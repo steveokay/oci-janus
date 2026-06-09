@@ -1,40 +1,37 @@
+// Package config loads and validates runtime configuration for registry-storage.
 package config
 
 import (
 	"fmt"
 
-	"github.com/spf13/viper"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
-// Config holds all runtime configuration for the service, loaded from environment variables.
+// Config is the complete set of environment variables required by registry-storage.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	loader.BaseConfig `mapstructure:",squash"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
+	// Storage driver: minio | s3 | gcs | azure | filesystem
+	StorageDriver string `mapstructure:"STORAGE_DRIVER"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	// MinIO / S3-compatible
+	StorageMinIOEndpoint  string `mapstructure:"STORAGE_MINIO_ENDPOINT"`
+	StorageMinIOAccessKey string `mapstructure:"STORAGE_MINIO_ACCESS_KEY"`
+	StorageMinIOSecretKey string `mapstructure:"STORAGE_MINIO_SECRET_KEY"`
+	StorageMinIOBucket    string `mapstructure:"STORAGE_MINIO_BUCKET"`
+	StorageMinIOUseSSL    bool   `mapstructure:"STORAGE_MINIO_USE_SSL"`
+	StorageMinIORegion    string `mapstructure:"STORAGE_MINIO_REGION"`
+
+	// Filesystem (dev only)
+	StorageFilesystemRoot string `mapstructure:"STORAGE_FILESYSTEM_ROOT"`
 }
 
-// Load reads configuration from environment variables and validates required fields.
+// Load binds environment variables into Config and validates required fields.
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
-	viper.SetDefault("LOG_LEVEL", "info")
-	viper.SetDefault("LOG_FORMAT", "json")
-	viper.SetDefault("GRPC_ADDR", ":50051")
-	viper.SetDefault("HTTP_ADDR", ":8080")
-	viper.SetDefault("OTEL_SERVICE_NAME", "storage")
-
 	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+	cfg.StorageMinIOUseSSL = true // default true
+	if err := loader.Load("registry-storage", cfg); err != nil {
+		return nil, err
 	}
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -43,15 +40,12 @@ func Load() (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	required := map[string]string{
-		"MTLS_CA_CERT_PATH": cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":    cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":     cfg.MTLSKeyPath,
+	if cfg.StorageDriver == "" {
+		return fmt.Errorf("STORAGE_DRIVER is required (minio|s3|gcs|azure|filesystem)")
 	}
-	for k, v := range required {
-		if v == "" {
-			return fmt.Errorf("%s is required", k)
-		}
+	valid := map[string]bool{"minio": true, "s3": true, "gcs": true, "azure": true, "filesystem": true}
+	if !valid[cfg.StorageDriver] {
+		return fmt.Errorf("STORAGE_DRIVER %q is not valid; must be one of minio|s3|gcs|azure|filesystem", cfg.StorageDriver)
 	}
 	return nil
 }

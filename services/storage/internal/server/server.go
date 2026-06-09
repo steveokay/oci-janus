@@ -9,37 +9,72 @@ import (
 	"net/http"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/credentials"
+	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 	"github.com/steveokay/oci-janus/services/storage/internal/config"
+	"github.com/steveokay/oci-janus/services/storage/internal/driver"
+	"github.com/steveokay/oci-janus/services/storage/internal/handler"
 )
 
-// Run starts the gRPC and HTTP servers and blocks until ctx is cancelled or a server error occurs.
+// Run starts the gRPC and HTTP servers and blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config) error {
-	grpcSrv := grpc.NewServer()
-	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
+	// ── 1. Storage driver ─────────────────────────────────────────────────────
+	drv, err := initDriver(cfg)
+	if err != nil {
+		return fmt.Errorf("init storage driver: %w", err)
+	}
+
+	if err := drv.Ping(ctx); err != nil {
+		return fmt.Errorf("storage backend ping failed: %w", err)
+	}
+	slog.Info("storage driver ready", "driver", cfg.StorageDriver)
+
+	// ── 2. gRPC server ────────────────────────────────────────────────────────
+	grpcOpts, err := buildGRPCOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
+
+	healthSrv := grpchealth.NewServer()
+	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
+	storagev1.RegisterStorageServiceServer(grpcSrv, handler.New(drv))
+	healthSrv.SetServingStatus("registry.storage.v1.StorageService", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", cfg.GRPCAddr, err)
 	}
 
-	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// ── 3. HTTP server ────────────────────────────────────────────────────────
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", metricsHandler)
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
+	mux.HandleFunc("GET /metrics", metricsHandler)
+	httpSrv := &http.Server{
+		Addr:    cfg.HTTPAddr,
+		Handler: http.MaxBytesHandler(mux, 4<<20),
+	}
 
+	// ── 4. Start & block ──────────────────────────────────────────────────────
 	errCh := make(chan error, 2)
 	go func() {
 		slog.Info("gRPC server starting", "addr", cfg.GRPCAddr)
-		errCh <- grpcSrv.Serve(lis)
+		if err := grpcSrv.Serve(lis); err != nil {
+			errCh <- fmt.Errorf("gRPC serve: %w", err)
+		}
 	}()
 	go func() {
 		slog.Info("HTTP server starting", "addr", cfg.HTTPAddr)
-		errCh <- httpSrv.ListenAndServe()
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("HTTP serve: %w", err)
+		}
 	}()
 
 	select {
@@ -51,6 +86,44 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func initDriver(cfg *config.Config) (driver.Driver, error) {
+	switch cfg.StorageDriver {
+	case "minio":
+		return driver.NewMinIO(
+			cfg.StorageMinIOEndpoint,
+			cfg.StorageMinIOAccessKey,
+			cfg.StorageMinIOSecretKey,
+			cfg.StorageMinIOBucket,
+			cfg.StorageMinIORegion,
+			cfg.StorageMinIOUseSSL,
+		)
+	case "filesystem":
+		return driver.NewFilesystem(cfg.StorageFilesystemRoot)
+	default:
+		return nil, fmt.Errorf("storage driver %q not implemented; supported: minio, filesystem", cfg.StorageDriver)
+	}
+}
+
+func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+
+	return opts, nil
 }
 
 func metricsHandler(w http.ResponseWriter, _ *http.Request) {

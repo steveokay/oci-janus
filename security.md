@@ -118,6 +118,77 @@
 
 ---
 
+### SEC-007 — Missing HTTP security response headers on `registry-auth` and `registry-core`
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-auth`, `registry-core`
+- **Raised:** 2026-06-09
+- **Description:** Neither service sets `X-Content-Type-Options: nosniff` or `X-Frame-Options: DENY` on HTTP responses. `registry-auth`'s `writeJSON`/`writeError` helpers only set `Content-Type`. `registry-core`'s `ociError` helper has the same gap. CLAUDE.md §17 requires both headers on all responses.
+- **Remediation:**
+  1. Add a thin `secureHeaders` HTTP middleware to `libs/middleware/http` that injects `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `X-XSS-Protection: 0` on every response
+  2. Wrap both HTTP servers' mux with this middleware (one line change in each `server.go`)
+  3. Add a test asserting these headers are present on all response codes
+- **References:** CLAUDE.md §17, OWASP Secure Headers Project
+
+---
+
+### SEC-008 — `registry-core` gRPC clients use plaintext transport
+- **Severity:** HIGH
+- **Status:** OPEN
+- **Service:** `registry-core`
+- **Raised:** 2026-06-09
+- **Description:** `services/core/internal/server/server.go` lines 34, 40, 46 use `insecure.NewCredentials()` for all three outgoing gRPC connections (to `registry-auth`, `registry-metadata`, `registry-storage`). The code comment acknowledges this as temporary. mTLS is a core security requirement (CLAUDE.md §7) and this gap means internal service communication is fully unencrypted and unauthenticated in current form.
+- **Remediation:**
+  1. Wire `libs/auth/mtls.ClientTLSConfig()` in `registry-core/server.go` the same way `registry-auth` server does for its gRPC server
+  2. Add `MTLS_CA_CERT_PATH`, `MTLS_CERT_PATH`, `MTLS_KEY_PATH` to `registry-core` config (they are in `BaseConfig` already — just need to use them)
+  3. Fail to start if the MTLS env vars are absent (remove the "insecure fallback")
+  4. Add the same optional-mTLS pattern used in auth and storage if dev mode without certs is still required — warn loudly but allow dev to proceed
+- **References:** `libs/auth/mtls`, CLAUDE.md §7, `services/auth/internal/server/server.go` (reference implementation)
+
+---
+
+### SEC-009 — IP rate limiting in `registry-auth` targets gateway IP, not client IP
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-auth`
+- **Raised:** 2026-06-09
+- **Description:** `remoteIP()` in `services/auth/internal/handler/http.go` reads `r.RemoteAddr` (the TCP peer). When `registry-auth` is deployed behind `registry-gateway`, the TCP peer is always the gateway's IP — all clients share a single rate-limit bucket, making per-client rate limiting ineffective. An attacker can brute-force credentials against multiple accounts without hitting the per-IP limit.
+- **Remediation:**
+  1. Check `X-Forwarded-For` only when the request's TCP peer IP is in a configured trusted proxy CIDR list (`TRUSTED_PROXY_CIDRS` env var)
+  2. If trusted: parse the leftmost non-private IP from `X-Forwarded-For`
+  3. If not trusted: fall back to `r.RemoteAddr` (current behaviour — correct for direct connections)
+  4. Validate the parsed IP is a valid, non-reserved address before using as rate-limit key
+  5. Add a startup warning if `TRUSTED_PROXY_CIDRS` is not configured (rate limiting is degraded)
+- **References:** CLAUDE.md §4.10 (audit IP note), §4.2 (rate limit requirement), `remoteIP()` in http.go
+
+---
+
+### SEC-010 — `registry-core` health-check gRPC server has no interceptors or mTLS
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `registry-core`
+- **Raised:** 2026-06-09
+- **Description:** The gRPC server in `services/core/internal/server/server.go` (line 78) is created with `grpc.NewServer()` — no interceptors, no mTLS, no recovery handler. Other services (auth, storage, metadata) all use `buildGRPCOptions()` which chains OTEL, logging, recovery, and optionally mTLS. An unhandled panic in a future gRPC handler would crash the process instead of returning `codes.Internal`.
+- **Remediation:**
+  1. Apply the same `buildGRPCOptions()` pattern from `registry-auth` to `registry-core`'s gRPC server
+  2. This is a low-effort fix once SEC-008 is addressed (the mTLS path will be wired at the same time)
+- **References:** `services/auth/internal/server/server.go` (reference), `libs/middleware/grpc`
+
+---
+
+### SEC-011 — `createUser` endpoint leaks internal error strings
+- **Severity:** INFO
+- **Status:** OPEN
+- **Service:** `registry-auth`
+- **Raised:** 2026-06-09
+- **Description:** `services/auth/internal/handler/http.go` line 152: `writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())`. The comment acknowledges this catches both intentional password-policy errors and "extremely rare" hash failures. An argon2id hash failure would expose the raw internal error string in the HTTP response body.
+- **Remediation:**
+  1. Enumerate the expected password-policy errors explicitly and map them to user-facing messages
+  2. For all other errors from `CreateUser`, return a generic "unable to create user" message and log the real error with `slog.ErrorContext`
+- **References:** `services/auth/internal/handler/http.go:152`
+
+---
+
 ## Resolved Issues
 
 | ID | Title | Service | Resolved | How |
@@ -132,18 +203,18 @@ Tracked per service. `?` = not yet assessed.
 
 | Rule | gateway | auth | core | storage | metadata | proxy | scanner | signer | webhook | audit | gc | tenant |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| No `unsafe` | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `exec.Command` with user input | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `os.Getenv` in handlers | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| File paths sanitised | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| HTTP client timeouts set | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `http.DefaultClient` | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `context.Background()` not in handlers | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `crypto/rand` used (not `math/rand`) | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| No `unsafe` | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| File paths sanitised | ? | N/A | N/A | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | CSP header on HTML responses | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| `X-Content-Type-Options: nosniff` | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | CORS explicitly configured | ? | ? | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ? |
-| Request body size limits | ? | ? | ? | N/A | N/A | ? | N/A | N/A | N/A | N/A | N/A | ? |
+| Request body size limits | ? | ✓ | ✓ | ? | N/A | ? | N/A | N/A | N/A | N/A | N/A | ? |
 | `govulncheck` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gosec` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gitleaks` pre-commit hook | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |

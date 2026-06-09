@@ -3,38 +3,24 @@ package config
 import (
 	"fmt"
 
-	"github.com/spf13/viper"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
-// Config holds all runtime configuration for the service, loaded from environment variables.
+// Config is the complete set of environment variables required by registry-metadata.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	loader.BaseConfig `mapstructure:",squash"`
+	loader.DBConfig   `mapstructure:",squash"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
-
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	RedisAddr     string `mapstructure:"REDIS_ADDR"`
+	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
+	RedisDB       int    `mapstructure:"REDIS_DB"`
 }
 
-// Load reads configuration from environment variables and validates required fields.
+// Load binds environment variables into Config and validates required fields.
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
-	viper.SetDefault("LOG_LEVEL", "info")
-	viper.SetDefault("LOG_FORMAT", "json")
-	viper.SetDefault("GRPC_ADDR", ":50051")
-	viper.SetDefault("HTTP_ADDR", ":8080")
-	viper.SetDefault("OTEL_SERVICE_NAME", "metadata")
-
 	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+	if err := loader.Load("registry-metadata", cfg); err != nil {
+		return nil, err
 	}
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -43,15 +29,8 @@ func Load() (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	required := map[string]string{
-		"MTLS_CA_CERT_PATH": cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":    cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":     cfg.MTLSKeyPath,
-	}
-	for k, v := range required {
-		if v == "" {
-			return fmt.Errorf("%s is required", k)
-		}
-	}
-	return nil
+	return loader.RequireFields(map[string]string{
+		"DB_DSN":     cfg.DBDSN,
+		"REDIS_ADDR": cfg.RedisAddr,
+	})
 }
