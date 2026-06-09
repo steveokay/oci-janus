@@ -1,3 +1,6 @@
+// Package events defines all RabbitMQ event types for the registry platform.
+// Every service that publishes or consumes events must use these types —
+// never define private event types inside individual services.
 package events
 
 import (

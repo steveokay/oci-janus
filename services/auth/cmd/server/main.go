@@ -1,3 +1,4 @@
+// Command server is the entrypoint for the auth service.
 package main
 
 import (

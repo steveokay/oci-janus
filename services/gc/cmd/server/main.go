@@ -1,3 +1,4 @@
+// Command server is the entrypoint for the gc service.
 package main
 
 import (

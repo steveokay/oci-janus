@@ -1,3 +1,6 @@
+// Package mtls provides helpers for constructing mTLS tls.Config values used
+// by all internal gRPC clients and servers. Every service-to-service call in the
+// registry requires mutual certificate verification — no unauthenticated gRPC.
 package mtls
 
 import (

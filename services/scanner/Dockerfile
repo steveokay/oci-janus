@@ -6,6 +6,7 @@ FROM golang:1.23-bookworm AS builder
 WORKDIR /build
 COPY go.work go.work.sum ./
 COPY libs/ libs/
+COPY proto/gen/go/ proto/gen/go/
 COPY services/scanner/ services/scanner/
 
 WORKDIR /build/services/scanner

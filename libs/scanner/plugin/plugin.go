@@ -1,3 +1,6 @@
+// Package plugin defines the vulnerability scanner plugin interface.
+// Scanners run as external processes (Trivy, Grype, etc.) and communicate
+// with the orchestrator over stdin/stdout JSON-RPC. Go .so plugins are not supported.
 package plugin
 
 import (
@@ -21,6 +24,8 @@ type BlobFetcher interface {
 	FetchBlob(ctx context.Context, digest string) (io.ReadCloser, error)
 }
 
+// ScanRequest describes the image layers to scan. StorageFetcher is injected by
+// the orchestrator so the plugin can pull blobs without holding storage credentials.
 type ScanRequest struct {
 	TenantID       string
 	RepositoryName string
@@ -29,12 +34,14 @@ type ScanRequest struct {
 	StorageFetcher BlobFetcher
 }
 
+// LayerRef identifies a single image layer by its content-addressable digest.
 type LayerRef struct {
 	Digest    string
 	MediaType string
 	Size      int64
 }
 
+// ScanResult is the structured output returned by a scanner plugin.
 type ScanResult struct {
 	ScannerName    string
 	ScannerVersion string
@@ -43,6 +50,7 @@ type ScanResult struct {
 	ScannedAt      time.Time
 }
 
+// Finding describes a single vulnerability detected in a package layer.
 type Finding struct {
 	CVE         string
 	Severity    string // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE

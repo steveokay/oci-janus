@@ -1,3 +1,6 @@
+// Package driver defines the storage backend interface.
+// All blob I/O in the registry goes through this abstraction so that
+// MinIO, S3, GCS, and Azure Blob are interchangeable without touching service code.
 package driver
 
 import (
@@ -26,6 +29,7 @@ type Driver interface {
 	Ping(ctx context.Context) error
 }
 
+// BlobInfo holds metadata returned by StatBlob.
 type BlobInfo struct {
 	Key         string
 	Size        int64
@@ -33,6 +37,7 @@ type BlobInfo struct {
 	LastModified time.Time
 }
 
+// CompletedPart identifies a successfully uploaded part in a multipart upload.
 type CompletedPart struct {
 	PartNum int
 	ETag    string

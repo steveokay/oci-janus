@@ -1,3 +1,4 @@
+// Package server wires the gRPC and HTTP servers together and manages graceful shutdown.
 package server
 
 import (
@@ -14,6 +15,7 @@ import (
 	"github.com/steveokay/oci-janus/services/storage/internal/config"
 )
 
+// Run starts the gRPC and HTTP servers and blocks until ctx is cancelled or a server error occurs.
 func Run(ctx context.Context, cfg *config.Config) error {
 	grpcSrv := grpc.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())

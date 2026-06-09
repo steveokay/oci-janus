@@ -1,6 +1,7 @@
 go 1.23
 
 use (
+	./proto/gen/go
 	./libs
 	./services/auth
 	./services/audit

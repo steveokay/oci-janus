@@ -1,3 +1,5 @@
+// Package codes maps gRPC status codes to HTTP status codes for use at service
+// boundaries where a gRPC error must be translated into an HTTP response.
 package codes
 
 import (

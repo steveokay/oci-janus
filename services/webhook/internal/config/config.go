@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Config holds all runtime configuration for the service, loaded from environment variables.
 type Config struct {
 	LogLevel    string `mapstructure:"LOG_LEVEL"`
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
@@ -22,6 +23,7 @@ type Config struct {
 	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
 }
 
+// Load reads configuration from environment variables and validates required fields.
 func Load() (*Config, error) {
 	viper.AutomaticEnv()
 	viper.SetDefault("LOG_LEVEL", "info")
