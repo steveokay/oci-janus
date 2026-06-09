@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>production-app - ContainerRegistry</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary-fixed": "#d2e4ff",
+                    "surface": "#f8f9ff",
+                    "on-surface-variant": "#44474d",
+                    "on-secondary-fixed": "#001c37",
+                    "primary-container": "#0d2137",
+                    "tertiary-fixed": "#65fe9f",
+                    "on-primary-fixed-variant": "#364860",
+                    "on-background": "#0b1c30",
+                    "on-primary-fixed": "#081c32",
+                    "on-primary": "#ffffff",
+                    "surface-tint": "#4d6079",
+                    "on-tertiary": "#ffffff",
+                    "primary-fixed-dim": "#b5c8e5",
+                    "surface-container-low": "#eff4ff",
+                    "surface-container-lowest": "#ffffff",
+                    "surface-container-high": "#dce9ff",
+                    "on-secondary-container": "#1b5185",
+                    "on-tertiary-fixed": "#00210d",
+                    "error-container": "#ffdad6",
+                    "inverse-surface": "#213145",
+                    "outline-variant": "#c4c6cd",
+                    "tertiary-container": "#002610",
+                    "inverse-primary": "#b5c8e5",
+                    "primary-fixed": "#d2e4ff",
+                    "on-tertiary-container": "#009c54",
+                    "on-secondary": "#ffffff",
+                    "inverse-on-surface": "#eaf1ff",
+                    "on-secondary-fixed-variant": "#0d487c",
+                    "secondary-container": "#97c4ff",
+                    "secondary": "#2f6096",
+                    "surface-container": "#e5eeff",
+                    "tertiary": "#000a03",
+                    "background": "#f8f9ff",
+                    "surface-dim": "#cbdbf5",
+                    "error": "#ba1a1a",
+                    "on-surface": "#0b1c30",
+                    "outline": "#74777d",
+                    "on-primary-container": "#7689a4",
+                    "on-error": "#ffffff",
+                    "tertiary-fixed-dim": "#43e186",
+                    "primary": "#000917",
+                    "surface-bright": "#f8f9ff",
+                    "secondary-fixed-dim": "#a1c9ff",
+                    "on-tertiary-fixed-variant": "#00522a",
+                    "surface-container-highest": "#d3e4fe",
+                    "on-error-container": "#93000a"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "gutter": "20px",
+                    "sm": "8px",
+                    "md": "16px",
+                    "lg": "24px",
+                    "base": "4px",
+                    "xl": "32px",
+                    "xs": "4px",
+                    "container-max": "1440px"
+            },
+            "fontFamily": {
+                    "body-lg": ["Hanken Grotesk"],
+                    "display": ["Hanken Grotesk"],
+                    "headline-lg": ["Hanken Grotesk"],
+                    "headline-md": ["Hanken Grotesk"],
+                    "code-sm": ["JetBrains Mono"],
+                    "body-md": ["Hanken Grotesk"],
+                    "label-caps": ["Hanken Grotesk"],
+                    "code-md": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display": ["36px", {"lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "headline-lg": ["28px", {"lineHeight": "36px", "fontWeight": "600"}],
+                    "headline-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "code-sm": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                    "code-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .zebra-stripe:nth-child(even) {
+            background-color: #f1f5f9;
+        }
+        .copy-feedback {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .copy-feedback.active {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md min-h-screen">
+<!-- TopNavBar -->
+<header class="w-full top-0 sticky bg-surface border-b border-outline-variant z-50">
+<nav class="flex items-center justify-between px-gutter max-w-container-max mx-auto h-16">
+<div class="flex items-center gap-xl">
+<span class="font-headline-md text-headline-md font-bold text-on-surface">ContainerRegistry</span>
+<div class="hidden md:flex items-center gap-lg">
+<a class="font-body-md text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Explore</a>
+<a class="font-body-md text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Pricing</a>
+<a class="font-body-md text-body-md text-on-surface-variant hover:text-primary transition-colors" href="#">Documentation</a>
+</div>
+</div>
+<div class="flex items-center gap-md">
+<div class="relative hidden lg:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+<input class="bg-surface-container-low border-outline-variant rounded-lg pl-10 pr-4 py-1 text-body-md focus:ring-2 focus:ring-primary focus:border-transparent outline-none w-64" placeholder="Search repositories..." type="text"/>
+</div>
+<button class="p-2 text-on-surface-variant hover:bg-surface-variant rounded-full transition-colors">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:bg-surface-variant rounded-full transition-colors">
+<span class="material-symbols-outlined">settings</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-secondary-container overflow-hidden border border-outline-variant">
+<img alt="User profile" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAD-sSeefU3TNf8bIKXWaT-utJEPJcxUWdrddkCfKYyFk-nmMNV24n2-yWD-Y2AkWt9rR5UnvuLvXSuk0P0yf0L2_5K6AtABfVWgErqw_Lt6Y_89vaH2etHL4RMZVgQuedvriXFqNdZ6gZ9rWeWDiyguwJ9_ztUHYP7KLTl6Gytna7o0VJygFd2AyVWlitZvZMFXX1KA3KdmEgF56BqT9dBkV02rBTCQqHeYRGvyk6bIJSX6m2YsWED96fP5Y1397hpRkS3iCDvbCU"/>
+</div>
+</div>
+</nav>
+</header>
+<div class="flex max-w-container-max mx-auto">
+<!-- SideNavBar -->
+<aside class="hidden lg:flex flex-col py-md px-sm border-r border-outline-variant h-[calc(100vh-64px)] w-64 sticky top-16 bg-surface-container-low">
+<div class="px-sm mb-lg">
+<div class="flex items-center gap-sm mb-base">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">inventory_2</span>
+</div>
+<div>
+<p class="font-label-caps text-label-caps uppercase text-on-surface-variant">Registry Admin</p>
+<p class="text-xs text-on-surface-variant/70">Production Cluster</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-md px-md py-sm bg-secondary-container text-on-secondary-container font-bold rounded-lg transition-all active:scale-95" href="#">
+<span class="material-symbols-outlined" data-icon="inventory_2" style="font-variation-settings: 'FILL' 1;">inventory_2</span>
+<span class="font-label-caps text-label-caps">Repositories</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all active:scale-95" href="#">
+<span class="material-symbols-outlined" data-icon="corporate_fare">corporate_fare</span>
+<span class="font-label-caps text-label-caps">Organizations</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all active:scale-95" href="#">
+<span class="material-symbols-outlined" data-icon="layers">layers</span>
+<span class="font-label-caps text-label-caps">Images</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all active:scale-95" href="#">
+<span class="material-symbols-outlined" data-icon="shield_lock">shield_lock</span>
+<span class="font-label-caps text-label-caps">Security</span>
+</a>
+</nav>
+<button class="mt-lg mb-md mx-sm py-sm bg-primary-container text-on-primary font-bold rounded-lg hover:opacity-90 transition-opacity active:scale-95">
+                New Repository
+            </button>
+<div class="border-t border-outline-variant pt-md mt-auto">
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+<span class="font-label-caps text-label-caps">Support</span>
+</a>
+<a class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+<span class="font-label-caps text-label-caps">API Docs</span>
+</a>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 p-gutter overflow-x-hidden">
+<!-- Breadcrumbs -->
+<nav class="flex items-center gap-sm text-on-surface-variant mb-lg font-body-md text-body-md">
+<a class="hover:text-primary" href="#">Repositories</a>
+<span class="material-symbols-outlined text-sm">chevron_right</span>
+<span class="text-on-surface font-bold">production-app</span>
+</nav>
+<!-- Hero Section (Bento Style) -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-lg mb-xl">
+<!-- Repository Info -->
+<div class="lg:col-span-2 bg-surface-container-lowest border border-outline-variant rounded-xl p-xl relative overflow-hidden">
+<div class="relative z-10">
+<div class="flex items-center gap-md mb-md">
+<h1 class="font-display text-display text-on-surface">production-app</h1>
+<span class="bg-secondary-fixed text-on-secondary-fixed px-sm py-xs rounded text-label-caps font-bold">PUBLIC</span>
+</div>
+<p class="text-body-lg font-body-lg text-on-surface-variant max-w-2xl mb-xl">
+                            Core application container for the global production cluster. Optimized for high-throughput 
+                            processing and secure data handling. Updated daily via automated CI/CD pipelines.
+                        </p>
+<!-- Pull Command Card -->
+<div class="bg-primary-container rounded-lg p-lg border border-on-primary-container shadow-lg">
+<div class="flex justify-between items-center mb-sm">
+<span class="text-on-primary-container font-label-caps text-label-caps">DOCKER PULL COMMAND</span>
+<span class="copy-feedback text-tertiary-fixed-dim text-xs font-bold" id="copy-status">COPIED!</span>
+</div>
+<div class="flex items-center justify-between bg-black/30 rounded px-md py-sm group">
+<code class="font-code-md text-code-md text-tertiary-fixed-dim" id="docker-pull-cmd">docker pull cr.io/prod/production-app:latest</code>
+<button class="text-on-primary hover:text-tertiary-fixed-dim transition-colors" onclick="copyCommand()">
+<span class="material-symbols-outlined">content_copy</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Subtle background decoration -->
+<div class="absolute right-0 bottom-0 opacity-5 -mb-8 -mr-8 pointer-events-none">
+<span class="material-symbols-outlined text-[200px]" style="font-variation-settings: 'FILL' 1;">inventory_2</span>
+</div>
+</div>
+<!-- Stats/Metadata Bento -->
+<div class="grid grid-rows-2 gap-lg">
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg flex flex-col justify-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant mb-sm uppercase">Total Pulls</span>
+<div class="flex items-end gap-sm">
+<span class="text-4xl font-bold text-on-surface">1.2M</span>
+<span class="text-tertiary-fixed-variant flex items-center text-sm font-bold mb-1">
+<span class="material-symbols-outlined text-sm">trending_up</span> 12%
+                            </span>
+</div>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg flex flex-col justify-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant mb-sm uppercase">Vulnerability Scan</span>
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-sm bg-tertiary-container/10 text-on-tertiary-container px-md py-sm rounded-lg">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">verified_user</span>
+<span class="font-bold">Passed</span>
+</div>
+<span class="text-xs text-on-surface-variant">Last scan: 2h ago</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Tags Table Section -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
+<div class="px-xl py-lg border-b border-outline-variant flex items-center justify-between">
+<h2 class="font-headline-md text-headline-md text-on-surface">Available Tags</h2>
+<div class="flex items-center gap-sm">
+<button class="flex items-center gap-xs px-md py-sm text-body-md border border-outline-variant rounded hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-sm">filter_list</span> Filter
+                        </button>
+<button class="flex items-center gap-xs px-md py-sm text-body-md border border-outline-variant rounded hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-sm">sort</span> Sort
+                        </button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-low border-b border-outline-variant">
+<tr>
+<th class="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Tag Name</th>
+<th class="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">OS/Architecture</th>
+<th class="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Compressed Size</th>
+<th class="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Security Status</th>
+<th class="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Last Pushed</th>
+<th class="px-xl py-md"></th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="zebra-stripe hover:bg-surface-variant/30 transition-colors group">
+<td class="px-xl py-md">
+<span class="font-code-md text-code-md bg-secondary-fixed/50 px-sm py-xs rounded">latest</span>
+</td>
+<td class="px-xl py-md">
+<div class="flex flex-col">
+<span class="text-body-md font-medium">linux/amd64</span>
+<span class="text-xs text-on-surface-variant">linux/arm64</span>
+</div>
+</td>
+<td class="px-xl py-md text-body-md">42.8 MB</td>
+<td class="px-xl py-md">
+<div class="inline-flex items-center gap-xs px-sm py-1 rounded bg-tertiary-container/10 text-on-tertiary-container text-xs font-bold uppercase">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                        Clean
+                                    </div>
+</td>
+<td class="px-xl py-md text-body-md text-on-surface-variant">2 hours ago</td>
+<td class="px-xl py-md text-right">
+<button class="p-2 text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-all">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="zebra-stripe hover:bg-surface-variant/30 transition-colors group">
+<td class="px-xl py-md">
+<span class="font-code-md text-code-md bg-secondary-fixed/50 px-sm py-xs rounded">v2.4.0-stable</span>
+</td>
+<td class="px-xl py-md">
+<span class="text-body-md font-medium">linux/amd64</span>
+</td>
+<td class="px-xl py-md text-body-md">41.2 MB</td>
+<td class="px-xl py-md">
+<div class="inline-flex items-center gap-xs px-sm py-1 rounded bg-tertiary-container/10 text-on-tertiary-container text-xs font-bold uppercase">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                        Clean
+                                    </div>
+</td>
+<td class="px-xl py-md text-body-md text-on-surface-variant">2 days ago</td>
+<td class="px-xl py-md text-right">
+<button class="p-2 text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-all">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="zebra-stripe hover:bg-surface-variant/30 transition-colors group border-l-4 border-error">
+<td class="px-xl py-md">
+<span class="font-code-md text-code-md bg-secondary-fixed/50 px-sm py-xs rounded">v2.3.9-rc1</span>
+</td>
+<td class="px-xl py-md">
+<span class="text-body-md font-medium">linux/amd64</span>
+</td>
+<td class="px-xl py-md text-body-md">40.9 MB</td>
+<td class="px-xl py-md">
+<div class="inline-flex items-center gap-xs px-sm py-1 rounded bg-error-container text-on-error-container text-xs font-bold uppercase">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">warning</span>
+                                        2 Vulnerabilities Found
+                                    </div>
+</td>
+<td class="px-xl py-md text-body-md text-on-surface-variant">1 week ago</td>
+<td class="px-xl py-md text-right">
+<button class="p-2 text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-all">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="zebra-stripe hover:bg-surface-variant/30 transition-colors group">
+<td class="px-xl py-md">
+<span class="font-code-md text-code-md bg-secondary-fixed/50 px-sm py-xs rounded">beta-nightly</span>
+</td>
+<td class="px-xl py-md">
+<div class="flex flex-col">
+<span class="text-body-md font-medium">linux/amd64</span>
+<span class="text-xs text-on-surface-variant">linux/arm/v7</span>
+</div>
+</td>
+<td class="px-xl py-md text-body-md">45.1 MB</td>
+<td class="px-xl py-md">
+<div class="inline-flex items-center gap-xs px-sm py-1 rounded bg-tertiary-container/10 text-on-tertiary-container text-xs font-bold uppercase">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                        Clean
+                                    </div>
+</td>
+<td class="px-xl py-md text-body-md text-on-surface-variant">Today, 04:12 AM</td>
+<td class="px-xl py-md text-right">
+<button class="p-2 text-on-surface-variant hover:text-primary opacity-0 group-hover:opacity-100 transition-all">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Pagination footer -->
+<div class="px-xl py-md bg-surface-container-low border-t border-outline-variant flex items-center justify-between">
+<p class="text-xs text-on-surface-variant font-medium">Showing 1 to 4 of 28 tags</p>
+<div class="flex items-center gap-sm">
+<button class="p-1 border border-outline-variant rounded disabled:opacity-30" disabled="">
+<span class="material-symbols-outlined text-lg">chevron_left</span>
+</button>
+<button class="p-1 border border-outline-variant rounded hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-lg">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Additional Technical Data Section -->
+<div class="mt-xl grid grid-cols-1 md:grid-cols-2 gap-lg">
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
+<h3 class="font-headline-md text-headline-md mb-md flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary">analytics</span>
+                        Push Frequency
+                    </h3>
+<div class="h-48 flex items-end gap-2 px-md">
+<div class="flex-1 bg-secondary-container rounded-t h-[30%]" title="Mon"></div>
+<div class="flex-1 bg-secondary-container rounded-t h-[45%]" title="Tue"></div>
+<div class="flex-1 bg-secondary-container rounded-t h-[90%]" title="Wed"></div>
+<div class="flex-1 bg-secondary-container rounded-t h-[60%]" title="Thu"></div>
+<div class="flex-1 bg-primary-container rounded-t h-[100%]" title="Fri (Active)"></div>
+<div class="flex-1 bg-secondary-container rounded-t h-[20%]" title="Sat"></div>
+<div class="flex-1 bg-secondary-container rounded-t h-[15%]" title="Sun"></div>
+</div>
+<div class="flex justify-between mt-sm text-[10px] text-on-surface-variant uppercase font-bold px-md">
+<span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+</div>
+</div>
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
+<h3 class="font-headline-md text-headline-md mb-md flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary">history</span>
+                        Recent Activity
+                    </h3>
+<div class="space-y-md">
+<div class="flex items-start gap-md">
+<div class="mt-1 w-2 h-2 rounded-full bg-tertiary-fixed-dim"></div>
+<div>
+<p class="text-body-md font-bold">New tag <span class="font-code-md text-code-sm bg-secondary-fixed px-1 rounded">beta-nightly</span> pushed</p>
+<p class="text-xs text-on-surface-variant">by Jenkins CI Pipeline • 2h ago</p>
+</div>
+</div>
+<div class="flex items-start gap-md">
+<div class="mt-1 w-2 h-2 rounded-full bg-secondary"></div>
+<div>
+<p class="text-body-md font-bold">Security scan completed</p>
+<p class="text-xs text-on-surface-variant">Trivy Scanner • 4h ago</p>
+</div>
+</div>
+<div class="flex items-start gap-md">
+<div class="mt-1 w-2 h-2 rounded-full bg-outline"></div>
+<div>
+<p class="text-body-md font-bold">Documentation updated</p>
+<p class="text-xs text-on-surface-variant">by admin_user • 1d ago</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+<script>
+        function copyCommand() {
+            const cmd = document.getElementById('docker-pull-cmd').innerText;
+            const status = document.getElementById('copy-status');
+            
+            navigator.clipboard.writeText(cmd).then(() => {
+                status.classList.add('active');
+                setTimeout(() => {
+                    status.classList.remove('active');
+                }, 2000);
+            });
+        }
+    </script>
+</body></html>
