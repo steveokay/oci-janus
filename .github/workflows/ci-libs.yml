@@ -1,0 +1,35 @@
+name: CI — libs
+
+on:
+  push:
+    paths: ["libs/**", "go.work"]
+  pull_request:
+    paths: ["libs/**", "go.work"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: libs
+          config: ../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd libs && go test -race ./...
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd libs && go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...

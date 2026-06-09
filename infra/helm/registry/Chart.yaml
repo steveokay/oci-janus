@@ -1,0 +1,44 @@
+apiVersion: v2
+name: registry
+description: OCI-compliant multi-tenant Docker registry platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: gateway
+    version: "0.1.0"
+    repository: "file://charts/gateway"
+  - name: auth
+    version: "0.1.0"
+    repository: "file://charts/auth"
+  - name: core
+    version: "0.1.0"
+    repository: "file://charts/core"
+  - name: storage
+    version: "0.1.0"
+    repository: "file://charts/storage"
+  - name: metadata
+    version: "0.1.0"
+    repository: "file://charts/metadata"
+  - name: proxy
+    version: "0.1.0"
+    repository: "file://charts/proxy"
+  - name: scanner
+    version: "0.1.0"
+    repository: "file://charts/scanner"
+  - name: signer
+    version: "0.1.0"
+    repository: "file://charts/signer"
+  - name: webhook
+    version: "0.1.0"
+    repository: "file://charts/webhook"
+  - name: audit
+    version: "0.1.0"
+    repository: "file://charts/audit"
+  - name: gc
+    version: "0.1.0"
+    repository: "file://charts/gc"
+  - name: tenant
+    version: "0.1.0"
+    repository: "file://charts/tenant"

@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package registry.storage.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/storage/v1;storagev1";
+
+import "google/protobuf/timestamp.proto";
+
+service StorageService {
+  rpc PutBlob(stream PutBlobRequest) returns (PutBlobResponse);
+  rpc GetBlob(GetBlobRequest) returns (stream GetBlobResponse);
+  rpc StatBlob(StatBlobRequest) returns (StatBlobResponse);
+  rpc DeleteBlob(DeleteBlobRequest) returns (DeleteBlobResponse);
+  rpc BlobExists(BlobExistsRequest) returns (BlobExistsResponse);
+  rpc ListBlobs(ListBlobsRequest) returns (stream ListBlobsResponse);
+  rpc InitiateMultipart(InitiateMultipartRequest) returns (InitiateMultipartResponse);
+  rpc UploadPart(stream UploadPartRequest) returns (UploadPartResponse);
+  rpc CompleteMultipart(CompleteMultipartRequest) returns (CompleteMultipartResponse);
+  rpc AbortMultipart(AbortMultipartRequest) returns (AbortMultipartResponse);
+}
+
+message PutBlobRequest {
+  oneof data {
+    PutBlobMeta meta  = 1;
+    bytes       chunk = 2;
+  }
+}
+
+message PutBlobMeta {
+  string key          = 1;
+  int64  size         = 2;
+  string content_type = 3;
+  string tenant_id    = 4;
+}
+
+message PutBlobResponse {
+  string key        = 1;
+  int64  bytes_written = 2;
+}
+
+message GetBlobRequest {
+  string key       = 1;
+  string tenant_id = 2;
+}
+
+message GetBlobResponse {
+  bytes chunk = 1;
+}
+
+message StatBlobRequest {
+  string key       = 1;
+  string tenant_id = 2;
+}
+
+message StatBlobResponse {
+  string key          = 1;
+  int64  size         = 2;
+  string content_type = 3;
+  google.protobuf.Timestamp last_modified = 4;
+}
+
+message DeleteBlobRequest {
+  string key       = 1;
+  string tenant_id = 2;
+}
+
+message DeleteBlobResponse {}
+
+message BlobExistsRequest {
+  string key       = 1;
+  string tenant_id = 2;
+}
+
+message BlobExistsResponse {
+  bool exists = 1;
+}
+
+message ListBlobsRequest {
+  string prefix    = 1;
+  string tenant_id = 2;
+}
+
+message ListBlobsResponse {
+  string key  = 1;
+  int64  size = 2;
+}
+
+message InitiateMultipartRequest {
+  string key       = 1;
+  string tenant_id = 2;
+}
+
+message InitiateMultipartResponse {
+  string upload_id = 1;
+}
+
+message UploadPartRequest {
+  oneof data {
+    UploadPartMeta meta  = 1;
+    bytes          chunk = 2;
+  }
+}
+
+message UploadPartMeta {
+  string key       = 1;
+  string upload_id = 2;
+  int32  part_num  = 3;
+  int64  size      = 4;
+  string tenant_id = 5;
+}
+
+message UploadPartResponse {
+  string etag     = 1;
+  int32  part_num = 2;
+}
+
+message CompletedPart {
+  int32  part_num = 1;
+  string etag     = 2;
+}
+
+message CompleteMultipartRequest {
+  string key       = 1;
+  string upload_id = 2;
+  string tenant_id = 3;
+  repeated CompletedPart parts = 4;
+}
+
+message CompleteMultipartResponse {
+  string key = 1;
+}
+
+message AbortMultipartRequest {
+  string key       = 1;
+  string upload_id = 2;
+  string tenant_id = 3;
+}
+
+message AbortMultipartResponse {}

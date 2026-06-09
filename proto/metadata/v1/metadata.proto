@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package registry.metadata.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1;metadatav1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service MetadataService {
+  // Repositories
+  rpc CreateRepository(CreateRepositoryRequest) returns (Repository);
+  rpc GetRepository(GetRepositoryRequest) returns (Repository);
+  rpc ListRepositories(ListRepositoriesRequest) returns (stream Repository);
+  rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
+  rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
+
+  // Tags
+  rpc PutTag(PutTagRequest) returns (Tag);
+  rpc GetTag(GetTagRequest) returns (Tag);
+  rpc ListTags(ListTagsRequest) returns (stream Tag);
+  rpc DeleteTag(DeleteTagRequest) returns (google.protobuf.Empty);
+
+  // Manifests
+  rpc PutManifest(PutManifestRequest) returns (Manifest);
+  rpc GetManifest(GetManifestRequest) returns (Manifest);
+  rpc DeleteManifest(DeleteManifestRequest) returns (google.protobuf.Empty);
+  rpc ListUntaggedManifests(ListUntaggedManifestsRequest) returns (stream Manifest);
+
+  // Blobs
+  rpc LinkBlob(LinkBlobRequest) returns (google.protobuf.Empty);
+  rpc UnlinkBlob(UnlinkBlobRequest) returns (google.protobuf.Empty);
+  rpc ListOrphanedBlobs(ListOrphanedBlobsRequest) returns (stream BlobRef);
+
+  // Quota
+  rpc GetTenantQuotaUsage(GetTenantQuotaUsageRequest) returns (QuotaUsage);
+  rpc IncrementTenantStorage(IncrementTenantStorageRequest) returns (google.protobuf.Empty);
+  rpc DecrementTenantStorage(DecrementTenantStorageRequest) returns (google.protobuf.Empty);
+
+  // Scan status
+  rpc UpdateScanStatus(UpdateScanStatusRequest) returns (google.protobuf.Empty);
+  rpc GetScanResult(GetScanResultRequest) returns (ScanResult);
+}
+
+message Repository {
+  string repo_id       = 1;
+  string org_id        = 2;
+  string tenant_id     = 3;
+  string name          = 4;
+  bool   is_public     = 5;
+  int64  storage_quota = 6;
+  int64  storage_used  = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message Tag {
+  string tag_id          = 1;
+  string repo_id         = 2;
+  string tenant_id       = 3;
+  string name            = 4;
+  string manifest_digest = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message Manifest {
+  string manifest_id = 1;
+  string repo_id     = 2;
+  string tenant_id   = 3;
+  string digest      = 4;
+  string media_type  = 5;
+  bytes  raw_json    = 6;
+  int64  size_bytes  = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message BlobRef {
+  string digest      = 1;
+  int64  size_bytes  = 2;
+  string storage_key = 3;
+}
+
+message QuotaUsage {
+  string tenant_id    = 1;
+  int64  used_bytes   = 2;
+  int64  quota_bytes  = 3;
+}
+
+message ScanResult {
+  string scan_id          = 1;
+  string manifest_digest  = 2;
+  string repo_id          = 3;
+  string tenant_id        = 4;
+  string scanner_name     = 5;
+  string scanner_version  = 6;
+  string status           = 7; // pending|running|complete|failed
+  map<string, int32> severity_counts = 8;
+  bytes  findings_json    = 9;
+  google.protobuf.Timestamp started_at   = 10;
+  google.protobuf.Timestamp completed_at = 11;
+}
+
+// Repository requests
+message CreateRepositoryRequest {
+  string org_id        = 1;
+  string tenant_id     = 2;
+  string name          = 3;
+  bool   is_public     = 4;
+  int64  storage_quota = 5;
+}
+message GetRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
+message ListRepositoriesRequest { string org_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; }
+message DeleteRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
+message UpdateRepositoryQuotaRequest { string repo_id = 1; string tenant_id = 2; int64 storage_quota = 3; }
+
+// Tag requests
+message PutTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; string manifest_digest = 4; }
+message GetTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; }
+message ListTagsRequest { string repo_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; string last = 5; }
+message DeleteTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; }
+
+// Manifest requests
+message PutManifestRequest { string repo_id = 1; string tenant_id = 2; string digest = 3; string media_type = 4; bytes raw_json = 5; int64 size_bytes = 6; }
+message GetManifestRequest { string repo_id = 1; string tenant_id = 2; string reference = 3; }
+message DeleteManifestRequest { string repo_id = 1; string tenant_id = 2; string digest = 3; }
+message ListUntaggedManifestsRequest { string repo_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; }
+
+// Blob requests
+message LinkBlobRequest { string repo_id = 1; string blob_digest = 2; int64 size_bytes = 3; string storage_key = 4; }
+message UnlinkBlobRequest { string repo_id = 1; string blob_digest = 2; }
+message ListOrphanedBlobsRequest { string tenant_id = 1; }
+
+// Quota requests
+message GetTenantQuotaUsageRequest { string tenant_id = 1; }
+message IncrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
+message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
+
+// Scan requests
+message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
+message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }

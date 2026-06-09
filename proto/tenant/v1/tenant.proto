@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package registry.tenant.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1;tenantv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service TenantService {
+  rpc CreateTenant(CreateTenantRequest) returns (Tenant);
+  rpc GetTenant(GetTenantRequest) returns (Tenant);
+  rpc DeleteTenant(DeleteTenantRequest) returns (google.protobuf.Empty);
+  rpc ResolveDomain(ResolveDomainRequest) returns (ResolveDomainResponse);
+  rpc RegisterDomain(RegisterDomainRequest) returns (RegisterDomainResponse);
+  rpc GetTenantPolicy(GetTenantPolicyRequest) returns (TenantPolicy);
+  rpc UpdateTenantPolicy(UpdateTenantPolicyRequest) returns (TenantPolicy);
+}
+
+message Tenant {
+  string tenant_id = 1;
+  string name      = 2;
+  string plan      = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message TenantPolicy {
+  string tenant_id            = 1;
+  bool   scan_on_push         = 2;
+  string block_on_severity    = 3; // "CRITICAL"|"HIGH"|"MEDIUM"|""
+  bool   allow_unscanned      = 4;
+  bool   proxy_cache_enabled  = 5;
+  bool   signing_required     = 6;
+  repeated string exempt_repositories = 7;
+  int64  storage_quota_bytes  = 8;
+}
+
+message CreateTenantRequest {
+  string name = 1;
+  string plan = 2;
+}
+message GetTenantRequest    { string tenant_id = 1; }
+message DeleteTenantRequest { string tenant_id = 1; }
+
+message ResolveDomainRequest  { string domain = 1; }
+message ResolveDomainResponse { string tenant_id = 1; bool found = 2; }
+
+message RegisterDomainRequest {
+  string tenant_id = 1;
+  string domain    = 2;
+}
+message RegisterDomainResponse {
+  string verification_token = 1; // add as TXT record at _registry-verify.<domain>
+}
+
+message GetTenantPolicyRequest    { string tenant_id = 1; }
+message UpdateTenantPolicyRequest {
+  string tenant_id            = 1;
+  bool   scan_on_push         = 2;
+  string block_on_severity    = 3;
+  bool   allow_unscanned      = 4;
+  bool   proxy_cache_enabled  = 5;
+  bool   signing_required     = 6;
+  repeated string exempt_repositories = 7;
+  int64  storage_quota_bytes  = 8;
+}

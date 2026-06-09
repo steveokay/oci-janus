@@ -1,0 +1,63 @@
+# Default values for the registry umbrella chart.
+# Do not place secrets here. Use SecretProviderClass / External Secrets Operator.
+
+global:
+  image:
+    registry: ghcr.io/steveokay
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  mtls:
+    enabled: true
+    caCertSecret: registry-mtls-ca
+
+  otel:
+    exporter: jaeger
+    endpoint: jaeger-collector:4317
+    environment: production
+    samplingRate: "1.0"
+
+auth:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+core:
+  replicaCount: 3
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+metadata:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+storage:
+  replicaCount: 2
+  driver: minio
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+scanner:
+  replicaCount: 2
+  workerCount: 4
+  jobTimeoutSeconds: 600
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: 2000m, memory: 2Gi }
+
+webhook:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+gc:
+  schedule: "0 2 * * *"  # nightly at 02:00 UTC
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }

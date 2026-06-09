@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package registry.proxy.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1;proxyv1";
+
+import "google/protobuf/empty.proto";
+
+service ProxyService {
+  rpc RegisterUpstream(RegisterUpstreamRequest) returns (Upstream);
+  rpc DeleteUpstream(DeleteUpstreamRequest) returns (google.protobuf.Empty);
+  rpc ListUpstreams(ListUpstreamsRequest) returns (stream Upstream);
+}
+
+message Upstream {
+  string upstream_id = 1;
+  string tenant_id   = 2;
+  string name        = 3;
+  string url         = 4;
+  string auth_type   = 5; // none|basic|token
+  bool   enabled     = 6;
+  int64  ttl_seconds = 7;
+}
+
+message RegisterUpstreamRequest {
+  string tenant_id   = 1;
+  string name        = 2;
+  string url         = 3;
+  string auth_type   = 4;
+  string username    = 5;
+  string password    = 6; // encrypted at rest
+  int64  ttl_seconds = 7;
+}
+message DeleteUpstreamRequest { string upstream_id = 1; string tenant_id = 2; }
+message ListUpstreamsRequest  { string tenant_id = 1; }

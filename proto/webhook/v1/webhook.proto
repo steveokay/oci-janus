@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package registry.webhook.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1;webhookv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service WebhookService {
+  rpc CreateEndpoint(CreateEndpointRequest) returns (Endpoint);
+  rpc DeleteEndpoint(DeleteEndpointRequest) returns (google.protobuf.Empty);
+  rpc ListEndpoints(ListEndpointsRequest) returns (stream Endpoint);
+}
+
+message Endpoint {
+  string endpoint_id = 1;
+  string tenant_id   = 2;
+  string url         = 3;
+  repeated string events = 4;
+  bool   active      = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message CreateEndpointRequest {
+  string tenant_id       = 1;
+  string url             = 2;
+  repeated string events = 3;
+  string secret          = 4; // HMAC key — stored encrypted, never returned after creation
+}
+message DeleteEndpointRequest { string endpoint_id = 1; string tenant_id = 2; }
+message ListEndpointsRequest  { string tenant_id = 1; }

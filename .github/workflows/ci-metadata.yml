@@ -1,0 +1,45 @@
+name: CI — metadata
+
+on:
+  push:
+    paths: ["services/metadata/**", "libs/**", "proto/metadata/**"]
+  pull_request:
+    paths: ["services/metadata/**", "libs/**", "proto/metadata/**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/metadata
+          config: ../../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/metadata && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/metadata && make build
+      - name: Build Docker image
+        run: |
+          docker build             --build-arg SERVICE=metadata             -f services/metadata/Dockerfile             -t ghcr.io/steveokay/oci-janus/metadata:${{ github.sha }}             .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/metadata:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

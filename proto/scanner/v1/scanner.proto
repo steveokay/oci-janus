@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package registry.scanner.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1;scannerv1";
+
+import "google/protobuf/timestamp.proto";
+
+service ScannerService {
+  rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
+  rpc GetScanStatus(GetScanStatusRequest) returns (GetScanStatusResponse);
+}
+
+message TriggerScanRequest {
+  string tenant_id        = 1;
+  string repository_name  = 2;
+  string manifest_digest  = 3;
+}
+
+message TriggerScanResponse {
+  string scan_id = 1;
+}
+
+message GetScanStatusRequest {
+  string scan_id   = 1;
+  string tenant_id = 2;
+}
+
+message GetScanStatusResponse {
+  string status  = 1; // pending|running|complete|failed
+  map<string, int32> severity_counts = 2;
+  google.protobuf.Timestamp completed_at = 3;
+}

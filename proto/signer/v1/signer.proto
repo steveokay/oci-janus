@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package registry.signer.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/signer/v1;signerv1";
+
+import "google/protobuf/timestamp.proto";
+
+service SignerService {
+  rpc SignManifest(SignManifestRequest) returns (SignManifestResponse);
+  rpc VerifyManifest(VerifyManifestRequest) returns (VerifyManifestResponse);
+  rpc ListSignatures(ListSignaturesRequest) returns (ListSignaturesResponse);
+}
+
+message SignManifestRequest {
+  string tenant_id        = 1;
+  string repository_name  = 2;
+  string manifest_digest  = 3;
+  string signer_id        = 4; // key identifier
+}
+
+message SignManifestResponse {
+  Signature signature = 1;
+}
+
+message VerifyManifestRequest {
+  string tenant_id       = 1;
+  string manifest_digest = 2;
+  string signer_id       = 3;
+}
+
+message VerifyManifestResponse {
+  bool   verified        = 1;
+  string failure_reason  = 2;
+  Signature signature    = 3;
+}
+
+message ListSignaturesRequest {
+  string manifest_digest = 1;
+  string tenant_id       = 2;
+}
+
+message ListSignaturesResponse {
+  repeated Signature signatures = 1;
+}
+
+message Signature {
+  string signer_id        = 1;
+  string manifest_digest  = 2;
+  string signature_digest = 3;
+  string key_id           = 4;
+  google.protobuf.Timestamp signed_at = 5;
+}

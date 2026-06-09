@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package registry.auth.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/auth/v1;authv1";
+
+import "google/protobuf/timestamp.proto";
+
+// AuthService validates tokens and API keys for internal service consumption.
+// Exposed only over mTLS gRPC — never directly to clients.
+service AuthService {
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse);
+  rpc GetUserPermissions(GetUserPermissionsRequest) returns (GetUserPermissionsResponse);
+}
+
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  bool   valid      = 1;
+  string user_id    = 2;
+  string tenant_id  = 3;
+  string jti        = 4;
+  repeated RepositoryAccess access = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ValidateAPIKeyRequest {
+  string key_id     = 1;
+  string raw_secret = 2;
+}
+
+message ValidateAPIKeyResponse {
+  bool   valid      = 1;
+  string user_id    = 2;
+  string tenant_id  = 3;
+  repeated RepositoryAccess access = 4;
+}
+
+message GetUserPermissionsRequest {
+  string user_id   = 1;
+  string tenant_id = 2;
+}
+
+message GetUserPermissionsResponse {
+  repeated RepositoryAccess access = 1;
+  repeated string roles = 2;
+}
+
+message RepositoryAccess {
+  string type    = 1; // "repository"
+  string name    = 2; // "org/repo"
+  repeated string actions = 3; // ["push", "pull"]
+}

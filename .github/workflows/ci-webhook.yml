@@ -1,0 +1,45 @@
+name: CI — webhook
+
+on:
+  push:
+    paths: ["services/webhook/**", "libs/**", "proto/webhook/**"]
+  pull_request:
+    paths: ["services/webhook/**", "libs/**", "proto/webhook/**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/webhook
+          config: ../../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/webhook && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/webhook && make build
+      - name: Build Docker image
+        run: |
+          docker build             --build-arg SERVICE=webhook             -f services/webhook/Dockerfile             -t ghcr.io/steveokay/oci-janus/webhook:${{ github.sha }}             .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/webhook:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

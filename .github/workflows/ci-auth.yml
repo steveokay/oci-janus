@@ -1,0 +1,60 @@
+name: CI — auth
+
+on:
+  push:
+    paths: ["services/auth/**", "libs/**", "proto/auth/**"]
+  pull_request:
+    paths: ["services/auth/**", "libs/**", "proto/auth/**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/auth
+          config: ../../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/auth && go test -race ./...
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd services/auth && govulncheck ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - name: Build binary
+        run: cd services/auth && make build
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg SERVICE=auth \
+            -f services/auth/Dockerfile \
+            -t ghcr.io/steveokay/oci-janus/auth:${{ github.sha }} \
+            .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/auth:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

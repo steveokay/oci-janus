@@ -1,0 +1,45 @@
+name: CI — signer
+
+on:
+  push:
+    paths: ["services/signer/**", "libs/**", "proto/signer/**"]
+  pull_request:
+    paths: ["services/signer/**", "libs/**", "proto/signer/**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/signer
+          config: ../../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/signer && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/signer && make build
+      - name: Build Docker image
+        run: |
+          docker build             --build-arg SERVICE=signer             -f services/signer/Dockerfile             -t ghcr.io/steveokay/oci-janus/signer:${{ github.sha }}             .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/signer:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

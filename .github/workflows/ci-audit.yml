@@ -1,0 +1,45 @@
+name: CI — audit
+
+on:
+  push:
+    paths: ["services/audit/**", "libs/**", "proto/audit/**"]
+  pull_request:
+    paths: ["services/audit/**", "libs/**", "proto/audit/**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/audit
+          config: ../../.golangci.yml
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/audit && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd services/audit && make build
+      - name: Build Docker image
+        run: |
+          docker build             --build-arg SERVICE=audit             -f services/audit/Dockerfile             -t ghcr.io/steveokay/oci-janus/audit:${{ github.sha }}             .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/audit:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

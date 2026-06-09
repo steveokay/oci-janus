@@ -1,0 +1,17 @@
+go 1.23
+
+use (
+	./libs
+	./services/auth
+	./services/audit
+	./services/core
+	./services/gc
+	./services/gateway
+	./services/metadata
+	./services/proxy
+	./services/scanner
+	./services/signer
+	./services/storage
+	./services/tenant
+	./services/webhook
+)
