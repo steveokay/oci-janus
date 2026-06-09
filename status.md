@@ -1,6 +1,7 @@
 # Project Status
 
-> Last updated: 2026-06-09
+> Last updated: 2026-06-09 (PM review)
+> PM Agent last ran: 2026-06-09
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -21,22 +22,22 @@
 
 | Service | Status | Owner | Notes |
 |---|---|---|---|
-| `proto/` | NOT STARTED | — | Proto definitions + generated Go stubs |
-| `libs/` | NOT STARTED | — | Shared Go modules |
-| `registry-gateway` | NOT STARTED | — | Traefik ingress, TLS termination, tenant routing |
-| `registry-auth` | NOT STARTED | — | JWT issuance, API key management |
-| `registry-core` | NOT STARTED | — | OCI Distribution Spec v1.1 |
-| `registry-storage` | NOT STARTED | — | Storage abstraction (MinIO/S3/GCS/Azure) |
-| `registry-metadata` | NOT STARTED | — | PostgreSQL metadata service |
-| `registry-proxy` | NOT STARTED | — | Pull-through proxy cache |
-| `registry-scanner` | NOT STARTED | — | Vulnerability scan orchestration |
-| `registry-signer` | NOT STARTED | — | Cosign + Notary v2 signing |
-| `registry-webhook` | NOT STARTED | — | Webhook delivery worker |
-| `registry-audit` | NOT STARTED | — | Audit log writer + query API |
-| `registry-gc` | NOT STARTED | — | Garbage collection worker |
-| `registry-tenant` | NOT STARTED | — | Tenant + custom domain management |
-| `ui/` | NOT STARTED | — | React/TypeScript frontend |
-| `infra/` | NOT STARTED | — | Helm charts, Compose, Terraform |
+| `proto/` | IN PROGRESS | — | All 8 `.proto` files written with full service definitions. Generated Go stubs (`proto/gen/go/`) not yet produced — need `buf generate` run. |
+| `libs/` | IN PROGRESS | — | Scaffold + 5 real files: Driver interface, Scanner interface, mTLS helpers, RabbitMQ events, gRPC error codes. ~15 package directories still empty stubs. |
+| `services/gateway` | IN PROGRESS | — | Scaffold only: go.mod, main.go, config, server, Dockerfile, Makefile. No business logic. |
+| `services/auth` | IN PROGRESS | — | Scaffold only. No JWT issuance, API key, DB access, or JWKS endpoint yet. |
+| `services/core` | IN PROGRESS | — | Scaffold only. No OCI endpoints, blob handling, or upload state yet. |
+| `services/storage` | IN PROGRESS | — | Scaffold only. No driver implementations (MinIO/S3/GCS/Azure) yet. |
+| `services/metadata` | IN PROGRESS | — | Scaffold only. No DB migrations, gRPC handlers, or repo layer yet. |
+| `services/proxy` | IN PROGRESS | — | Scaffold only. No upstream fetching, cache logic, or RabbitMQ publish yet. |
+| `services/scanner` | IN PROGRESS | — | Scaffold only. No plugin runner, job queue, or scan logic yet. |
+| `services/signer` | IN PROGRESS | — | Scaffold only. No Cosign/Notary integration yet. |
+| `services/webhook` | IN PROGRESS | — | Scaffold only. No delivery worker, retry logic, or HMAC signing yet. |
+| `services/audit` | IN PROGRESS | — | Scaffold only. No DB schema, event consumer, or append-only enforcement yet. |
+| `services/gc` | IN PROGRESS | — | Scaffold only. No mark/sweep algorithm or advisory lock yet. |
+| `services/tenant` | IN PROGRESS | — | Scaffold only. No tenant CRUD, domain verification, or policy management yet. |
+| `ui/` | IN PROGRESS | — | Scaffold only: package.json, Vite config, tsconfig, main.tsx, globals.css (design tokens), Axios client. No routes or components yet. |
+| `infra/` | IN PROGRESS | — | docker-compose.yml (all infra services), Helm umbrella chart + values, 3 runbook stubs. Terraform empty. |
 
 ---
 
@@ -53,6 +54,9 @@
 | 7 | Connection pool: add `MaxConnIdleTime`, `MaxConnLifetime`, `ConnectTimeout`; map exhaustion to `codes.ResourceExhausted` | RESOLVED | 2026-06-09 |
 | 8 | Custom domain verification: add 24h notification + exponential backoff on DNS polling | RESOLVED | 2026-06-09 |
 | 9 | Monorepo over per-service repos — single `github.com/<org>/registry` repo with Go workspaces (`go.work`); each service keeps its own `go.mod` for Docker build isolation; CI uses path-filtered jobs | RESOLVED | 2026-06-09 |
+| 10 | K8s target: Docker Desktop local cluster — no cloud provider; Helm charts deploy to local cluster; Terraform deferred until production target is chosen | RESOLVED | 2026-06-09 |
+| 11 | Default vulnerability scanner: **Trivy** — runs as external process plugin via JSON-RPC; `SCANNER_PLUGIN_PATH` points to Trivy binary; no `.so` loading | RESOLVED | 2026-06-09 |
+| 12 | Local KMS: **HashiCorp Vault dev mode** in docker-compose; `SIGNER_KEY_BACKEND=vault`; Vault Transit engine; prod path is swap `VAULT_ADDR` or change backend env var — zero code changes | RESOLVED | 2026-06-09 |
 
 ---
 
@@ -188,40 +192,53 @@ Concrete implementation plans for each resolved architecture issue.
 
 ### REM-010 — Move Scanner Interface Location
 - **Affects:** `libs/`, `services/scanner`
-- **Status:** PLANNED
-- **Summary:** Move `Scanner` interface from `libs/storage/driver` to `libs/scanner/plugin`.
-- **Tasks:**
-  - [ ] Create `libs/scanner/plugin/` package
-  - [ ] Move `Scanner`, `ScanRequest`, `ScanResult`, `Finding`, `LayerRef`, `BlobFetcher` types there
-  - [ ] Update all import paths in `services/scanner`
-  - [ ] Update `§5` in CLAUDE.md to reflect correct location (already done)
+- **Status:** DONE ✅
+- **Summary:** `libs/scanner/plugin/plugin.go` created during monorepo scaffold with full Scanner interface, ScanRequest, ScanResult, Finding, LayerRef, BlobFetcher types. CLAUDE.md already updated. No further action needed.
 
 ---
 
 ## Open Decisions
 
-| # | Question | Raised | Blocking |
+| # | Question | Status | Resolution |
 |---|---|---|---|
-| 1 | Which org/GitHub namespace to use for all repos? | 2026-06-09 | Everything |
-| 2 | Cloud provider for initial production deployment (K8s target)? | 2026-06-09 | `infra/` |
-| 3 | Which scanner plugin to ship as default (Trivy vs Grype)? | 2026-06-09 | `registry-scanner` |
-| 4 | KMS provider for production signing keys? | 2026-06-09 | `registry-signer` |
+| 1 | Which org/GitHub namespace? | ✅ RESOLVED | `github.com/steveokay/oci-janus` — in all `go.mod` files and CI |
+| 2 | Cloud provider / K8s target? | ✅ RESOLVED | No cloud provider. K8s runs locally on **Docker Desktop** for all testing. No Terraform needed at this stage. Helm charts deploy to the local cluster. |
+| 3 | Default scanner plugin? | ✅ RESOLVED | **Trivy** — add as default external process plugin. `SCANNER_PLUGIN_PATH` points to Trivy binary. |
+| 4 | Local KMS for signing keys? | ✅ RESOLVED | **HashiCorp Vault in dev mode** (Docker container). `SIGNER_KEY_BACKEND=vault`, Vault Transit engine for key storage and signing. No raw key material in env vars or files. Prod path: swap `VAULT_ADDR` to a real Vault instance or change backend to `awskms`/`gcpkms` with zero code changes. |
 
 ---
 
 ## Current Sprint
 
-> Update this section at the start of each sprint.
-
-**Sprint goal:** — (not started)
+**Sprint 1 — Foundation**
+> Goal: `libs/` foundations complete, local dev environment running, `services/auth` functional end-to-end.
+> Why: Every other service depends on auth for token validation. Nothing can be integration-tested without a working auth service and a live local stack.
 
 | Task | Service | Status |
 |---|---|---|
-| — | — | — |
+| Run `buf generate` — produce Go stubs in `proto/gen/go/` | `proto/` | NOT STARTED |
+| Implement `libs/config/loader` — Viper loader with DB + pool config fields | `libs/` | NOT STARTED |
+| Implement `libs/middleware/grpc` — server interceptors (recovery, auth, tracing, logging, metrics) | `libs/` | NOT STARTED |
+| Implement `libs/observability/otel` — OTEL bootstrap (tracer + meter, pluggable exporter) | `libs/` | NOT STARTED |
+| Implement `libs/crypto/argon2` — argon2id hash + verify helpers | `libs/` | NOT STARTED |
+| Implement `libs/crypto/aes` — AES-256-GCM encrypt/decrypt helpers | `libs/` | NOT STARTED |
+| Implement `libs/rabbitmq/publisher` — confirm-mode publisher | `libs/` | NOT STARTED |
+| Implement `libs/rabbitmq/consumer` — manual-ack consumer with DLX | `libs/` | NOT STARTED |
+| Add Vault dev mode to `docker-compose.yml` + init script (enable Transit engine, create signing key) | `infra/` | NOT STARTED |
+| Spin up local stack — `docker compose up` in `infra/docker-compose/` | `infra/` | NOT STARTED |
+| Write DB migrations for auth schema (users, api_keys) | `services/auth` | NOT STARTED |
+| Implement auth HTTP endpoints (POST /auth/token, /api/v1/login, /api/v1/apikeys, JWKS) | `services/auth` | NOT STARTED |
+| Implement auth gRPC handlers (ValidateToken, ValidateAPIKey, GetUserPermissions) | `services/auth` | NOT STARTED |
+| Apply REM-002: JWT revocation TTL coupling | `services/auth` | NOT STARTED |
 
 ---
 
 ## Notes
 
-- Build order recommendation: `proto/` → `libs/` → `services/auth` → `services/metadata` → `services/storage` → `services/core` → remaining services
-- `registry-core` OCI conformance tests must pass before any other service builds on top of it
+- Build order: `proto/` (generate stubs) → `libs/` (foundations) → `services/auth` → `services/metadata` → `services/storage` → `services/core` → remaining services
+- `services/core` OCI conformance tests must pass before any downstream service builds on top of it
+- Do not start `services/core` until `services/auth`, `services/metadata`, and `services/storage` gRPC handlers are functional
+- No cloud provider. K8s = Docker Desktop local cluster. Terraform is deferred — not needed until a production target is chosen.
+- Vault dev mode goes into docker-compose alongside the other infra services. An init script enables the Transit engine and seeds the dev signing key on first boot.
+- Trivy scanner: `services/scanner` will invoke the Trivy binary as an external process. Trivy installs into the scanner Docker image — no separate plugin download needed.
+- All open decisions are now resolved. No blockers for Sprint 1 or Sprint 2.
