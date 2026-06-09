@@ -1,40 +1,38 @@
+// Package config loads and validates runtime configuration for registry-auth.
+// All values come from environment variables; no config files are read.
 package config
 
 import (
 	"fmt"
 
-	"github.com/spf13/viper"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
-// Config holds all runtime configuration for the service, loaded from environment variables.
+// Config is the complete set of environment variables required by registry-auth.
+// Embedded structs use mapstructure's squash tag so their fields map directly
+// from env vars without any prefix.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	loader.BaseConfig `mapstructure:",squash"`
+	loader.DBConfig   `mapstructure:",squash"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
+	// Redis — used for JTI revocation (REM-002) and per-IP login rate limiting
+	RedisAddr     string `mapstructure:"REDIS_ADDR"`
+	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
+	RedisDB       int    `mapstructure:"REDIS_DB"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	// JWT RS256 signing keys — base64-encoded PEM, never stored in plaintext
+	JWTPrivateKeyB64 string `mapstructure:"JWT_PRIVATE_KEY_B64"`
+	JWTPublicKeyB64  string `mapstructure:"JWT_PUBLIC_KEY_B64"`
+	// JWTKeyID is the kid header value used for key rotation via JWKS
+	JWTKeyID string `mapstructure:"JWT_KEY_ID"`
 }
 
-// Load reads configuration from environment variables and validates required fields.
+// Load binds environment variables into Config and validates required fields.
+// Fails fast at startup rather than surfacing missing secrets at request time.
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
-	viper.SetDefault("LOG_LEVEL", "info")
-	viper.SetDefault("LOG_FORMAT", "json")
-	viper.SetDefault("GRPC_ADDR", ":50051")
-	viper.SetDefault("HTTP_ADDR", ":8080")
-	viper.SetDefault("OTEL_SERVICE_NAME", "auth")
-
 	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+	if err := loader.Load("registry-auth", cfg); err != nil {
+		return nil, err
 	}
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -43,15 +41,13 @@ func Load() (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	required := map[string]string{
-		"MTLS_CA_CERT_PATH": cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":    cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":     cfg.MTLSKeyPath,
-	}
-	for k, v := range required {
-		if v == "" {
-			return fmt.Errorf("%s is required", k)
-		}
-	}
-	return nil
+	// mTLS cert paths are required in production but optional for local dev.
+	// The server will warn and run without TLS if they are absent.
+	return loader.RequireFields(map[string]string{
+		"DB_DSN":              cfg.DBDSN,
+		"REDIS_ADDR":          cfg.RedisAddr,
+		"JWT_PRIVATE_KEY_B64": cfg.JWTPrivateKeyB64,
+		"JWT_PUBLIC_KEY_B64":  cfg.JWTPublicKeyB64,
+		"JWT_KEY_ID":          cfg.JWTKeyID,
+	})
 }

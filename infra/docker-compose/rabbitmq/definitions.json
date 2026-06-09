@@ -1,0 +1,154 @@
+{
+  "vhosts": [
+    { "name": "/" }
+  ],
+  "exchanges": [
+    {
+      "name": "registry.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "registry.dlx",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "registry.scanner",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-dead-letter-exchange": "registry.dlx",
+        "x-message-ttl": 604800000
+      }
+    },
+    {
+      "name": "registry.webhook",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-dead-letter-exchange": "registry.dlx",
+        "x-message-ttl": 604800000
+      }
+    },
+    {
+      "name": "registry.audit",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-dead-letter-exchange": "registry.dlx",
+        "x-message-ttl": 604800000
+      }
+    },
+    {
+      "name": "dlq.registry.scanner",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "dlq.registry.webhook",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "dlq.registry.audit",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "registry.events",
+      "vhost": "/",
+      "destination": "registry.scanner",
+      "destination_type": "queue",
+      "routing_key": "push.completed",
+      "arguments": {}
+    },
+    {
+      "source": "registry.events",
+      "vhost": "/",
+      "destination": "registry.audit",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "registry.events",
+      "vhost": "/",
+      "destination": "registry.webhook",
+      "destination_type": "queue",
+      "routing_key": "push.completed",
+      "arguments": {}
+    },
+    {
+      "source": "registry.events",
+      "vhost": "/",
+      "destination": "registry.webhook",
+      "destination_type": "queue",
+      "routing_key": "scan.completed",
+      "arguments": {}
+    },
+    {
+      "source": "registry.dlx",
+      "vhost": "/",
+      "destination": "dlq.registry.scanner",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "registry.dlx",
+      "vhost": "/",
+      "destination": "dlq.registry.webhook",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "registry.dlx",
+      "vhost": "/",
+      "destination": "dlq.registry.audit",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    }
+  ],
+  "permissions": [
+    {
+      "user": "registry",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ]
+}

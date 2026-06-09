@@ -1,0 +1,67 @@
+# Standalone dev compose for registry-auth.
+# Start the infra stack first:
+#   docker-compose -f ../../infra/docker-compose/docker-compose.yml up -d
+# Then start this service:
+#   cp .env.example .env  # fill in JWT keys
+#   docker-compose -f docker-compose.dev.yml up --build
+
+services:
+  registry-auth:
+    build:
+      context: ../../
+      dockerfile: services/auth/Dockerfile
+      args:
+        SERVICE: auth
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"   # HTTP: token endpoint, API
+      - "50051:50051" # gRPC: internal AuthService
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # Infrastructure pulled in from the shared infra compose.
+  # These are defined here only to satisfy depends_on; the actual containers
+  # are managed by the infra docker-compose.yml.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: registry
+      POSTGRES_PASSWORD: registry
+      POSTGRES_DB: registry_auth
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  registry:
+    name: registry
+    driver: bridge
+
+volumes:
+  postgres_auth_data:

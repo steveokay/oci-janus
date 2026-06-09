@@ -1,20 +1,36 @@
 version: "3.9"
 
-# Infrastructure services for local development.
-# Application services are started separately with their own docker-compose.dev.yml files.
+# Full local dev stack: infrastructure + all implemented application services.
+# Usage:
+#   cp .env.example .env          # fill in secrets
+#   cp ../../services/auth/.env.example ../../services/auth/.env  # fill in JWT keys
+#   docker-compose up -d
+#
+# Traefik dashboard: http://localhost:8888
+# Jaeger UI:         http://localhost:16686
+# RabbitMQ UI:       http://localhost:15672  (registry / registry)
+# MinIO console:     http://localhost:9001   (minioadmin / minioadmin)
+# Vault UI:          http://localhost:8200   (token: dev-root-token)
 
 services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: registry
-      POSTGRES_PASSWORD: registry
-      POSTGRES_MULTIPLE_DATABASES: registry_auth,registry_metadata,registry_tenant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
+      POSTGRES_DB: registry_auth
+      # init-multi-db.sh reads this to create additional databases
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh
+      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
     ports:
       - "5432:5432"
+    networks:
+      - registry
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U registry"]
       interval: 5s
@@ -28,6 +44,8 @@ services:
       - redis_data:/data
     ports:
       - "6379:6379"
+    networks:
+      - registry
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -37,14 +55,16 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     environment:
-      RABBITMQ_DEFAULT_USER: registry
-      RABBITMQ_DEFAULT_PASS: registry
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-registry}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-registry}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
     ports:
       - "5672:5672"
-      - "15672:15672"   # management UI
+      - "15672:15672"
+    networks:
+      - registry
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -55,13 +75,15 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio_data:/data
     ports:
       - "9000:9000"
-      - "9001:9001"   # console
+      - "9001:9001"
+    networks:
+      - registry
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -73,9 +95,11 @@ services:
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "16686:16686"  # UI
+      - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC
       - "4318:4318"    # OTLP HTTP
+    networks:
+      - registry
 
   vault:
     image: hashicorp/vault:1.17
@@ -86,8 +110,10 @@ services:
       VAULT_LOG_LEVEL: warn
     ports:
       - "8200:8200"
+    networks:
+      - registry
     cap_add:
-      - IPC_LOCK   # prevents Vault memory from being swapped to disk
+      - IPC_LOCK
     healthcheck:
       test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
       interval: 5s
@@ -106,7 +132,49 @@ services:
     volumes:
       - ./vault/init.sh:/init.sh:ro
     command: sh /init.sh
-    restart: "no"   # runs once, seeds Transit engine and signing key
+    networks:
+      - registry
+    restart: "no"
+
+  # ── Application services ────────────────────────────────────────────────────
+
+  registry-auth:
+    build:
+      context: ../../
+      dockerfile: services/auth/Dockerfile
+      args:
+        SERVICE: auth
+    env_file:
+      - ../../services/auth/.env
+    environment:
+      # Override connection strings to use Docker service names
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=require
+      REDIS_ADDR: redis:6379
+      OTEL_EXPORTER: jaeger
+      OTEL_ENDPOINT: http://jaeger:4317
+      OTEL_ENVIRONMENT: development
+    ports:
+      - "8080:8080"    # HTTP: /auth/token, /api/v1/*, /.well-known/jwks.json
+      - "50051:50051"  # gRPC: AuthService (internal)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  registry:
+    name: registry
+    driver: bridge
 
 volumes:
   postgres_data:
