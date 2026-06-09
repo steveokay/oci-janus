@@ -1,13 +1,13 @@
 go 1.23
 
 use (
-	./proto/gen/go
 	./libs
-	./services/auth
+	./proto/gen/go
 	./services/audit
+	./services/auth
 	./services/core
-	./services/gc
 	./services/gateway
+	./services/gc
 	./services/metadata
 	./services/proxy
 	./services/scanner

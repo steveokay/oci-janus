@@ -1,0 +1,106 @@
+// Package publisher provides a RabbitMQ publisher with confirm mode.
+// Confirm mode means the broker ACKs every message before Publish returns,
+// so callers know the message was persisted — not just placed in a socket buffer.
+package publisher
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+)
+
+// Publisher sends events to a RabbitMQ topic exchange using confirm mode.
+// Use New to create an instance; call Close when the service shuts down.
+type Publisher struct {
+	conn     *amqp.Connection
+	ch       *amqp.Channel
+	confirms chan amqp.Confirmation
+	exchange string
+}
+
+// New dials the broker, opens a channel, enables confirm mode, and declares
+// the exchange as durable topic. The exchange must already exist or be
+// declared here; passing an existing exchange is idempotent.
+func New(url, exchange string) (*Publisher, error) {
+	conn, err := amqp.Dial(url)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", url, err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("open channel: %w", err)
+	}
+	// Declare exchange so the publisher owns its dependency
+	if err := ch.ExchangeDeclare(exchange, "topic", true, false, false, false, nil); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("declare exchange %q: %w", exchange, err)
+	}
+	// Enable publisher confirms — without this, Publish is fire-and-forget
+	if err := ch.Confirm(false); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("enable confirm mode: %w", err)
+	}
+	// Buffer 1 so the channel never blocks between Publish and the select below
+	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
+
+	return &Publisher{conn: conn, ch: ch, confirms: confirms, exchange: exchange}, nil
+}
+
+// Publish marshals event to JSON and sends it to the exchange with the given
+// routing key. It blocks until the broker ACKs the message or ctx is cancelled.
+// Messages are marked persistent (survives broker restart) and include
+// tenant_id as an AMQP header for consumers that need it without deserialising.
+func (p *Publisher) Publish(ctx context.Context, routingKey string, event events.Event) error {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+
+	err = p.ch.PublishWithContext(ctx, p.exchange, routingKey,
+		false, // mandatory — don't return if no queue bound (routing is the publisher's problem)
+		false, // immediate — not used with quorum queues
+		amqp.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp.Persistent, // survives broker restart
+			MessageId:    event.ID,
+			Timestamp:    event.OccurredAt,
+			Body:         body,
+			// tenant_id header lets consumers filter without deserialising the body
+			Headers: amqp.Table{"tenant_id": event.TenantID},
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("publish to %q/%q: %w", p.exchange, routingKey, err)
+	}
+
+	// Wait for the broker to confirm delivery. This is what makes confirm mode
+	// meaningful — without this wait the call would be fire-and-forget.
+	select {
+	case confirm, ok := <-p.confirms:
+		if !ok {
+			return fmt.Errorf("confirm channel closed")
+		}
+		if !confirm.Ack {
+			return fmt.Errorf("broker nacked message (delivery tag %d)", confirm.DeliveryTag)
+		}
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled waiting for broker ack: %w", ctx.Err())
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout waiting for broker ack")
+	}
+	return nil
+}
+
+// Close shuts down the channel and connection. Always call on process exit.
+func (p *Publisher) Close() error {
+	if err := p.ch.Close(); err != nil {
+		return fmt.Errorf("close channel: %w", err)
+	}
+	return p.conn.Close()
+}
