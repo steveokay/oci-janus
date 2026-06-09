@@ -1,57 +1,60 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 
-	"github.com/spf13/viper"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
-// Config holds all runtime configuration for the service, loaded from environment variables.
+// Config holds all runtime configuration for registry-proxy.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	loader.BaseConfig `mapstructure:",squash"`
+	loader.DBConfig   `mapstructure:",squash"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
+	RedisAddr     string `mapstructure:"REDIS_ADDR"`
+	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
+	RedisDB       int    `mapstructure:"REDIS_DB"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	AuthGRPCAddr    string `mapstructure:"AUTH_GRPC_ADDR"`
+	StorageGRPCAddr string `mapstructure:"STORAGE_GRPC_ADDR"`
+
+	// CredentialKeyHex is a 64-character hex string (32 bytes) used for
+	// AES-256-GCM encryption of upstream registry passwords at rest.
+	CredentialKeyHex string `mapstructure:"CREDENTIAL_KEY_HEX"`
+
+	// UpstreamHTTPTimeoutSecs controls per-request timeout to upstream registries.
+	UpstreamHTTPTimeoutSecs int `mapstructure:"UPSTREAM_HTTP_TIMEOUT_SECS"`
+	// UpstreamMaxResponseBytes caps the response body size per upstream layer (default 20 GiB).
+	UpstreamMaxResponseBytes int64 `mapstructure:"UPSTREAM_MAX_RESPONSE_BYTES"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
 func Load() (*Config, error) {
-	viper.AutomaticEnv()
-	viper.SetDefault("LOG_LEVEL", "info")
-	viper.SetDefault("LOG_FORMAT", "json")
-	viper.SetDefault("GRPC_ADDR", ":50051")
-	viper.SetDefault("HTTP_ADDR", ":8080")
-	viper.SetDefault("OTEL_SERVICE_NAME", "proxy")
-
 	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+	if err := loader.Load("registry-proxy", cfg); err != nil {
+		return nil, err
 	}
-	if err := validate(cfg); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	if err := loader.RequireFields(map[string]string{
+		"REDIS_ADDR":         cfg.RedisAddr,
+		"AUTH_GRPC_ADDR":     cfg.AuthGRPCAddr,
+		"STORAGE_GRPC_ADDR":  cfg.StorageGRPCAddr,
+		"DB_DSN":             cfg.DBDSN,
+		"CREDENTIAL_KEY_HEX": cfg.CredentialKeyHex,
+	}); err != nil {
+		return nil, err
+	}
+	if len(cfg.CredentialKeyHex) != 64 {
+		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX must be 64 hex characters (32 bytes), got %d", len(cfg.CredentialKeyHex))
+	}
+	if _, err := hex.DecodeString(cfg.CredentialKeyHex); err != nil {
+		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX is not valid hex: %w", err)
+	}
+	if cfg.UpstreamHTTPTimeoutSecs == 0 {
+		cfg.UpstreamHTTPTimeoutSecs = 30
+	}
+	if cfg.UpstreamMaxResponseBytes == 0 {
+		cfg.UpstreamMaxResponseBytes = 20 << 30 // 20 GiB per CLAUDE.md §4.6
 	}
 	return cfg, nil
-}
-
-func validate(cfg *Config) error {
-	required := map[string]string{
-		"MTLS_CA_CERT_PATH": cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":    cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":     cfg.MTLSKeyPath,
-	}
-	for k, v := range required {
-		if v == "" {
-			return fmt.Errorf("%s is required", k)
-		}
-	}
-	return nil
 }

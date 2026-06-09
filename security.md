@@ -189,6 +189,35 @@
 
 ---
 
+### SEC-012 — `registry-proxy` blob handler stores partial blob on client disconnect
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-proxy`
+- **Raised:** 2026-06-09
+- **Description:** `services/proxy/internal/handler/http.go` — `handleGetBlob` uses `io.TeeReader` to simultaneously stream a blob to the client and a background goroutine that stores it in `registry-storage`. If the client disconnects mid-stream, `io.Copy` returns an error but `pw.Close()` (pipe writer close) is called unconditionally immediately after. The background goroutine sees EOF on the pipe and stores a truncated blob under the correct digest key, corrupting the cache entry for all future clients.
+- **Remediation:**
+  1. Track `io.Copy` error and call `pw.CloseWithError(err)` on failure so the background goroutine receives a non-EOF error
+  2. In the background goroutine, abort the `PutBlob` stream on pipe error — do not call `CloseAndRecv()`
+  3. On abort: issue a best-effort `DeleteBlob` to remove any partial write
+  4. Alternatively, buffer the full blob before streaming — acceptable for manifest-sized objects but not large blobs
+- **References:** `services/proxy/internal/handler/http.go:handleGetBlob`, SEC-004
+
+---
+
+### SEC-013 — `registry-proxy` blob requests missing digest format validation
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `registry-proxy`
+- **Raised:** 2026-06-09
+- **Description:** `handleGetBlob` in `http.go` passes the `digest` path parameter directly to `blobKey(tenantID, digest)`. `blobKey` calls `strings.TrimPrefix(digest, "sha256:")` and then `hex[:2]` — if digest is malformed (e.g. empty string, or a value without the sha256 prefix that leaves `hex` less than 2 chars), this panics with an index out of range. No regex validation is applied to the digest before use.
+- **Remediation:**
+  1. Add `digestRE = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)` (identical to `registry-core`)
+  2. Validate `digest` at the top of `handleGetBlob` and `handleHeadBlob`, return `DIGEST_INVALID` (400) on mismatch
+  3. Apply the same validation to the `reference` parameter in manifest handlers when it starts with `sha256:`
+- **References:** `services/proxy/internal/handler/http.go:blobKey`, `services/core/internal/handler/http.go:digestRE`
+
+---
+
 ## Resolved Issues
 
 | ID | Title | Service | Resolved | How |
@@ -203,18 +232,18 @@ Tracked per service. `?` = not yet assessed.
 
 | Rule | gateway | auth | core | storage | metadata | proxy | scanner | signer | webhook | audit | gc | tenant |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| No `unsafe` | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| File paths sanitised | ? | N/A | N/A | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| No `unsafe` | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| File paths sanitised | ? | N/A | N/A | ? | ? | N/A | ? | ? | ? | ? | ? | ? |
+| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
 | CSP header on HTML responses | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
 | CORS explicitly configured | ? | ? | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ? |
-| Request body size limits | ? | ✓ | ✓ | ? | N/A | ? | N/A | N/A | N/A | N/A | N/A | ? |
+| Request body size limits | ? | ✓ | ✓ | ? | N/A | ✓ | N/A | N/A | N/A | N/A | N/A | ? |
 | `govulncheck` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gosec` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gitleaks` pre-commit hook | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
