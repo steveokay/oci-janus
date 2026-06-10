@@ -1,4 +1,4 @@
-// Package server wires the gRPC and HTTP servers together and manages graceful shutdown.
+// Package server wires the signer service and starts gRPC + HTTP servers.
 package server
 
 import (
@@ -7,18 +7,35 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/signer/internal/config"
+	"github.com/steveokay/oci-janus/services/signer/internal/handler"
+	"github.com/steveokay/oci-janus/services/signer/internal/signing"
+	"github.com/steveokay/oci-janus/services/signer/internal/sigstore"
 )
 
-// Run starts the gRPC and HTTP servers and blocks until ctx is cancelled or a server error occurs.
+// Run initialises all dependencies and starts the signer service.
 func Run(ctx context.Context, cfg *config.Config) error {
+	s, err := loadSigner(cfg)
+	if err != nil {
+		return fmt.Errorf("load signer: %w", err)
+	}
+	slog.Info("signer loaded", "backend", cfg.SignerKeyBackend, "key_id", s.KeyID())
+
+	store := sigstore.New()
+	grpcHdl := handler.New(s, store)
+
 	grpcSrv := grpc.NewServer()
-	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
+	signerv1.RegisterSignerServiceServer(grpcSrv, grpcHdl)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -29,8 +46,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", metricsHandler)
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
+	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // TODO: wire prometheus registry
+	})
+	httpSrv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           httpMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -44,7 +67,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	select {
 	case <-ctx.Done():
-		slog.Info("shutting down")
+		slog.Info("shutting down signer service")
 		grpcSrv.GracefulStop()
 		_ = httpSrv.Shutdown(context.Background())
 		return nil
@@ -53,7 +76,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 }
 
-func metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	// TODO: wire up prometheus registry
-	w.WriteHeader(http.StatusOK)
+// loadSigner constructs the Signer from config.
+// Only the "env" backend is fully implemented; others fail with a clear error.
+func loadSigner(cfg *config.Config) (*signing.Signer, error) {
+	switch cfg.SignerKeyBackend {
+	case "env":
+		return signing.NewEnv(cfg.CosignPrivateKeyB64, cfg.CosignPublicKeyB64)
+	case "vault", "awskms", "gcpkms", "azurekms":
+		return nil, fmt.Errorf("SIGNER_KEY_BACKEND=%s is not yet implemented; use env backend", cfg.SignerKeyBackend)
+	default:
+		return nil, fmt.Errorf("unknown SIGNER_KEY_BACKEND: %s", cfg.SignerKeyBackend)
+	}
 }

@@ -6,21 +6,40 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds all runtime configuration for the service, loaded from environment variables.
+// Config holds all runtime configuration for the signer service.
 type Config struct {
 	LogLevel    string `mapstructure:"LOG_LEVEL"`
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
 	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
+	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
+	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
+	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
 	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
 	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
 	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
 	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+
+	// SIGNER_KEY_BACKEND selects the key source: env | vault | awskms | gcpkms | azurekms
+	SignerKeyBackend string `mapstructure:"SIGNER_KEY_BACKEND"`
+
+	// env backend: PEM-encoded ECDSA P-256 private/public key, base64-encoded.
+	// Never log these values.
+	CosignPrivateKeyB64 string `mapstructure:"SIGNER_COSIGN_PRIVATE_KEY"`
+	CosignPublicKeyB64  string `mapstructure:"SIGNER_COSIGN_PUBLIC_KEY"`
+
+	// vault backend
+	VaultAddr       string `mapstructure:"VAULT_ADDR"`
+	VaultToken      string `mapstructure:"VAULT_TOKEN"`
+	VaultCosignPath string `mapstructure:"VAULT_COSIGN_PATH"`
+
+	// KMS backends (awskms / gcpkms / azurekms)
+	KMSKeyARN       string `mapstructure:"SIGNER_KMS_ARN"`
+	KMSResourceID   string `mapstructure:"SIGNER_KMS_RESOURCE_ID"`
+	KMSVaultURL     string `mapstructure:"SIGNER_KMS_VAULT_URL"`
+	KMSKeyName      string `mapstructure:"SIGNER_KMS_KEY_NAME"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -30,7 +49,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
 	viper.SetDefault("HTTP_ADDR", ":8080")
-	viper.SetDefault("OTEL_SERVICE_NAME", "signer")
+	viper.SetDefault("OTEL_SERVICE_NAME", "registry-signer")
+	viper.SetDefault("SIGNER_KEY_BACKEND", "env")
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
@@ -51,6 +71,22 @@ func validate(cfg *Config) error {
 	for k, v := range required {
 		if v == "" {
 			return fmt.Errorf("%s is required", k)
+		}
+	}
+
+	validBackends := map[string]bool{
+		"env": true, "vault": true, "awskms": true, "gcpkms": true, "azurekms": true,
+	}
+	if !validBackends[cfg.SignerKeyBackend] {
+		return fmt.Errorf("SIGNER_KEY_BACKEND must be one of: env, vault, awskms, gcpkms, azurekms")
+	}
+
+	if cfg.SignerKeyBackend == "env" {
+		if cfg.CosignPrivateKeyB64 == "" {
+			return fmt.Errorf("SIGNER_COSIGN_PRIVATE_KEY is required for env backend")
+		}
+		if cfg.CosignPublicKeyB64 == "" {
+			return fmt.Errorf("SIGNER_COSIGN_PUBLIC_KEY is required for env backend")
 		}
 	}
 	return nil
