@@ -408,6 +408,20 @@
 
 ---
 
+### SEC-029 — `registry-scanner` plugin path not sanitised with `filepath.Clean`
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `registry-scanner`
+- **Raised:** 2026-06-10
+- **Description:** `services/scanner/internal/plugin/process.go:166` constructs the plugin command path via string operations without calling `filepath.Clean`. The path comes from `SCANNER_PLUGIN_PATH` env var (loaded at startup — not direct user input), but CLAUDE.md §17 requires all file paths to be sanitised with `filepath.Clean` and checked against an allowed prefix. A path containing `..` segments or trailing slashes could resolve to an unexpected binary, especially if the env var value is derived from a config management system that allows substitution.
+- **Remediation:**
+  1. Apply `pluginPath = filepath.Clean(cfg.PluginPath)` immediately after loading the config
+  2. Assert that the cleaned path is absolute: `if !filepath.IsAbs(pluginPath) { return fmt.Errorf(...) }`
+  3. Optionally: assert the binary lives within a configured allowed directory (`SCANNER_PLUGIN_DIR`) to prevent path traversal via symlinks
+- **References:** CLAUDE.md §17 — "All file paths sanitised with `filepath.Clean` and checked against an allowed prefix", `services/scanner/internal/plugin/process.go`
+
+---
+
 ### SEC-028 — `context.Background()` used inside request handlers (breaks tracing and graceful shutdown)
 - **Severity:** LOW
 - **Status:** OPEN
@@ -435,25 +449,25 @@ Tracked per service. `?` = not yet assessed.
 
 | Rule | gateway | auth | core | storage | metadata | proxy | scanner | signer | webhook | audit | gc | tenant |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| No `unsafe` | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
-| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
-| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
-| File paths sanitised | ? | N/A | N/A | ? | ? | N/A | ? | N/A | N/A | N/A | N/A | N/A |
-| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | N/A |
-| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | ✗ (SEC-021 in healthcheck) |
-| `context.Background()` not in handlers | ? | ✗ (SEC-028) | ✗ (SEC-028) | ? | ? | ✗ (SEC-028) | ✗ (SEC-028) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | N/A | ✓ | N/A | ✓ |
+| No `unsafe` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| No `exec.Command` with user input | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| No `os.Getenv` in handlers | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| File paths sanitised | N/A | N/A | N/A | ✓ | N/A | N/A | ✗ (SEC-029) | N/A | N/A | N/A | N/A | N/A |
+| HTTP client timeouts set | N/A | N/A | N/A | N/A | N/A | ✓ | N/A | N/A | ✓ | N/A | N/A | N/A |
+| No `http.DefaultClient` | ✓ | N/A | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | ✓ | N/A | N/A | ✗ (SEC-021 in healthcheck) |
+| `context.Background()` not in handlers | ✓ | ✗ (SEC-028) | ✗ (SEC-028) | ✓ | ✓ | ✗ (SEC-028) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `crypto/rand` used (not `math/rand`) | N/A | ✓ | ✓ | N/A | N/A | ✓ | N/A | ✓ | N/A | ✓ | N/A | ✓ |
 | `ReadHeaderTimeout` set on HTTP server | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `ReadTimeout`/`WriteTimeout` set | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) |
 | CSP header on HTML responses | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ✓ | ? | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
-| CORS explicitly configured | ? | ? | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ? |
-| Request body size limits | ? | ✓ | ✓ | ? | N/A | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
+| `X-Content-Type-Options: nosniff` | N/A | ✗ (SEC-007) | ✗ (SEC-007) | N/A | N/A | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
+| CORS explicitly configured | N/A | ✗ (unassessed) | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Request body size limits | ✗ (SEC-019) | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
 | Metrics on separate port | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) |
-| `govulncheck` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `gosec` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| `gitleaks` pre-commit hook | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
-| No secrets in Docker layers | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
+| `govulncheck` in CI | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `gosec` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `gitleaks` pre-commit hook | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| No secrets in Docker layers | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
