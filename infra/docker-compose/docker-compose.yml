@@ -1,20 +1,65 @@
 version: "3.9"
 
-# Full local dev stack: infrastructure + all implemented application services.
-# Usage:
-#   cp .env.example .env          # fill in secrets
-#   cp ../../services/auth/.env.example ../../services/auth/.env  # fill in JWT keys
-#   docker-compose up -d
+# Full local dev stack — all infrastructure and registry services.
 #
-# Traefik dashboard: http://localhost:8888
-# Jaeger UI:         http://localhost:16686
-# RabbitMQ UI:       http://localhost:15672  (registry / registry)
-# MinIO console:     http://localhost:9001   (minioadmin / minioadmin)
-# Vault UI:          http://localhost:8200   (token: dev-root-token)
+# Quick start:
+#   cd infra/docker-compose
+#   cp .env.example .env          # fill in SIGNER keys + CREDENTIAL_KEY_HEX values
+#   docker compose up -d
+#
+# Port map:
+#   postgres:           5432
+#   redis:              6379
+#   rabbitmq:           5672, 15672 (management UI — registry/registry)
+#   minio:              9000, 9001 (console — minioadmin/minioadmin)
+#   jaeger:             16686 (UI), 4317/4318 (OTLP)
+#   vault:              8200 (token: dev-root-token)
+#   registry-gateway:   8443 (HTTP stub, health only)
+#   registry-auth:      8080 (HTTP), 50051 (gRPC)
+#   registry-core:      8081 (OCI /v2/), 50052 (gRPC health)
+#   registry-storage:   8082 (HTTP), 50053 (gRPC)
+#   registry-metadata:  8083 (HTTP), 50054 (gRPC)
+#   registry-proxy:     8084 (HTTP), 50055 (gRPC)
+#   registry-signer:    8086 (HTTP), 50057 (gRPC)
+#   registry-webhook:   8087 (HTTP), 50058 (gRPC)
+#   registry-audit:     8088 (HTTP), 50059 (gRPC)
+#   registry-gc:        8089 (HTTP), 50060 (gRPC)
+#   registry-tenant:    8090 (HTTP), 50061 (gRPC)
+#
+# Scanner requires a plugin binary; start it separately:
+#   docker compose --profile scanner up -d registry-scanner
+
+# ── Reusable fragments ──────────────────────────────────────────────────────
+
+x-otel: &otel
+  OTEL_EXPORTER: jaeger
+  OTEL_ENDPOINT: http://jaeger:4317
+  OTEL_ENVIRONMENT: development
+
+x-healthcheck: &healthcheck
+  test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
 
 services:
 
-  # ── Infrastructure ──────────────────────────────────────────────────────────
+  # ── Dev cert initialiser ──────────────────────────────────────────────────
+  # Runs once on first boot; generates self-signed mTLS certs for all services
+  # into the certs_data volume. Idempotent — safe to restart.
+  cert-init:
+    image: alpine:3.20
+    volumes:
+      - certs_data:/certs
+      - ../../scripts:/scripts:ro
+    command: sh /scripts/gen-dev-certs.sh
+    environment:
+      CERTS_DIR: /certs
+    networks:
+      - registry
+    restart: "no"
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
 
   postgres:
     image: postgres:16-alpine
@@ -22,8 +67,8 @@ services:
       POSTGRES_USER: registry
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       POSTGRES_DB: registry_auth
-      # init-multi-db.sh reads this to create additional databases
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy
+      # init-multi-db.sh creates additional databases listed here
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -136,7 +181,34 @@ services:
       - registry
     restart: "no"
 
-  # ── Application services ────────────────────────────────────────────────────
+  # ── Application services ──────────────────────────────────────────────────
+
+  registry-gateway:
+    build:
+      context: ../../
+      dockerfile: services/gateway/Dockerfile
+      args:
+        SERVICE: gateway
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-gateway
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/gateway.crt
+      MTLS_KEY_PATH: /certs/gateway.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8443:8080"
+      - "50062:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
 
   registry-auth:
     build:
@@ -147,15 +219,21 @@ services:
     env_file:
       - ../../services/auth/.env
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-auth
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=require
       REDIS_ADDR: redis:6379
-      OTEL_EXPORTER: jaeger
-      OTEL_ENDPOINT: http://jaeger:4317
-      OTEL_ENVIRONMENT: development
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/auth.crt
+      MTLS_KEY_PATH: /certs/auth.key
+    volumes:
+      - certs_data:/certs:ro
     ports:
-      - "8080:8080"    # HTTP: /auth/token, /api/v1/*, /.well-known/jwks.json
-      - "50051:50051"  # gRPC: AuthService (internal)
+      - "8080:8080"
+      - "50051:50051"
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -163,10 +241,7 @@ services:
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck
       start_period: 15s
     restart: unless-stopped
 
@@ -176,31 +251,32 @@ services:
       dockerfile: services/storage/Dockerfile
       args:
         SERVICE: storage
-    env_file:
-      - ../../services/storage/.env
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-storage
       STORAGE_DRIVER: minio
       STORAGE_MINIO_ENDPOINT: minio:9000
       STORAGE_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       STORAGE_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       STORAGE_MINIO_BUCKET: registry
       STORAGE_MINIO_USE_SSL: "false"
-      OTEL_EXPORTER: jaeger
-      OTEL_ENDPOINT: http://jaeger:4317
-      OTEL_ENVIRONMENT: development
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/storage.crt
+      MTLS_KEY_PATH: /certs/storage.key
+    volumes:
+      - certs_data:/certs:ro
     ports:
-      - "8082:8080"    # HTTP: /healthz, /metrics
-      - "50053:50051"  # gRPC: StorageService (internal)
+      - "8082:8080"
+      - "50053:50051"
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck
       start_period: 10s
     restart: unless-stopped
 
@@ -210,18 +286,22 @@ services:
       dockerfile: services/metadata/Dockerfile
       args:
         SERVICE: metadata
-    env_file:
-      - ../../services/metadata/.env
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-metadata
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_metadata?sslmode=require
       REDIS_ADDR: redis:6379
-      OTEL_EXPORTER: jaeger
-      OTEL_ENDPOINT: http://jaeger:4317
-      OTEL_ENVIRONMENT: development
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/metadata.crt
+      MTLS_KEY_PATH: /certs/metadata.key
+    volumes:
+      - certs_data:/certs:ro
     ports:
-      - "8083:8080"    # HTTP: /healthz, /metrics
-      - "50054:50051"  # gRPC: MetadataService (internal)
+      - "8083:8080"
+      - "50054:50051"
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -229,10 +309,7 @@ services:
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck
       start_period: 15s
     restart: unless-stopped
 
@@ -245,18 +322,24 @@ services:
     env_file:
       - ../../services/core/.env
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-core
       AUTH_GRPC_ADDR: registry-auth:50051
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       REDIS_ADDR: redis:6379
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
-      OTEL_EXPORTER: jaeger
-      OTEL_ENDPOINT: http://jaeger:4317
-      OTEL_ENVIRONMENT: development
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/core.crt
+      MTLS_KEY_PATH: /certs/core.key
+    volumes:
+      - certs_data:/certs:ro
     ports:
-      - "8081:8080"    # HTTP: /v2/ OCI Distribution Spec
-      - "50052:50051"  # gRPC: health check
+      - "8081:8080"
+      - "50052:50051"
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       registry-auth:
         condition: service_healthy
       registry-metadata:
@@ -270,10 +353,7 @@ services:
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck
       start_period: 20s
     restart: unless-stopped
 
@@ -283,21 +363,25 @@ services:
       dockerfile: services/proxy/Dockerfile
       args:
         SERVICE: proxy
-    env_file:
-      - ../../services/proxy/.env
     environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-proxy
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_proxy?sslmode=require
       REDIS_ADDR: redis:6379
       AUTH_GRPC_ADDR: registry-auth:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       CREDENTIAL_KEY_HEX: ${PROXY_CREDENTIAL_KEY_HEX}
-      OTEL_EXPORTER: jaeger
-      OTEL_ENDPOINT: http://jaeger:4317
-      OTEL_ENVIRONMENT: development
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/proxy.crt
+      MTLS_KEY_PATH: /certs/proxy.key
+    volumes:
+      - certs_data:/certs:ro
     ports:
-      - "8084:8080"    # HTTP: /v2/cache/* pull-through proxy
-      - "50055:50051"  # gRPC: ProxyService (internal)
+      - "8084:8080"
+      - "50055:50051"
     depends_on:
+      cert-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -309,10 +393,218 @@ services:
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      <<: *healthcheck
+      start_period: 15s
+    restart: unless-stopped
+
+  registry-signer:
+    build:
+      context: ../../
+      dockerfile: services/signer/Dockerfile
+      args:
+        SERVICE: signer
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-signer
+      SIGNER_KEY_BACKEND: env
+      SIGNER_COSIGN_PRIVATE_KEY: ${SIGNER_COSIGN_PRIVATE_KEY}
+      SIGNER_COSIGN_PUBLIC_KEY: ${SIGNER_COSIGN_PUBLIC_KEY}
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/signer.crt
+      MTLS_KEY_PATH: /certs/signer.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8086:8080"
+      - "50057:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-webhook:
+    build:
+      context: ../../
+      dockerfile: services/webhook/Dockerfile
+      args:
+        SERVICE: webhook
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-webhook
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_webhook?sslmode=require
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      CREDENTIAL_KEY_HEX: ${WEBHOOK_CREDENTIAL_KEY_HEX}
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/webhook.crt
+      MTLS_KEY_PATH: /certs/webhook.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8087:8080"
+      - "50058:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-audit:
+    build:
+      context: ../../
+      dockerfile: services/audit/Dockerfile
+      args:
+        SERVICE: audit
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-audit
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_audit?sslmode=require
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      TRUSTED_GATEWAY_IP: registry-gateway
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/audit.crt
+      MTLS_KEY_PATH: /certs/audit.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8088:8080"
+      - "50059:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-gc:
+    build:
+      context: ../../
+      dockerfile: services/gc/Dockerfile
+      args:
+        SERVICE: gc
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-gc
+      METADATA_GRPC_ADDR: registry-metadata:50051
+      STORAGE_GRPC_ADDR: registry-storage:50051
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      GC_MODE: full
+      GC_RUN_INTERVAL_HOURS: "24"
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/gc.crt
+      MTLS_KEY_PATH: /certs/gc.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8089:8080"
+      - "50060:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      registry-metadata:
+        condition: service_healthy
+      registry-storage:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-tenant:
+    build:
+      context: ../../
+      dockerfile: services/tenant/Dockerfile
+      args:
+        SERVICE: tenant
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-tenant
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_tenant?sslmode=require
+      REDIS_ADDR: redis:6379
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/tenant.crt
+      MTLS_KEY_PATH: /certs/tenant.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8090:8080"
+      - "50061:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  # Scanner requires an external plugin binary — not started by default.
+  # Set SCANNER_PLUGIN_PATH and SCANNER_PLUGIN_CHECKSUM in .env, then:
+  #   docker compose --profile scanner up -d registry-scanner
+  registry-scanner:
+    build:
+      context: ../../
+      dockerfile: services/scanner/Dockerfile
+      args:
+        SERVICE: scanner
+    profiles: ["scanner"]
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-scanner
+      METADATA_GRPC_ADDR: registry-metadata:50051
+      STORAGE_GRPC_ADDR: registry-storage:50051
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH}
+      SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM}
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/scanner.crt
+      MTLS_KEY_PATH: /certs/scanner.key
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      - "8085:8080"
+      - "50056:50051"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      registry-metadata:
+        condition: service_healthy
+      registry-storage:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      <<: *healthcheck
       start_period: 15s
     restart: unless-stopped
 
@@ -326,3 +618,4 @@ volumes:
   redis_data:
   rabbitmq_data:
   minio_data:
+  certs_data:

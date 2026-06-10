@@ -1,5 +1,5 @@
 ---
-name: project-management-agent
+name: pm-agent
 description: Keeps status.md accurate, surfaces blockers, enforces build order dependencies, and flags stale decisions. Invoke at sprint boundaries, new service kickoff, status changes, or when dependencies between services are unclear.
 ---
 

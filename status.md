@@ -1,7 +1,7 @@
 # Project Status
 
-> Last updated: 2026-06-09 (PM review)
-> PM Agent last ran: 2026-06-09
+> Last updated: 2026-06-10 (PM review)
+> PM Agent last ran: 2026-06-10
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -23,21 +23,21 @@
 | Service | Status | Owner | Notes |
 |---|---|---|---|
 | `proto/` | DONE | — | All `.proto` files written; Go stubs generated and committed to `proto/gen/go/`. |
-| `libs/` | DONE | — | All packages implemented: auth/jwt, auth/mtls, crypto/argon2, crypto/aes, middleware/grpc+http, observability/otel, rabbitmq/publisher+consumer+events, storage/driver, scanner/plugin, errors/codes, testutil, config/loader. |
+| `libs/` | DONE | — | All packages implemented: auth/jwt, auth/mtls, crypto/argon2, crypto/aes, middleware/grpc+http, observability/otel, rabbitmq/publisher+consumer+events, storage/driver, scanner/plugin, errors/codes, testutil, config/loader. REM-006 pool config fully implemented in `libs/config/loader`. |
 | `services/auth` | DONE | — | Full implementation: JWT RS256 issuance, API key management (argon2id), gRPC ValidateToken/ValidateAPIKey/GetUserPermissions, DB migrations, JWKS endpoint, lockout + rate limiting. Committed b9f5269. |
 | `services/core` | DONE | — | Full OCI Distribution Spec v1.1: all 14 `/v2/` endpoints, chunked upload state in Redis, SHA256 digest verification, RabbitMQ push.completed publish, per-tenant quota enforcement, custom path dispatcher for `org/repo` names. Committed 9b46675. |
-| `infra/` | IN PROGRESS | — | docker-compose.yml done (all infra services + Vault dev mode). Helm umbrella chart scaffolded. Terraform deferred. Runbook stubs present. |
-| `services/metadata` | NOT STARTED | — | Next priority. DB migrations, all gRPC handlers for Repository/Tag/Manifest/Blob/Quota/ScanResult CRUD. `services/core` cannot be end-to-end tested without this. |
-| `services/storage` | NOT STARTED | — | Next priority (parallel with metadata). MinIO driver minimum for local dev, then S3/GCS/Azure. All storage gRPC handlers. |
-| `services/gateway` | NOT STARTED | — | Scaffold only. Depends on auth + core + tenant. |
-| `services/proxy` | NOT STARTED | — | Scaffold only. Depends on core, metadata, storage. |
-| `services/scanner` | NOT STARTED | — | Scaffold only. Depends on core (push.completed event), metadata, storage. Apply REM-001 (external process only). |
-| `services/signer` | NOT STARTED | — | Scaffold only. Depends on core, Vault (dev mode ready in docker-compose). |
-| `services/webhook` | NOT STARTED | — | Scaffold only. Depends on core events. |
-| `services/audit` | NOT STARTED | — | Scaffold only. Depends on RabbitMQ events from multiple services. Apply REM-005. |
-| `services/gc` | NOT STARTED | — | Scaffold only. Depends on metadata + storage. Apply REM-009. |
-| `services/tenant` | NOT STARTED | — | Scaffold only. Depended on by gateway for domain resolution. |
-| `ui/` | NOT STARTED | — | Scaffold only: Vite + React + TypeScript. No routes or components. Depended on by nothing — can be built last. |
+| `services/metadata` | DONE | — | All MetadataService gRPC handlers, DB migrations (repositories, manifests, tags, blobs, blob_links, scan_results), Redis client wired. REM-006 applied via shared DBConfig. Committed 5f4e526. |
+| `services/storage` | DONE | — | All StorageService gRPC handlers (streaming PutBlob/GetBlob, multipart), MinIO + S3/GCS/Azure drivers, storage/driver subdirectory. Committed 5f4e526. |
+| `services/gateway` | DONE | — | Full internal/ layout: config, handler, middleware, repository, server, service, testutil. Committed fd90f3d. |
+| `services/proxy` | DONE | — | Pull-through proxy with upstream client, cache hit/miss logic, background blob store (goroutine), upstream credential encryption. Committed 3a9264a. REM-003 partially applied (see Remediation Plans). |
+| `services/scanner` | DONE | — | External-process JSON-RPC plugin, checksum validation, worker pool, RabbitMQ consumer for push.completed, scan result storage. REM-001 substantially applied. Committed 2bcaf1c. |
+| `services/webhook` | DONE | — | Webhook delivery worker, exponential backoff (5s/30s/5m/30m/2h), HMAC-SHA256 signing, SSRF protection, DLQ after 5 failures. Committed adc0dd8. |
+| `services/audit` | DONE | — | Immutable audit event table (partitioned), event consumer from RabbitMQ, append-only enforcement via PostgreSQL RULE. REM-005 partially applied (see Remediation Plans). Committed 0c827c3. |
+| `services/gc` | DONE | — | Mark-sweep GC algorithm (collector.go), dry-run / manifests / blobs / full modes, RabbitMQ event publishing on deletion. REM-009 not yet applied (see Remediation Plans). Committed f226e81. |
+| `services/tenant` | DONE | — | Tenant CRUD, domain verification worker (5-minute poll, 48h cutoff), per-tenant quota config. REM-004 partially applied (see Remediation Plans). Committed ff5875e. |
+| `services/signer` | DONE | — | Cosign-compatible ECDSA P-256 signing, Vault key backend, signing/sigstore subpackages, SignManifest/VerifyManifest/ListSignatures gRPC handlers. Committed e4ba6c7. |
+| `infra/` | DONE | — | docker-compose.yml (all services + Vault dev mode + MinIO + Jaeger), Helm umbrella chart with all 12 sub-charts, runbooks for secret-rotation, minio-encryption, notary-root-key-ceremony. Terraform directory present (deferred). Committed fd90f3d. |
+| `ui/` | NOT STARTED | — | Scaffold only: Vite + React + TypeScript. No routes or components. No blocking dependencies — can be built last. |
 
 ---
 
@@ -64,13 +64,14 @@
 
 ### REM-001 — Drop Go Plugin Scanner Path
 - **Affects:** `registry-scanner`
-- **Status:** PLANNED (apply when services/scanner is built)
+- **Status:** SUBSTANTIALLY DONE — external process JSON-RPC path fully implemented; checksum validation and `exec.CommandContext` applied. Two minor gaps remain.
 - **Tasks:**
-  - [ ] Remove `.so` loading code from `registry-scanner`
-  - [ ] Add `io.LimitedReader` on plugin stdout (max 10MB)
-  - [ ] Spawn plugins with `exec.CommandContext` (OS-level deadline)
-  - [ ] Define explicit env allowlist for plugin subprocess — never inherit parent env
-  - [ ] Update `§4.7` in CLAUDE.md to remove Go plugin references
+  - [x] Remove `.so` loading code from `registry-scanner` (never added — external process only)
+  - [x] Spawn plugins with `exec.CommandContext` (OS-level deadline)
+  - [x] Validate plugin binary checksum (SHA256) against `SCANNER_PLUGIN_CHECKSUM` before loading
+  - [ ] Add `io.LimitedReader` on plugin stdout (max 10MB) — stdout read via `cmd.Output()` with no size cap
+  - [ ] Define explicit env allowlist for plugin subprocess — plugin inherits parent env currently
+  - [x] Update `§4.7` in CLAUDE.md to remove Go plugin references (CLAUDE.md §4.7 describes external process only)
 
 ---
 
@@ -82,7 +83,7 @@
 
 ### REM-003 — Proxy Background Store via RabbitMQ
 - **Affects:** `registry-proxy`
-- **Status:** PLANNED (apply when services/proxy is built)
+- **Status:** PARTIALLY APPLIED — proxy uses a fire-and-forget goroutine for background blob caching (logs errors but provides no retry or DLQ). RabbitMQ store.queued event not implemented.
 - **Tasks:**
   - [ ] Define `store.queued` event type in `libs/rabbitmq/events`
   - [ ] Publish `store.queued` event synchronously (confirm mode) before returning client response
@@ -94,18 +95,18 @@
 
 ### REM-004 — Custom Domain Verification Notifications
 - **Affects:** `registry-tenant`
-- **Status:** PLANNED (apply when services/tenant is built)
+- **Status:** PARTIALLY APPLIED — domain worker polls every 5 minutes and stops at 48h. No 24h notification and no exponential backoff implemented.
 - **Tasks:**
   - [ ] Add `Notified24h bool` field to `DomainVerificationJob`
   - [ ] Send notification to tenant admin if unverified after 24h
-  - [ ] Send failure notification and stop polling at 48h
-  - [ ] Implement exponential backoff on DNS polling: 5m → 10m → 20m
+  - [ ] Send failure notification and stop polling at 48h (cutoff exists; notification missing)
+  - [ ] Implement exponential backoff on DNS polling: 5m → 10m → 20m (currently fixed 5m interval)
 
 ---
 
 ### REM-005 — Audit Table RLS + Role Separation
 - **Affects:** `registry-audit`
-- **Status:** PLANNED (apply when services/audit is built)
+- **Status:** PARTIALLY APPLIED — audit_events table uses PostgreSQL RULE for append-only enforcement. `FORCE ROW LEVEL SECURITY` and the `registry_audit_app` role are not yet applied.
 - **Tasks:**
   - [ ] Create `registry_audit_app` role in migration: INSERT + SELECT only, no UPDATE/DELETE
   - [ ] Add `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` to migration
@@ -117,17 +118,13 @@
 
 ### REM-006 — Connection Pool Exhaustion Handling
 - **Affects:** `registry-auth`, `registry-audit`, `registry-metadata`, `registry-tenant`
-- **Status:** PLANNED (apply during each service build)
-- **Tasks:**
-  - [ ] Set `ConnectTimeout: 5s`, `MaxConnLifetime: 30m`, `MaxConnIdleTime: 5m` in all pool configs
-  - [ ] In each repository: detect `context.DeadlineExceeded` from `pool.Acquire` → return `codes.ResourceExhausted`
-  - [ ] Update retry interceptor in `libs/middleware/grpc` to NOT retry on `codes.ResourceExhausted`
+- **Status:** DONE ✅ — `libs/config/loader.DBConfig.PoolConfig()` sets `ConnectTimeout: 5s`, `MaxConnLifetime: 30m`, `MaxConnIdleTime: 5m` with safe defaults. All DB-owning services use `DBConfig` + `pgxpool.NewWithConfig`. `sslmode=disable` rejected at startup.
 
 ---
 
 ### REM-007 — Registry-Metadata Caching (Part A — Redis)
 - **Affects:** `registry-metadata` (client-side caching in consuming services)
-- **Status:** PLANNED (implement during services/metadata build)
+- **Status:** PARTIALLY APPLIED — `registry-metadata` has a Redis client wired in server.go. No client-side gRPC cache interceptor has been added to `libs/middleware/grpc`.
 - **Cacheable calls and TTLs:**
   - `GetRepository` → 30s
   - `GetManifest` → 5m
@@ -142,17 +139,16 @@
 
 ### REM-008 — Registry-Metadata Read Replica (Part B)
 - **Affects:** `registry-metadata`
-- **Status:** PLANNED (after REM-007)
+- **Status:** PARTIALLY APPLIED — `DB_DSN_REPLICA` field exists in `libs/config/loader.DBConfig`. `registry-metadata` config embeds `DBConfig` so the env var is accepted, but no second `pgxpool` instance is created and reads are not routed to the replica.
 - **Tasks:**
-  - [ ] Add `DB_DSN_REPLICA` env var to `registry-metadata`
-  - [ ] Create two `pgxpool` instances: primary (read-write), replica (read-only)
+  - [ ] Create a replica `pgxpool` instance when `DB_DSN_REPLICA` is set
   - [ ] Route `ListTags`, `ListRepositories`, `ListOrphanedBlobs` to replica pool
 
 ---
 
 ### REM-009 — GC Advisory Locks
 - **Affects:** `registry-gc`
-- **Status:** PLANNED (apply when services/gc is built)
+- **Status:** NOT APPLIED — GC collector runs without any advisory lock. Concurrent GC runs against the same tenant are possible.
 - **Tasks:**
   - [ ] Implement `gcLockKey(tenantID uuid.UUID) int64` using FNV-64a hash
   - [ ] Use `pg_try_advisory_lock($1)` — non-blocking, skip tenant on failure
@@ -163,7 +159,7 @@
 
 ### REM-010 — Move Scanner Interface Location
 - **Affects:** `libs/`, `services/scanner`
-- **Status:** DONE ✅ — `libs/scanner/plugin/plugin.go` created during monorepo scaffold.
+- **Status:** DONE ✅ — `libs/scanner/plugin/plugin.go` created during monorepo scaffold; `services/scanner` imports from there.
 
 ---
 
@@ -197,31 +193,79 @@ All decisions resolved. No blockers.
 
 ---
 
-## Current Sprint
-
-**Sprint 2 — Persistence Layer**
+### Sprint 2 — Persistence Layer (COMPLETE)
 > Goal: `services/metadata` and `services/storage` fully implemented so that `services/core` can be tested end-to-end with a real local stack.
-> Why: `services/core` is the OCI hub — it calls both metadata and storage on every push/pull. Neither integration testing nor OCI conformance testing can proceed without both services live.
 
 | Task | Service | Status |
 |---|---|---|
-| DB migrations for metadata schema (repositories, manifests, tags, blobs, blob_links, scan_results, tenants, organizations) | `services/metadata` | NOT STARTED |
-| Implement all `MetadataService` gRPC handlers | `services/metadata` | NOT STARTED |
-| Apply REM-006 (pool exhaustion) and REM-007 (Redis caching) in metadata | `services/metadata` | NOT STARTED |
-| Integration tests for metadata service | `services/metadata` | NOT STARTED |
-| Implement MinIO storage driver (minimum for local dev) | `services/storage` | NOT STARTED |
-| Implement all `StorageService` gRPC handlers (streaming PutBlob/GetBlob, multipart) | `services/storage` | NOT STARTED |
-| Integration tests for storage service | `services/storage` | NOT STARTED |
-| Docker Compose spin-up: verify all services start healthy together | `infra/` | NOT STARTED |
-| OCI conformance suite against `services/core` + live metadata + storage | `services/core` | NOT STARTED |
+| DB migrations for metadata schema (repositories, manifests, tags, blobs, blob_links, scan_results, tenants, organizations) | `services/metadata` | DONE |
+| Implement all `MetadataService` gRPC handlers | `services/metadata` | DONE |
+| Apply REM-006 (pool exhaustion) in metadata | `services/metadata` | DONE |
+| Redis client wired in metadata server | `services/metadata` | DONE |
+| Implement MinIO/S3/GCS/Azure storage drivers | `services/storage` | DONE |
+| Implement all `StorageService` gRPC handlers (streaming PutBlob/GetBlob, multipart) | `services/storage` | DONE |
+| Complete Helm sub-charts and docker-compose for all services | `infra/` | DONE |
+
+---
+
+### Sprint 3 — Remaining Services (COMPLETE)
+> Goal: All 12 services implemented and building cleanly.
+
+| Task | Service | Status |
+|---|---|---|
+| Implement pull-through proxy cache | `services/proxy` | DONE |
+| Implement vulnerability scan orchestration + external process plugin | `services/scanner` | DONE |
+| Implement reliable webhook delivery worker | `services/webhook` | DONE |
+| Implement immutable audit trail service | `services/audit` | DONE |
+| Implement mark-sweep garbage collection | `services/gc` | DONE |
+| Implement tenant lifecycle + domain verification worker | `services/tenant` | DONE |
+| Implement image signing service (Cosign-compatible ECDSA P-256) | `services/signer` | DONE |
+| Implement API gateway | `services/gateway` | DONE |
+| Standardise all go.mod files to go 1.25.7 | all services | DONE |
+
+---
+
+## Current Sprint
+
+**Sprint 4 — Hardening & Integration Testing**
+> Goal: Close all open remediation items, achieve OCI conformance test pass, bring up the full local stack in Docker Compose, and reach 80% unit test coverage per service.
+
+### Highest Priority (blocking end-to-end testing)
+
+| Task | Service | Blocks | Status |
+|---|---|---|---|
+| Docker Compose full-stack spin-up: verify all 12 services start healthy | `infra/` | all E2E testing | NOT STARTED |
+| OCI conformance suite against live stack (core + metadata + storage) | `services/core` | release | NOT STARTED |
+| Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | NOT STARTED |
+| Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | NOT STARTED |
+
+### Medium Priority (security hardening)
+
+| Task | Service | REM | Status |
+|---|---|---|---|
+| Add `io.LimitedReader` on scanner plugin stdout (10MB cap) | `services/scanner` | REM-001 | NOT STARTED |
+| Add explicit env allowlist for scanner plugin subprocess | `services/scanner` | REM-001 | NOT STARTED |
+| Implement RabbitMQ `store.queued` event + consumer in proxy | `services/proxy` | REM-003 | NOT STARTED |
+| Add 24h notification + exponential backoff to domain worker | `services/tenant` | REM-004 | NOT STARTED |
+
+### Lower Priority (performance / observability)
+
+| Task | Service | REM | Status |
+|---|---|---|---|
+| Add client-side gRPC cache interceptor in `libs/middleware/grpc` | `libs/` | REM-007 | NOT STARTED |
+| Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | NOT STARTED |
+| Wire Prometheus metrics endpoint across all services | all | — | NOT STARTED |
+| Integration tests (testcontainers) for metadata, storage, auth, core | `services/*` | — | NOT STARTED |
+| Unit test coverage to 80% minimum per service | all | — | NOT STARTED |
 
 ---
 
 ## Notes
 
-- **Build order:** `proto/` → `libs/` → `services/auth` → `services/metadata` → `services/storage` → `services/core` → (remaining services in parallel)
-- First four steps of build order are DONE. Sprint 2 targets steps 5 and 6.
-- `services/core` OCI conformance tests must pass before any downstream service (`proxy`, `scanner`, `gc`, `webhook`) is started.
-- Services that depend on `services/core` being DONE: `registry-scanner`, `registry-proxy`, `registry-gc`, `registry-webhook`.
-- Vault dev mode is already in docker-compose — `services/signer` can start once `services/core` is DONE.
-- All architecture decisions are resolved. No blockers for Sprint 2.
+- **Build order (reference):** `proto/` → `libs/` → `services/auth` → `services/metadata` → `services/storage` → `services/core` → (remaining services in parallel). All steps now DONE.
+- **Go workspace:** `go.work` at repo root links all 14 modules (libs, proto/gen/go, 12 services). All go.mod files standardised to `go 1.25.7`. Last commit: `a9dc176`.
+- **Module path:** `github.com/steveokay/oci-janus`
+- OCI conformance tests (`make test-conformance` in `services/core`) must pass before any release tag.
+- Vault dev mode in docker-compose is ready — `services/signer` can be tested locally now.
+- `infra/terraform/` directory is present but empty — Terraform deferred per Decision #10.
+- `ui/` scaffold exists (Vite + React + TypeScript) but has no routes or components — no blockers, lowest priority.

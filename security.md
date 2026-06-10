@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-09
+> Last updated: 2026-06-10
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -204,6 +204,77 @@
 
 ---
 
+### SEC-014 — New services: gRPC servers have no interceptors and use plaintext transport
+- **Severity:** HIGH
+- **Status:** OPEN
+- **Service:** `registry-signer`, `registry-gc`, `registry-tenant`, `registry-webhook`, `registry-audit`
+- **Raised:** 2026-06-10
+- **Description:** All five services create their gRPC servers with `grpc.NewServer()` — no interceptors (recovery, tracing, logging, auth), no mTLS credentials. Their gRPC clients (where present) use `insecure.NewCredentials()`. This mirrors the known gap in `registry-core` (SEC-008, SEC-010) but was not captured for the new services. In production, internal traffic is fully unencrypted and unauthenticated. A panic in any gRPC handler crashes the process.
+- **Remediation:**
+  1. For each service's gRPC server: apply `buildGRPCOptions()` pattern from `registry-auth` — wires recovery, OTEL tracing, structured logging, and optionally mTLS
+  2. For each service's gRPC clients: replace `insecure.NewCredentials()` with `libs/auth/mtls.ClientTLSConfig()` once dev certs are wired (cert-init in docker-compose provides `/certs/` volume)
+  3. This work is blocked on the mTLS wiring tracked in SEC-008 — tackle both together
+- **References:** SEC-008, SEC-010, `services/auth/internal/server/server.go` (reference implementation)
+
+---
+
+### SEC-015 — `registry-signer` in-memory sigstore is volatile
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-signer`
+- **Raised:** 2026-06-10
+- **Description:** `services/signer/internal/sigstore/store.go` holds all signature records in a `sync.RWMutex`-protected map. On process restart (pod crash, rolling deploy, OOM kill), all records are lost. `VerifyManifest` will return `Verified: false` for all previously signed images, breaking any policy that requires signature verification. This is also a correctness issue: two signer replicas have independent stores, so the instance that didn't sign the manifest can't verify it.
+- **Remediation:**
+  1. Persist signature records to PostgreSQL (add a `signatures` table to the signer's own DB, or reuse `registry-metadata`'s gRPC API)
+  2. Alternatively, follow Cosign's intended model: push the signature as an OCI artifact to `registry-core` and query it back via `registry-core`'s OCI API — the in-memory store is only a hot cache for the local instance
+  3. The `SigB64` field in the Record (raw private key signature bytes) should not be persisted in cleartext — store only the signature digest and re-sign on demand, or store encrypted
+- **References:** `services/signer/internal/sigstore/store.go`, CLAUDE.md §4.8
+
+---
+
+### SEC-016 — `registry-tenant` domain name not validated in `RegisterDomain`
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-tenant`
+- **Raised:** 2026-06-10
+- **Description:** `RegisterDomain` in `handler/grpc.go` accepts `req.Domain` and passes it to the repository without format validation. The domain is stored in PostgreSQL (parameterised — no SQL injection risk) and later used in two unsafe ways: (1) string-concatenated into the DNS lookup target `"_registry-verify." + d.Domain` in the domain worker; (2) string-concatenated into the Redis key `"domain:" + d.Domain`. A domain containing newlines, null bytes, or Redis special characters could cause unexpected behaviour. Additionally, accepting non-RFC-1123 hostnames means the DNS TXT lookup will silently fail instead of returning an early validation error.
+- **Remediation:**
+  1. Add `domainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)` to the handler
+  2. Reject domains that don't match at the gRPC layer (return `codes.InvalidArgument`)
+  3. Also validate that the domain is not an IP address (`net.ParseIP(req.Domain) == nil`)
+  4. Apply the same regex in `ResolveDomain` before doing the DB lookup
+- **References:** RFC 1123 hostname syntax, `services/tenant/internal/handler/grpc.go:RegisterDomain`
+
+---
+
+### SEC-017 — `registry-tenant` tenant name not validated against allowlist
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `registry-tenant`
+- **Raised:** 2026-06-10
+- **Description:** `CreateTenant` checks only that `req.Name != ""`. CLAUDE.md §7 specifies org name: `^[a-z0-9-]{2,64}$`. Tenant names are used as subdomains in the platform domain (`<tenant>.registry.example.com`) and as display names. Accepting names with uppercase, special characters, or names shorter than 2 characters can cause subtle bugs in subdomain routing, URL construction, and display.
+- **Remediation:**
+  1. Add `tenantNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)` (same as CLAUDE.md org name rule)
+  2. Return `codes.InvalidArgument` for non-matching names
+  3. Add a uniqueness error mapping: translate pgx duplicate-key errors to `codes.AlreadyExists` instead of surfacing the raw DB error
+- **References:** CLAUDE.md §7 (input validation), `services/tenant/internal/handler/grpc.go:CreateTenant`
+
+---
+
+### SEC-018 — `registry-audit` HTTP endpoints missing security response headers and body size limit
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-audit`
+- **Raised:** 2026-06-10
+- **Description:** `POST /audit/events` and `GET /audit/events` in `handler/http.go` set no `X-Content-Type-Options: nosniff` header. `WriteEvent` decodes the request body via `json.NewDecoder(r.Body).Decode(&req)` with no `http.MaxBytesReader` size cap. A caller (internal or otherwise) can send an arbitrarily large request body, causing unbounded memory allocation. `metadata` field is `json.RawMessage` — a 100 MB metadata blob would be fully read into memory before rejection.
+- **Remediation:**
+  1. Wrap `r.Body` with `http.MaxBytesReader(w, r.Body, 1<<20)` (1 MB) before decoding — consistent with CLAUDE.md §17 request body size limits
+  2. Add a `secureHeaders` middleware (per SEC-007 remediation) to the audit HTTP mux — covers both endpoints in one place
+  3. Consider bounding the `metadata` field to a known-safe size in the request struct
+- **References:** SEC-007, `services/audit/internal/handler/http.go:WriteEvent`, CLAUDE.md §17
+
+---
+
 ### SEC-013 — `registry-proxy` blob requests missing digest format validation
 - **Severity:** LOW
 - **Status:** OPEN
@@ -232,18 +303,18 @@ Tracked per service. `?` = not yet assessed.
 
 | Rule | gateway | auth | core | storage | metadata | proxy | scanner | signer | webhook | audit | gc | tenant |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| No `unsafe` | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| File paths sanitised | ? | N/A | N/A | ? | ? | N/A | ? | ? | ? | ? | ? | ? |
-| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
-| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| No `unsafe` | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
+| No `exec.Command` with user input | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
+| No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
+| File paths sanitised | ? | N/A | N/A | ? | ? | N/A | ? | N/A | N/A | N/A | N/A | N/A |
+| HTTP client timeouts set | ? | N/A | N/A | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | N/A |
+| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | N/A |
+| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | N/A | ✓ | N/A | ✓ |
 | CSP header on HTML responses | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
-| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ✓ | ? | ? | ? | ? | ? | ? |
+| `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ✓ | ? | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
 | CORS explicitly configured | ? | ? | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ? |
-| Request body size limits | ? | ✓ | ✓ | ? | N/A | ✓ | N/A | N/A | N/A | N/A | N/A | ? |
+| Request body size limits | ? | ✓ | ✓ | ? | N/A | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
 | `govulncheck` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gosec` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gitleaks` pre-commit hook | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
