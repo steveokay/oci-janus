@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-10 (full stack operational — all 16 containers healthy)
+> Last updated: 2026-06-10 (CI security gaps closed; AUTH_REALM fix enables docker push/pull from host)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -234,6 +234,7 @@ All decisions resolved. No blockers.
 | Task | Service | Blocks | Status |
 |---|---|---|---|
 | Docker Compose full-stack spin-up: verify all 16 containers start healthy | `infra/` | all E2E testing | DONE ✅ |
+| Fix AUTH_REALM — WWW-Authenticate pointed to internal Compose hostname; docker push/pull from host failed | `services/core` | docker push/pull smoke test | DONE ✅ |
 | OCI conformance suite against live stack (core + metadata + storage) | `services/core` | release | NOT STARTED |
 | Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | NOT STARTED |
 | Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | NOT STARTED |
@@ -242,6 +243,8 @@ All decisions resolved. No blockers.
 
 | Task | Service | REM | Status |
 |---|---|---|---|
+| Add `govulncheck` CI job to all 10 service workflows missing it | `infra/` | — | DONE ✅ |
+| Add `gitleaks` CI workflow (`ci-gitleaks.yml`) on all pushes/PRs | `infra/` | — | DONE ✅ |
 | Add `io.LimitedReader` on scanner plugin stdout (10MB cap) | `services/scanner` | REM-001 | NOT STARTED |
 | Add explicit env allowlist for scanner plugin subprocess | `services/scanner` | REM-001 | NOT STARTED |
 | Implement RabbitMQ `store.queued` event + consumer in proxy | `services/proxy` | REM-003 | NOT STARTED |
@@ -270,3 +273,5 @@ All decisions resolved. No blockers.
 - `infra/terraform/` directory is present but empty — Terraform deferred per Decision #10.
 - `ui/` scaffold exists (Vite + React + TypeScript) but has no routes or components — no blockers, lowest priority.
 - Security audit completed 2026-06-10 — SEC-019 through SEC-028 added to `security.md`. Notable open items: HTTP server timeouts missing on 6 services (SEC-019/020), healthcheck binary lacks timeout (SEC-021), `sslmode=prefer` in dev compose (SEC-022), `context.Background()` in handlers (SEC-028).
+- **CI security gaps closed (2026-06-10):** `govulncheck` added to all 12 service CI workflows; `ci-gitleaks.yml` added for secret scanning on all pushes/PRs. Commit `a919cd4`.
+- **AUTH_REALM fix (2026-06-10):** `services/core` WWW-Authenticate realm was hardcoded to `https://registry/auth/token` (internal Compose hostname). Now reads from `AUTH_REALM` env var, defaulting to `http://localhost:8080/auth/token`. Docker push/pull from host now works. Commit `cb241bd`.
