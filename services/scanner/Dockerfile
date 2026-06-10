@@ -10,7 +10,7 @@ COPY proto/gen/go/ proto/gen/go/
 COPY services/scanner/ services/scanner/
 
 WORKDIR /build/services/scanner
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
 
 # ── Stage 2: Trivy binary ─────────────────────────────────────────
 FROM aquasec/trivy:0.52.0 AS trivy

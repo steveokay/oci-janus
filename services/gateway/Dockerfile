@@ -12,7 +12,7 @@ ARG SERVICE
 COPY services/${SERVICE}/ services/${SERVICE}/
 
 WORKDIR /build/services/${SERVICE}
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
 
 # ----------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS final
