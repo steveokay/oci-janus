@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-10
+> Last updated: 2026-06-10 (post-docker-compose hardening pass, SEC-019–SEC-028 added)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -289,6 +289,138 @@
 
 ---
 
+### SEC-019 — HTTP servers missing `ReadHeaderTimeout` (slowloris attack vector)
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `registry-auth`, `registry-core`, `registry-proxy`, `registry-metadata`, `registry-gateway`, `registry-storage`
+- **Raised:** 2026-06-10
+- **Description:** Six HTTP server instances lack `ReadHeaderTimeout`. This permits slowloris attacks where a client sends HTTP headers slowly to exhaust server goroutines and connections. Some services (`registry-signer`, `registry-webhook`, `registry-audit`, `registry-gc`, `registry-scanner`, `registry-tenant`) correctly set `ReadHeaderTimeout: 10 * time.Second`; the six affected services do not.
+- **Remediation:**
+  1. Add `ReadHeaderTimeout: 10 * time.Second` to every `http.Server{}` literal across all six services
+  2. While at it, add `ReadTimeout: 30 * time.Second` and `WriteTimeout: 30 * time.Second` for full slowloris protection (see SEC-020)
+- **References:** `net/http` package docs — Server timeouts, OWASP Slowloris attack description
+
+---
+
+### SEC-020 — HTTP servers missing `ReadTimeout` and `WriteTimeout`
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** All services with HTTP servers
+- **Raised:** 2026-06-10
+- **Description:** No service configures `ReadTimeout` or `WriteTimeout` on its `http.Server`. `ReadHeaderTimeout` (partially set) protects only the header phase. An attacker sending a slow POST body or a slow-reading client holding a response open can exhaust goroutines over time. All services are affected, including those that correctly set `ReadHeaderTimeout`.
+- **Remediation:**
+  1. Add `ReadTimeout: 30 * time.Second` and `WriteTimeout: 30 * time.Second` to all `http.Server{}` instances
+  2. For streaming endpoints (blob upload/download in `registry-core`, `registry-storage`), use `http.ResponseController.SetWriteDeadline` per-request to extend the deadline only where needed, rather than a global high timeout
+
+---
+
+### SEC-021 — Healthcheck binary uses `http.DefaultClient` without timeout
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `libs/cmd/healthcheck` (embedded in all service images)
+- **Raised:** 2026-06-10
+- **Description:** `libs/cmd/healthcheck/main.go` calls `http.Get(addr)` which uses `http.DefaultClient` with no timeout. If the target service hangs on a slow response, the healthcheck probe will block indefinitely, preventing Kubernetes from detecting the stalled container and triggering a pod restart. The `//nolint:noctx,gosec` comment suppresses linting but does not address the underlying issue.
+- **Remediation:**
+  ```go
+  client := &http.Client{Timeout: 5 * time.Second}
+  resp, err := client.Get(addr)
+  ```
+  Remove the `//nolint:noctx,gosec` suppression after fixing.
+- **References:** CLAUDE.md §17 — "HTTP clients: always set timeouts; No default HTTP client"
+
+---
+
+### SEC-022 — `sslmode=prefer` in docker-compose contradicts enforced `sslmode=require`
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** All DB-owning services via `infra/docker-compose/docker-compose.yml`
+- **Raised:** 2026-06-10
+- **Description:** All PostgreSQL DSNs in `docker-compose.yml` use `sslmode=prefer`. The config loader in `libs/config/loader/loader.go` blocks `sslmode=disable` but accepts `sslmode=prefer`. With `sslmode=prefer`, the driver attempts TLS but silently falls back to a plaintext connection if TLS negotiation fails. In the dev Postgres container (no server cert), the actual connection is unencrypted, which contradicts the security model documented in CLAUDE.md §13 (`sslmode=require` is mandatory). Developer habits formed with `sslmode=prefer` can leak into production configurations.
+- **Remediation:**
+  1. Short-term: keep `sslmode=prefer` in dev compose but add a large warning comment and a `Makefile` target that asserts production DSNs use `sslmode=require`
+  2. Better: configure the dev Postgres container with a self-signed TLS cert so `sslmode=require` works in dev too (see `POSTGRES_SSL_*` env vars in Postgres Docker image)
+  3. Update the loader validation to emit a `slog.Warn` when `sslmode != "require"` instead of silently accepting it
+
+---
+
+### SEC-023 — Vault dev root token hardcoded in docker-compose
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `vault` (dev)
+- **Raised:** 2026-06-10
+- **Description:** `docker-compose.yml` starts Vault with `-dev-root-token-id=dev-root-token` and the vault-init container references `VAULT_TOKEN: dev-root-token` as a literal string (not an env var). This "magic string" is invisible in `.env.example` and has no protection against accidental promotion to non-dev environments. If the compose file is reused in CI or staging without overriding the token, Vault will be exposed with a well-known root credential.
+- **Remediation:**
+  1. Move `VAULT_DEV_ROOT_TOKEN=dev-root-token` into `.env.example` as a documented variable
+  2. Replace the hardcoded string in `docker-compose.yml` with `${VAULT_DEV_ROOT_TOKEN:-dev-root-token}`
+  3. Add a pre-flight check in `Makefile` or `scripts/check-env.sh` that warns if default dev tokens are detected in non-dev environments
+
+---
+
+### SEC-024 — Dev TLS private keys made world-readable (`chmod a+r *.key`)
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `cert-init` (affects all services via shared certs volume)
+- **Raised:** 2026-06-10
+- **Description:** `scripts/gen-dev-certs.sh` runs `chmod a+r "$CERTS_DIR"/*.key` to allow the non-root service container (uid 65532) to read the certs from the shared Docker volume. This makes all private key files (including the CA key) world-readable (mode 644) on the developer's host filesystem. Any process running on the dev machine can read the keys from the volume mount path. While these are dev-only certs, the pattern normalises insecure key file permissions.
+- **Remediation:**
+  1. Remove the `chmod a+r *.key` line; keep only `chmod 644 *.crt`
+  2. Change the ownership of `.key` files to uid 65532 instead: `chown 65532:65532 "$CERTS_DIR"/*.key && chmod 600 "$CERTS_DIR"/*.key`
+  3. In the cert-init `Dockerfile`, run as the same uid so generated files are already owned correctly
+
+---
+
+### SEC-025 — `/metrics` endpoints unauthenticated and exposed on public HTTP port
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** All services
+- **Raised:** 2026-06-10
+- **Description:** Every service serves `/metrics` on the same port as `/healthz` and business endpoints. In the current Prometheus-`TODO` state, these return 200 OK with no data, but once wired, they will expose per-tenant request rates, error counts, and storage utilisation. An authenticated user who knows the internal port can infer activity patterns for other tenants. In Kubernetes, the metrics port should be a separate, unadvertised port only reachable from within the cluster (Prometheus `serviceMonitor` targets it directly).
+- **Remediation:**
+  1. Serve `/metrics` on a dedicated second HTTP port (e.g. `:9090`) that is not included in the service's main `HTTP_ADDR`
+  2. Add a `METRICS_ADDR` env var (default `:9090`) to each service config
+  3. Exclude the metrics port from `NetworkPolicy` egress rules — allow only Prometheus pods to reach it
+
+---
+
+### SEC-026 — OTEL exporter uses insecure (plaintext) gRPC to Jaeger
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** All services (via `libs/observability/otel/otel.go`)
+- **Raised:** 2026-06-10
+- **Description:** `libs/observability/otel/otel.go` uses `otlptracegrpc.WithInsecure()` and `otlpmetricgrpc.WithInsecure()` for both trace and metric exporters. Span data may contain resource identifiers, user IDs, error messages, and request metadata. Transmitting this over plaintext allows any on-path observer to read or modify telemetry. A comment states "TLS terminated at the collector sidecar" — this assumption holds only in a service-mesh environment and is not enforced.
+- **Remediation:**
+  1. Add a `OTEL_INSECURE` boolean env var (default `false`); only apply `WithInsecure()` when explicitly set
+  2. In production K8s: configure a TLS-terminating sidecar or use OTEL Collector with TLS and remove `WithInsecure()` entirely
+  3. Update `local-setup.md` to document that `OTEL_INSECURE=true` is required in docker-compose dev mode
+
+---
+
+### SEC-027 — Default weak passwords in docker-compose are not warned against
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `postgres`, `rabbitmq`, `minio`
+- **Raised:** 2026-06-10
+- **Description:** `docker-compose.yml` uses `${POSTGRES_PASSWORD:-registry}`, `${RABBITMQ_DEFAULT_PASS:-registry}`, and `${MINIO_ROOT_PASSWORD:-minioadmin}` — fallback defaults are weak well-known passwords. If a developer runs `docker compose up -d` without copying `.env.example` first, all infrastructure services start with trivially guessable credentials. There is no pre-flight check enforcing that secrets are set.
+- **Remediation:**
+  1. Add a `check-env` Makefile target that aborts if `POSTGRES_PASSWORD` is not set or equals `registry`
+  2. Generate strong random defaults in a `scripts/generate-dev-secrets.sh` script and document in `local-setup.md`
+  3. Add a comment in `docker-compose.yml` making clear the fallback defaults are insufficient for any shared or non-local environment
+
+---
+
+### SEC-028 — `context.Background()` used inside request handlers (breaks tracing and graceful shutdown)
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `registry-core`, `registry-proxy`, `registry-auth`, `registry-scanner`
+- **Raised:** 2026-06-10
+- **Description:** Several request handlers create new root contexts via `context.Background()` instead of deriving from the incoming request context. Notable locations: `services/core/internal/service/registry.go` (DeleteBlob and event publish calls), `services/proxy/internal/handler/http.go` (background cache store goroutine), `services/auth/internal/service/auth.go` (LastUsed update). Consequences: (1) spans created in these operations are disconnected from the parent trace; (2) operations continue after the client disconnects, wasting resources; (3) operations do not receive the shutdown signal from the server's context cancellation.
+- **Remediation:**
+  1. Replace `context.Background()` with the request context (`ctx`) for all operations that are part of the request lifecycle
+  2. For deliberate fire-and-forget background work (e.g., cache store), use a detached context with a bounded timeout: `ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second); defer cancel()` — and add a comment explaining the detachment is intentional
+  3. Background workers (e.g., scanner job queue) are exempt — they correctly use `context.Background()` as they have no parent request
+
+---
+
 ## Resolved Issues
 
 | ID | Title | Service | Resolved | How |
@@ -308,13 +440,16 @@ Tracked per service. `?` = not yet assessed.
 | No `os.Getenv` in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
 | File paths sanitised | ? | N/A | N/A | ? | ? | N/A | ? | N/A | N/A | N/A | N/A | N/A |
 | HTTP client timeouts set | ? | N/A | N/A | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | N/A |
-| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | N/A |
-| `context.Background()` not in handlers | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | ✓ | ✓ | ✓ | ✓ |
+| No `http.DefaultClient` | ? | N/A | ✓ | ? | ? | ✓ | ? | N/A | ✓ | N/A | N/A | ✗ (SEC-021 in healthcheck) |
+| `context.Background()` not in handlers | ? | ✗ (SEC-028) | ✗ (SEC-028) | ? | ? | ✗ (SEC-028) | ✗ (SEC-028) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `crypto/rand` used (not `math/rand`) | ? | ✓ | ✓ | ? | ? | ✓ | ? | ✓ | N/A | ✓ | N/A | ✓ |
+| `ReadHeaderTimeout` set on HTTP server | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✗ (SEC-019) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `ReadTimeout`/`WriteTimeout` set | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) | ✗ (SEC-020) |
 | CSP header on HTML responses | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | `X-Content-Type-Options: nosniff` | ? | ✗ (SEC-007) | ✗ (SEC-007) | ? | ? | ✓ | ? | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
 | CORS explicitly configured | ? | ? | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ? |
 | Request body size limits | ? | ✓ | ✓ | ? | N/A | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
+| Metrics on separate port | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) |
 | `govulncheck` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gosec` in CI | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |
 | `gitleaks` pre-commit hook | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? | ? |

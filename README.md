@@ -28,14 +28,14 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | OCI Distribution Spec v1.1 (push / pull / delete / list) | Implemented |
 | Multi-tenant with per-tenant custom domains | Implemented |
 | JWT (RS256) + API key authentication | Implemented |
-| mTLS between all internal services | Implemented |
+| mTLS between all internal services | Implemented (dev certs via cert-init; prod via cert-manager) |
 | Pull-through proxy cache for upstream registries | Implemented |
 | Pluggable storage (MinIO / AWS S3 / GCS / Azure Blob) | Implemented |
-| Vulnerability scanner plugin interface | Implemented (orchestration) |
-| Image signing — Cosign (Sigstore) + Notary v2 | Scaffold |
-| Webhook delivery with retries + HMAC signing | Scaffold |
-| Immutable audit log | Scaffold |
-| Garbage collection worker | Scaffold |
+| Vulnerability scanner plugin interface | Implemented (external process JSON-RPC; Trivy default) |
+| Image signing — Cosign (Sigstore) + Notary v2 | Implemented (ECDSA P-256, Vault key backend) |
+| Webhook delivery with retries + HMAC signing | Implemented |
+| Immutable audit log | Implemented (append-only PostgreSQL partition) |
+| Garbage collection worker | Implemented (mark-sweep, dry-run / manifests / blobs / full modes) |
 | RBAC at org / repo / tag level | Scaffold |
 
 ### Technology Stack
@@ -217,7 +217,7 @@ All services use environment variables. No YAML config files are committed (only
 | `HTTP_ADDR` | HTTP listen address | `:8080` (varies per service) |
 | `LOG_LEVEL` | `debug`/`info`/`warn`/`error` | `info` |
 | `LOG_FORMAT` | `json` (prod) or `text` (dev) | `json` |
-| `DB_DSN` | PostgreSQL connection string (`sslmode=require` mandatory) | — |
+| `DB_DSN` | PostgreSQL connection string (`sslmode=require` in prod; `sslmode=prefer` in dev compose) | — |
 | `DB_MAX_CONNS` | pgxpool max connections | `20` |
 | `REDIS_ADDR` | Redis address | — |
 | `REDIS_PASSWORD` | Redis password | — |
@@ -440,6 +440,7 @@ See [`security.md`](security.md) for the full issue tracker. Summary of open HIG
 | SEC-001 | HIGH | Audit table RLS bypassed by schema owner role |
 | SEC-003 | HIGH | Go plugin scanner loads untrusted `.so` in-process |
 | SEC-008 | HIGH | `registry-core` gRPC clients use plaintext transport (insecure credentials) |
+| SEC-014 | HIGH | Signer/gc/tenant/webhook/audit gRPC servers have no interceptors or mTLS |
 
 ---
 

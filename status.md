@@ -1,7 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-10 (PM review)
-> PM Agent last ran: 2026-06-10
+> Last updated: 2026-06-10 (full stack operational — all 16 containers healthy)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -234,7 +233,7 @@ All decisions resolved. No blockers.
 
 | Task | Service | Blocks | Status |
 |---|---|---|---|
-| Docker Compose full-stack spin-up: verify all 12 services start healthy | `infra/` | all E2E testing | NOT STARTED |
+| Docker Compose full-stack spin-up: verify all 16 containers start healthy | `infra/` | all E2E testing | DONE ✅ |
 | OCI conformance suite against live stack (core + metadata + storage) | `services/core` | release | NOT STARTED |
 | Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | NOT STARTED |
 | Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | NOT STARTED |
@@ -265,7 +264,9 @@ All decisions resolved. No blockers.
 - **Build order (reference):** `proto/` → `libs/` → `services/auth` → `services/metadata` → `services/storage` → `services/core` → (remaining services in parallel). All steps now DONE.
 - **Go workspace:** `go.work` at repo root links all 14 modules (libs, proto/gen/go, 12 services). All go.mod files standardised to `go 1.25.7`. Last commit: `a9dc176`.
 - **Module path:** `github.com/steveokay/oci-janus`
+- **Full stack running (2026-06-10):** All 16 docker-compose containers (12 services + postgres, redis, rabbitmq, minio, jaeger, vault, cert-init) reach healthy/running state. Key fixes applied: `GOWORK=off` in all Dockerfiles, Viper env-seeding in all config loaders, `sslmode=prefer` for dev postgres, `embed.FS` for goose migrations, `PRIMARY KEY (id, occurred_at)` on partitioned audit table, static `/healthcheck` binary in distroless images, `chmod a+r` for cert volume permissions, OTLP endpoint without `http://` prefix.
 - OCI conformance tests (`make test-conformance` in `services/core`) must pass before any release tag.
 - Vault dev mode in docker-compose is ready — `services/signer` can be tested locally now.
 - `infra/terraform/` directory is present but empty — Terraform deferred per Decision #10.
 - `ui/` scaffold exists (Vite + React + TypeScript) but has no routes or components — no blockers, lowest priority.
+- Security audit completed 2026-06-10 — SEC-019 through SEC-028 added to `security.md`. Notable open items: HTTP server timeouts missing on 6 services (SEC-019/020), healthcheck binary lacks timeout (SEC-021), `sslmode=prefer` in dev compose (SEC-022), `context.Background()` in handlers (SEC-028).
