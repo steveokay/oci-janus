@@ -3,8 +3,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -33,22 +33,28 @@ func NewAuthClient(conn *grpc.ClientConn, rdb *redis.Client) *AuthClient {
 	return &AuthClient{grpc: authv1.NewAuthServiceClient(conn), redis: rdb}
 }
 
-// ValidateBearer validates a Bearer JWT. Results are cached in Redis by JTI until
+// cachedClaims is the JSON-serialisable form of TokenClaims stored in Redis.
+type cachedClaims struct {
+	UserID   string                     `json:"u"`
+	TenantID string                     `json:"t"`
+	Access   []*authv1.RepositoryAccess `json:"a,omitempty"`
+}
+
+// ValidateBearer validates a Bearer JWT. Results are cached in Redis by token until
 // the token's own expiry so we don't hit registry-auth on every request.
 func (a *AuthClient) ValidateBearer(ctx context.Context, token string) (*TokenClaims, error) {
 	cacheKey := "jwt:valid:" + token
-	if cached, err := a.redis.Get(ctx, cacheKey).Result(); err == nil {
-		// cached value is "userID:tenantID" — fast path
-		parts := strings.SplitN(cached, ":", 2)
-		if len(parts) == 2 {
-			return &TokenClaims{UserID: parts[0], TenantID: parts[1]}, nil
+	if cached, err := a.redis.Get(ctx, cacheKey).Bytes(); err == nil {
+		var cc cachedClaims
+		if json.Unmarshal(cached, &cc) == nil {
+			return &TokenClaims{UserID: cc.UserID, TenantID: cc.TenantID, Access: cc.Access}, nil
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	resp, err := a.grpc.ValidateToken(ctx, &authv1.ValidateTokenRequest{Token: token})
+	resp, err := a.grpc.ValidateToken(rpcCtx, &authv1.ValidateTokenRequest{Token: token})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.Unauthenticated {
 			return nil, ErrUnauthorized
@@ -65,11 +71,11 @@ func (a *AuthClient) ValidateBearer(ctx context.Context, token string) (*TokenCl
 		Access:   resp.GetAccess(),
 	}
 
-	// cache until token expiry
 	if exp := resp.GetExpiresAt(); exp != nil {
-		ttl := time.Until(exp.AsTime())
-		if ttl > 0 {
-			_ = a.redis.Set(ctx, cacheKey, claims.UserID+":"+claims.TenantID, ttl).Err()
+		if ttl := time.Until(exp.AsTime()); ttl > 0 {
+			if b, jerr := json.Marshal(cachedClaims{UserID: claims.UserID, TenantID: claims.TenantID, Access: claims.Access}); jerr == nil {
+				_ = a.redis.Set(ctx, cacheKey, b, ttl).Err()
+			}
 		}
 	}
 

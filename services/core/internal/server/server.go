@@ -10,15 +10,17 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/core/internal/config"
 	"github.com/steveokay/oci-janus/services/core/internal/handler"
 	"github.com/steveokay/oci-janus/services/core/internal/service"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 )
 
 // Run wires everything and blocks until ctx is cancelled or a server errors.
@@ -30,20 +32,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	defer rdb.Close()
 
-	// gRPC client connections (insecure for now; production uses mTLS from libs/auth/mtls)
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// gRPC client transport: mTLS when cert paths are configured, plaintext otherwise.
+	grpcCreds, err := clientCreds(cfg)
+	if err != nil {
+		return fmt.Errorf("load mTLS creds: %w", err)
+	}
+
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpcCreds)
 	if err != nil {
 		return fmt.Errorf("dial auth: %w", err)
 	}
 	defer authConn.Close()
 
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpcCreds)
 	if err != nil {
 		return fmt.Errorf("dial metadata: %w", err)
 	}
 	defer metaConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpcCreds)
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -102,4 +109,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// clientCreds returns mTLS dial credentials when all three cert paths are set,
+// falling back to plaintext for local dev without certs.
+func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
+		if err != nil {
+			return nil, err
+		}
+		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+	}
+	slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
+	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
 }

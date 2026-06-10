@@ -151,6 +151,20 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 	return &repo, nil
 }
 
+// GetOrCreateOrganization returns the org with the given name for a tenant, creating it if absent.
+func (r *Repository) GetOrCreateOrganization(ctx context.Context, tenantID, orgName string) (orgID string, err error) {
+	const q = `
+		INSERT INTO organizations (tenant_id, name)
+		VALUES ($1, $2)
+		ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING id`
+	err = r.pool.QueryRow(ctx, q, tenantID, orgName).Scan(&orgID)
+	if err != nil {
+		return "", fmt.Errorf("get or create organization: %w", err)
+	}
+	return orgID, nil
+}
+
 // ── Tags ────────────────────────────────────────────────────────────────────
 
 // PutTag upserts a tag (insert or update manifest_digest + updated_at).

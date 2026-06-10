@@ -25,6 +25,10 @@ type Config struct {
 	JWTPublicKeyB64  string `mapstructure:"JWT_PUBLIC_KEY_B64"`
 	// JWTKeyID is the kid header value used for key rotation via JWKS
 	JWTKeyID string `mapstructure:"JWT_KEY_ID"`
+
+	// DevDefaultTenantID is used in local dev when no X-Tenant-ID header is present.
+	// Must not be set in production.
+	DevDefaultTenantID string `mapstructure:"DEV_DEFAULT_TENANT_ID"`
 }
 
 // Load binds environment variables into Config and validates required fields.

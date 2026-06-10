@@ -15,9 +15,19 @@ mkdir -p "$CERTS_DIR"
 
 SERVICES="auth core storage metadata proxy scanner signer webhook audit gc tenant gateway"
 
-# Install openssl if running inside Alpine
+# Install openssl if running inside Alpine (best-effort — skipped if no network)
 if ! command -v openssl > /dev/null 2>&1; then
-  apk add --no-cache openssl > /dev/null 2>&1
+  apk add --no-cache openssl > /dev/null 2>&1 || true
+fi
+
+# If openssl still unavailable and certs already exist, nothing to do
+if ! command -v openssl > /dev/null 2>&1; then
+  if [ -f "$CERTS_DIR/ca.crt" ]; then
+    echo "[cert-init] openssl unavailable but certs already exist — skipping generation."
+    exit 0
+  fi
+  echo "[cert-init] ERROR: openssl not available and no certs found." >&2
+  exit 1
 fi
 
 # Generate CA
@@ -32,6 +42,7 @@ if [ ! -f "$CERTS_DIR/ca.crt" ]; then
 fi
 
 # Generate per-service leaf certs
+# SANs are required: Go 1.15+ rejects certs with CN only (no SAN) during TLS verification.
 for svc in $SERVICES; do
   if [ ! -f "$CERTS_DIR/$svc.crt" ]; then
     echo "[cert-init] Generating cert for registry-$svc..."
@@ -40,13 +51,16 @@ for svc in $SERVICES; do
       -key "$CERTS_DIR/$svc.key" \
       -out "$CERTS_DIR/$svc.csr" \
       -subj "/CN=registry-$svc/O=registry-dev" 2>/dev/null
+    EXT_FILE=$(mktemp)
+    printf "subjectAltName=DNS:registry-%s,DNS:localhost\n" "$svc" > "$EXT_FILE"
     openssl x509 -req -days 365 \
       -in "$CERTS_DIR/$svc.csr" \
       -CA "$CERTS_DIR/ca.crt" \
       -CAkey "$CERTS_DIR/ca.key" \
       -CAcreateserial \
+      -extfile "$EXT_FILE" \
       -out "$CERTS_DIR/$svc.crt" 2>/dev/null
-    rm -f "$CERTS_DIR/$svc.csr"
+    rm -f "$CERTS_DIR/$svc.csr" "$EXT_FILE"
   fi
 done
 

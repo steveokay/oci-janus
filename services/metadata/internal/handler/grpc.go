@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,7 +42,27 @@ func mapErr(err error) error {
 // ── Repositories ─────────────────────────────────────────────────────────────
 
 func (h *MetadataHandler) CreateRepository(ctx context.Context, req *metadatav1.CreateRepositoryRequest) (*metadatav1.Repository, error) {
-	repo, err := h.repo.CreateRepository(ctx, req.TenantId, req.OrgId, req.Name, req.IsPublic, req.StorageQuota)
+	orgID := req.OrgId
+	name := req.Name
+
+	// When OrgId is absent, derive org from "org/repo" name format.
+	if orgID == "" {
+		parts := strings.SplitN(name, "/", 2)
+		if len(parts) != 2 {
+			return nil, status.Error(codes.InvalidArgument, "name must be org/repo when org_id is not set")
+		}
+		var err error
+		orgID, err = h.repo.GetOrCreateOrganization(ctx, req.TenantId, parts[0])
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		name = parts[1]
+	}
+
+	repo, err := h.repo.CreateRepository(ctx, req.TenantId, orgID, name, req.IsPublic, req.StorageQuota)
+	if errors.Is(err, repository.ErrAlreadyExists) {
+		return h.repo.GetRepositoryByName(ctx, req.TenantId, orgID, name)
+	}
 	return repo, mapErr(err)
 }
 

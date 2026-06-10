@@ -191,7 +191,7 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -241,7 +241,7 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -276,7 +276,7 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -310,7 +310,7 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
@@ -358,7 +358,7 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 	if !claims.HasAction(name, "delete") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -389,7 +389,7 @@ func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, d
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -419,7 +419,7 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, di
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -454,7 +454,7 @@ func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name,
 		return
 	}
 	if !claims.HasAction(name, "delete") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -489,7 +489,7 @@ func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
@@ -528,7 +528,7 @@ func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -555,7 +555,7 @@ func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -589,7 +589,7 @@ func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 
@@ -626,7 +626,7 @@ func (h *Handler) handleCancelUpload(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		h.challengeAuth(w)
 		return
 	}
 

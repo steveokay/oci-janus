@@ -17,12 +17,14 @@ import (
 
 // HTTPHandler implements the HTTP API for registry-auth.
 type HTTPHandler struct {
-	svc *service.Service
+	svc              *service.Service
+	devDefaultTenant uuid.UUID // zero when not set; only used in local dev
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
-func NewHTTPHandler(svc *service.Service) *HTTPHandler {
-	return &HTTPHandler{svc: svc}
+// devDefaultTenantID may be uuid.Nil (production) or a fixed dev UUID.
+func NewHTTPHandler(svc *service.Service, devDefaultTenantID uuid.UUID) *HTTPHandler {
+	return &HTTPHandler{svc: svc, devDefaultTenant: devDefaultTenantID}
 }
 
 // Register mounts all auth routes onto mux.
@@ -51,7 +53,7 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, err := parseTenantID(r)
+	tenantID, err := h.parseTenantID(r)
 	if err != nil {
 		w.Header().Set("Www-Authenticate", `Bearer realm="/auth/token",service="registry"`)
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "missing or invalid X-Tenant-ID header")
@@ -351,9 +353,13 @@ func (h *HTTPHandler) requireAuth(r *http.Request) (*service.Claims, error) {
 }
 
 // parseTenantID reads the X-Tenant-ID header injected by the gateway.
-func parseTenantID(r *http.Request) (uuid.UUID, error) {
+// Falls back to h.devDefaultTenant when the header is absent and a dev default is configured.
+func (h *HTTPHandler) parseTenantID(r *http.Request) (uuid.UUID, error) {
 	raw := r.Header.Get("X-Tenant-ID")
 	if raw == "" {
+		if h.devDefaultTenant != uuid.Nil {
+			return h.devDefaultTenant, nil
+		}
 		return uuid.Nil, errors.New("missing X-Tenant-ID header")
 	}
 	return uuid.Parse(raw)

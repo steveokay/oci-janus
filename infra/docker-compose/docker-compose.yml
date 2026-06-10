@@ -223,6 +223,7 @@ services:
       OTEL_SERVICE_NAME: registry-auth
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=prefer
       REDIS_ADDR: redis:6379
+      DEV_DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/auth.crt
       MTLS_KEY_PATH: /certs/auth.key

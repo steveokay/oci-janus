@@ -17,6 +17,7 @@ import (
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/google/uuid"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
@@ -87,7 +88,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /metrics", metricsHandler)
-	handler.NewHTTPHandler(svc).Register(mux)
+	devTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
+	handler.NewHTTPHandler(svc, devTenantID).Register(mux)
 
 	httpSrv := &http.Server{
 		Addr:    cfg.HTTPAddr,

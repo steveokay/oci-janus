@@ -33,8 +33,16 @@ func NewMinIO(endpoint, accessKey, secretKey, bucket, region string, useSSL bool
 }
 
 func (d *MinIODriver) Ping(ctx context.Context) error {
-	_, err := d.client.BucketExists(ctx, d.bucket)
-	return err
+	exists, err := d.client.BucketExists(ctx, d.bucket)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if err := d.client.MakeBucket(ctx, d.bucket, minio.MakeBucketOptions{}); err != nil {
+			return fmt.Errorf("create bucket %q: %w", d.bucket, err)
+		}
+	}
+	return nil
 }
 
 func (d *MinIODriver) PutBlob(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
