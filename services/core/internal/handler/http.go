@@ -26,13 +26,14 @@ var digestRE = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 // Handler holds all dependencies for the OCI HTTP API.
 type Handler struct {
-	auth     *service.AuthClient
-	registry *service.Registry
+	auth      *service.AuthClient
+	registry  *service.Registry
+	authRealm string
 }
 
 // New constructs a Handler.
-func New(auth *service.AuthClient, registry *service.Registry) *Handler {
-	return &Handler{auth: auth, registry: registry}
+func New(auth *service.AuthClient, registry *service.Registry, authRealm string) *Handler {
+	return &Handler{auth: auth, registry: registry, authRealm: authRealm}
 }
 
 // Register mounts all OCI /v2/ routes onto mux.
@@ -171,7 +172,7 @@ func (h *Handler) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) challengeAuth(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="https://registry/auth/token",service="registry-core"`)
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="registry-core"`, h.authRealm))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	writeErrors(w, ociErr{Code: "UNAUTHORIZED", Message: "authentication required"})

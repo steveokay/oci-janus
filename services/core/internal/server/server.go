@@ -62,7 +62,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	registry := service.NewRegistry(metaConn, storageConn, uploadStore, pub)
 
 	// HTTP handler
-	h := handler.New(authClient, registry)
+	h := handler.New(authClient, registry, cfg.AuthRealm)
 	mux := http.NewServeMux()
 	h.Register(mux)
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {

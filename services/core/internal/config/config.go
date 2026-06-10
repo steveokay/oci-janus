@@ -20,6 +20,7 @@ type Config struct {
 	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
 	AuthGRPCAddr     string `mapstructure:"AUTH_GRPC_ADDR"`
+	AuthRealm        string `mapstructure:"AUTH_REALM"`
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
 
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-core")
 	viper.SetDefault("REDIS_ADDR", "localhost:6379")
 	viper.SetDefault("AUTH_GRPC_ADDR", "registry-auth:50051")
+	viper.SetDefault("AUTH_REALM", "http://localhost:8080/auth/token")
 	viper.SetDefault("METADATA_GRPC_ADDR", "registry-metadata:50051")
 	viper.SetDefault("STORAGE_GRPC_ADDR", "registry-storage:50051")
 

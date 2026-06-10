@@ -325,6 +325,7 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: registry-core
       AUTH_GRPC_ADDR: registry-auth:50051
+      AUTH_REALM: http://localhost:8080/auth/token
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       REDIS_ADDR: redis:6379
