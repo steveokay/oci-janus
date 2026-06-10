@@ -1,0 +1,40 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/steveokay/registry-core
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  httpPort: 8080
+  grpcPort: 50051
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  name: ""
+
+secretName: registry-core-secrets
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  GRPC_ADDR: ":50051"
+  HTTP_ADDR: ":8080"
+  OTEL_SERVICE_NAME: registry-core
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

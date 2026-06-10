@@ -23,7 +23,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       POSTGRES_DB: registry_auth
       # init-multi-db.sh reads this to create additional databases
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -147,7 +147,6 @@ services:
     env_file:
       - ../../services/auth/.env
     environment:
-      # Override connection strings to use Docker service names
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=require
       REDIS_ADDR: redis:6379
       OTEL_EXPORTER: jaeger
@@ -160,6 +159,152 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  registry-storage:
+    build:
+      context: ../../
+      dockerfile: services/storage/Dockerfile
+      args:
+        SERVICE: storage
+    env_file:
+      - ../../services/storage/.env
+    environment:
+      STORAGE_DRIVER: minio
+      STORAGE_MINIO_ENDPOINT: minio:9000
+      STORAGE_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      STORAGE_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      STORAGE_MINIO_BUCKET: registry
+      STORAGE_MINIO_USE_SSL: "false"
+      OTEL_EXPORTER: jaeger
+      OTEL_ENDPOINT: http://jaeger:4317
+      OTEL_ENVIRONMENT: development
+    ports:
+      - "8082:8080"    # HTTP: /healthz, /metrics
+      - "50053:50051"  # gRPC: StorageService (internal)
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-metadata:
+    build:
+      context: ../../
+      dockerfile: services/metadata/Dockerfile
+      args:
+        SERVICE: metadata
+    env_file:
+      - ../../services/metadata/.env
+    environment:
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_metadata?sslmode=require
+      REDIS_ADDR: redis:6379
+      OTEL_EXPORTER: jaeger
+      OTEL_ENDPOINT: http://jaeger:4317
+      OTEL_ENVIRONMENT: development
+    ports:
+      - "8083:8080"    # HTTP: /healthz, /metrics
+      - "50054:50051"  # gRPC: MetadataService (internal)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  registry-core:
+    build:
+      context: ../../
+      dockerfile: services/core/Dockerfile
+      args:
+        SERVICE: core
+    env_file:
+      - ../../services/core/.env
+    environment:
+      AUTH_GRPC_ADDR: registry-auth:50051
+      METADATA_GRPC_ADDR: registry-metadata:50051
+      STORAGE_GRPC_ADDR: registry-storage:50051
+      REDIS_ADDR: redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      OTEL_EXPORTER: jaeger
+      OTEL_ENDPOINT: http://jaeger:4317
+      OTEL_ENVIRONMENT: development
+    ports:
+      - "8081:8080"    # HTTP: /v2/ OCI Distribution Spec
+      - "50052:50051"  # gRPC: health check
+    depends_on:
+      registry-auth:
+        condition: service_healthy
+      registry-metadata:
+        condition: service_healthy
+      registry-storage:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  registry-proxy:
+    build:
+      context: ../../
+      dockerfile: services/proxy/Dockerfile
+      args:
+        SERVICE: proxy
+    env_file:
+      - ../../services/proxy/.env
+    environment:
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_proxy?sslmode=require
+      REDIS_ADDR: redis:6379
+      AUTH_GRPC_ADDR: registry-auth:50051
+      STORAGE_GRPC_ADDR: registry-storage:50051
+      CREDENTIAL_KEY_HEX: ${PROXY_CREDENTIAL_KEY_HEX}
+      OTEL_EXPORTER: jaeger
+      OTEL_ENDPOINT: http://jaeger:4317
+      OTEL_ENVIRONMENT: development
+    ports:
+      - "8084:8080"    # HTTP: /v2/cache/* pull-through proxy
+      - "50055:50051"  # gRPC: ProxyService (internal)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      registry-auth:
+        condition: service_healthy
+      registry-storage:
         condition: service_healthy
     networks:
       - registry

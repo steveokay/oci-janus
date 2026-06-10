@@ -1,0 +1,72 @@
+# Production overrides — no secrets here.
+# Secrets are injected via External Secrets Operator → Vault / AWS Secrets Manager.
+
+global:
+  image:
+    registry: ghcr.io/steveokay
+    pullPolicy: Always   # always pull on pod restart in prod
+  otel:
+    exporter: tempo
+    endpoint: tempo-distributor.monitoring.svc.cluster.local:4317
+    environment: production
+    samplingRate: "0.1"  # 10% sampling in production
+
+gateway:
+  platformDomain: registry.yourdomain.com
+  tls:
+    acmeEmail: ops@yourdomain.com
+    staging: false
+  rateLimit:
+    average: 200
+    burst: 400
+
+auth:
+  replicaCount: 3
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+core:
+  replicaCount: 5
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: 2000m, memory: 1Gi }
+
+metadata:
+  replicaCount: 3
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: 2000m, memory: 1Gi }
+
+storage:
+  replicaCount: 3
+  driver: s3
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+proxy:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+scanner:
+  replicaCount: 4
+  workerCount: 8
+  resources:
+    requests: { cpu: 1000m, memory: 1Gi }
+    limits:   { cpu: 4000m, memory: 4Gi }
+
+webhook:
+  replicaCount: 3
+
+audit:
+  replicaCount: 2
+
+gc:
+  schedule: "0 3 * * *"   # 03:00 UTC nightly
+  gcMode: full
+
+tenant:
+  replicaCount: 2

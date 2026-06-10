@@ -1,0 +1,40 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/steveokay/registry-scanner
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  httpPort: 8080
+  grpcPort: 50051
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  name: ""
+
+secretName: registry-scanner-secrets
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  GRPC_ADDR: ":50051"
+  HTTP_ADDR: ":8080"
+  OTEL_SERVICE_NAME: registry-scanner
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

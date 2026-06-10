@@ -1,0 +1,6 @@
+apiVersion: v2
+name: tenant
+description: registry-tenant — Tenant lifecycle and custom domain management
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

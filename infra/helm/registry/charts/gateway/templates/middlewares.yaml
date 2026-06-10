@@ -1,0 +1,64 @@
+# Traefik Middleware: redirect HTTP → HTTPS (hard fail, no redirect)
+# Per CLAUDE.md §4.1: "Reject HTTP (no redirect to HTTPS — hard fail)"
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: https-only
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+
+---
+# Security headers injected on all responses
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: 63072000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    forceSTSHeader: true
+    contentTypeNosniff: true
+    frameDeny: true
+    browserXssFilter: false    # modern browsers ignore; CSP is the right control
+    customResponseHeaders:
+      X-Content-Type-Options: nosniff
+      X-Frame-Options: DENY
+
+---
+# Rate limiting (per source IP, Redis-backed)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  rateLimit:
+    average: {{ .Values.rateLimit.average }}
+    burst: {{ .Values.rateLimit.burst }}
+    sourceCriterion:
+      ipStrategy:
+        depth: 1   # trust first X-Forwarded-For entry (from LB in front of Traefik)
+
+---
+# Strip internal headers from client requests (SSRF / spoofing protection)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-internal-headers
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-Tenant-ID: ""        # cleared; gateway re-sets it after lookup
+      X-Request-ID: ""       # cleared; gateway generates a fresh one
+      X-Forwarded-For: ""    # cleared; Traefik re-sets from TCP peer

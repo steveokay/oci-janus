@@ -1,0 +1,33 @@
+{{- define "audit.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- define "audit.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "registry-%s" .Chart.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- define "audit.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- define "audit.labels" -}}
+helm.sh/chart: {{ include "audit.chart" . }}
+{{ include "audit.selectorLabels" . }}
+app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+{{- define "audit.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "audit.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- define "audit.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "audit.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+{{- define "audit.image" -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end }}

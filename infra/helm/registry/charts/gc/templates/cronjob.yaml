@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gc.fullname" . }}
+  labels:
+    {{- include "gc.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "gc.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "gc.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: gc
+              image: {{ include "gc.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - name: GC_MODE
+                  value: {{ .Values.gcMode | quote }}
+                - name: GC_BLOB_MIN_AGE
+                  value: {{ .Values.blobMinAgeSecs | quote }}
+                - name: GC_MANIFEST_MIN_AGE
+                  value: {{ .Values.manifestMinAgeSecs | quote }}
+                {{- range $k, $v := .Values.env }}
+                - name: {{ $k }}
+                  value: {{ $v | quote }}
+                {{- end }}
+                {{- with .Values.global }}
+                - name: OTEL_EXPORTER
+                  value: {{ .otel.exporter | quote }}
+                - name: OTEL_ENDPOINT
+                  value: {{ .otel.endpoint | quote }}
+                - name: OTEL_ENVIRONMENT
+                  value: {{ .otel.environment | quote }}
+                {{- end }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

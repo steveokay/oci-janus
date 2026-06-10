@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-gateway
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept all inbound traffic on 80 and 443 (public internet)
+    - ports:
+        - port: 80
+        - port: 443
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Upstream internal services
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: 8080
+    # ACME / Let's Encrypt (TLS challenge)
+    - ports:
+        - port: 443

@@ -1,0 +1,56 @@
+# Platform domain — tenant subdomains are served under this
+platformDomain: registry.example.com
+
+# TLS — Let's Encrypt ACME via Traefik CertResolver
+tls:
+  acmeEmail: ops@example.com
+  # staging=true uses Let's Encrypt staging CA (rate-limit-free, for testing)
+  staging: false
+
+# Rate limiting (Redis-backed sliding window)
+rateLimit:
+  average: 100   # requests per second per source IP
+  burst: 200
+
+# Traefik sub-chart values (see https://github.com/traefik/traefik-helm-chart)
+traefik:
+  enabled: true
+  deployment:
+    replicas: 2
+  ports:
+    web:
+      port: 80
+      # Hard-redirect HTTP → HTTPS is handled by Traefik middleware, not a port redirect
+      expose:
+        default: true
+    websecure:
+      port: 443
+      expose:
+        default: true
+      tls:
+        enabled: true
+  additionalArguments:
+    - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+    - "--certificatesresolvers.letsencrypt.acme.email={{ .Values.tls.acmeEmail }}"
+    - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+  persistence:
+    enabled: true
+    size: 128Mi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70

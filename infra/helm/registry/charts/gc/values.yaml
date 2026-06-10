@@ -1,0 +1,32 @@
+image:
+  repository: ghcr.io/steveokay/registry-gc
+  pullPolicy: IfNotPresent
+  tag: ""
+
+schedule: "0 2 * * *"   # nightly at 02:00 UTC
+gcMode: full             # dry-run | manifests | blobs | full
+blobMinAgeSecs: 3600     # never delete blobs younger than this (protects in-flight uploads)
+manifestMinAgeSecs: 86400
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: ""
+
+secretName: registry-gc-secrets
+
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  OTEL_SERVICE_NAME: registry-gc
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

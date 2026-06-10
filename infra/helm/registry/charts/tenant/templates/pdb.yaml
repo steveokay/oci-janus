@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "tenant.fullname" . }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "tenant.selectorLabels" . | nindent 6 }}

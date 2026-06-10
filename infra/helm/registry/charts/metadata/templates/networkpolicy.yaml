@@ -1,0 +1,47 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "metadata.fullname" . }}
+  labels:
+    {{- include "metadata.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "metadata.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: core
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proxy
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scanner
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gc
+      ports:
+        - port: {{ .Values.service.grpcPort }}
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Redis
+    - ports:
+        - port: 6379
+    # Internal services (gRPC to auth, storage, metadata, etc.)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+    # PostgreSQL
+    - ports:
+        - port: 5432

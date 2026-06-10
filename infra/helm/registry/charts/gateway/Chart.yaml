@@ -1,0 +1,12 @@
+apiVersion: v2
+name: gateway
+description: registry-gateway — Traefik v3 ingress with TLS termination and tenant routing
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: traefik
+    version: "30.x.x"
+    repository: "https://traefik.github.io/charts"
+    condition: traefik.enabled

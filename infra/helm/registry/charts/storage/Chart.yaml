@@ -1,0 +1,6 @@
+apiVersion: v2
+name: storage
+description: registry-storage — Storage abstraction (MinIO/S3/GCS/Azure)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
