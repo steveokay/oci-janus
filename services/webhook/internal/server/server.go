@@ -1,4 +1,4 @@
-// Package server wires the gRPC and HTTP servers together and manages graceful shutdown.
+// Package server wires the webhook service components and starts gRPC + HTTP servers.
 package server
 
 import (
@@ -7,18 +7,83 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/webhook/internal/config"
+	"github.com/steveokay/oci-janus/services/webhook/internal/delivery"
+	"github.com/steveokay/oci-janus/services/webhook/internal/handler"
+	"github.com/steveokay/oci-janus/services/webhook/internal/repository"
+	"github.com/steveokay/oci-janus/services/webhook/internal/worker"
+
+	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 )
 
-// Run starts the gRPC and HTTP servers and blocks until ctx is cancelled or a server error occurs.
+// Run initialises all dependencies and starts the webhook service.
 func Run(ctx context.Context, cfg *config.Config) error {
+	poolCfg, err := pgxpool.ParseConfig(cfg.DBDSN)
+	if err != nil {
+		return fmt.Errorf("parse DB_DSN: %w", err)
+	}
+	poolCfg.MaxConns = cfg.DBMaxConns
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return fmt.Errorf("pgxpool.New: %w", err)
+	}
+	defer pool.Close()
+
+	if err := runMigrations(ctx, cfg.DBDSN); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
+	repo := repository.New(pool)
+	dispatcher := delivery.NewDispatcher(cfg.DeliveryTimeoutSecs)
+
+	w, err := worker.New(repo, dispatcher, cfg.CredentialKeyHex, cfg.DeliveryPollIntervalSecs)
+	if err != nil {
+		return fmt.Errorf("new worker: %w", err)
+	}
+
+	// Single consumer with wildcard '#' routing key catches all event types.
+	cons, err := consumer.New(cfg.RabbitMQURL, consumer.Config{
+		Queue:      "webhook.events",
+		RoutingKey: "#",
+		MaxRetries: 3,
+		Exchange:   events.ExchangeEvents,
+	})
+	if err != nil {
+		return fmt.Errorf("rabbitmq consumer: %w", err)
+	}
+	defer cons.Close()
+
+	go func() {
+		slog.Info("starting event consumer")
+		if err := cons.Consume(ctx, w.HandleEvent); err != nil {
+			slog.Error("consumer stopped", "error", err)
+		}
+	}()
+
+	go w.RunDeliveryLoop(ctx)
+
+	grpcHdl, err := handler.New(repo, cfg.CredentialKeyHex)
+	if err != nil {
+		return fmt.Errorf("new gRPC handler: %w", err)
+	}
+
 	grpcSrv := grpc.NewServer()
-	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
+	webhookv1.RegisterWebhookServiceServer(grpcSrv, grpcHdl)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -29,8 +94,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", metricsHandler)
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
+	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // TODO: wire prometheus registry
+	})
+	httpSrv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           httpMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -44,7 +115,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	select {
 	case <-ctx.Done():
-		slog.Info("shutting down")
+		slog.Info("shutting down webhook service")
 		grpcSrv.GracefulStop()
 		_ = httpSrv.Shutdown(context.Background())
 		return nil
@@ -53,7 +124,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 }
 
-func metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	// TODO: wire up prometheus registry
-	w.WriteHeader(http.StatusOK)
+// runMigrations runs goose SQL migrations against the database.
+func runMigrations(ctx context.Context, dsn string) error {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
+
+	goose.SetBaseFS(nil)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+	return goose.Up(db, "migrations")
 }
