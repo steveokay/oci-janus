@@ -47,6 +47,7 @@ type Event struct {
 // PushCompletedPayload is the payload for push.completed events.
 type PushCompletedPayload struct {
 	RepositoryName string `json:"repository_name"`
+	RepoID         string `json:"repo_id"`
 	Tag            string `json:"tag"`
 	ManifestDigest string `json:"manifest_digest"`
 	PushedBy       string `json:"pushed_by"`
