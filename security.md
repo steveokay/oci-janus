@@ -464,9 +464,9 @@ Tracked per service. `?` = not yet assessed.
 | CORS explicitly configured | N/A | ✗ (unassessed) | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Request body size limits | ✗ (SEC-019) | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | ✗ (SEC-018) | N/A | N/A |
 | Metrics on separate port | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) |
-| `govulncheck` in CI | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `govulncheck` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `gosec` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `gitleaks` pre-commit hook | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| `gitleaks` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | No secrets in Docker layers | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
@@ -476,7 +476,7 @@ Tracked per service. `?` = not yet assessed.
 | Task | Frequency | Owner | Last Run |
 |---|---|---|---|
 | OWASP ZAP baseline scan (staging) | Weekly | — | Never |
-| `govulncheck` across all repos | Every PR | CI | Never |
+| `govulncheck` across all repos | Every PR | CI | Every PR (all 12 service CI workflows) |
 | Dependency license check | Every PR | CI | Never |
 | Secret rotation review | Quarterly | — | Never |
 | Audit log retention review | Quarterly | — | Never |
