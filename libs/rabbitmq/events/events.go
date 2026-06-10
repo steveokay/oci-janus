@@ -72,3 +72,17 @@ type StoreQueuedPayload struct {
 	RepositoryName string `json:"repository_name"`
 	Tag            string `json:"tag"`
 }
+
+// GCRunStartedPayload is the payload for gc.run.started events.
+type GCRunStartedPayload struct {
+	Mode string `json:"mode"`
+}
+
+// GCRunCompletedPayload is the payload for gc.run.completed events.
+type GCRunCompletedPayload struct {
+	Mode             string `json:"mode"`
+	ManifestsDeleted int    `json:"manifests_deleted"`
+	BlobsDeleted     int    `json:"blobs_deleted"`
+	BytesFreed       int64  `json:"bytes_freed"`
+	DryRun           bool   `json:"dry_run"`
+}
