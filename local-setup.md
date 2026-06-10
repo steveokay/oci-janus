@@ -1,6 +1,6 @@
 # Local Setup Guide
 
-> This file is gitignored — safe to annotate with real values for personal reference.
+> This file is tracked in git. Do not commit real secret values — keep placeholders only.
 
 ## Prerequisites
 

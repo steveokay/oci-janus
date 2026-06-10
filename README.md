@@ -42,12 +42,12 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 
 | Concern | Choice |
 |---|---|
-| Language | Go 1.25+ |
+| Language | Go 1.23+ (toolchain `go1.25.7` in go.mod) |
 | Database | PostgreSQL 16 |
 | Cache / Rate-limiting | Redis 7 |
 | Message broker | RabbitMQ 3.13 (Quorum Queues) |
 | Object storage (default dev) | MinIO |
-| Service mesh | mTLS (cert-manager in K8s, cfssl in dev) |
+| Service mesh | mTLS (cert-manager in K8s, openssl in dev via `cert-init`) |
 | Observability | OpenTelemetry → Jaeger / Grafana Tempo / Datadog |
 | Container base image | `gcr.io/distroless/static-debian12` |
 | Secret management | HashiCorp Vault (dev), K8s External Secrets Operator (prod) |
@@ -55,6 +55,8 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 ---
 
 ## Architecture
+
+> For the full system architecture with detailed sequence diagrams and flow breakdowns, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ```
                      ┌────────────────────────────────────────┐
@@ -118,7 +120,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.23+
 - Docker + Docker Compose v2
 - `buf` CLI v1.x (for proto codegen)
 - `golangci-lint` v1.61+ (for linting)
@@ -347,7 +349,7 @@ Rules:
 ### mTLS Certificates (Local Dev)
 
 ```bash
-make dev-certs    # generates certs/ with CA + per-service certs using cfssl
+make dev-certs    # generates certs/ with CA + per-service certs using openssl (via cert-init container)
 ```
 
 In production (Kubernetes), cert-manager issues certificates automatically using an internal CA issuer.
@@ -439,7 +441,6 @@ See [`security.md`](security.md) for the full issue tracker. Summary of open HIG
 |---|---|---|
 | SEC-001 | HIGH | Audit table RLS bypassed by schema owner role |
 | SEC-003 | HIGH | Go plugin scanner loads untrusted `.so` in-process |
-| SEC-008 | HIGH | `registry-core` gRPC clients use plaintext transport (insecure credentials) |
 | SEC-014 | HIGH | Signer/gc/tenant/webhook/audit gRPC servers have no interceptors or mTLS |
 
 ---

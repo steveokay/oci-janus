@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-10 (CI security gaps closed; AUTH_REALM fix enables docker push/pull from host)
+> Last updated: 2026-06-10 (docker push/pull smoke test passing end-to-end; 6-fix chain applied; ARCHITECTURE.md created)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -105,13 +105,14 @@
 
 ### REM-005 — Audit Table RLS + Role Separation
 - **Affects:** `registry-audit`
-- **Status:** PARTIALLY APPLIED — audit_events table uses PostgreSQL RULE for append-only enforcement. `FORCE ROW LEVEL SECURITY` and the `registry_audit_app` role are not yet applied.
+- **Status:** DONE ✅ — migration `20240101000002_audit_rls_role.sql` + server.go AfterConnect + checkRole().
 - **Tasks:**
-  - [ ] Create `registry_audit_app` role in migration: INSERT + SELECT only, no UPDATE/DELETE
-  - [ ] Add `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` to migration
-  - [ ] Add `INSERT` policy: `WITH CHECK (true)`
-  - [ ] Add `SELECT` policy: `USING (tenant_id = current_setting('app.tenant_id')::uuid)`
-  - [ ] Add startup check: refuse to start if `current_user` = schema owner role
+  - [x] Create `registry_audit_app` NOLOGIN role in migration: INSERT + SELECT on audit_events, DELETE on audit_events_default (retention path only)
+  - [x] Add `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` to migration
+  - [x] Add `INSERT` policy: `WITH CHECK (true)`
+  - [x] Add `SELECT` policy: `USING (true)` (tenant isolation via app-layer WHERE clauses)
+  - [x] Pool `AfterConnect` does `SET ROLE registry_audit_app` on every connection
+  - [x] `checkRole()` startup check refuses to start if effective role ≠ `registry_audit_app`
 
 ---
 
@@ -235,9 +236,18 @@ All decisions resolved. No blockers.
 |---|---|---|---|
 | Docker Compose full-stack spin-up: verify all 16 containers start healthy | `infra/` | all E2E testing | DONE ✅ |
 | Fix AUTH_REALM — WWW-Authenticate pointed to internal Compose hostname; docker push/pull from host failed | `services/core` | docker push/pull smoke test | DONE ✅ |
+| Fix HasAction 403 → challengeAuth(401) — Docker only re-requests token on 401; 403 caused infinite retry loop | `services/core` | docker push smoke test | DONE ✅ |
+| Fix Redis JWT cache losing Access claims — cachedClaims now serializes full access list as JSON | `services/core` | auth / push/pull | DONE ✅ |
+| Fix MinIO bucket auto-creation — Ping() creates the bucket if absent; BlobExists was returning Internal | `services/storage` | blob operations | DONE ✅ |
+| Fix missing dev tenant FK — migration 00002 seeds tenant `00000000-0000-0000-0000-000000000001` | `services/metadata` | CreateRepository | DONE ✅ |
+| Fix CreateRepository empty OrgId — handler now parses `org/repo` name, upserts org, returns existing on conflict | `services/metadata` | push flow | DONE ✅ |
+| Fix dev cert SANs — gen-dev-certs.sh now emits subjectAltName for Go 1.15+ TLS hostname verification | `cert-init` | mTLS / grpc conns | DONE ✅ |
+| Wire SEC-008 fix — clientCreds() in core server uses mtls.ClientTLSConfig() when cert paths set | `services/core` | mTLS hardening | DONE ✅ |
+| docker push/pull smoke test: `docker push localhost:8081/steveokay/alpine:3.20` passes end-to-end | all | E2E validation | DONE ✅ |
+| Create ARCHITECTURE.md — full system architecture with ASCII diagrams, sequence flows, service descriptions | docs | — | DONE ✅ |
 | OCI conformance suite against live stack (core + metadata + storage) | `services/core` | release | NOT STARTED |
 | Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | NOT STARTED |
-| Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | NOT STARTED |
+| Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | DONE ✅ |
 
 ### Medium Priority (security hardening)
 
@@ -275,3 +285,6 @@ All decisions resolved. No blockers.
 - Security audit completed 2026-06-10 — SEC-019 through SEC-028 added to `security.md`. Notable open items: HTTP server timeouts missing on 6 services (SEC-019/020), healthcheck binary lacks timeout (SEC-021), `sslmode=prefer` in dev compose (SEC-022), `context.Background()` in handlers (SEC-028).
 - **CI security gaps closed (2026-06-10):** `govulncheck` added to all 12 service CI workflows; `ci-gitleaks.yml` added for secret scanning on all pushes/PRs. Commit `a919cd4`.
 - **AUTH_REALM fix (2026-06-10):** `services/core` WWW-Authenticate realm was hardcoded to `https://registry/auth/token` (internal Compose hostname). Now reads from `AUTH_REALM` env var, defaulting to `http://localhost:8080/auth/token`. Docker push/pull from host now works. Commit `cb241bd`.
+- **docker push/pull chain fixes (2026-06-10):** 6 root causes debugged and resolved to make `docker push localhost:8081/steveokay/alpine:3.20` work end-to-end: (1) HasAction 403→challengeAuth(401) in core; (2) Redis JWT cache losing Access claims (JSON serialization fix); (3) MinIO bucket auto-creation in storage Ping(); (4) dev tenant FK seeded in metadata 00002 migration; (5) CreateRepository auto-org-create from `org/repo` name; (6) dev cert SANs added in gen-dev-certs.sh for Go 1.15+ TLS. Also wired SEC-008 mTLS fix (clientCreds() helper in core server.go).
+- **ARCHITECTURE.md created (2026-06-10):** Full system architecture document at repo root. Covers all 12 services, ASCII system diagram, docker login/push/pull sequence diagrams, async pipeline flow, custom domain resolution, multi-tenancy model, infrastructure components, and design decisions.
+- **SEC-008 resolved (2026-06-10):** `registry-core` gRPC clients now use `libs/auth/mtls.ClientTLSConfig()` when cert paths are configured. Falls back to insecure with `slog.Warn` only in dev without certs. Moved to Resolved in `security.md`.

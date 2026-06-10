@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -27,11 +28,23 @@ import (
 
 // Run initialises all audit service components and blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config) error {
+	// Run migrations first (on a plain pool) so the registry_audit_app role exists
+	// before the main pool tries to SET ROLE to it.
+	if err := runMigrations(ctx, cfg.DBDSN); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+
 	poolCfg, err := pgxpool.ParseConfig(cfg.DBDSN)
 	if err != nil {
 		return fmt.Errorf("parse DB_DSN: %w", err)
 	}
 	poolCfg.MaxConns = cfg.DBMaxConns
+	// Every connection in the runtime pool assumes the low-privilege role so that
+	// FORCE ROW LEVEL SECURITY on audit_events applies correctly (SEC-001).
+	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET ROLE registry_audit_app")
+		return err
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -39,8 +52,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer pool.Close()
 
-	if err := runMigrations(ctx, cfg.DBDSN); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
+	if err := checkRole(ctx, pool); err != nil {
+		return err
 	}
 
 	repo := repository.New(pool)
@@ -136,6 +149,23 @@ func runRetentionLoop(ctx context.Context, repo *repository.Repository, retentio
 			}
 		}
 	}
+}
+
+// checkRole verifies the pool is operating as registry_audit_app and not as the
+// schema owner. If the AfterConnect SET ROLE failed silently, this catches it early.
+func checkRole(ctx context.Context, pool *pgxpool.Pool) error {
+	var currentUser string
+	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&currentUser); err != nil {
+		return fmt.Errorf("checkRole: %w", err)
+	}
+	if currentUser != "registry_audit_app" {
+		return fmt.Errorf(
+			"SEC-001: registry-audit must run as registry_audit_app role, got %q — "+
+				"ensure GRANT registry_audit_app TO <login_user> was applied by the migration",
+			currentUser,
+		)
+	}
+	return nil
 }
 
 // runMigrations applies goose SQL migrations.

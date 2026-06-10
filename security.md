@@ -29,21 +29,6 @@
 
 ## Open Issues
 
-### SEC-001 — Audit Table: RLS bypass via schema owner role
-- **Severity:** HIGH
-- **Status:** OPEN
-- **Service:** `registry-audit`
-- **Raised:** 2026-06-09
-- **Description:** PostgreSQL table owners bypass Row Level Security by default. If `registry-audit` connects as the schema owner role, the append-only RLS policy is silently ignored, allowing UPDATE and DELETE on audit records.
-- **Remediation:**
-  1. Create a separate low-privilege app role: `registry_audit_app` with only INSERT + SELECT grants
-  2. Add `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` to the migration
-  3. Add a startup check in `registry-audit` that refuses to start if `current_user` is the schema owner
-  4. Document in migration file that the schema owner must never be used at runtime
-- **References:** PostgreSQL docs — Row Security Policies, `FORCE ROW LEVEL SECURITY`
-
----
-
 ### SEC-002 — GC Advisory Locks: undefined locking behaviour under concurrent workers
 - **Severity:** MEDIUM
 - **Status:** OPEN
@@ -132,21 +117,6 @@
 
 ---
 
-### SEC-008 — `registry-core` gRPC clients use plaintext transport
-- **Severity:** HIGH
-- **Status:** OPEN
-- **Service:** `registry-core`
-- **Raised:** 2026-06-09
-- **Description:** `services/core/internal/server/server.go` lines 34, 40, 46 use `insecure.NewCredentials()` for all three outgoing gRPC connections (to `registry-auth`, `registry-metadata`, `registry-storage`). The code comment acknowledges this as temporary. mTLS is a core security requirement (CLAUDE.md §7) and this gap means internal service communication is fully unencrypted and unauthenticated in current form.
-- **Remediation:**
-  1. Wire `libs/auth/mtls.ClientTLSConfig()` in `registry-core/server.go` the same way `registry-auth` server does for its gRPC server
-  2. Add `MTLS_CA_CERT_PATH`, `MTLS_CERT_PATH`, `MTLS_KEY_PATH` to `registry-core` config (they are in `BaseConfig` already — just need to use them)
-  3. Fail to start if the MTLS env vars are absent (remove the "insecure fallback")
-  4. Add the same optional-mTLS pattern used in auth and storage if dev mode without certs is still required — warn loudly but allow dev to proceed
-- **References:** `libs/auth/mtls`, CLAUDE.md §7, `services/auth/internal/server/server.go` (reference implementation)
-
----
-
 ### SEC-009 — IP rate limiting in `registry-auth` targets gateway IP, not client IP
 - **Severity:** MEDIUM
 - **Status:** OPEN
@@ -168,10 +138,10 @@
 - **Status:** OPEN
 - **Service:** `registry-core`
 - **Raised:** 2026-06-09
-- **Description:** The gRPC server in `services/core/internal/server/server.go` (line 78) is created with `grpc.NewServer()` — no interceptors, no mTLS, no recovery handler. Other services (auth, storage, metadata) all use `buildGRPCOptions()` which chains OTEL, logging, recovery, and optionally mTLS. An unhandled panic in a future gRPC handler would crash the process instead of returning `codes.Internal`.
+- **Description:** The gRPC server in `services/core/internal/server/server.go` is created with `grpc.NewServer()` — no interceptors, no mTLS, no recovery handler. Other services (auth, storage, metadata) all use `buildGRPCOptions()` which chains OTEL, logging, recovery, and optionally mTLS. An unhandled panic in a future gRPC handler would crash the process instead of returning `codes.Internal`.
 - **Remediation:**
   1. Apply the same `buildGRPCOptions()` pattern from `registry-auth` to `registry-core`'s gRPC server
-  2. This is a low-effort fix once SEC-008 is addressed (the mTLS path will be wired at the same time)
+  2. SEC-008 (outbound client mTLS) is already resolved — this covers the inbound server side
 - **References:** `services/auth/internal/server/server.go` (reference), `libs/middleware/grpc`
 
 ---
@@ -213,8 +183,8 @@
 - **Remediation:**
   1. For each service's gRPC server: apply `buildGRPCOptions()` pattern from `registry-auth` — wires recovery, OTEL tracing, structured logging, and optionally mTLS
   2. For each service's gRPC clients: replace `insecure.NewCredentials()` with `libs/auth/mtls.ClientTLSConfig()` once dev certs are wired (cert-init in docker-compose provides `/certs/` volume)
-  3. This work is blocked on the mTLS wiring tracked in SEC-008 — tackle both together
-- **References:** SEC-008, SEC-010, `services/auth/internal/server/server.go` (reference implementation)
+  3. SEC-008 (outbound mTLS for `registry-core`) is already resolved and provides the reference pattern
+- **References:** SEC-010, `services/auth/internal/server/server.go` (reference implementation)
 
 ---
 
@@ -439,7 +409,8 @@
 
 | ID | Title | Service | Resolved | How |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| SEC-001 | Audit table RLS bypassed by schema owner role | `registry-audit` | 2026-06-10 | Migration `20240101000002_audit_rls_role.sql` creates `registry_audit_app` NOLOGIN role, grants INSERT+SELECT on `audit_events` and DELETE on `audit_events_default` (retention path). `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` applies RLS even to the table owner. INSERT and SELECT policies defined; no UPDATE/DELETE policy → default-deny. Pool `AfterConnect` does `SET ROLE registry_audit_app` on every connection. `checkRole()` in `server.go` fails startup if effective role is not `registry_audit_app`. |
+| SEC-008 | `registry-core` gRPC clients use plaintext transport | `registry-core` | 2026-06-10 | Added `clientCreds()` helper in `services/core/internal/server/server.go` that calls `libs/auth/mtls.ClientTLSConfig()` when `MTLS_CA_CERT_PATH`/`MTLS_CERT_PATH`/`MTLS_KEY_PATH` are set. Falls back to insecure with a loud `slog.Warn` only when cert paths are absent (dev without certs). All three outbound gRPC connections (auth, metadata, storage) now use the shared credential. Dev certs generated by `cert-init` are picked up automatically via the mounted `/certs/` volume. |
 
 ---
 
