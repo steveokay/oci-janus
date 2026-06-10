@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -35,6 +37,11 @@ type Config struct {
 // Load reads configuration from environment variables and validates required fields.
 func Load() (*Config, error) {
 	viper.AutomaticEnv()
+	for _, e := range os.Environ() {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			viper.Set(k, v)
+		}
+	}
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50052")

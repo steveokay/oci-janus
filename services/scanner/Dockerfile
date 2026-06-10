@@ -9,6 +9,8 @@ COPY libs/ libs/
 COPY proto/gen/go/ proto/gen/go/
 COPY services/scanner/ services/scanner/
 
+RUN cd /build/libs && CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/healthcheck ./cmd/healthcheck
+
 WORKDIR /build/services/scanner
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/server ./cmd/server
 
@@ -24,7 +26,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy Go server and Trivy binary
+# Copy Go server, healthcheck, and Trivy binary
+COPY --from=builder /bin/healthcheck /healthcheck
 COPY --from=builder /bin/server /server
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 

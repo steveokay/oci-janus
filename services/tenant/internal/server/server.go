@@ -18,6 +18,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	tenantmigrations "github.com/steveokay/oci-janus/services/tenant/migrations"
 	"github.com/steveokay/oci-janus/services/tenant/internal/config"
 	"github.com/steveokay/oci-janus/services/tenant/internal/domainworker"
 	"github.com/steveokay/oci-janus/services/tenant/internal/handler"
@@ -111,9 +112,9 @@ func runMigrations(ctx context.Context, dsn string) error {
 	db := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = db.Close() }()
 
-	goose.SetBaseFS(nil)
+	goose.SetBaseFS(tenantmigrations.FS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	return goose.Up(db, "migrations")
+	return goose.Up(db, ".")
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	webhookmigrations "github.com/steveokay/oci-janus/services/webhook/migrations"
 	"github.com/steveokay/oci-janus/services/webhook/internal/config"
 	"github.com/steveokay/oci-janus/services/webhook/internal/delivery"
 	"github.com/steveokay/oci-janus/services/webhook/internal/handler"
@@ -135,9 +136,9 @@ func runMigrations(ctx context.Context, dsn string) error {
 	db := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = db.Close() }()
 
-	goose.SetBaseFS(nil)
+	goose.SetBaseFS(webhookmigrations.FS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	return goose.Up(db, "migrations")
+	return goose.Up(db, ".")
 }

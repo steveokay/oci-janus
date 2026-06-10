@@ -79,11 +79,12 @@ func Bootstrap(ctx context.Context, cfg Config) (func(context.Context) error, er
 }
 
 // buildResource creates the OTEL resource describing this service instance.
+// NewSchemaless avoids a schema-URL conflict between resource.Default() (SDK v1.43
+// embeds semconv v1.40) and any older semconv package imported elsewhere.
 func buildResource(cfg Config) (*resource.Resource, error) {
 	return resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.DeploymentEnvironment(cfg.Environment),
 		),

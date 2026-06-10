@@ -1,7 +1,7 @@
 -- +goose Up
 
 CREATE TABLE audit_events (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id          UUID        NOT NULL DEFAULT gen_random_uuid(),
     tenant_id   UUID        NOT NULL,
     actor_id    TEXT        NOT NULL,
     actor_type  TEXT        NOT NULL
@@ -12,7 +12,8 @@ CREATE TABLE audit_events (
     outcome     TEXT        NOT NULL
                             CHECK (outcome IN ('success', 'failure')),
     metadata    JSONB       NOT NULL DEFAULT '{}',
-    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 
 -- Default partition covering the first year; add new partitions via migration.

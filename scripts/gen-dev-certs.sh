@@ -50,4 +50,7 @@ for svc in $SERVICES; do
   fi
 done
 
+# Make all certs world-readable so non-root service containers (uid 65532) can read them.
+chmod a+r "$CERTS_DIR"/*.crt "$CERTS_DIR"/*.key 2>/dev/null || true
+
 echo "[cert-init] Dev certs ready in $CERTS_DIR/"

@@ -5,6 +5,7 @@ package loader
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -106,6 +107,17 @@ func Load(serviceName string, cfg any) error {
 	v.SetDefault("DB_CONNECT_TIMEOUT", "5s")
 	v.SetDefault("DB_MAX_CONN_LIFETIME", "30m")
 	v.SetDefault("DB_MAX_CONN_IDLE_TIME", "5m")
+
+	// Seed Viper with all environment variables so that AutomaticEnv works
+	// correctly with Unmarshal. Viper's AllSettings (used by Unmarshal) only
+	// returns keys it already knows; without this, fields with no SetDefault
+	// entry (e.g. DB_DSN, REDIS_ADDR) are silently left empty.
+	for _, e := range os.Environ() {
+		k, val, ok := strings.Cut(e, "=")
+		if ok {
+			v.Set(k, val)
+		}
+	}
 
 	if err := v.Unmarshal(cfg); err != nil {
 		return fmt.Errorf("unmarshal config: %w", err)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
@@ -148,9 +149,9 @@ func runMigrations(ctx context.Context, dsn string) error {
 	db := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = db.Close() }()
 
-	goose.SetBaseFS(nil)
+	goose.SetBaseFS(auditmigrations.FS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	return goose.Up(db, "migrations")
+	return goose.Up(db, ".")
 }

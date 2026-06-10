@@ -33,11 +33,11 @@ version: "3.9"
 
 x-otel: &otel
   OTEL_EXPORTER: jaeger
-  OTEL_ENDPOINT: http://jaeger:4317
+  OTEL_ENDPOINT: jaeger:4317
   OTEL_ENVIRONMENT: development
 
 x-healthcheck: &healthcheck
-  test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+  test: ["CMD", "/healthcheck"]
   interval: 10s
   timeout: 5s
   retries: 5
@@ -77,7 +77,7 @@ services:
     networks:
       - registry
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U registry"]
+      test: ["CMD-SHELL", "pg_isready -U registry -d registry_auth"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -221,7 +221,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-auth
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=prefer
       REDIS_ADDR: redis:6379
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/auth.crt
@@ -289,7 +289,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-metadata
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_metadata?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_metadata?sslmode=prefer
       REDIS_ADDR: redis:6379
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/metadata.crt
@@ -366,7 +366,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-proxy
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_proxy?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_proxy?sslmode=prefer
       REDIS_ADDR: redis:6379
       AUTH_GRPC_ADDR: registry-auth:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
@@ -436,7 +436,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-webhook
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_webhook?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_webhook?sslmode=prefer
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       CREDENTIAL_KEY_HEX: ${WEBHOOK_CREDENTIAL_KEY_HEX}
       MTLS_CA_CERT_PATH: /certs/ca.crt
@@ -470,7 +470,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-audit
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_audit?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_audit?sslmode=prefer
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       TRUSTED_GATEWAY_IP: registry-gateway
       MTLS_CA_CERT_PATH: /certs/ca.crt
@@ -542,7 +542,7 @@ services:
     environment:
       <<: *otel
       OTEL_SERVICE_NAME: registry-tenant
-      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_tenant?sslmode=require
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_tenant?sslmode=prefer
       REDIS_ADDR: redis:6379
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/tenant.crt

@@ -11,6 +11,8 @@ COPY proto/gen/go/ proto/gen/go/
 ARG SERVICE
 COPY services/${SERVICE}/ services/${SERVICE}/
 
+RUN cd /build/libs && CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/healthcheck ./cmd/healthcheck
+
 WORKDIR /build/services/${SERVICE}
 # GOWORK=off: build against this service's own go.mod, not the workspace.
 # The workspace is for local development only; Docker builds must be self-contained.
@@ -19,6 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /
 # ----------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS final
 
+COPY --from=builder /bin/healthcheck /healthcheck
 COPY --from=builder /bin/server /server
 
 EXPOSE 50051 8080
