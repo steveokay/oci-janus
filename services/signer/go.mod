@@ -1,6 +1,6 @@
 module github.com/steveokay/oci-janus/services/signer
 
-go 1.25.0
+go 1.25.7
 
 require (
 	github.com/spf13/viper v1.19.0
