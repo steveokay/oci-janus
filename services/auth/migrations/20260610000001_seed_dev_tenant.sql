@@ -8,7 +8,7 @@ VALUES (
     '98dbe36b-ef28-4903-b25c-bff1b2921c9e',
     'admin',
     'admin@dev.local',
-    '$argon2id$v=19$m=65536,t=3,p=2$o5d+Kl4Ewd96MKFE6wqQ1w$NdruhP2AYbLv1JAnwj6VHGqsgtywlrR70euNs2fEzoM',
+    '$argon2id$v=19$m=65536,t=3,p=2$3kHdg2SOxbVRyPf3LEhy1g$nnZN9kUaP7QjM1kgm6g0RpIQ/orFgJk0Uc5GMnfvCDg',
     true
 )
 ON CONFLICT (tenant_id, username) DO NOTHING;

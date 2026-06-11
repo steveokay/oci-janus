@@ -46,6 +46,11 @@ func (d *MinIODriver) Ping(ctx context.Context) error {
 }
 
 func (d *MinIODriver) PutBlob(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
+	// Use -1 when size is unknown so MinIO switches to streaming multipart mode.
+	// A declared size of 0 would cause the SDK to reject any data in the reader.
+	if size == 0 {
+		size = -1
+	}
 	_, err := d.client.PutObject(ctx, d.bucket, key, r, size, minio.PutObjectOptions{
 		ContentType:          contentType,
 		ServerSideEncryption: nil, // SSE configured at bucket level
