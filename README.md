@@ -201,14 +201,10 @@ docker login localhost:8081 -u <user> -p <api-key>
 docker tag myimage:latest localhost:8081/myorg/myimage:latest
 docker push localhost:8081/myorg/myimage:latest
 
-# Pull through proxy (once an upstream is registered — see local-setup.md §6)
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"00000000-0000-0000-0000-000000000001"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-curl -s -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
-  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/3.20"
+# Pull through proxy cache (once an upstream is registered — see local-setup.md §6)
+# The proxy participates in the standard Docker token-auth flow — no manual token needed.
+docker login localhost:8084 -u <user> -p <password>
+docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
 ```
 
 ---
@@ -263,6 +259,7 @@ All services use environment variables. No YAML config files are committed (only
 
 | Variable | Description |
 |---|---|
+| `AUTH_REALM` | URL Docker clients use to fetch tokens — must be publicly reachable (default `http://localhost:8080/auth/token`) |
 | `AUTH_GRPC_ADDR` | `registry-auth` gRPC address |
 | `STORAGE_GRPC_ADDR` | `registry-storage` gRPC address |
 | `CREDENTIAL_KEY_HEX` | 64-char hex key (32 bytes) for AES-256-GCM credential encryption |
@@ -273,7 +270,7 @@ All services use environment variables. No YAML config files are committed (only
 
 | Variable | Description |
 |---|---|
-| `SCANNER_PLUGIN_PATH` | Path to scanner binary or `.so` plugin |
+| `SCANNER_PLUGIN_PATH` | Absolute path to external scanner process binary (e.g. trivy wrapper) |
 | `SCANNER_PLUGIN_CHECKSUM` | SHA256 hex checksum of the plugin binary |
 | `SCANNER_WORKER_COUNT` | Concurrent scan workers (default `4`) |
 | `SCANNER_JOB_TIMEOUT_SECONDS` | Per-scan timeout (default `600`) |

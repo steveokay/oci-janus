@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-11 (SEC-002/003/004/014 resolved; proxy mTLS fix added to SEC-008 resolved entry; all docs updated)
+> Last updated: 2026-06-11 (SEC-002/003/004/014 resolved; SEC-008 covers both core + proxy mTLS; all docs updated to reflect proxy AUTH_REALM fix and native docker pull through cache)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
