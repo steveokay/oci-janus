@@ -23,6 +23,10 @@ type Config struct {
 	// as store.queued events so a consumer can retry them durably.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
+	// AuthRealm is the URL Docker clients are directed to for token acquisition.
+	// Must be reachable from the client machine (not an internal Compose hostname).
+	AuthRealm string `mapstructure:"AUTH_REALM"`
+
 	// CredentialKeyHex is a 64-character hex string (32 bytes) used for
 	// AES-256-GCM encryption of upstream registry passwords at rest.
 	CredentialKeyHex string `mapstructure:"CREDENTIAL_KEY_HEX"`
@@ -53,6 +57,9 @@ func Load() (*Config, error) {
 	}
 	if _, err := hex.DecodeString(cfg.CredentialKeyHex); err != nil {
 		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX is not valid hex: %w", err)
+	}
+	if cfg.AuthRealm == "" {
+		cfg.AuthRealm = "http://localhost:8080/auth/token"
 	}
 	if cfg.UpstreamHTTPTimeoutSecs == 0 {
 		cfg.UpstreamHTTPTimeoutSecs = 30

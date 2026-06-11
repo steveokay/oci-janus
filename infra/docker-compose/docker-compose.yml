@@ -372,6 +372,7 @@ services:
       REDIS_ADDR: redis:6379
       AUTH_GRPC_ADDR: registry-auth:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
+      AUTH_REALM: http://localhost:8080/auth/token
       CREDENTIAL_KEY_HEX: ${PROXY_CREDENTIAL_KEY_HEX}
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/proxy.crt

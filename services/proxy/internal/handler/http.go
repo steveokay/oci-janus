@@ -30,12 +30,13 @@ import (
 
 // HTTPHandler serves the OCI pull-through cache HTTP API.
 type HTTPHandler struct {
-	repo     *repository.Repository
-	auth     *authClient
-	storage  storagev1.StorageServiceClient
-	upstream *upstream.Client
-	pub      *publisher.Publisher // nil when RabbitMQ is not configured
-	key      []byte               // 32-byte AES key for credential decryption
+	repo      *repository.Repository
+	auth      *authClient
+	storage   storagev1.StorageServiceClient
+	upstream  *upstream.Client
+	pub       *publisher.Publisher // nil when RabbitMQ is not configured
+	key       []byte               // 32-byte AES key for credential decryption
+	authRealm string               // URL Docker clients use to fetch tokens (AUTH_REALM)
 }
 
 // NewHTTPHandler constructs the pull-through cache HTTP handler.
@@ -48,18 +49,20 @@ func NewHTTPHandler(
 	upstreamClient *upstream.Client,
 	pub *publisher.Publisher,
 	credentialKeyHex string,
+	authRealm string,
 ) (*HTTPHandler, error) {
 	key, err := hexToKey(credentialKeyHex)
 	if err != nil {
 		return nil, err
 	}
 	return &HTTPHandler{
-		repo:     repo,
-		auth:     newAuthClient(authConn, rdb),
-		storage:  storagev1.NewStorageServiceClient(storageConn),
-		upstream: upstreamClient,
-		pub:      pub,
-		key:      key,
+		repo:      repo,
+		auth:      newAuthClient(authConn, rdb),
+		storage:   storagev1.NewStorageServiceClient(storageConn),
+		upstream:  upstreamClient,
+		pub:       pub,
+		key:       key,
+		authRealm: authRealm,
 	}, nil
 }
 
@@ -587,8 +590,7 @@ func (h *HTTPHandler) authenticate(r *http.Request) (*tokenClaims, error) {
 }
 
 func (h *HTTPHandler) challengeAuth(w http.ResponseWriter, r *http.Request) {
-	realm := "https://" + r.Host + "/v2/token"
-	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="registry-proxy"`, realm))
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="registry-proxy"`, h.authRealm))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(ociErrBody("UNAUTHORIZED", "authentication required"))

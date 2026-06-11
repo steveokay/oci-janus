@@ -192,32 +192,38 @@ docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy -c "
 "
 ```
 
-### 6b — Pull an image through the cache
+### 6b — Allow the insecure proxy registry in Docker Desktop
 
-The proxy is at `localhost:8084`. Paths follow: `/v2/cache/<upstream-name>/<image>/manifests/<tag>`.
+The proxy is at `localhost:8084`. Add it to Docker Desktop's insecure registries the same way you did for `localhost:8081` in Step 5a:
+
+1. Docker Desktop → Settings → Docker Engine
+2. Add `"localhost:8084"` to `insecure-registries`
+3. Click **Apply & Restart**
+
+### 6c — Pull an image through the cache
+
+Docker handles the full auth flow automatically — no manual token retrieval needed. The proxy returns a `WWW-Authenticate` challenge pointing to `registry-auth`, Docker fetches a token, and retries.
 
 ```bash
-# Fetch the alpine:3.20 manifest list (multi-arch)
-curl -s \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
-  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/3.20" \
-  | python3 -m json.tool | head -20
+# Log in to the proxy registry (same credentials as the main registry)
+docker login localhost:8084 -u admin -p Admin1234!dev
 
-# Fetch by digest (first request hits Docker Hub; subsequent requests served from DB cache)
-curl -s \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
-  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/sha256:c64c687cbe..." \
-  -o /dev/null -w "%{http_code}\n"
-# → 200
+# Pull through the cache — path: localhost:8084/cache/<upstream>/<image>:<tag>
+docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
 
-# Verify the manifest was cached
+# Subsequent pulls are served from local storage (no upstream request)
+docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
+```
+
+First pull fetches from Docker Hub and caches. Every subsequent pull is served from the local MinIO store.
+
+```bash
+# Verify the manifest was cached in postgres
 docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy \
   -c "SELECT image, reference, media_type, length(body) AS bytes, fetched_at FROM proxy_manifests;"
 ```
 
-### 6c — Supported proxy endpoints
+### 6d — Supported proxy endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -226,9 +232,9 @@ docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy \
 | `GET` | `/v2/cache/<upstream>/<image>/blobs/<digest>` | Stream blob — stored to registry-storage in background |
 | `HEAD` | `/v2/cache/<upstream>/<image>/blobs/<digest>` | Check blob existence |
 
-> **Authentication:** All proxy endpoints require a valid Bearer token from `registry-auth`.
-> Use `POST /api/v1/login` to get a session token (not a Docker scope token).
-> The proxy does not participate in the Docker `WWW-Authenticate` scope redirect flow for upstream images.
+> **Authentication:** The proxy participates in the standard Docker token auth flow.
+> On a 401, Docker fetches a token from `AUTH_REALM` (`http://localhost:8080/auth/token`)
+> and retries automatically — identical to the main registry on port 8081.
 
 ---
 

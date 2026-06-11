@@ -101,7 +101,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// HTTP handler
-	httpHandler, err := handler.NewHTTPHandler(repo, authConn, rdb, storageConn, upstreamClient, pub, cfg.CredentialKeyHex)
+	httpHandler, err := handler.NewHTTPHandler(repo, authConn, rdb, storageConn, upstreamClient, pub, cfg.CredentialKeyHex, cfg.AuthRealm)
 	if err != nil {
 		return fmt.Errorf("init http handler: %w", err)
 	}
