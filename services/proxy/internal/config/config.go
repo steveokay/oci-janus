@@ -19,6 +19,10 @@ type Config struct {
 	AuthGRPCAddr    string `mapstructure:"AUTH_GRPC_ADDR"`
 	StorageGRPCAddr string `mapstructure:"STORAGE_GRPC_ADDR"`
 
+	// RabbitMQURL is optional. When set, failed background blob stores are published
+	// as store.queued events so a consumer can retry them durably.
+	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
+
 	// CredentialKeyHex is a 64-character hex string (32 bytes) used for
 	// AES-256-GCM encryption of upstream registry passwords at rest.
 	CredentialKeyHex string `mapstructure:"CREDENTIAL_KEY_HEX"`

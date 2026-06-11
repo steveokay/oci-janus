@@ -17,6 +17,9 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
 	"github.com/steveokay/oci-janus/services/proxy/internal/config"
 	"github.com/steveokay/oci-janus/services/proxy/internal/handler"
@@ -76,10 +79,43 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("init grpc handler: %w", err)
 	}
 
+	// RabbitMQ publisher + store.queued consumer (optional — skipped when RABBITMQ_URL is unset).
+	var pub *publisher.Publisher
+	if cfg.RabbitMQURL != "" {
+		p, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
+		if err != nil {
+			return fmt.Errorf("rabbitmq publisher: %w", err)
+		}
+		defer p.Close()
+		pub = p
+		slog.Info("rabbitmq publisher connected — blob store retries enabled")
+	} else {
+		slog.Warn("RABBITMQ_URL not set — failed background blob stores will not be retried")
+	}
+
 	// HTTP handler
-	httpHandler, err := handler.NewHTTPHandler(repo, authConn, rdb, storageConn, upstreamClient, cfg.CredentialKeyHex)
+	httpHandler, err := handler.NewHTTPHandler(repo, authConn, rdb, storageConn, upstreamClient, pub, cfg.CredentialKeyHex)
 	if err != nil {
 		return fmt.Errorf("init http handler: %w", err)
+	}
+
+	// Start store.queued consumer when RabbitMQ is available.
+	if cfg.RabbitMQURL != "" {
+		storeCons, err := consumer.New(cfg.RabbitMQURL, consumer.Config{
+			Queue:      "proxy.store.queued",
+			RoutingKey: events.RoutingStoreQueued,
+			MaxRetries: 3,
+		})
+		if err != nil {
+			return fmt.Errorf("rabbitmq store consumer: %w", err)
+		}
+		defer storeCons.Close()
+		// consume in background; errors are logged by the consumer loop.
+		go func() {
+			if err := storeCons.Consume(ctx, httpHandler.HandleStoreQueued); err != nil && ctx.Err() == nil {
+				slog.Error("store consumer exited unexpectedly", "error", err)
+			}
+		}()
 	}
 
 	// gRPC server

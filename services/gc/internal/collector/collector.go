@@ -16,6 +16,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 )
@@ -26,6 +27,7 @@ type Result struct {
 	ManifestsDeleted int
 	BlobsDeleted     int
 	BytesFreed       int64
+	TenantsSkipped   int // tenants whose advisory lock was already held
 	DryRun           bool
 }
 
@@ -34,16 +36,20 @@ type Collector struct {
 	meta           metadatav1.MetadataServiceClient
 	storage        storagev1.StorageServiceClient
 	pub            *publisher.Publisher
+	locker         *advisory.Locker // nil = advisory locking disabled
 	mode           string
 	blobMinAge     time.Duration
 	manifestMinAge time.Duration
 }
 
 // New creates a Collector. mode must be one of: dry-run, manifests, blobs, full.
+// locker may be nil; when nil, per-tenant advisory locking is skipped (safe for
+// single-worker deployments).
 func New(
 	metaConn *grpc.ClientConn,
 	storageConn *grpc.ClientConn,
 	pub *publisher.Publisher,
+	locker *advisory.Locker,
 	mode string,
 	blobMinAgeHours, manifestMinAgeHours int,
 ) *Collector {
@@ -51,6 +57,7 @@ func New(
 		meta:           metadatav1.NewMetadataServiceClient(metaConn),
 		storage:        storagev1.NewStorageServiceClient(storageConn),
 		pub:            pub,
+		locker:         locker,
 		mode:           mode,
 		blobMinAge:     time.Duration(blobMinAgeHours) * time.Hour,
 		manifestMinAge: time.Duration(manifestMinAgeHours) * time.Hour,
@@ -58,6 +65,8 @@ func New(
 }
 
 // Run executes one full GC cycle and returns a summary.
+// When advisory locking is configured, each tenant's work is guarded by a
+// pg_try_advisory_lock so concurrent GC workers never race on the same tenant.
 func (c *Collector) Run(ctx context.Context) (*Result, error) {
 	res := &Result{Mode: c.mode, DryRun: c.mode == "dry-run"}
 
@@ -65,21 +74,22 @@ func (c *Collector) Run(ctx context.Context) (*Result, error) {
 		slog.WarnContext(ctx, "gc: failed to publish gc.run.started", "error", err)
 	}
 
-	if c.mode == "manifests" || c.mode == "full" || c.mode == "dry-run" {
-		n, err := c.sweepManifests(ctx, res.DryRun)
-		if err != nil {
-			return nil, fmt.Errorf("sweep manifests: %w", err)
-		}
-		res.ManifestsDeleted = n
+	// Collect distinct tenant IDs from the full repository list.
+	tenants, err := c.listTenants(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tenants: %w", err)
 	}
 
-	if c.mode == "blobs" || c.mode == "full" || c.mode == "dry-run" {
-		n, freed, err := c.sweepBlobs(ctx, res.DryRun)
+	for tenantID := range tenants {
+		skipped, err := c.runForTenant(ctx, tenantID, res)
 		if err != nil {
-			return nil, fmt.Errorf("sweep blobs: %w", err)
+			slog.WarnContext(ctx, "gc: run for tenant failed",
+				"tenant_id", tenantID, "error", err)
+			continue
 		}
-		res.BlobsDeleted = n
-		res.BytesFreed = freed
+		if skipped {
+			res.TenantsSkipped++
+		}
 	}
 
 	if err := c.publishCompleted(ctx, res); err != nil {
@@ -91,15 +101,82 @@ func (c *Collector) Run(ctx context.Context) (*Result, error) {
 		"manifests_deleted", res.ManifestsDeleted,
 		"blobs_deleted", res.BlobsDeleted,
 		"bytes_freed", res.BytesFreed,
+		"tenants_skipped", res.TenantsSkipped,
 		"dry_run", res.DryRun,
 	)
 	return res, nil
 }
 
-// sweepManifests deletes untagged manifests older than manifestMinAge across all repos.
-func (c *Collector) sweepManifests(ctx context.Context, dryRun bool) (int, error) {
-	// List all repositories (empty tenant_id = all tenants, system-level GC).
-	repoStream, err := c.meta.ListRepositories(ctx, &metadatav1.ListRepositoriesRequest{})
+// listTenants returns the set of tenant IDs across all repositories.
+func (c *Collector) listTenants(ctx context.Context) (map[string]struct{}, error) {
+	stream, err := c.meta.ListRepositories(ctx, &metadatav1.ListRepositoriesRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("list repositories: %w", err)
+	}
+	tenants := map[string]struct{}{}
+	for {
+		repo, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("recv repository: %w", err)
+		}
+		tenants[repo.TenantId] = struct{}{}
+	}
+	return tenants, nil
+}
+
+// runForTenant runs a full GC pass for a single tenant, acquiring an advisory
+// lock first when a Locker is configured. Returns (true, nil) if the lock was
+// already held by another worker (tenant skipped).
+func (c *Collector) runForTenant(ctx context.Context, tenantIDStr string, res *Result) (skipped bool, err error) {
+	tenantID, err := uuid.Parse(tenantIDStr)
+	if err != nil {
+		return false, fmt.Errorf("parse tenant uuid %q: %w", tenantIDStr, err)
+	}
+
+	if c.locker != nil {
+		unlock, acquired, err := c.locker.TryLock(ctx, tenantID)
+		if err != nil {
+			return false, fmt.Errorf("advisory lock: %w", err)
+		}
+		if !acquired {
+			slog.InfoContext(ctx, "gc: tenant lock held by another worker, skipping",
+				"tenant_id", tenantIDStr)
+			return true, nil
+		}
+		// defer is scoped to this function, so the lock is released when we return.
+		defer unlock()
+	}
+
+	dryRun := c.mode == "dry-run"
+
+	if c.mode == "manifests" || c.mode == "full" || dryRun {
+		n, err := c.sweepTenantManifests(ctx, tenantIDStr, dryRun)
+		if err != nil {
+			return false, fmt.Errorf("sweep manifests for tenant %s: %w", tenantIDStr, err)
+		}
+		res.ManifestsDeleted += n
+	}
+
+	if c.mode == "blobs" || c.mode == "full" || dryRun {
+		n, freed, err := c.sweepTenantBlobs(ctx, tenantIDStr, dryRun)
+		if err != nil {
+			return false, fmt.Errorf("sweep blobs for tenant %s: %w", tenantIDStr, err)
+		}
+		res.BlobsDeleted += n
+		res.BytesFreed += freed
+	}
+
+	return false, nil
+}
+
+// sweepTenantManifests deletes untagged manifests older than manifestMinAge for one tenant.
+func (c *Collector) sweepTenantManifests(ctx context.Context, tenantID string, dryRun bool) (int, error) {
+	repoStream, err := c.meta.ListRepositories(ctx, &metadatav1.ListRepositoriesRequest{
+		TenantId: tenantID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("list repositories: %w", err)
 	}
@@ -165,42 +242,9 @@ func (c *Collector) sweepManifests(ctx context.Context, dryRun bool) (int, error
 	return deleted, nil
 }
 
-// sweepBlobs deletes orphaned blobs (no repo links) older than blobMinAge.
-func (c *Collector) sweepBlobs(ctx context.Context, dryRun bool) (int, int64, error) {
-	// Collect all tenants by scanning repositories.
-	repoStream, err := c.meta.ListRepositories(ctx, &metadatav1.ListRepositoriesRequest{})
-	if err != nil {
-		return 0, 0, fmt.Errorf("list repositories: %w", err)
-	}
-
-	tenants := map[string]struct{}{}
-	for {
-		repo, err := repoStream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return 0, 0, fmt.Errorf("recv repository: %w", err)
-		}
-		tenants[repo.TenantId] = struct{}{}
-	}
-
-	deleted := 0
-	var freed int64
-
-	for tenantID := range tenants {
-		n, f, err := c.sweepTenantBlobs(ctx, tenantID, dryRun)
-		if err != nil {
-			slog.WarnContext(ctx, "gc: sweep blobs for tenant failed",
-				"tenant_id", tenantID, "error", err)
-			continue
-		}
-		deleted += n
-		freed += f
-	}
-	return deleted, freed, nil
-}
-
+// sweepTenantBlobs deletes orphaned blobs (no repo links) for one tenant.
+// Storage deletion precedes metadata deletion so a crash leaves the orphan
+// record intact for the next run rather than leaking unreachable storage.
 func (c *Collector) sweepTenantBlobs(ctx context.Context, tenantID string, dryRun bool) (int, int64, error) {
 	stream, err := c.meta.ListOrphanedBlobs(ctx, &metadatav1.ListOrphanedBlobsRequest{
 		TenantId: tenantID,
@@ -269,6 +313,7 @@ func (c *Collector) sweepTenantBlobs(ctx context.Context, tenantID string, dryRu
 	return deleted, freed, nil
 }
 
+// publishStarted emits a gc.run.started event to RabbitMQ. Non-fatal on failure.
 func (c *Collector) publishStarted(ctx context.Context) error {
 	payload, _ := json.Marshal(events.GCRunStartedPayload{Mode: c.mode})
 	return c.pub.Publish(ctx, events.RoutingGCRunStarted, events.Event{
@@ -280,6 +325,7 @@ func (c *Collector) publishStarted(ctx context.Context) error {
 	})
 }
 
+// publishCompleted emits a gc.run.completed event with the run summary. Non-fatal on failure.
 func (c *Collector) publishCompleted(ctx context.Context, res *Result) error {
 	payload, _ := json.Marshal(events.GCRunCompletedPayload{
 		Mode:             res.Mode,

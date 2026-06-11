@@ -6,6 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.1
+	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/steveokay/oci-janus/libs v0.0.0
 	github.com/steveokay/oci-janus/proto/gen/go v0.0.0

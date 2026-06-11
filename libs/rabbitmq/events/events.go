@@ -64,13 +64,20 @@ type ScanCompletedPayload struct {
 	Blocked         bool           `json:"blocked"`
 }
 
-// StoreQueuedPayload is the payload for store.queued events (proxy background store).
+// StoreQueuedPayload is the payload for store.queued events.
+// Published by registry-proxy when a background blob store fails so the
+// consumer can retry with a fresh upstream fetch — no in-memory state needed.
 type StoreQueuedPayload struct {
 	TenantID       string `json:"tenant_id"`
 	UpstreamName   string `json:"upstream_name"`
-	ManifestDigest string `json:"manifest_digest"`
-	RepositoryName string `json:"repository_name"`
-	Tag            string `json:"tag"`
+	// BlobDigest is the content-addressed sha256:... digest of the blob to (re-)store.
+	BlobDigest     string `json:"blob_digest,omitempty"`
+	// Image is the upstream image name (e.g. "library/ubuntu") used to re-fetch the blob.
+	Image          string `json:"image,omitempty"`
+	// The following fields are retained for manifest-level store events.
+	ManifestDigest string `json:"manifest_digest,omitempty"`
+	RepositoryName string `json:"repository_name,omitempty"`
+	Tag            string `json:"tag,omitempty"`
 }
 
 // GCRunStartedPayload is the payload for gc.run.started events.

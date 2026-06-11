@@ -28,11 +28,20 @@ type Config struct {
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
 	RabbitMQURL      string `mapstructure:"RABBITMQ_URL"`
 
-	// GCMode controls what the collector deletes: dry-run | manifests | blobs | full
-	GCMode               string `mapstructure:"GC_MODE"`
-	GCRunIntervalHours   int    `mapstructure:"GC_RUN_INTERVAL_HOURS"`
-	BlobMinAgeHours      int    `mapstructure:"GC_BLOB_MIN_AGE_HOURS"`
-	ManifestMinAgeHours  int    `mapstructure:"GC_MANIFEST_MIN_AGE_HOURS"`
+	// GCAdvisoryLockDBDSN is a PostgreSQL DSN used solely for pg_try_advisory_lock
+	// coordination. Optional — if unset, advisory locking is disabled (safe for
+	// single-worker deployments).
+	GCAdvisoryLockDBDSN string `mapstructure:"GC_ADVISORY_LOCK_DB_DSN"`
+
+	// GCMode controls what the collector deletes: dry-run | manifests | blobs | full.
+	GCMode string `mapstructure:"GC_MODE"`
+	// GCRunIntervalHours is the number of hours between automatic GC runs.
+	GCRunIntervalHours int `mapstructure:"GC_RUN_INTERVAL_HOURS"`
+	// BlobMinAgeHours guards against deleting blobs that belong to an in-flight push
+	// (blobs are written before manifests; a very fresh blob may have no manifest link yet).
+	BlobMinAgeHours int `mapstructure:"GC_BLOB_MIN_AGE_HOURS"`
+	// ManifestMinAgeHours prevents deleting manifests pushed moments before a tag is attached.
+	ManifestMinAgeHours int `mapstructure:"GC_MANIFEST_MIN_AGE_HOURS"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -63,11 +72,11 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// validate returns an error for any missing required field or invalid enum value.
 func validate(cfg *Config) error {
+	// MTLS_* paths are optional — server.go falls back to insecure with a warning
+	// when they are absent (development mode only).
 	required := map[string]string{
-		"MTLS_CA_CERT_PATH":  cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":     cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":      cfg.MTLSKeyPath,
 		"METADATA_GRPC_ADDR": cfg.MetadataGRPCAddr,
 		"STORAGE_GRPC_ADDR":  cfg.StorageGRPCAddr,
 		"RABBITMQ_URL":       cfg.RabbitMQURL,

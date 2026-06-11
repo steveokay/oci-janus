@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,11 +27,14 @@ type rpcRequest struct {
 	Params rpcParams `json:"params"`
 }
 
+// rpcParams carries the scan job details sent to the plugin process.
+// ImagePath is a host-local temp directory pre-populated with layer blobs;
+// the plugin reads files from it so it never needs direct storage credentials.
 type rpcParams struct {
-	TenantID       string              `json:"tenant_id"`
-	ManifestDigest string              `json:"manifest_digest"`
+	TenantID       string               `json:"tenant_id"`
+	ManifestDigest string               `json:"manifest_digest"`
 	Layers         []libplugin.LayerRef `json:"layers"`
-	ImagePath      string              `json:"image_path"` // temp dir with pre-staged layer files
+	ImagePath      string               `json:"image_path"`
 }
 
 // rpcResponse is the JSON-RPC envelope received from the plugin process via stdout.
@@ -40,11 +44,12 @@ type rpcResponse struct {
 	Error  string          `json:"error,omitempty"`
 }
 
+// rpcResult is the inner result object returned by the plugin inside rpcResponse.Result.
 type rpcResult struct {
-	ScannerName    string                `json:"scanner_name"`
-	ScannerVersion string                `json:"scanner_version"`
-	Findings       []libplugin.Finding   `json:"findings"`
-	SeverityCounts map[string]int        `json:"severity_counts"`
+	ScannerName    string              `json:"scanner_name"`
+	ScannerVersion string              `json:"scanner_version"`
+	Findings       []libplugin.Finding `json:"findings"`
+	SeverityCounts map[string]int      `json:"severity_counts"`
 }
 
 // ProcessPlugin invokes a scanner binary as an external process.
@@ -116,17 +121,35 @@ func (p *ProcessPlugin) Scan(ctx context.Context, req libplugin.ScanRequest) (*l
 	// No user-supplied arguments — all data flows through stdin.
 	cmd := exec.CommandContext(ctx, p.path) //nolint:gosec
 	cmd.Stdin = strings.NewReader(string(reqJSON))
+	// Restrict environment to an explicit allowlist so the plugin cannot
+	// inherit host secrets (DB_DSN, JWT keys, cloud credentials, etc.).
+	cmd.Env = pluginEnv()
 	stderr := &strings.Builder{}
 	cmd.Stderr = stderr
 
-	stdout, err := cmd.Output()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
+		return nil, fmt.Errorf("open stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start plugin process: %w", err)
+	}
+
+	// Cap stdout at 10 MiB to prevent a malicious or runaway plugin from
+	// exhausting memory on the orchestrator host.
+	const maxStdout = 10 << 20
+	stdout, err := io.ReadAll(io.LimitReader(stdoutPipe, maxStdout))
+	waitErr := cmd.Wait()
+	if waitErr != nil {
 		slog.Error("plugin process failed",
 			"path", p.path,
 			"stderr", stderr.String(),
-			"error", err,
+			"error", waitErr,
 		)
-		return nil, fmt.Errorf("plugin process exited with error: %w", err)
+		return nil, fmt.Errorf("plugin process exited with error: %w", waitErr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read plugin stdout: %w", err)
 	}
 
 	var resp rpcResponse
@@ -173,6 +196,38 @@ func stageBlobToDir(ctx context.Context, fetcher libplugin.BlobFetcher, dir, dig
 		return fmt.Errorf("write layer data: %w", err)
 	}
 	return nil
+}
+
+// pluginEnv returns a minimal environment for the scanner subprocess.
+// Only well-known, non-sensitive variables are forwarded; all service secrets
+// (DB_DSN, JWT keys, cloud credentials) are intentionally excluded.
+func pluginEnv() []string {
+	allowed := []string{
+		"PATH", "HOME", "TMPDIR", "TMP", "TEMP",
+		"USER", "USERNAME",
+		"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+	}
+	// Prefixes for scanner-specific config that plugins may legitimately need.
+	allowedPrefixes := []string{"TRIVY_", "GRYPE_"}
+
+	var env []string
+	for _, e := range os.Environ() {
+		k, _, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if slices.Contains(allowed, k) {
+			env = append(env, e)
+			continue
+		}
+		for _, p := range allowedPrefixes {
+			if strings.HasPrefix(k, p) {
+				env = append(env, e)
+				break
+			}
+		}
+	}
+	return env
 }
 
 // fileSHA256 returns the lowercase hex SHA256 digest of the file at path.

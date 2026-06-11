@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -19,6 +20,7 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
 	"github.com/steveokay/oci-janus/services/gc/internal/config"
 )
@@ -44,8 +46,22 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer pub.Close()
 
+	var locker *advisory.Locker
+	if cfg.GCAdvisoryLockDBDSN != "" {
+		pool, err := pgxpool.New(ctx, cfg.GCAdvisoryLockDBDSN)
+		if err != nil {
+			return fmt.Errorf("advisory lock pool: %w", err)
+		}
+		defer pool.Close()
+		locker = advisory.New(pool)
+		slog.Info("gc advisory locking enabled")
+	} else {
+		slog.Warn("GC_ADVISORY_LOCK_DB_DSN not set — advisory locking disabled (safe for single-worker only)")
+	}
+
 	col := collector.New(
 		metaConn, storageConn, pub,
+		locker,
 		cfg.GCMode,
 		cfg.BlobMinAgeHours,
 		cfg.ManifestMinAgeHours,

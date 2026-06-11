@@ -33,13 +33,19 @@ type PolicyRecord struct {
 
 // DomainRecord is a row from tenant_domains.
 type DomainRecord struct {
-	ID                 uuid.UUID
-	TenantID           uuid.UUID
-	Domain             string
-	VerificationToken  string
-	Verified           bool
-	RegisteredAt       time.Time
-	VerifiedAt         *time.Time
+	ID                uuid.UUID
+	TenantID          uuid.UUID
+	Domain            string
+	VerificationToken string
+	Verified          bool
+	RegisteredAt      time.Time
+	VerifiedAt        *time.Time
+	// Notification flags — set after each admin alert is sent to avoid duplicates.
+	Notified24h   bool
+	Notified48h   bool
+	// NextPollAfter is the earliest time the worker should retry DNS for this domain.
+	// Updated on each failed poll using exponential backoff to reduce DNS churn.
+	NextPollAfter time.Time
 }
 
 // Repository wraps the pgxpool and owns all SQL.
@@ -149,10 +155,12 @@ func (r *Repository) RegisterDomain(ctx context.Context, tenantID uuid.UUID, dom
 		        verification_token = EXCLUDED.verification_token,
 		        verified = false,
 		        verified_at = NULL
-		 RETURNING id, tenant_id, domain, verification_token, verified, registered_at, verified_at`,
+		 RETURNING id, tenant_id, domain, verification_token, verified, registered_at, verified_at,
+		           notified_24h, notified_48h, next_poll_after`,
 		tenantID, domain, token,
 	).Scan(&rec.ID, &rec.TenantID, &rec.Domain, &rec.VerificationToken,
-		&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt)
+		&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt,
+		&rec.Notified24h, &rec.Notified48h, &rec.NextPollAfter)
 	if err != nil {
 		return nil, fmt.Errorf("RegisterDomain: %w", err)
 	}
@@ -184,13 +192,19 @@ func (r *Repository) MarkDomainVerified(ctx context.Context, domainID uuid.UUID)
 	return err
 }
 
-// ListUnverifiedDomains returns unverified domains registered within maxAgeHours.
+// ListUnverifiedDomains returns unverified domains that are due for a poll attempt.
+// maxAgeHours is the window from registration; domains older than this are excluded
+// because they will never verify (tenant has not responded). Only domains whose
+// next_poll_after is in the past are returned, implementing exponential backoff.
 func (r *Repository) ListUnverifiedDomains(ctx context.Context, maxAgeHours int) ([]*DomainRecord, error) {
 	cutoff := time.Now().Add(-time.Duration(maxAgeHours) * time.Hour)
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, tenant_id, domain, verification_token, verified, registered_at, verified_at
+		`SELECT id, tenant_id, domain, verification_token, verified, registered_at, verified_at,
+		        notified_24h, notified_48h, next_poll_after
 		 FROM tenant_domains
-		 WHERE verified = false AND registered_at > $1
+		 WHERE verified = false
+		   AND registered_at > $1
+		   AND next_poll_after <= now()
 		 ORDER BY registered_at`,
 		cutoff,
 	)
@@ -203,10 +217,39 @@ func (r *Repository) ListUnverifiedDomains(ctx context.Context, maxAgeHours int)
 	for rows.Next() {
 		rec := &DomainRecord{}
 		if err := rows.Scan(&rec.ID, &rec.TenantID, &rec.Domain, &rec.VerificationToken,
-			&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt); err != nil {
+			&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt,
+			&rec.Notified24h, &rec.Notified48h, &rec.NextPollAfter); err != nil {
 			return nil, err
 		}
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// MarkDomain24hNotified records that the 24-hour reminder has been sent for this domain.
+func (r *Repository) MarkDomain24hNotified(ctx context.Context, domainID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tenant_domains SET notified_24h = true WHERE id = $1`,
+		domainID,
+	)
+	return err
+}
+
+// MarkDomain48hNotified records that the 48-hour failure notification has been sent.
+func (r *Repository) MarkDomain48hNotified(ctx context.Context, domainID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tenant_domains SET notified_48h = true WHERE id = $1`,
+		domainID,
+	)
+	return err
+}
+
+// UpdateNextPollAfter sets the earliest next retry time for a domain, implementing
+// exponential backoff between DNS polls.
+func (r *Repository) UpdateNextPollAfter(ctx context.Context, domainID uuid.UUID, next time.Time) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tenant_domains SET next_poll_after = $1 WHERE id = $2`,
+		next, domainID,
+	)
+	return err
 }

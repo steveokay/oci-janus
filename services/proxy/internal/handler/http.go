@@ -20,6 +20,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	aescrypto "github.com/steveokay/oci-janus/libs/crypto/aes"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 	"github.com/steveokay/oci-janus/services/proxy/internal/repository"
@@ -32,16 +34,19 @@ type HTTPHandler struct {
 	auth     *authClient
 	storage  storagev1.StorageServiceClient
 	upstream *upstream.Client
-	key      []byte // 32-byte AES key for credential decryption
+	pub      *publisher.Publisher // nil when RabbitMQ is not configured
+	key      []byte               // 32-byte AES key for credential decryption
 }
 
 // NewHTTPHandler constructs the pull-through cache HTTP handler.
+// pub may be nil; when nil, failed background stores are only logged and not retried.
 func NewHTTPHandler(
 	repo *repository.Repository,
 	authConn *grpc.ClientConn,
 	rdb *redis.Client,
 	storageConn *grpc.ClientConn,
 	upstreamClient *upstream.Client,
+	pub *publisher.Publisher,
 	credentialKeyHex string,
 ) (*HTTPHandler, error) {
 	key, err := hexToKey(credentialKeyHex)
@@ -53,6 +58,7 @@ func NewHTTPHandler(
 		auth:     newAuthClient(authConn, rdb),
 		storage:  storagev1.NewStorageServiceClient(storageConn),
 		upstream: upstreamClient,
+		pub:      pub,
 		key:      key,
 	}, nil
 }
@@ -269,7 +275,9 @@ func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
 		if err := h.storeBlobFromReader(bgCtx, key, tenantID.String(), ct, pr); err != nil {
-			slog.Error("background blob store failed", "err", err, "digest", digest)
+			slog.Error("background blob store failed, queuing retry", "err", err, "digest", digest)
+			// Publish a durable retry event so the consumer can re-fetch from upstream.
+			h.publishStoreQueued(bgCtx, tenantID.String(), up.Name, image, digest)
 		}
 	}()
 
@@ -409,6 +417,74 @@ func (h *HTTPHandler) upstreamCreds(up *repository.UpstreamRecord) upstream.Cred
 func blobKey(tenantID, digest string) string {
 	hex := strings.TrimPrefix(digest, "sha256:")
 	return fmt.Sprintf("blobs/%s/sha256/%s/%s", tenantID, hex[:2], hex)
+}
+
+// --- RabbitMQ store.queued helpers ---
+
+// publishStoreQueued emits a store.queued event so the consumer can retry a
+// failed blob cache write. No-op when the publisher is not configured.
+func (h *HTTPHandler) publishStoreQueued(ctx context.Context, tenantID, upstreamName, image, blobDigest string) {
+	if h.pub == nil {
+		return
+	}
+	payload, _ := json.Marshal(events.StoreQueuedPayload{
+		TenantID:     tenantID,
+		UpstreamName: upstreamName,
+		BlobDigest:   blobDigest,
+		Image:        image,
+	})
+	if err := h.pub.Publish(ctx, events.RoutingStoreQueued, events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingStoreQueued,
+		TenantID:   tenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}); err != nil {
+		slog.ErrorContext(ctx, "publish store.queued failed", "error", err, "blob_digest", blobDigest)
+	}
+}
+
+// HandleStoreQueued is the consumer.Handler for store.queued events.
+// It re-fetches the blob from the upstream registry and writes it to storage.
+// Returning a non-nil error causes the consumer to NACK and retry (up to MaxRetries).
+func (h *HTTPHandler) HandleStoreQueued(ctx context.Context, event events.Event) error {
+	var payload events.StoreQueuedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal store.queued payload: %w", err)
+	}
+	if payload.BlobDigest == "" || payload.Image == "" {
+		// Manifest-level store events — not handled here.
+		return nil
+	}
+	return h.retryStoreBlob(ctx, payload)
+}
+
+// retryStoreBlob re-fetches a blob from the upstream registry and stores it.
+// Called by HandleStoreQueued on consumer retry; uses a fresh HTTP connection so
+// no state from the original failed attempt is carried over.
+func (h *HTTPHandler) retryStoreBlob(ctx context.Context, payload events.StoreQueuedPayload) error {
+	tenantID, err := uuid.Parse(payload.TenantID)
+	if err != nil {
+		return fmt.Errorf("parse tenant id %q: %w", payload.TenantID, err)
+	}
+	up, err := h.repo.GetUpstreamByName(ctx, tenantID, payload.UpstreamName)
+	if err != nil {
+		return fmt.Errorf("get upstream %q: %w", payload.UpstreamName, err)
+	}
+
+	creds := h.upstreamCreds(up)
+	rc, _, ct, err := h.upstream.FetchBlob(ctx, up.URL, payload.Image, payload.BlobDigest, creds)
+	if err != nil {
+		return fmt.Errorf("fetch blob from upstream: %w", err)
+	}
+	defer rc.Close()
+
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	key := blobKey(payload.TenantID, payload.BlobDigest)
+	return h.storeBlobFromReader(ctx, key, payload.TenantID, ct, rc)
 }
 
 // --- Auth helpers ---
