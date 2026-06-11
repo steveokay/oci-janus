@@ -148,7 +148,7 @@ curl -sf http://localhost:8081/v2/
 # → 401 Unauthorized (expected — confirms auth challenge is working)
 
 TOKEN=$(curl -sf "http://localhost:8080/auth/token?service=registry-core&scope=repository:myorg/myimage:push,pull" \
-  -u admin:password | jq -r .token)
+  -u admin:Admin1234\!dev | jq -r .token)
 curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8081/v2/
 # → {}  (HTTP 200)
 
