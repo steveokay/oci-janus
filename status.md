@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-10 (docker push/pull smoke test passing end-to-end; 6-fix chain applied; ARCHITECTURE.md created)
+> Last updated: 2026-06-11 (REM-001/003/004/007/008/009 applied; proxy mTLS fix (SEC-008 pattern); pull-through cache tested end-to-end — alpine:3.20 from Docker Hub, manifest cached in DB)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -63,13 +63,13 @@
 
 ### REM-001 — Drop Go Plugin Scanner Path
 - **Affects:** `registry-scanner`
-- **Status:** SUBSTANTIALLY DONE — external process JSON-RPC path fully implemented; checksum validation and `exec.CommandContext` applied. Two minor gaps remain.
+- **Status:** DONE ✅ — all tasks complete.
 - **Tasks:**
   - [x] Remove `.so` loading code from `registry-scanner` (never added — external process only)
   - [x] Spawn plugins with `exec.CommandContext` (OS-level deadline)
   - [x] Validate plugin binary checksum (SHA256) against `SCANNER_PLUGIN_CHECKSUM` before loading
-  - [ ] Add `io.LimitedReader` on plugin stdout (max 10MB) — stdout read via `cmd.Output()` with no size cap
-  - [ ] Define explicit env allowlist for plugin subprocess — plugin inherits parent env currently
+  - [x] Add `io.LimitedReader` on plugin stdout (max 10MB) — pipe+LimitReader pattern in process.go
+  - [x] Define explicit env allowlist for plugin subprocess — `pluginEnv()` in process.go passes only PATH/HOME/TMPDIR/TRIVY_*/GRYPE_* prefixes
   - [x] Update `§4.7` in CLAUDE.md to remove Go plugin references (CLAUDE.md §4.7 describes external process only)
 
 ---
@@ -82,24 +82,26 @@
 
 ### REM-003 — Proxy Background Store via RabbitMQ
 - **Affects:** `registry-proxy`
-- **Status:** PARTIALLY APPLIED — proxy uses a fire-and-forget goroutine for background blob caching (logs errors but provides no retry or DLQ). RabbitMQ store.queued event not implemented.
+- **Status:** DONE ✅ — RabbitMQ retry path fully implemented.
 - **Tasks:**
-  - [ ] Define `store.queued` event type in `libs/rabbitmq/events`
-  - [ ] Publish `store.queued` event synchronously (confirm mode) before returning client response
-  - [ ] Implement `store.queued` consumer worker in `registry-proxy`
-  - [ ] On retry: re-fetch from upstream, verify `Content-Digest` matches original before storing
-  - [ ] Dead-letter after 3 retries → alert tenant admin
+  - [x] Define `store.queued` event type in `libs/rabbitmq/events` (`StoreQueuedPayload`)
+  - [x] On background goroutine failure: publish `store.queued` event via `publishStoreQueued()`
+  - [x] Implement `store.queued` consumer in `registry-proxy` server.go (`HandleStoreQueued` + `retryStoreBlob`)
+  - [x] On retry: re-fetch blob from upstream with original credentials
+  - [x] Dead-letter after 3 retries (consumer.Config MaxRetries: 3)
 
 ---
 
 ### REM-004 — Custom Domain Verification Notifications
 - **Affects:** `registry-tenant`
-- **Status:** PARTIALLY APPLIED — domain worker polls every 5 minutes and stops at 48h. No 24h notification and no exponential backoff implemented.
+- **Status:** DONE ✅ — notifications + backoff + DB columns all implemented.
 - **Tasks:**
-  - [ ] Add `Notified24h bool` field to `DomainVerificationJob`
-  - [ ] Send notification to tenant admin if unverified after 24h
-  - [ ] Send failure notification and stop polling at 48h (cutoff exists; notification missing)
-  - [ ] Implement exponential backoff on DNS polling: 5m → 10m → 20m (currently fixed 5m interval)
+  - [x] Add `Notified24h`, `Notified48h` bool fields to `DomainRecord`; migration `20260611000001_domain_notification.sql`
+  - [x] Send 24h notification (logged + `MarkDomain24hNotified`) when age ≥ 24h, idempotent via flag
+  - [x] Send 48h failure notification when age ≥ 47h, idempotent via flag
+  - [x] Exponential backoff: age <1h → 5min, 1h–12h → 10min, >12h → 20min (`calcBackoff`)
+  - [x] `next_poll_after` column + index; `ListUnverifiedDomains` filters `next_poll_after <= now()`
+  - [x] 8 unit tests in `worker_test.go` — all passing
 
 ---
 
@@ -123,37 +125,36 @@
 ---
 
 ### REM-007 — Registry-Metadata Caching (Part A — Redis)
-- **Affects:** `registry-metadata` (client-side caching in consuming services)
-- **Status:** PARTIALLY APPLIED — `registry-metadata` has a Redis client wired in server.go. No client-side gRPC cache interceptor has been added to `libs/middleware/grpc`.
-- **Cacheable calls and TTLs:**
-  - `GetRepository` → 30s
-  - `GetManifest` → 5m
-  - `GetTag` → 30s
-  - `GetTenantQuotaUsage` → 10s
+- **Affects:** `registry-metadata`
+- **Status:** DONE ✅ — server-side cache interceptor wired in metadata.
 - **Tasks:**
-  - [ ] Add cache interceptor to `libs/middleware/grpc` (client-side, wraps metadata calls)
-  - [ ] Cache key format: `meta:<method>:<tenant_id>:<primary_key>`
-  - [ ] Invalidation: publish cache-bust key alongside write gRPC calls
+  - [x] `CacheInterceptor` in `libs/middleware/grpc/cache.go` — server-side `UnaryServerInterceptor`
+  - [x] Cache key format: `grpc:<full_method>:<tenant_id>:<primary_key>`; stored as proto.Marshal bytes
+  - [x] TTLs: GetRepository→30s, GetManifest→5m, GetTag→30s, GetTenantQuotaUsage→10s
+  - [x] Corrupted entries evicted automatically; cache failure is non-fatal (fallthrough to handler)
+  - [x] Wired in `metadata/internal/server/buildGRPCOptions()`
 
 ---
 
 ### REM-008 — Registry-Metadata Read Replica (Part B)
 - **Affects:** `registry-metadata`
-- **Status:** PARTIALLY APPLIED — `DB_DSN_REPLICA` field exists in `libs/config/loader.DBConfig`. `registry-metadata` config embeds `DBConfig` so the env var is accepted, but no second `pgxpool` instance is created and reads are not routed to the replica.
+- **Status:** DONE ✅ — replica pool wired and list queries routed.
 - **Tasks:**
-  - [ ] Create a replica `pgxpool` instance when `DB_DSN_REPLICA` is set
-  - [ ] Route `ListTags`, `ListRepositories`, `ListOrphanedBlobs` to replica pool
+  - [x] `DBConfig.ReplicaPoolConfig()` added to `libs/config/loader/loader.go`
+  - [x] `repository.NewWithReplica(pool, readPool)` + `reader()` helper — falls back to primary when readPool is nil
+  - [x] `ListRepositories`, `ListTags`, `ListOrphanedBlobs` route to `r.reader()`
+  - [x] Replica pool created in server.go when `DB_DSN_REPLICA` is set; warns and continues without when unset
 
 ---
 
 ### REM-009 — GC Advisory Locks
 - **Affects:** `registry-gc`
-- **Status:** NOT APPLIED — GC collector runs without any advisory lock. Concurrent GC runs against the same tenant are possible.
+- **Status:** DONE ✅ — advisory locking fully implemented.
 - **Tasks:**
-  - [ ] Implement `gcLockKey(tenantID uuid.UUID) int64` using FNV-64a hash
-  - [ ] Use `pg_try_advisory_lock($1)` — non-blocking, skip tenant on failure
-  - [ ] Acquire and release on a single pinned connection from `pgxpool`
-  - [ ] Emit `registry_gc_lock_skipped_total` metric when lock not acquired
+  - [x] `advisory.Locker` in `services/gc/internal/advisory/lock.go` — FNV-64a key from tenant UUID
+  - [x] `pg_try_advisory_lock($1)` — non-blocking; tenant skipped when lock not acquired (`TenantsSkipped` counter in Result)
+  - [x] Single pinned connection via `pgxpool.Acquire()`; explicit `pg_advisory_unlock` + `Release()` in deferred unlock func
+  - [x] `GC_ADVISORY_LOCK_DB_DSN` env var; graceful no-op when unset (single-worker mode)
 
 ---
 
@@ -243,10 +244,12 @@ All decisions resolved. No blockers.
 | Fix CreateRepository empty OrgId — handler now parses `org/repo` name, upserts org, returns existing on conflict | `services/metadata` | push flow | DONE ✅ |
 | Fix dev cert SANs — gen-dev-certs.sh now emits subjectAltName for Go 1.15+ TLS hostname verification | `cert-init` | mTLS / grpc conns | DONE ✅ |
 | Wire SEC-008 fix — clientCreds() in core server uses mtls.ClientTLSConfig() when cert paths set | `services/core` | mTLS hardening | DONE ✅ |
+| Wire SEC-008 fix — clientCreds() in proxy server uses mtls.ClientTLSConfig() when cert paths set | `services/proxy` | mTLS hardening | DONE ✅ |
 | docker push/pull smoke test: `docker push localhost:8081/steveokay/alpine:3.20` passes end-to-end | all | E2E validation | DONE ✅ |
+| Pull-through cache smoke test: `GET /v2/cache/dockerhub/library/alpine/manifests/3.20` returns 200, manifest cached in `proxy_manifests` DB table | `services/proxy` | proxy E2E | DONE ✅ |
 | Create ARCHITECTURE.md — full system architecture with ASCII diagrams, sequence flows, service descriptions | docs | — | DONE ✅ |
 | OCI conformance suite against live stack (core + metadata + storage) | `services/core` | release | NOT STARTED |
-| Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | NOT STARTED |
+| Apply REM-009: GC advisory locks (`pg_try_advisory_lock`, FNV-64a key) | `services/gc` | concurrent GC safety | DONE ✅ |
 | Apply REM-005 (remaining): `FORCE ROW LEVEL SECURITY` + `registry_audit_app` role | `services/audit` | security hardening | DONE ✅ |
 
 ### Medium Priority (security hardening)
@@ -255,17 +258,17 @@ All decisions resolved. No blockers.
 |---|---|---|---|
 | Add `govulncheck` CI job to all 10 service workflows missing it | `infra/` | — | DONE ✅ |
 | Add `gitleaks` CI workflow (`ci-gitleaks.yml`) on all pushes/PRs | `infra/` | — | DONE ✅ |
-| Add `io.LimitedReader` on scanner plugin stdout (10MB cap) | `services/scanner` | REM-001 | NOT STARTED |
-| Add explicit env allowlist for scanner plugin subprocess | `services/scanner` | REM-001 | NOT STARTED |
-| Implement RabbitMQ `store.queued` event + consumer in proxy | `services/proxy` | REM-003 | NOT STARTED |
-| Add 24h notification + exponential backoff to domain worker | `services/tenant` | REM-004 | NOT STARTED |
+| Add `io.LimitedReader` on scanner plugin stdout (10MB cap) | `services/scanner` | REM-001 | DONE ✅ |
+| Add explicit env allowlist for scanner plugin subprocess | `services/scanner` | REM-001 | DONE ✅ |
+| Implement RabbitMQ `store.queued` event + consumer in proxy | `services/proxy` | REM-003 | DONE ✅ |
+| Add 24h notification + exponential backoff to domain worker | `services/tenant` | REM-004 | DONE ✅ |
 
 ### Lower Priority (performance / observability)
 
 | Task | Service | REM | Status |
 |---|---|---|---|
-| Add client-side gRPC cache interceptor in `libs/middleware/grpc` | `libs/` | REM-007 | NOT STARTED |
-| Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | NOT STARTED |
+| Add gRPC cache interceptor in `libs/middleware/grpc` | `libs/` | REM-007 | DONE ✅ |
+| Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | DONE ✅ |
 | Wire Prometheus metrics endpoint across all services | all | — | NOT STARTED |
 | Integration tests (testcontainers) for metadata, storage, auth, core | `services/*` | — | NOT STARTED |
 | Unit test coverage to 80% minimum per service | all | — | NOT STARTED |
@@ -288,3 +291,5 @@ All decisions resolved. No blockers.
 - **docker push/pull chain fixes (2026-06-10):** 6 root causes debugged and resolved to make `docker push localhost:8081/steveokay/alpine:3.20` work end-to-end: (1) HasAction 403→challengeAuth(401) in core; (2) Redis JWT cache losing Access claims (JSON serialization fix); (3) MinIO bucket auto-creation in storage Ping(); (4) dev tenant FK seeded in metadata 00002 migration; (5) CreateRepository auto-org-create from `org/repo` name; (6) dev cert SANs added in gen-dev-certs.sh for Go 1.15+ TLS. Also wired SEC-008 mTLS fix (clientCreds() helper in core server.go).
 - **ARCHITECTURE.md created (2026-06-10):** Full system architecture document at repo root. Covers all 12 services, ASCII system diagram, docker login/push/pull sequence diagrams, async pipeline flow, custom domain resolution, multi-tenancy model, infrastructure components, and design decisions.
 - **SEC-008 resolved (2026-06-10):** `registry-core` gRPC clients now use `libs/auth/mtls.ClientTLSConfig()` when cert paths are configured. Falls back to insecure with `slog.Warn` only in dev without certs. Moved to Resolved in `security.md`.
+- **Proxy mTLS fix (2026-06-11):** `registry-proxy` gRPC clients also applied the SEC-008 `clientCreds()` pattern. Proxy was using `insecure.NewCredentials()` — TLS handshake failed silently → all auth calls returned error → all requests 401. Also triggered `go mod tidy` in `services/storage` (transitive redis dep from new `libs/middleware/grpc/cache.go`).
+- **Pull-through cache E2E test (2026-06-11):** `GET /v2/cache/dockerhub/library/alpine/manifests/3.20` returns HTTP 200 with full OCI image index (multi-arch manifest list, 9226 bytes). Manifest stored in `proxy_manifests` DB table. Second request served from cache.

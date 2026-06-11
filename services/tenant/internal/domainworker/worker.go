@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
@@ -24,9 +25,19 @@ const (
 	pollInterval = 5 * time.Minute
 )
 
+// domainRepository is the subset of repository.Repository that the worker uses.
+// Kept unexported so it is a test seam, not a published API.
+type domainRepository interface {
+	ListUnverifiedDomains(ctx context.Context, maxAgeHours int) ([]*repository.DomainRecord, error)
+	MarkDomainVerified(ctx context.Context, domainID uuid.UUID) error
+	MarkDomain24hNotified(ctx context.Context, domainID uuid.UUID) error
+	MarkDomain48hNotified(ctx context.Context, domainID uuid.UUID) error
+	UpdateNextPollAfter(ctx context.Context, domainID uuid.UUID, next time.Time) error
+}
+
 // Worker polls pending domain verifications and updates Redis when verified.
 type Worker struct {
-	repo *repository.Repository
+	repo domainRepository
 	rdb  *redis.Client
 }
 

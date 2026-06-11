@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
@@ -54,14 +56,32 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return fmt.Errorf("connect to Redis: %w", err)
 	}
-	_ = rdb // reserved for future caching (REM-007)
 
-	// ── 3. Handler ────────────────────────────────────────────────────────────
-	repo := repository.New(pool)
+	// ── 3. Read replica pool (REM-008) ────────────────────────────────────────
+	// When DB_DSN_REPLICA is set, list-heavy reads (ListTags, ListRepositories,
+	// ListOrphanedBlobs) are routed to the replica to offload the primary.
+	var readPool *pgxpool.Pool
+	if cfg.DBDSNReplica != "" {
+		repCfg, err := cfg.DBConfig.ReplicaPoolConfig()
+		if err != nil {
+			return fmt.Errorf("build replica pool config: %w", err)
+		}
+		readPool, err = pgxpool.NewWithConfig(ctx, repCfg)
+		if err != nil {
+			return fmt.Errorf("connect to replica: %w", err)
+		}
+		defer readPool.Close()
+		slog.Info("read replica connected", "addr", cfg.DBDSNReplica)
+	} else {
+		slog.Warn("DB_DSN_REPLICA not set — all reads go to primary (REM-008)")
+	}
+
+	// ── 4. Handler ────────────────────────────────────────────────────────────
+	repo := repository.NewWithReplica(pool, readPool)
 	h := handler.New(repo)
 
-	// ── 4. gRPC server ────────────────────────────────────────────────────────
-	grpcOpts, err := buildGRPCOptions(cfg)
+	// ── 5. gRPC server ────────────────────────────────────────────────────────
+	grpcOpts, err := buildGRPCOptions(cfg, rdb)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -77,7 +97,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("listen %s: %w", cfg.GRPCAddr, err)
 	}
 
-	// ── 5. HTTP server ────────────────────────────────────────────────────────
+	// ── 6. HTTP server ────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -88,7 +108,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		Handler: http.MaxBytesHandler(mux, 4<<20),
 	}
 
-	// ── 6. Start & block ──────────────────────────────────────────────────────
+	// ── 7. Start & block ──────────────────────────────────────────────────────
 	errCh := make(chan error, 2)
 	go func() {
 		slog.Info("gRPC server starting", "addr", cfg.GRPCAddr)
@@ -133,10 +153,48 @@ func runMigrations(cfg *config.Config) error {
 	return nil
 }
 
-func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOption, error) {
+	// Cache interceptor for read-heavy metadata methods (REM-007).
+	cacheInterceptor := grpcmw.CacheInterceptor(rdb, map[string]grpcmw.CachableMethod{
+		"/registry.metadata.v1.MetadataService/GetRepository": {
+			TTL: 30 * time.Second,
+			KeyFunc: func(req proto.Message) string {
+				r := req.(*metadatav1.GetRepositoryRequest)
+				return r.GetTenantId() + ":" + r.GetRepoId()
+			},
+			New: func() proto.Message { return &metadatav1.Repository{} },
+		},
+		"/registry.metadata.v1.MetadataService/GetManifest": {
+			TTL: 5 * time.Minute,
+			KeyFunc: func(req proto.Message) string {
+				r := req.(*metadatav1.GetManifestRequest)
+				return r.GetTenantId() + ":" + r.GetRepoId() + ":" + r.GetReference()
+			},
+			New: func() proto.Message { return &metadatav1.Manifest{} },
+		},
+		"/registry.metadata.v1.MetadataService/GetTag": {
+			TTL: 30 * time.Second,
+			KeyFunc: func(req proto.Message) string {
+				r := req.(*metadatav1.GetTagRequest)
+				return r.GetTenantId() + ":" + r.GetRepoId() + ":" + r.GetName()
+			},
+			New: func() proto.Message { return &metadatav1.Tag{} },
+		},
+		"/registry.metadata.v1.MetadataService/GetTenantQuotaUsage": {
+			TTL: 10 * time.Second,
+			KeyFunc: func(req proto.Message) string {
+				r := req.(*metadatav1.GetTenantQuotaUsageRequest)
+				return r.GetTenantId()
+			},
+			New: func() proto.Message { return &metadatav1.QuotaUsage{} },
+		},
+	})
+
+	interceptors := append(grpcmw.ServerInterceptors(), cacheInterceptor)
+
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainUnaryInterceptor(interceptors...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
 	}
 

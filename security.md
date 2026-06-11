@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-10 (post-docker-compose hardening pass, SEC-019–SEC-028 added)
+> Last updated: 2026-06-11 (SEC-002/003/004 resolved; REM-001/003/004/009 applied; go mod tidy all services)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -29,48 +29,12 @@
 
 ## Open Issues
 
-### SEC-002 — GC Advisory Locks: undefined locking behaviour under concurrent workers
-- **Severity:** MEDIUM
-- **Status:** OPEN
-- **Service:** `registry-gc`
-- **Raised:** 2026-06-09
-- **Description:** The CLAUDE.md specifies "advisory lock" for GC but does not specify `pg_try_advisory_lock` vs `pg_advisory_lock`, lock key derivation, or connection pinning. Two concurrent GC workers on the same tenant could corrupt `storage_used` quota figures.
-- **Remediation:**
-  1. Use `pg_try_advisory_lock(int8)` — non-blocking, skip tenant if lock not acquired
-  2. Derive lock key from tenant UUID via FNV-64a hash (deterministic, collision-resistant)
-  3. Acquire and release on a single pinned `pgxpool` connection
-  4. Emit a metric on lock skip so skipped tenants are observable
-- **References:** PostgreSQL advisory locks docs, `§4.11` in CLAUDE.md
 
 ---
 
-### SEC-003 — Go Plugin Scanner Path: supply chain and ABI risk
-- **Severity:** HIGH
-- **Status:** OPEN
-- **Service:** `registry-scanner`
-- **Raised:** 2026-06-09
-- **Description:** Loading scanner plugins as `.so` files via `plugin.Open()` requires exact Go toolchain + dependency version match. A compromised or malformed `.so` runs in-process with full access to the host service's memory. Checksum verification helps but does not eliminate ABI instability.
-- **Remediation:**
-  1. Remove `.so` plugin support entirely
-  2. Support only the external process JSON-RPC path
-  3. Enforce `io.LimitedReader` on plugin stdout (max 10MB) to prevent memory exhaustion
-  4. Spawn plugin with `exec.CommandContext` (deadline enforced at OS level)
-  5. Never inherit parent environment — pass an explicit allowlist only
-- **References:** Go plugin package docs, `§4.7` in CLAUDE.md
 
 ---
 
-### SEC-004 — Proxy Background Store: fire-and-forget failure creates silent inconsistency
-- **Severity:** MEDIUM
-- **Status:** OPEN
-- **Service:** `registry-proxy`
-- **Raised:** 2026-06-09
-- **Description:** Background goroutine that stores upstream content to `registry-storage` has no retry or failure visibility. A silent failure means the next cache miss re-fetches from upstream but the failed store is never retried or alerted on.
-- **Remediation:**
-  1. Replace fire-and-forget goroutine with a `store.queued` RabbitMQ event published synchronously before returning the client response
-  2. A worker consumes `store.queued`, performs the store, dead-letters after 3 retries
-  3. On retry: re-fetch from upstream and verify `Content-Digest` matches original before storing
-- **References:** `§4.6` in CLAUDE.md, `§14` (RabbitMQ event contracts)
 
 ---
 
@@ -410,6 +374,9 @@
 | ID | Title | Service | Resolved | How |
 |---|---|---|---|---|
 | SEC-001 | Audit table RLS bypassed by schema owner role | `registry-audit` | 2026-06-10 | Migration `20240101000002_audit_rls_role.sql` creates `registry_audit_app` NOLOGIN role, grants INSERT+SELECT on `audit_events` and DELETE on `audit_events_default` (retention path). `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` applies RLS even to the table owner. INSERT and SELECT policies defined; no UPDATE/DELETE policy → default-deny. Pool `AfterConnect` does `SET ROLE registry_audit_app` on every connection. `checkRole()` in `server.go` fails startup if effective role is not `registry_audit_app`. |
+| SEC-002 | GC advisory locks: undefined locking behaviour under concurrent workers | `registry-gc` | 2026-06-11 | `services/gc/internal/advisory/lock.go` — `pg_try_advisory_lock(int8)` with FNV-64a key from tenant UUID. Connection pinned via `pgxpool.Acquire()`; explicit `pg_advisory_unlock` + `Release()` in deferred unlock. `runForTenant()` helper scopes the lock to one tenant at a time. `GC_ADVISORY_LOCK_DB_DSN` env var; no-op when unset (single-worker safe). |
+| SEC-003 | Go plugin scanner path: supply chain and ABI risk | `registry-scanner` | 2026-06-11 | `.so` path was never implemented. `process.go` now uses pipe + `io.LimitReader(stdoutPipe, 10<<20)` instead of `cmd.Output()`. `pluginEnv()` passes an explicit allowlist (PATH, HOME, TMPDIR, TRIVY_*/GRYPE_* prefixes only) — all other env vars including DB/JWT credentials are stripped. |
+| SEC-004 | Proxy background store: fire-and-forget failure creates silent inconsistency | `registry-proxy` | 2026-06-11 | Background goroutine calls `publishStoreQueued()` on failure, which publishes a `store.queued` RabbitMQ event. `HandleStoreQueued` consumer re-fetches blob from upstream and retries the store. Dead-letters after 3 retries via `consumer.Config{MaxRetries: 3}`. No-op when `RABBITMQ_URL` is unset. |
 | SEC-008 | `registry-core` gRPC clients use plaintext transport | `registry-core` | 2026-06-10 | Added `clientCreds()` helper in `services/core/internal/server/server.go` that calls `libs/auth/mtls.ClientTLSConfig()` when `MTLS_CA_CERT_PATH`/`MTLS_CERT_PATH`/`MTLS_KEY_PATH` are set. Falls back to insecure with a loud `slog.Warn` only when cert paths are absent (dev without certs). All three outbound gRPC connections (auth, metadata, storage) now use the shared credential. Dev certs generated by `cert-init` are picked up automatically via the mounted `/certs/` volume. |
 
 ---

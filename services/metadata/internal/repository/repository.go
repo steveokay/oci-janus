@@ -20,12 +20,28 @@ import (
 
 // Repository performs all database operations for the metadata service.
 type Repository struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	readPool *pgxpool.Pool // optional read replica; falls back to pool when nil
 }
 
-// New returns a Repository backed by the given pool.
+// New returns a Repository that sends all queries to pool.
 func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
+}
+
+// NewWithReplica returns a Repository that routes heavy list queries to readPool
+// when non-nil, offloading the primary. ReadPool may be nil; the primary is used.
+func NewWithReplica(pool, readPool *pgxpool.Pool) *Repository {
+	return &Repository{pool: pool, readPool: readPool}
+}
+
+// reader returns the replica pool for read-only list queries when available,
+// falling back to the primary pool.
+func (r *Repository) reader() *pgxpool.Pool {
+	if r.readPool != nil {
+		return r.readPool
+	}
+	return r.pool
 }
 
 // ── Repositories ────────────────────────────────────────────────────────────
@@ -92,7 +108,7 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID strin
 		args = []any{tenantID}
 	}
 
-	rows, err := r.pool.Query(ctx, q, args...)
+	rows, err := r.reader().Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list repositories: %w", err)
 	}
@@ -219,7 +235,7 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		q += fmt.Sprintf(" LIMIT %d", pageSize)
 	}
 
-	rows, err := r.pool.Query(ctx, q, args...)
+	rows, err := r.reader().Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}
@@ -420,7 +436,7 @@ func (r *Repository) ListOrphanedBlobs(ctx context.Context) ([]*metadatav1.BlobR
 		           SELECT 1 FROM blob_links bl WHERE bl.blob_digest = b.digest
 		       )`
 
-	rows, err := r.pool.Query(ctx, q)
+	rows, err := r.reader().Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("list orphaned blobs: %w", err)
 	}

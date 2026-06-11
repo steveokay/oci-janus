@@ -13,10 +13,12 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -54,14 +56,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	defer rdb.Close()
 
-	// gRPC client connections (insecure; production uses mTLS from libs/auth/mtls)
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// gRPC client connections — mTLS when certs are configured, insecure in dev.
+	grpcCreds, err := clientCreds(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC credentials: %w", err)
+	}
+
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpcCreds)
 	if err != nil {
 		return fmt.Errorf("dial auth: %w", err)
 	}
 	defer authConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpcCreds)
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -163,6 +170,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// clientCreds returns mTLS transport credentials when cert paths are set,
+// or insecure credentials for local development.
+func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+	}
+	slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
+	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
 }
 
 // runMigrations opens a temporary pgxpool and runs goose migrations from the embedded FS.

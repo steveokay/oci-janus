@@ -87,6 +87,23 @@ func (c *DBConfig) PoolConfig() (*pgxpool.Config, error) {
 	return cfg, nil
 }
 
+// ReplicaPoolConfig constructs a pgxpool.Config for the optional read replica.
+// Returns an error if DB_DSN_REPLICA is empty or invalid.
+func (c *DBConfig) ReplicaPoolConfig() (*pgxpool.Config, error) {
+	if c.DBDSNReplica == "" {
+		return nil, fmt.Errorf("DB_DSN_REPLICA is not set")
+	}
+	// Reuse PoolConfig logic by temporarily swapping the DSN.
+	primary := c.DBDSN
+	c.DBDSN = c.DBDSNReplica
+	cfg, err := c.PoolConfig()
+	c.DBDSN = primary
+	if err != nil {
+		return nil, fmt.Errorf("replica pool config: %w", err)
+	}
+	return cfg, nil
+}
+
 // Load binds environment variables into cfg using Viper and applies
 // service-agnostic defaults. cfg must be a pointer to a mapstructure-tagged struct.
 // serviceName sets the default for OTEL_SERVICE_NAME when the env var is absent.
