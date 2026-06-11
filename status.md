@@ -270,9 +270,10 @@ All decisions resolved. No blockers.
 |---|---|---|---|
 | Add gRPC cache interceptor in `libs/middleware/grpc` | `libs/` | REM-007 | DONE ✅ |
 | Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | DONE ✅ |
-| Wire Prometheus metrics endpoint across all services | all | — | NOT STARTED |
+| Wire Prometheus metrics endpoint across all services | all | — | DONE ✅ |
 | Integration tests (testcontainers) for metadata, storage, auth, core | `services/*` | — | NOT STARTED |
 | Unit test coverage to 80% minimum per service | all | — | NOT STARTED |
+| Troubleshooting guide — known errors + resolutions (defer until post-UI) | `docs/` | — | NOT STARTED |
 
 ---
 
