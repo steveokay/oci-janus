@@ -64,5 +64,105 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@v4
-      - name: Run OCI Distribution Spec conformance
+
+      # Allow Docker to push/pull from the local registry on port 8081.
+      - name: Configure Docker daemon for insecure local registry
+        run: |
+          echo '{"insecure-registries":["localhost:8081"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl reload docker
+
+      # Generate all secrets inline so CI never reads from repo secrets.
+      # Keys are ephemeral — discarded when the job finishes.
+      - name: Generate secrets inline
+        run: |
+          # ── Proxy / webhook AES keys ──────────────────────────────────────
+          PROXY_KEY=$(openssl rand -hex 32)
+          WEBHOOK_KEY=$(openssl rand -hex 32)
+
+          # ── RSA 4096 key pair for JWT signing ─────────────────────────────
+          openssl genrsa -out /tmp/jwt_private.pem 4096 2>/dev/null
+          openssl rsa -in /tmp/jwt_private.pem -pubout -out /tmp/jwt_public.pem 2>/dev/null
+          JWT_PRIVATE_B64=$(base64 -w0 /tmp/jwt_private.pem)
+          JWT_PUBLIC_B64=$(base64 -w0 /tmp/jwt_public.pem)
+          JWT_KID=$(cat /proc/sys/kernel/random/uuid)
+
+          # ── ECDSA P-256 key pair for Cosign signer ────────────────────────
+          SIGNER_PRIVATE=$(openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null \
+            | openssl pkcs8 -topk8 -nocrypt 2>/dev/null \
+            | base64 -w0)
+          SIGNER_PUBLIC=$(echo "$SIGNER_PRIVATE" | base64 -d \
+            | openssl pkey -pubout 2>/dev/null \
+            | base64 -w0)
+
+          # ── Write infra/.env ──────────────────────────────────────────────
+          cp infra/docker-compose/.env.example infra/docker-compose/.env
+          printf '\nPROXY_CREDENTIAL_KEY_HEX=%s\n' "$PROXY_KEY"   >> infra/docker-compose/.env
+          printf 'WEBHOOK_CREDENTIAL_KEY_HEX=%s\n' "$WEBHOOK_KEY" >> infra/docker-compose/.env
+          printf 'SIGNER_COSIGN_PRIVATE_KEY=%s\n' "$SIGNER_PRIVATE" >> infra/docker-compose/.env
+          printf 'SIGNER_COSIGN_PUBLIC_KEY=%s\n' "$SIGNER_PUBLIC"   >> infra/docker-compose/.env
+
+          # ── Write services/auth/.env ──────────────────────────────────────
+          cp services/auth/.env.example services/auth/.env
+          printf '\nJWT_PRIVATE_KEY_B64=%s\n' "$JWT_PRIVATE_B64" >> services/auth/.env
+          printf 'JWT_PUBLIC_KEY_B64=%s\n'  "$JWT_PUBLIC_B64"  >> services/auth/.env
+          printf 'JWT_KEY_ID=%s\n'          "$JWT_KID"         >> services/auth/.env
+
+          # ── Write services/core/.env (no extra vars needed) ───────────────
+          cp services/core/.env.example services/core/.env
+
+      - name: Start compose stack
+        run: docker compose -f infra/docker-compose/docker-compose.yml up -d
+        env:
+          COMPOSE_FILE: infra/docker-compose/docker-compose.yml
+
+      # Poll until registry-core responds — 401 (auth required) or 200 both mean it is up.
+      - name: Wait for registry-core to be ready (up to 120 s)
+        run: |
+          echo "Waiting for http://localhost:8081/v2/ ..."
+          for i in $(seq 1 60); do
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8081/v2/ || true)
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ]; then
+              echo "registry-core responded with HTTP $STATUS after $((i * 2))s — stack is up."
+              exit 0
+            fi
+            echo "  attempt $i: got '$STATUS', retrying in 2s..."
+            sleep 2
+          done
+          echo "ERROR: registry-core did not become ready within 120s" >&2
+          docker compose -f infra/docker-compose/docker-compose.yml logs registry-core >&2
+          exit 1
+
+      # Create a dedicated user for the conformance suite.
+      # 201 = created, 409 = already exists (idempotent on reruns) — both are fine.
+      - name: Create conformance test user
+        run: |
+          HTTP_STATUS=$(curl -s -o /tmp/create_user_resp.json -w '%{http_code}' \
+            -X POST http://localhost:8080/api/v1/users \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "username": "conformance",
+              "password": "Conform1234!dev",
+              "email": "conformance@test.local",
+              "tenant_id": "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
+            }')
+          echo "Create user response: HTTP $HTTP_STATUS"
+          cat /tmp/create_user_resp.json || true
+          if [ "$HTTP_STATUS" != "201" ] && [ "$HTTP_STATUS" != "409" ]; then
+            echo "ERROR: unexpected status $HTTP_STATUS when creating conformance user" >&2
+            exit 1
+          fi
+
+      - name: Run OCI conformance suite
         run: cd services/core && make test-conformance
+
+      - name: Upload conformance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-results-${{ github.sha }}
+          path: /tmp/conformance-results/
+          if-no-files-found: warn
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose -f infra/docker-compose/docker-compose.yml down -v

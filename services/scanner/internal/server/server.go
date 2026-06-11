@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -101,8 +102,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK) // TODO: wire prometheus registry
+	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
 	})
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,

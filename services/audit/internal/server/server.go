@@ -20,6 +20,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -91,8 +92,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK) // TODO: wire prometheus
+	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
 	})
 	httpMux.HandleFunc("POST /audit/events", httpHdl.WriteEvent)
 	httpMux.HandleFunc("GET /audit/events", httpHdl.QueryEvents)

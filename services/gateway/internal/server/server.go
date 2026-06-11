@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/services/gateway/internal/config"
 )
 
@@ -53,7 +54,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 }
 
-func metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	// TODO: wire up prometheus registry
-	w.WriteHeader(http.StatusOK)
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	metrics.Handler().ServeHTTP(w, r)
 }

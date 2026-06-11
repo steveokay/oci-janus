@@ -12,7 +12,9 @@ version: "3.9"
 #   redis:              6379
 #   rabbitmq:           5672, 15672 (management UI — registry/registry)
 #   minio:              9000, 9001 (console — minioadmin/minioadmin)
-#   jaeger:             16686 (UI), 4317/4318 (OTLP)
+#   otel-collector:     4317 (OTLP gRPC), 4318 (OTLP HTTP), 8889 (span metrics)
+#   prometheus:         9090 (metrics UI + SPM backend)
+#   jaeger:             16686 (UI — SPM powered by prometheus)
 #   vault:              8200 (token: dev-root-token)
 #   registry-gateway:   8443 (HTTP stub, health only)
 #   registry-auth:      8080 (HTTP), 50051 (gRPC)
@@ -33,7 +35,7 @@ version: "3.9"
 
 x-otel: &otel
   OTEL_EXPORTER: jaeger
-  OTEL_ENDPOINT: jaeger:4317
+  OTEL_ENDPOINT: otel-collector:4317
   OTEL_ENVIRONMENT: development
 
 x-healthcheck: &healthcheck
@@ -139,12 +141,47 @@ services:
     image: jaegertracing/all-in-one:1.58
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      METRICS_STORAGE_TYPE: prometheus
+      PROMETHEUS_SERVER_URL: http://prometheus:9090
+      PROMETHEUS_QUERY_NORMALIZE_CALLS: "true"
+      PROMETHEUS_QUERY_NORMALIZE_DURATION: "true"
     ports:
-      - "16686:16686"  # Jaeger UI
-      - "4317:4317"    # OTLP gRPC
-      - "4318:4318"    # OTLP HTTP
+      - "16686:16686"  # Jaeger UI (SPM tab enabled)
     networks:
       - registry
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC — services send traces here
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus span metrics scrape target
+    depends_on:
+      - jaeger
+    networks:
+      - registry
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"   # Prometheus UI + query API
+    depends_on:
+      - otel-collector
+    networks:
+      - registry
+    restart: unless-stopped
 
   vault:
     image: hashicorp/vault:1.17
@@ -223,7 +260,7 @@ services:
       OTEL_SERVICE_NAME: registry-auth
       DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_auth?sslmode=prefer
       REDIS_ADDR: redis:6379
-      DEV_DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
+      DEV_DEFAULT_TENANT_ID: "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/auth.crt
       MTLS_KEY_PATH: /certs/auth.key

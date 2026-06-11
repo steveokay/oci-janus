@@ -21,6 +21,7 @@ import (
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	tenantmigrations "github.com/steveokay/oci-janus/services/tenant/migrations"
 	"github.com/steveokay/oci-janus/services/tenant/internal/config"
 	"github.com/steveokay/oci-janus/services/tenant/internal/domainworker"
@@ -78,8 +79,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK) // TODO: wire prometheus registry
+	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
 	})
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -75,7 +75,7 @@ On first boot `cert-init` runs first and generates dev mTLS certs (world-readabl
 
 **Notes:**
 - Dev postgres has no TLS cert, so DSNs use `sslmode=prefer` (falls back to plaintext). Production injects its own `DB_DSN` with `sslmode=require` via K8s Secret.
-- OTEL traces go to Jaeger at `jaeger:4317` (no `http://` prefix — gRPC endpoint).
+- OTEL traces go to the OpenTelemetry Collector at `otel-collector:4317` (no `http://` prefix — gRPC endpoint), which forwards spans to Jaeger and computes RED metrics for the Jaeger SPM Monitor tab.
 - All service images contain a compiled `/healthcheck` binary (no shell available — distroless base).
 
 ---
@@ -122,7 +122,7 @@ curl -s -X POST http://localhost:8080/api/v1/users \
     "username": "admin",
     "password": "Admin1234!dev",
     "email": "admin@local.dev",
-    "tenant_id": "00000000-0000-0000-0000-000000000001"
+    "tenant_id": "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
   }' | jq .
 ```
 
@@ -173,7 +173,7 @@ The proxy service caches images from upstream registries (e.g. Docker Hub). Pull
 # Get a session token first
 TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"00000000-0000-0000-0000-000000000001"}' \
+  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"98dbe36b-ef28-4903-b25c-bff1b2921c9e"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
 # Register Docker Hub as an upstream called "dockerhub"
@@ -183,7 +183,7 @@ docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy -c "
   INSERT INTO upstream_registries (upstream_id, tenant_id, name, url, auth_type, enabled)
   VALUES (
     gen_random_uuid(),
-    '00000000-0000-0000-0000-000000000001',
+    '98dbe36b-ef28-4903-b25c-bff1b2921c9e',
     'dockerhub',
     'https://registry-1.docker.io',
     'none',
@@ -242,7 +242,8 @@ docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy \
 
 | UI | URL | Credentials |
 |---|---|---|
-| Jaeger traces | http://localhost:16686 | — |
+| Jaeger traces + SPM | http://localhost:16686 | — (Monitor tab powered by Prometheus) |
+| Prometheus | http://localhost:9090 | — |
 | RabbitMQ | http://localhost:15672 | registry / registry |
 | MinIO console | http://localhost:9001 | minioadmin / minioadmin |
 | Vault | http://localhost:8200 | token: `dev-root-token` |

@@ -21,6 +21,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/config"
 	"github.com/steveokay/oci-janus/services/metadata/internal/handler"
@@ -211,7 +212,6 @@ func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOptio
 	return opts, nil
 }
 
-func metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	// TODO: wire up prometheus registry
-	w.WriteHeader(http.StatusOK)
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	metrics.Handler().ServeHTTP(w, r)
 }

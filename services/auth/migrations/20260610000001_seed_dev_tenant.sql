@@ -5,7 +5,7 @@
 INSERT INTO users (id, tenant_id, username, email, password_hash, is_active)
 VALUES (
     '00000000-0000-0000-0000-000000000002',
-    '00000000-0000-0000-0000-000000000001',
+    '98dbe36b-ef28-4903-b25c-bff1b2921c9e',
     'admin',
     'admin@dev.local',
     '$argon2id$v=19$m=65536,t=3,p=2$o5d+Kl4Ewd96MKFE6wqQ1w$NdruhP2AYbLv1JAnwj6VHGqsgtywlrR70euNs2fEzoM',
