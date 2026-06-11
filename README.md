@@ -57,6 +57,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 ## Architecture
 
 > For the full system architecture with detailed sequence diagrams and flow breakdowns, see [ARCHITECTURE.md](ARCHITECTURE.md).
+> For how the system works in production (Kubernetes, TLS, secrets, end-to-end push/pull flows), see [prod-flow.md](prod-flow.md).
 
 ```
                      ┌────────────────────────────────────────┐
