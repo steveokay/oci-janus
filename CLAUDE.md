@@ -585,7 +585,7 @@ type UpstreamRegistry struct {
 
 ```go
 // Scanner is the interface all scanner plugins must implement.
-// Plugins are loaded as Go plugins (*.so) OR as external processes via stdin/stdout JSON-RPC.
+// Plugins are loaded as external processes via stdin/stdout JSON-RPC.
 type Scanner interface {
     // Name returns the unique scanner identifier, e.g. "trivy", "grype"
     Name() string
@@ -626,10 +626,11 @@ type Finding struct {
 ```
 
 **Plugin loading:**
-- `SCANNER_PLUGIN_PATH` env var points to plugin binary or `.so` file
+- `SCANNER_PLUGIN_PATH` env var points to the external plugin binary
 - Validate plugin binary checksum (SHA256) against `SCANNER_PLUGIN_CHECKSUM` env var before loading
 - If checksum mismatch: log critical, refuse to start
-- External process plugins: communicate over stdin/stdout with newline-delimited JSON. Never shell-exec with user-supplied input.
+- Plugin binary path must be absolute; sanitised with `filepath.Clean` before use
+- Communicate over stdin/stdout with newline-delimited JSON. Never shell-exec with user-supplied input.
 
 **Scan job flow:**
 1. Consume `push.completed` from RabbitMQ
@@ -1049,9 +1050,8 @@ Incoming request Host: registry.acme.com
 
 Scanner plugins must implement the `Scanner` interface defined in `libs/scanner/plugin` (see §4.7).
 
-**Plugin types supported:**
-1. **Go plugin** (`.so` file): loaded via `plugin.Open()`. Must export `New() Scanner`.
-2. **External process**: spawned as subprocess, communicates via stdin/stdout JSON-RPC.
+**Plugin type supported:**
+- **External process**: spawned as subprocess with `exec.CommandContext`, communicates via stdin/stdout JSON-RPC. Go plugin (`.so`) path was evaluated and rejected — see Decision #1.
 
 **JSON-RPC protocol for external process plugins:**
 

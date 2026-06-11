@@ -110,10 +110,26 @@ Docker Desktop must trust `localhost:8081` before any push/pull. Do this **once*
 
 Without this, Docker attempts TLS and the push fails before it even reaches the auth step.
 
-### 5b — Log in to the local registry
+### 5b — Create a user and log in
+
+There is no pre-seeded user. Create one via the auth API first:
 
 ```bash
-docker login localhost:8081 -u admin -p password
+# Create a test user (password must be ≥ 12 chars with upper, lower, digit, symbol)
+curl -s -X POST http://localhost:8080/api/v1/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "Admin1234!dev",
+    "email": "admin@local.dev",
+    "tenant_id": "00000000-0000-0000-0000-000000000001"
+  }' | jq .
+```
+
+Then log in with Docker:
+
+```bash
+docker login localhost:8081 -u admin -p Admin1234!dev
 ```
 
 This stores a credential so Docker can exchange it for a bearer token via
@@ -144,6 +160,75 @@ docker push localhost:8081/myorg/alpine:3.20
 # 3. Pull it back
 docker pull localhost:8081/myorg/alpine:3.20
 ```
+
+---
+
+## Step 6 — Pull-through proxy cache
+
+The proxy service caches images from upstream registries (e.g. Docker Hub). Pull requests are served from local storage after the first fetch.
+
+### 6a — Register an upstream registry
+
+```bash
+# Get a session token first
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"00000000-0000-0000-0000-000000000001"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+# Register Docker Hub as an upstream called "dockerhub"
+# The proxy gRPC API is on port 50055; use the HTTP management API when available
+# For dev: insert directly via the proxy HTTP API (if implemented) or via psql:
+docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy -c "
+  INSERT INTO upstream_registries (upstream_id, tenant_id, name, url, auth_type, enabled)
+  VALUES (
+    gen_random_uuid(),
+    '00000000-0000-0000-0000-000000000001',
+    'dockerhub',
+    'https://registry-1.docker.io',
+    'none',
+    true
+  ) ON CONFLICT DO NOTHING;
+"
+```
+
+### 6b — Pull an image through the cache
+
+The proxy is at `localhost:8084`. Paths follow: `/v2/cache/<upstream-name>/<image>/manifests/<tag>`.
+
+```bash
+# Fetch the alpine:3.20 manifest list (multi-arch)
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/3.20" \
+  | python3 -m json.tool | head -20
+
+# Fetch by digest (first request hits Docker Hub; subsequent requests served from DB cache)
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/sha256:c64c687cbe..." \
+  -o /dev/null -w "%{http_code}\n"
+# → 200
+
+# Verify the manifest was cached
+docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy \
+  -c "SELECT image, reference, media_type, length(body) AS bytes, fetched_at FROM proxy_manifests;"
+```
+
+### 6c — Supported proxy endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v2/cache/<upstream>/<image>/manifests/<ref>` | Fetch manifest (tag or digest) — cached after first hit |
+| `HEAD` | `/v2/cache/<upstream>/<image>/manifests/<ref>` | Check manifest existence |
+| `GET` | `/v2/cache/<upstream>/<image>/blobs/<digest>` | Stream blob — stored to registry-storage in background |
+| `HEAD` | `/v2/cache/<upstream>/<image>/blobs/<digest>` | Check blob existence |
+
+> **Authentication:** All proxy endpoints require a valid Bearer token from `registry-auth`.
+> Use `POST /api/v1/login` to get a session token (not a Docker scope token).
+> The proxy does not participate in the Docker `WWW-Authenticate` scope redirect flow for upstream images.
 
 ---
 

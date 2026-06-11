@@ -31,7 +31,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | mTLS between all internal services | Implemented (dev certs via cert-init; prod via cert-manager) |
 | Pull-through proxy cache for upstream registries | Implemented |
 | Pluggable storage (MinIO / AWS S3 / GCS / Azure Blob) | Implemented |
-| Vulnerability scanner plugin interface | Implemented (external process JSON-RPC; Trivy default) |
+| Vulnerability scanner plugin interface | Implemented (external process JSON-RPC only; Trivy default) |
 | Image signing — Cosign (Sigstore) + Notary v2 | Implemented (ECDSA P-256, Vault key backend) |
 | Webhook delivery with retries + HMAC signing | Implemented |
 | Immutable audit log | Implemented (append-only PostgreSQL partition) |
@@ -201,8 +201,14 @@ docker login localhost:8081 -u <user> -p <api-key>
 docker tag myimage:latest localhost:8081/myorg/myimage:latest
 docker push localhost:8081/myorg/myimage:latest
 
-# Pull through proxy (once an upstream is registered)
-docker pull localhost:8084/v2/cache/dockerhub/library/ubuntu:22.04
+# Pull through proxy (once an upstream is registered — see local-setup.md §6)
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"00000000-0000-0000-0000-000000000001"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+curl -s -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+  "http://localhost:8084/v2/cache/dockerhub/library/alpine/manifests/3.20"
 ```
 
 ---
@@ -397,7 +403,7 @@ Build tag: `//go:build integration`
 cd services/core && make test-conformance
 ```
 
-This runs automatically in CI on every PR to `main`.
+> **Note:** OCI conformance suite setup is pending (Sprint 4). Once wired it will run in CI on every PR to `main`.
 
 ---
 
@@ -435,13 +441,20 @@ SSRF protection: the upstream HTTP client validates all upstream URLs against pr
 
 ### Known Security Issues
 
-See [`security.md`](security.md) for the full issue tracker. Summary of open HIGH+ issues:
+See [`security.md`](security.md) for the full issue tracker. Summary of open MEDIUM+ issues:
 
 | ID | Severity | Description |
 |---|---|---|
-| SEC-001 | HIGH | Audit table RLS bypassed by schema owner role |
-| SEC-003 | HIGH | Go plugin scanner loads untrusted `.so` in-process |
-| SEC-014 | HIGH | Signer/gc/tenant/webhook/audit gRPC servers have no interceptors or mTLS |
+| SEC-007 | MEDIUM | Missing `X-Content-Type-Options: nosniff` on auth and core HTTP responses |
+| SEC-009 | MEDIUM | Auth IP rate limiting targets gateway IP, not client IP |
+| SEC-012 | MEDIUM | Proxy blob handler may store partial blob on client disconnect |
+| SEC-018 | MEDIUM | Audit HTTP endpoints missing security headers and body size limit |
+| SEC-019 | MEDIUM | Six HTTP servers missing `ReadHeaderTimeout` (slowloris vector) |
+| SEC-020 | MEDIUM | All HTTP servers missing `ReadTimeout`/`WriteTimeout` |
+| SEC-021 | MEDIUM | Healthcheck binary uses `http.DefaultClient` without timeout |
+| SEC-022 | MEDIUM | `sslmode=prefer` in docker-compose (should be `sslmode=require`) |
+| SEC-023 | MEDIUM | Vault dev root token hardcoded in docker-compose |
+| SEC-024 | MEDIUM | Dev TLS private keys world-readable (`chmod a+r *.key`) |
 
 ---
 

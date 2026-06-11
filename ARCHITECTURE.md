@@ -391,6 +391,8 @@ registry-core uses X-Tenant-ID for all DB/storage operations
 - PostgreSQL Row-Level Security (RLS) as a second layer: `SET LOCAL app.tenant_id` per transaction
 - Maintains blob deduplication (`blob_links` table: many repos can share one blob)
 - Tracks quota usage per tenant; updated on every push/delete
+- Server-side Redis cache interceptor (REM-007): GetRepository (30s TTL), GetManifest (5m), GetTag (30s), GetTenantQuotaUsage (10s)
+- Optional read replica pool (REM-008): `DB_DSN_REPLICA` routes list-heavy queries (ListTags, ListRepositories, ListOrphanedBlobs) to replica
 
 **Schema highlights:**
 ```
@@ -435,7 +437,7 @@ tenants → organizations → repositories → manifests
 
 - Consumes `push.completed` events from RabbitMQ
 - Manages a configurable worker pool (default: 4 concurrent scans)
-- Loads scanner via plugin interface: Go plugin (`.so`) or external process (JSON-RPC over stdin/stdout)
+- Loads scanner via external process plugin (JSON-RPC over stdin/stdout); Go plugin `.so` path was dropped (see Decision #1)
 - Plugin checksum verified before loading (SHA256 vs `SCANNER_PLUGIN_CHECKSUM` env var)
 - Per-tenant scan policy: block pulls on CRITICAL/HIGH, allow-unscanned flag
 - Updates scan results in metadata; publishes `scan.completed` event
