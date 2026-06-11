@@ -1,6 +1,15 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(docker network *)",
+      "Bash(docker run *)",
+      "Bash(docker push *)",
+      "Bash(docker pull *)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

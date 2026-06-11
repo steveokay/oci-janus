@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
@@ -22,16 +25,14 @@ import (
 
 // Run initialises all dependencies, starts the GC cron loop, and serves health/metrics.
 func Run(ctx context.Context, cfg *config.Config) error {
-	// TODO: replace insecure credentials with mTLS from cfg.MTLS* paths.
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds := clientCreds(cfg)
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, creds)
 	if err != nil {
 		return fmt.Errorf("dial metadata: %w", err)
 	}
 	defer metaConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, creds)
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -53,7 +54,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Start GC loop — runs immediately then every GCRunIntervalHours.
 	go runLoop(ctx, col, time.Duration(cfg.GCRunIntervalHours)*time.Hour)
 
-	grpcSrv := grpc.NewServer()
+	grpcOpts, err := buildGRPCOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
@@ -95,6 +100,40 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildGRPCOptions returns server options with interceptors and optional mTLS.
+func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+	return opts, nil
+}
+
+// clientCreds returns a dial option with mTLS when cert paths are configured,
+// falling back to insecure with a warning for development without certs.
+func clientCreds(cfg *config.Config) grpc.DialOption {
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
+		if err != nil {
+			slog.Warn("mTLS client config failed, falling back to insecure", "error", err)
+			return grpc.WithTransportCredentials(insecure.NewCredentials())
+		}
+		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
+	}
+	slog.Warn("mTLS not configured — gRPC client using insecure (development mode only)")
+	return grpc.WithTransportCredentials(insecure.NewCredentials())
 }
 
 // runLoop runs one GC pass immediately, then repeats every interval until ctx is cancelled.

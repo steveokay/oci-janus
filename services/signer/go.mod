@@ -4,6 +4,7 @@ go 1.25.7
 
 require (
 	github.com/spf13/viper v1.19.0
+	github.com/steveokay/oci-janus/libs v0.0.0
 	github.com/steveokay/oci-janus/proto/gen/go v0.0.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -32,4 +33,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/steveokay/oci-janus/proto/gen/go => ../../proto/gen/go
+replace (
+	github.com/steveokay/oci-janus/libs => ../../libs
+	github.com/steveokay/oci-janus/proto/gen/go => ../../proto/gen/go
+)

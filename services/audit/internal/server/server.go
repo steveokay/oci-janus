@@ -14,8 +14,12 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -100,7 +104,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// gRPC server: health check only (no audit-specific RPC yet).
-	grpcSrv := grpc.NewServer()
+	grpcOpts, err := buildGRPCOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
@@ -149,6 +157,25 @@ func runRetentionLoop(ctx context.Context, repo *repository.Repository, retentio
 			}
 		}
 	}
+}
+
+// buildGRPCOptions returns server options with interceptors and optional mTLS.
+func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+	return opts, nil
 }
 
 // checkRole verifies the pool is operating as registry_audit_app and not as the

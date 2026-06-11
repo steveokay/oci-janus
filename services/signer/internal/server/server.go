@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	"github.com/steveokay/oci-janus/services/signer/internal/config"
 	"github.com/steveokay/oci-janus/services/signer/internal/handler"
 	"github.com/steveokay/oci-janus/services/signer/internal/signing"
@@ -31,7 +34,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	store := sigstore.New()
 	grpcHdl := handler.New(s, store)
 
-	grpcSrv := grpc.NewServer()
+	grpcOpts, err := buildGRPCOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	signerv1.RegisterSignerServiceServer(grpcSrv, grpcHdl)
@@ -74,6 +81,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildGRPCOptions returns server options with interceptors and optional mTLS.
+func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+	return opts, nil
 }
 
 // loadSigner constructs the Signer from config.
