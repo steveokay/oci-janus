@@ -169,26 +169,20 @@ The proxy service caches images from upstream registries (e.g. Docker Hub). Pull
 
 ### 6a — Register an upstream registry
 
-```bash
-# Get a session token first
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"98dbe36b-ef28-4903-b25c-bff1b2921c9e"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+The `dockerhub` upstream is **seeded automatically** by the proxy migration (`00002_seed_dev_upstreams.sql`) on every clean stack start — no manual steps required.
 
-# Register Docker Hub as an upstream called "dockerhub"
-# The proxy gRPC API is on port 50055; use the HTTP management API when available
-# For dev: insert directly via the proxy HTTP API (if implemented) or via psql:
+To add additional upstreams (e.g. ghcr.io, quay.io) insert them directly:
+
+```bash
 docker exec docker-compose-postgres-1 psql -U registry -d registry_proxy -c "
-  INSERT INTO upstream_registries (upstream_id, tenant_id, name, url, auth_type, enabled)
+  INSERT INTO upstream_registries (tenant_id, name, url, auth_type, enabled)
   VALUES (
-    gen_random_uuid(),
     '98dbe36b-ef28-4903-b25c-bff1b2921c9e',
-    'dockerhub',
-    'https://registry-1.docker.io',
+    'ghcr',
+    'https://ghcr.io',
     'none',
     true
-  ) ON CONFLICT DO NOTHING;
+  ) ON CONFLICT (tenant_id, name) DO NOTHING;
 "
 ```
 
