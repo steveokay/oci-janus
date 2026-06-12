@@ -223,3 +223,65 @@ func TestPoll_NoBackoffUpdateOnSuccess(t *testing.T) {
 		t.Error("expected no UpdateNextPollAfter calls when domain list is empty")
 	}
 }
+
+// TestVerify_DoesNotRepeat48hNotification verifies that the 48h notification is
+// not sent a second time when d.Notified48h is already true.
+func TestVerify_DoesNotRepeat48hNotification(t *testing.T) {
+	// Domain is 47.5h old and 48h notification was already sent.
+	d := newDomain(47*time.Hour+30*time.Minute, true, true)
+	d.Domain = "nonexistent.invalid"
+	repo := newFakeRepo(d)
+	w := workerWithFakeRepo(repo)
+
+	ctx := context.Background()
+	_ = w.verify(ctx, d)
+
+	// Neither MarkDomain48hNotified nor MarkDomain24hNotified should be called again
+	// because both flags are already set.
+	if repo.notified48h[d.ID] {
+		t.Error("48h notification should not be re-sent when already flagged")
+	}
+	if repo.notified24h[d.ID] {
+		t.Error("24h notification should not be re-sent when already flagged")
+	}
+}
+
+// TestCalcBackoff_justUnder1h ensures the boundary at 1 hour still returns 5 minutes.
+func TestCalcBackoff_justUnder1h(t *testing.T) {
+	registeredAt := time.Now().Add(-(time.Hour - time.Second))
+	got := calcBackoff(registeredAt)
+	if got != 5*time.Minute {
+		t.Errorf("calcBackoff(59m59s) = %v, want 5m", got)
+	}
+}
+
+// TestCalcBackoff_justOver12h ensures the boundary at 12 hours returns 20 minutes.
+func TestCalcBackoff_justOver12h(t *testing.T) {
+	registeredAt := time.Now().Add(-(12*time.Hour + time.Second))
+	got := calcBackoff(registeredAt)
+	if got != 20*time.Minute {
+		t.Errorf("calcBackoff(12h+1s) = %v, want 20m", got)
+	}
+}
+
+// TestPoll_MultipleDomainsAllGetBackoff verifies that when there are multiple
+// domains pending verification, each one gets its next_poll_after updated on
+// DNS failure.
+func TestPoll_MultipleDomainsAllGetBackoff(t *testing.T) {
+	d1 := newDomain(30*time.Minute, false, false)
+	d1.Domain = "nonexistent1.invalid"
+	d2 := newDomain(2*time.Hour, false, false)
+	d2.Domain = "nonexistent2.invalid"
+
+	repo := newFakeRepo(d1, d2)
+	w := workerWithFakeRepo(repo)
+
+	w.poll(context.Background())
+
+	if _, ok := repo.nextPollAfter[d1.ID]; !ok {
+		t.Error("expected UpdateNextPollAfter for domain 1")
+	}
+	if _, ok := repo.nextPollAfter[d2.ID]; !ok {
+		t.Error("expected UpdateNextPollAfter for domain 2")
+	}
+}

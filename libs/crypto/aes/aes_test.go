@@ -55,3 +55,38 @@ func TestEncrypt_BadKeyLength(t *testing.T) {
 		t.Error("expected error for non-32-byte key")
 	}
 }
+
+// TestDecrypt_BadKeyLength verifies Decrypt also enforces the 32-byte key requirement.
+func TestDecrypt_BadKeyLength(t *testing.T) {
+	_, err := Decrypt([]byte("any-ciphertext"), []byte("tooshort"))
+	if err == nil {
+		t.Error("expected error for non-32-byte key in Decrypt")
+	}
+}
+
+// TestDecrypt_TooShortCiphertext verifies that a ciphertext shorter than the
+// GCM nonce size is rejected before any decryption attempt.
+func TestDecrypt_TooShortCiphertext(t *testing.T) {
+	// GCM nonce is 12 bytes; any ciphertext <= 12 bytes cannot contain a nonce + ciphertext.
+	shortCT := make([]byte, 4)
+	_, err := Decrypt(shortCT, testKey)
+	if err == nil {
+		t.Error("expected error for ciphertext shorter than nonce size")
+	}
+}
+
+// TestEncrypt_EmptyPlaintext verifies that an empty plaintext can be encrypted
+// and then successfully decrypted back to an empty byte slice.
+func TestEncrypt_EmptyPlaintext(t *testing.T) {
+	ct, err := Encrypt([]byte{}, testKey)
+	if err != nil {
+		t.Fatalf("Encrypt empty plaintext: %v", err)
+	}
+	pt, err := Decrypt(ct, testKey)
+	if err != nil {
+		t.Fatalf("Decrypt empty plaintext: %v", err)
+	}
+	if len(pt) != 0 {
+		t.Errorf("expected empty plaintext, got %d bytes", len(pt))
+	}
+}
