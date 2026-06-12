@@ -2,16 +2,11 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { toast } from 'sonner'
 import {
-  Package,
   User,
   Lock,
-  ArrowRight,
-  ShieldCheck,
-  Eye,
-  EyeOff,
   Loader2,
 } from 'lucide-react'
 import { apiClient } from '@/lib/api/client'
@@ -49,7 +44,7 @@ interface LoginResponse {
 
 function LoginPage() {
   const navigate = useNavigate()
-  const [showPassword, setShowPassword] = useState(false)
+  /* Password visibility toggle removed — reference design has no eye icon */
 
   /*
    * Apply the login-specific body styles (light dot-grid background).
@@ -107,8 +102,17 @@ function LoginPage() {
       {/* ------------------------------------------------------------------ */}
       <header className="px-6 flex items-center justify-between w-full max-w-[1440px] mx-auto h-16 sticky top-0 z-50">
         <div className="flex items-center gap-1">
-          {/* Package is the lucide equivalent of Material's inventory_2 */}
-          <Package className="text-[#000917] w-5 h-5" strokeWidth={2} />
+          {/*
+           * Material Symbols inventory_2 matches the reference exactly —
+           * FILL 1 renders the solid/filled variant of the box icon.
+           * The font is already loaded via index.html via Google Fonts CDN.
+           */}
+          <span
+            className="material-symbols-outlined text-[#000917] text-[20px] leading-none"
+            style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
+          >
+            inventory_2
+          </span>
           <span className="text-xl font-bold text-[#0b1c30]">ContainerRegistry</span>
         </div>
         <div className="flex items-center gap-4">
@@ -133,9 +137,12 @@ function LoginPage() {
       {/* Main                                                                 */}
       {/* ------------------------------------------------------------------ */}
       <main className="flex-grow flex items-center justify-center px-5 py-8 relative">
-        {/* Floating terminal — left, decorative, hidden on mobile */}
+        {/* Floating terminal — left, decorative, hidden on mobile.
+            max-w-[20rem] is used instead of max-w-xs because the project's
+            custom --spacing-xs token (4px) causes Tailwind v4 to generate
+            max-w-xs as 4px rather than the default 20rem. */}
         <div className="hidden lg:block absolute left-8 top-1/2 -translate-y-1/2 opacity-10 pointer-events-none">
-          <div className="font-mono text-xs bg-[#0d2137] text-[#f8f9ff] p-4 rounded shadow-xl max-w-xs space-y-1">
+          <div className="font-mono text-xs bg-[#0d2137] text-[#f8f9ff] p-4 rounded shadow-xl max-w-[20rem] space-y-1">
             <p>$ docker login registry.ops.io</p>
             <p>Authenticating with credentials...</p>
             <p className="text-[#43e186]">Login Succeeded</p>
@@ -143,9 +150,10 @@ function LoginPage() {
           </div>
         </div>
 
-        {/* Floating terminal — right, decorative, hidden on mobile */}
+        {/* Floating terminal — right, decorative, hidden on mobile.
+            Same max-w-[20rem] fix as above (avoids broken custom spacing token). */}
         <div className="absolute right-8 bottom-1/2 translate-y-1/2 opacity-10 pointer-events-none hidden lg:block">
-          <div className="font-mono text-xs bg-[#0d2137] text-[#f8f9ff] p-4 rounded shadow-xl max-w-xs space-y-1">
+          <div className="font-mono text-xs bg-[#0d2137] text-[#f8f9ff] p-4 rounded shadow-xl max-w-[20rem] space-y-1">
             <p className="text-[#7689a4]">registry-sync -v 2.4.1</p>
             <p>Pushing manifest for sha256:7f4c...</p>
             <p>Pushed [v1.0.4-stable]</p>
@@ -228,6 +236,11 @@ function LoginPage() {
                   Forgot Password?
                 </a>
               </div>
+              {/*
+               * Password field — no visibility toggle, matching the reference design
+               * which has no eye icon. The lock icon sits on the left only; pr-4 is
+               * used (same as username) since there is no right-side button.
+               */}
               <div className="relative group">
                 <Lock
                   className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#74777d] group-focus-within:text-[#000917] transition-colors"
@@ -235,14 +248,15 @@ function LoginPage() {
                 />
                 <input
                   id="password"
-                  type={showPassword ? 'text' : 'password'}
+                  type="password"
                   autoComplete="current-password"
                   placeholder="••••••••"
                   aria-invalid={!!errors.password}
                   aria-describedby={errors.password ? 'password-error' : undefined}
                   className={[
                     // rounded-[4px] matches reference rounded-lg = 0.25rem (custom scale overrides Tailwind default 8px)
-                    'w-full pl-12 pr-12 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
+                    // pr-4 instead of pr-12: no eye-toggle button on the right
+                    'w-full pl-12 pr-4 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
                     'focus:outline-none focus:ring-0 transition-all',
                     errors.password
                       ? 'border-[#ba1a1a] focus:border-[#ba1a1a]'
@@ -250,23 +264,6 @@ function LoginPage() {
                   ].join(' ')}
                   {...register('password')}
                 />
-                {/*
-                 * Visibility toggle sits inside the field so it doesn't
-                 * affect the field's layout. type="button" prevents it from
-                 * accidentally submitting the form.
-                 */}
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#74777d] hover:text-[#000917] transition-colors"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                </button>
               </div>
               {errors.password && (
                 <p id="password-error" className="text-xs text-[#ba1a1a] mt-0.5">
@@ -293,7 +290,13 @@ function LoginPage() {
               ) : (
                 <>
                   Login
-                  <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                  {/*
+                   * Material Symbols arrow_forward matches the reference exactly.
+                   * Lucide ArrowRight has a different stroke weight/shape.
+                   */}
+                  <span className="material-symbols-outlined text-[20px] leading-none" aria-hidden="true">
+                    arrow_forward
+                  </span>
                 </>
               )}
             </button>
@@ -316,8 +319,17 @@ function LoginPage() {
                        rounded-[4px] hover:bg-[#eff4ff] active:scale-[0.98] transition-all
                        flex items-center justify-center gap-2"
           >
-            {/* ShieldCheck maps to shield_person / verified_user from Material */}
-            <ShieldCheck className="w-5 h-5 text-[#0b1c30]" aria-hidden="true" />
+            {/*
+             * Material Symbols shield_person with FILL 1 (filled style) matches the reference.
+             * Lucide ShieldCheck has a different shape (checkmark vs. person silhouette).
+             */}
+            <span
+              className="material-symbols-outlined text-[20px] leading-none"
+              style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
+              aria-hidden="true"
+            >
+              shield_person
+            </span>
             Login with SSO
           </button>
 
@@ -339,8 +351,16 @@ function LoginPage() {
       <footer className="px-6 py-6 border-t border-[#c4c6cd] bg-white">
         <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            {/* ShieldCheck with green colour signals FIPS compliance */}
-            <ShieldCheck className="w-5 h-5 text-[#009c54]" aria-hidden="true" />
+            {/*
+             * Material Symbols verified_user matches the reference footer icon exactly.
+             * on-tertiary-container (#009c54) is the green color used in the reference.
+             */}
+            <span
+              className="material-symbols-outlined text-[#009c54] text-[16px] leading-none"
+              aria-hidden="true"
+            >
+              verified_user
+            </span>
             <span className="text-xs font-bold uppercase tracking-widest text-[#44474d]">
               FIPS 140-2 Compliant Registry
             </span>
