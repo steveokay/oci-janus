@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-12 (OCI conformance 75/75 PASS; referrer tracking + OCI-Subject header implemented)
+> Last updated: 2026-06-12 (integration tests complete for auth/core/metadata/storage; unit tests added; 23 security items open)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -271,8 +271,8 @@ All decisions resolved. No blockers.
 | Add gRPC cache interceptor in `libs/middleware/grpc` | `libs/` | REM-007 | DONE ✅ |
 | Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | DONE ✅ |
 | Wire Prometheus metrics endpoint across all services | all | — | DONE ✅ |
-| Integration tests (testcontainers) for metadata, storage, auth, core | `services/*` | — | NOT STARTED |
-| Unit test coverage to 80% minimum per service | all | — | NOT STARTED |
+| Integration tests (testcontainers) for auth, core, metadata, storage | `services/*` | — | DONE ✅ |
+| Unit test coverage to 80% minimum per service | all | — | IN PROGRESS (libs 80%+, auth 55%, core 18% — logic-only paths; rest blocked on integration infra) |
 | Troubleshooting guide — known errors + resolutions (defer until post-UI) | `docs/` | — | NOT STARTED |
 
 ---
