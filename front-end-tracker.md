@@ -153,6 +153,40 @@ The management API will be called from the browser. Add CORS middleware to whate
 
 ---
 
+## Security
+
+### Critical — Fix Now
+
+| # | Item | Detail | Status |
+|---|---|---|---|
+| FE-SEC-001 | JWT in localStorage | `login.tsx` saves `access_token` to `localStorage` — XSS can steal it. `CLAUDE-frontend.md §10` requires **memory-only** (Zustand store). Move token to Zustand; update `useAuth`, `_authenticated.tsx` beforeLoad, and the axios interceptor to read from the store instead. Also remove `localStorage.getItem('access_token')` from `index.tsx` guard. | 🔴 |
+| FE-SEC-002 | Auth guard reads stale localStorage | `_authenticated.tsx` and `index.tsx` both call `localStorage.getItem('access_token')` — once token is moved to Zustand this breaks. Both guards must read from the Zustand store. | 🔴 |
+
+### High — Before First Real User
+
+| # | Item | Detail | Status |
+|---|---|---|---|
+| FE-SEC-003 | Content Security Policy | No CSP header on HTML responses. The nginx config (once the Docker image is built) must set `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'` | ⬜ |
+| FE-SEC-004 | CORS allowlist on management API | When the management REST API is built (see Dashboard Wiring §1) the handler must set an explicit `Access-Control-Allow-Origin: <production-domain>` — never `*`. Dev allowlist: `http://localhost:5173`. | ⬜ |
+| FE-SEC-005 | Vague error messages on login | Login should never say "user not found" or "wrong password" — only "Invalid credentials". Current toast shows "Invalid username or password." which is correct, but the `root` form error must match. Confirm both paths use the same generic string. | ⬜ |
+| FE-SEC-006 | No tokens in URLs | Navigation (`router.navigate`) and API calls must never put the JWT in a query parameter or URL path segment. Audit all `navigate()` calls and axios requests — token must stay in `Authorization` header only. | ⬜ |
+| FE-SEC-007 | Logout clears auth state | Sidebar logout button (not yet wired) must: (1) call `POST /api/v1/logout` to revoke the JWT server-side, (2) clear the Zustand auth store, (3) redirect to `/login`. Clearing only the store without revoking leaves the token valid for its remaining 5-min TTL. | ⬜ |
+| FE-SEC-008 | Global 401 handling | Axios response interceptor must detect 401 on any API call, clear the Zustand auth store, and redirect to `/login`. Without this, expired or revoked tokens leave the user on a broken authenticated page. | ⬜ |
+
+### Medium — Before Production
+
+| # | Item | Detail | Status |
+|---|---|---|---|
+| FE-SEC-009 | Refresh token in HttpOnly cookie | `CLAUDE-frontend.md §12` specifies a refresh token flow. If implemented, the refresh token must be stored in an `HttpOnly; Secure; SameSite=Strict` cookie — never in JS-accessible storage. Backend must expose `POST /api/v1/auth/refresh`. | ⬜ |
+| FE-SEC-010 | Open redirect after login | `index.tsx` redirects to `/dashboard` unconditionally. If a `?redirect=` param is ever added, validate it against an allowlist of internal paths before redirecting — reject any value with `://` or leading `//`. | ⬜ |
+| FE-SEC-011 | User-supplied content rendered safely | Repo names, tag names, and descriptions fetched from the API must be rendered as text (React's default), never via `dangerouslySetInnerHTML`. Audit all components that render API strings. | ⬜ |
+| FE-SEC-012 | `npm audit` in CI | Add `npm audit --audit-level=high` step to `ci-frontend.yml` to catch dependency CVEs. Block the build on high/critical findings. | ⬜ |
+| FE-SEC-013 | HTTPS enforcement in production | The nginx Docker image must redirect HTTP → HTTPS and set `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Do not serve the app over plain HTTP in any non-dev environment. | ⬜ |
+| FE-SEC-014 | `X-Frame-Options` and `X-Content-Type-Options` on frontend | nginx must serve `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff` on all responses (already done on backend via `SecureHeaders` middleware — mirror it on the frontend nginx config). | ⬜ |
+| FE-SEC-015 | Sensitive data not logged | Audit `console.log` / `console.error` calls — must not log JWT values, passwords, or API key material. Remove any dev-time logging that outputs auth state. | ⬜ |
+
+---
+
 ## Build & CI
 
 | Task | Detail | Status |
