@@ -71,11 +71,11 @@ cd infra/docker-compose
 docker compose up -d
 ```
 
-On first boot `cert-init` runs first and generates dev mTLS certs (world-readable, uid 65532-compatible) into the `certs_data` volume. Then infra starts (postgres, redis, rabbitmq, minio, jaeger, vault), then all 12 services in dependency order. Allow ~90 seconds for all containers to reach healthy state.
+On first boot `cert-init` runs first and generates dev mTLS certs into the `certs_data` volume. Private keys are mode 600, owned by uid 65532 (ownership is best-effort on developer's host filesystem where that uid may not exist). Certificate files are mode 644. Then infra starts (postgres, redis, rabbitmq, minio, jaeger, vault), then all 12 services in dependency order. Allow ~90 seconds for all containers to reach healthy state.
 
 **Notes:**
 - Dev postgres has no TLS cert, so DSNs use `sslmode=prefer` (falls back to plaintext). Production injects its own `DB_DSN` with `sslmode=require` via K8s Secret.
-- OTEL traces go to the OpenTelemetry Collector at `otel-collector:4317` (no `http://` prefix — gRPC endpoint), which forwards spans to Jaeger and computes RED metrics for the Jaeger SPM Monitor tab.
+- OTEL traces go to the OpenTelemetry Collector at `otel-collector:4317` (no `http://` prefix — gRPC endpoint), which forwards spans to Jaeger and computes RED metrics for the Jaeger SPM Monitor tab. The `OTEL_INSECURE=true` variable is set in the compose `x-otel` fragment so the OTLP gRPC connection uses plaintext (Jaeger in dev has no TLS cert). Never set this in staging or production.
 - All service images contain a compiled `/healthcheck` binary (no shell available — distroless base).
 
 ---
