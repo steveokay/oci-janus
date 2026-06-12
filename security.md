@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-12 (SEC-005/007/009/010/011/012/013/016/017/018/019/020/021/022/023/024/026/027/028/029/030/031/032/034 resolved; SEC-006/015/025 deferred; SEC-033 open — sentinel error refactor)
+> Last updated: 2026-06-12 (SEC-005/007/009/010/011/012/013/016/017/018/019/020/021/022/023/024/026/027/028/029/030/031/032/033/034 resolved; SEC-006/015/025 deferred)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -73,20 +73,6 @@
 ---
 
 
-### SEC-033 — `IsPasswordPolicyError` uses fragile string-prefix heuristic; classification can break silently
-- **Severity:** LOW
-- **Status:** OPEN
-- **Service:** `registry-auth`
-- **Raised:** 2026-06-12
-- **Description:** `services/auth/internal/service/errors.go:IsPasswordPolicyError` distinguishes safe policy errors (safe to forward to callers) from internal errors (must not be forwarded) by checking whether the error message starts with the string `"hash password:"`. This is a fragile coupling to `fmt.Errorf` message text in `service.CreateUser`. Any future change to the wrapping prefix in `CreateUser` (e.g. renaming, refactoring) would silently cause internal argon2 errors to be classified as policy errors and leaked to callers, violating SEC-011. The function also does not use `errors.Is` or `errors.As`, so it cannot handle wrapped error chains correctly. The safer pattern is a sentinel error type for policy violations, or wrapping with a dedicated exported error variable.
-- **Remediation:**
-  1. Define a sentinel type `type PasswordPolicyError struct { msg string }` (implementing `error`) in `service` package
-  2. Have `ValidatePassword` return `&PasswordPolicyError{msg: "..."}` instead of bare `errors.New`
-  3. Replace `IsPasswordPolicyError` with `errors.As(err, &PasswordPolicyError{})` or `errors.As(err, new(*PasswordPolicyError))`
-  4. This removes the dependency on message-string matching and makes the classification robust to future refactoring
-- **References:** `services/auth/internal/service/errors.go:19`, `services/auth/internal/service/auth.go:193`, `services/auth/internal/handler/http.go:201`
-
----
 
 
 ## Resolved Issues
@@ -96,6 +82,7 @@
 | SEC-001 | Audit table RLS bypassed by schema owner role | `registry-audit` | 2026-06-10 | Migration `20240101000002_audit_rls_role.sql` creates `registry_audit_app` NOLOGIN role, grants INSERT+SELECT on `audit_events` and DELETE on `audit_events_default` (retention path). `ALTER TABLE audit_events FORCE ROW LEVEL SECURITY` applies RLS even to the table owner. INSERT and SELECT policies defined; no UPDATE/DELETE policy → default-deny. Pool `AfterConnect` does `SET ROLE registry_audit_app` on every connection. `checkRole()` in `server.go` fails startup if effective role is not `registry_audit_app`. |
 | SEC-002 | GC advisory locks: undefined locking behaviour under concurrent workers | `registry-gc` | 2026-06-11 | `services/gc/internal/advisory/lock.go` — `pg_try_advisory_lock(int8)` with FNV-64a key from tenant UUID. Connection pinned via `pgxpool.Acquire()`; explicit `pg_advisory_unlock` + `Release()` in deferred unlock. `runForTenant()` helper scopes the lock to one tenant at a time. `GC_ADVISORY_LOCK_DB_DSN` env var; no-op when unset (single-worker safe). |
 | SEC-003 | Go plugin scanner path: supply chain and ABI risk | `registry-scanner` | 2026-06-11 | `.so` path was never implemented. `process.go` now uses pipe + `io.LimitReader(stdoutPipe, 10<<20)` instead of `cmd.Output()`. `pluginEnv()` passes an explicit allowlist (PATH, HOME, TMPDIR, TRIVY_*/GRYPE_* prefixes only) — all other env vars including DB/JWT credentials are stripped. |
+| SEC-033 | `IsPasswordPolicyError` uses fragile string-prefix heuristic | `registry-auth` | 2026-06-12 | Defined `PasswordPolicyError` sentinel struct in `service/password.go`; `ValidatePassword` now returns `&PasswordPolicyError{...}`. `IsPasswordPolicyError` rewritten to use `errors.As(err, new(*PasswordPolicyError))` — type-safe, handles wrapped chains, no string matching. |
 | SEC-004 | Proxy background store: fire-and-forget failure creates silent inconsistency | `registry-proxy` | 2026-06-11 | Background goroutine calls `publishStoreQueued()` on failure, which publishes a `store.queued` RabbitMQ event. `HandleStoreQueued` consumer re-fetches blob from upstream and retries the store. Dead-letters after 3 retries via `consumer.Config{MaxRetries: 3}`. No-op when `RABBITMQ_URL` is unset. |
 | SEC-008 | gRPC clients use plaintext transport | `registry-core`, `registry-proxy` | 2026-06-10 / 2026-06-11 | Added `clientCreds()` helper in both `services/core/internal/server/server.go` and `services/proxy/internal/server/server.go`. Calls `libs/auth/mtls.ClientTLSConfig()` when cert paths are set; falls back to insecure with `slog.Warn` in dev. Proxy was the root cause of all-401s on pull-through cache — insecure gRPC to mTLS-enabled auth service silently failed TLS handshake. |
 | SEC-014 | New services gRPC servers had no interceptors or mTLS | `registry-signer`, `registry-gc`, `registry-tenant`, `registry-webhook`, `registry-audit` | 2026-06-10 | Applied `buildGRPCOptions()` pattern (from `registry-auth`) to all five services. Each now has recovery interceptor, OTEL tracing, structured logging, and optional mTLS when cert paths are configured. Commit `c4e08d7`. |
