@@ -96,6 +96,35 @@
   --color-error-container:   #ffdad6;
   --color-on-error:          #ffffff;
   --color-on-error-container:#93000a;
+
+  /*
+   * Spacing tokens — used as p-gutter, px-md, gap-lg, etc.
+   * --spacing-* is the Tailwind v4 convention for custom spacing values;
+   * the old --space-* prefix is NOT recognised by the v4 engine.
+   */
+  --spacing-gutter: 20px;
+  --spacing-xs:     4px;
+  --spacing-sm:     8px;
+  --spacing-md:     16px;
+  --spacing-lg:     24px;
+  --spacing-xl:     32px;
+  --spacing-base:   4px;
+
+  /*
+   * Border-radius tokens — these OVERRIDE the Tailwind defaults.
+   * Crucially, --radius-full becomes 0.75rem (12px), NOT 9999px,
+   * which matches the Stitch design system's "full" pill shape for chips.
+   */
+  --radius-DEFAULT: 0.125rem; /* 2px  — used as rounded            */
+  --radius-lg:      0.25rem;  /* 4px  — used as rounded-lg         */
+  --radius-xl:      0.5rem;   /* 8px  — used as rounded-xl         */
+  --radius-full:    0.75rem;  /* 12px — used as rounded-full       */
+
+  /*
+   * Max-width token for the page container so we can use max-w-container-max
+   * without hard-coding 1440px in every layout component.
+   */
+  --width-container-max: 1440px;
 }
 
 * {
@@ -121,4 +150,107 @@ body.login-page {
 .login-card-blur {
   backdrop-filter: blur(8px);
   background-color: rgba(255, 255, 255, 0.95);
+}
+
+/*
+ * Material Symbols Outlined baseline style.
+ * The variable font axes control the icon's appearance without extra requests:
+ *   FILL 0   → outlined (not filled) style
+ *   wght 400 → regular weight stroke
+ *   GRAD 0   → no grade adjustment
+ *   opsz 24  → optimised for 24px display size
+ *
+ * vertical-align: middle keeps icons vertically centred when placed inline
+ * next to text — avoids the classic "icon sits 2px too low" layout shift.
+ */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+
+/*
+ * Typography utility classes — mirrors the Stitch design system scale.
+ * Using @utility in Tailwind v4 registers these as first-class utility
+ * classes that participate in the normal cascade (no !important needed).
+ * Each class sets the full typographic spec: size, line-height, weight,
+ * letter-spacing (where relevant), and the correct font family.
+ */
+
+/* display: hero headlines, empty-state illustrations, marketing copy */
+@utility text-display {
+  font-size: 36px;
+  line-height: 44px;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/* headline-lg: section titles, modal headings */
+@utility text-headline-lg {
+  font-size: 28px;
+  line-height: 36px;
+  font-weight: 600;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/* headline-md: card titles, table section headers, nav wordmark */
+@utility text-headline-md {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/* body-lg: standard readable prose, form hints */
+@utility text-body-lg {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/* body-md: default UI text, table cell values, nav link labels */
+@utility text-body-md {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/*
+ * label-caps: compact micro-label style used for column headers, badges, stat
+ * card labels, and filter buttons. The letter-spacing of 0.05em compensates
+ * for the tighter optical feel of small all-caps text.
+ *
+ * NOTE: text-transform is intentionally NOT set here — elements that need
+ * ALL-CAPS should either write their content in uppercase in JSX or add the
+ * Tailwind `uppercase` utility class explicitly. This matches the reference
+ * design system where some label-caps text is mixed-case (e.g. stat card
+ * labels, sidebar nav items) and some is all-caps (e.g. column headers, badges).
+ */
+@utility text-label-caps {
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  font-family: "Hanken Grotesk", sans-serif;
+}
+
+/* code-md: inline code, pull command strings, digest references */
+@utility text-code-md {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  font-family: "JetBrains Mono", monospace;
+}
+
+/*
+ * code-sm: compact monospace — version badges, short digests, sub-labels
+ * under repo names. Weight 500 gives slightly bolder rendering at small sizes.
+ */
+@utility text-code-sm {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  font-family: "JetBrains Mono", monospace;
 }

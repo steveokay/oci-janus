@@ -15,6 +15,12 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
+    /*
+     * vite/client provides the ImportMeta augmentation that gives us
+     * import.meta.env, import.meta.hot, etc. Without this, TypeScript
+     * reports "Property 'env' does not exist on type 'ImportMeta'".
+     */
+    "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
