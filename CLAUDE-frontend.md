@@ -1,7 +1,7 @@
 # CLAUDE.md — Frontend: Container Registry UI
 
 > **Purpose:** This file is the canonical reference for AI-assisted development of the
-> `ui/` frontend (monorepo path: `registry/ui/`). It is derived from the verified Stitch design files (5 screens),
+> `frontend/` frontend (monorepo path: `registry/frontend/`). It is derived from the verified Stitch design files (5 screens),
 > the `DESIGN.md` token specification, and the backend `claude.md` API contracts.
 > Every component, pattern, token, and convention is defined here.
 > When in doubt, re-read this file. Never assume — ask.
@@ -52,23 +52,23 @@ reconsider.
 
 | Screen | File | Status |
 |---|---|---|
-| Login | `stitch/login/screen.png` | ✅ Verified |
-| Repository Dashboard | `stitch/repository_dashboard/screen.png` | ✅ Verified |
-| Image Details & Tags | `stitch/image_details_tags/screen.png` | ✅ Verified |
-| Security Scan Results | `stitch/security_scan_results/screen.png` | ✅ Verified |
-| Build History | `stitch/build_history/screen.png` | ✅ Verified |
+| Login | `stitch/login/screen.png` | ✅ Implemented (`src/routes/login.tsx`) |
+| Repository Dashboard | `stitch/repository_dashboard/screen.png` | ✅ Verified — not yet implemented |
+| Image Details & Tags | `stitch/image_details_tags/screen.png` | ✅ Verified — not yet implemented |
+| Security Scan Results | `stitch/security_scan_results/screen.png` | ✅ Verified — not yet implemented |
+| Build History | `stitch/build_history/screen.png` | ✅ Verified — not yet implemented |
 
-Store the Stitch design assets in `ui/design/stitch/` in the monorepo.
+Store the Stitch design assets in `frontend/design/stitch/` in the monorepo.
 Reference them when implementing each screen — do not work from memory.
 
 ---
 
 ## 2. Repository Structure
 
-The frontend lives at `ui/` inside the monorepo (`github.com/<org>/registry`). It is not a Go module and does not participate in `go.work`. It has its own `package.json`, build tooling, and CI path filter.
+The frontend lives at `frontend/` inside the monorepo (`github.com/<org>/registry`). It is not a Go module and does not participate in `go.work`. It has its own `package.json`, build tooling, and CI path filter.
 
 ```
-ui/                                    # monorepo path: registry/ui/
+frontend/                              # monorepo path: registry/frontend/
 ├── design/
 │   └── stitch/                        # Original Stitch design assets (read-only reference)
 │       ├── login/
@@ -1345,16 +1345,16 @@ server {
 
 ### CI Pipeline
 
-The frontend CI job is path-filtered on `ui/**` in the monorepo's `.github/workflows/` directory. It only runs when files under `ui/` change.
+The frontend CI job is path-filtered on `frontend/**` in the monorepo's `.github/workflows/` directory. It only runs when files under `frontend/` change.
 
 ```yaml
-# .github/workflows/ui.yml  (path filter: ui/**)
+# .github/workflows/ci-ui.yml  (path filter: frontend/**)
 steps:
   - lint         # eslint --max-warnings 0
   - typecheck    # tsc --noEmit
   - test         # vitest run --coverage
   - build        # vite build
-  - docker-build # docker build (context: ui/) + trivy scan
+  - docker-build # docker build (context: frontend/) + trivy scan
   - e2e          # playwright test (against built container)
   - deploy       # push to registry, update infra/helm image tag
 ```
@@ -1436,6 +1436,6 @@ Every component in `src/components/registry/` must have a JSDoc comment block:
 ---
 
 > **Last updated:** See Git log.
-> **Design source of truth:** `ui/design/stitch/` — always check against screens before implementing.
+> **Design source of truth:** `frontend/design/stitch/` — always check against screens before implementing.
 > **Backend contracts:** See `../services/core/` and the root `CLAUDE.md` for API shapes.
 > **This file is the source of truth. If code contradicts this file, the code is wrong.**

@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-12 (integration tests complete for auth/core/metadata/storage; unit tests added; 23 security items open)
+> Last updated: 2026-06-12 (Sprint 4 COMPLETE; Sprint 5 started — frontend login page shipped, QA pass done; SEC-033 resolved; ui/ renamed to frontend/)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -22,7 +22,7 @@
 | Service | Status | Owner | Notes |
 |---|---|---|---|
 | `proto/` | DONE | — | All `.proto` files written; Go stubs generated and committed to `proto/gen/go/`. |
-| `libs/` | DONE | — | All packages implemented: auth/jwt, auth/mtls, crypto/argon2, crypto/aes, middleware/grpc+http, observability/otel, rabbitmq/publisher+consumer+events, storage/driver, scanner/plugin, errors/codes, testutil, config/loader. REM-006 pool config fully implemented in `libs/config/loader`. |
+| `libs/` | DONE | — | All packages implemented: auth/jwt, auth/mtls, crypto/argon2, crypto/aes, middleware/grpc+http, observability/otel, rabbitmq/publisher+consumer+events, storage/driver, scanner/plugin, errors/codes, testutil, config/loader. REM-006 pool config fully implemented in `libs/config/loader`. `libs/middleware/http/secure_headers.go` (SecureHeaders middleware — CSP, X-Content-Type-Options, X-Frame-Options, HSTS) added during security hardening sprint. |
 | `services/auth` | DONE | — | Full implementation: JWT RS256 issuance, API key management (argon2id), gRPC ValidateToken/ValidateAPIKey/GetUserPermissions, DB migrations, JWKS endpoint, lockout + rate limiting. Committed b9f5269. |
 | `services/core` | DONE | — | Full OCI Distribution Spec v1.1: all 14 `/v2/` endpoints, chunked upload state in Redis, SHA256 digest verification, RabbitMQ push.completed publish, per-tenant quota enforcement, custom path dispatcher for `org/repo` names. Committed 9b46675. |
 | `services/metadata` | DONE | — | All MetadataService gRPC handlers, DB migrations (repositories, manifests, tags, blobs, blob_links, scan_results), Redis client wired. REM-006 applied via shared DBConfig. Committed 5f4e526. |
@@ -36,7 +36,8 @@
 | `services/tenant` | DONE | — | Tenant CRUD, domain verification worker (5-minute poll, 48h cutoff), per-tenant quota config. REM-004 partially applied (see Remediation Plans). Committed ff5875e. |
 | `services/signer` | DONE | — | Cosign-compatible ECDSA P-256 signing, Vault key backend, signing/sigstore subpackages, SignManifest/VerifyManifest/ListSignatures gRPC handlers. Committed e4ba6c7. |
 | `infra/` | DONE | — | docker-compose.yml (all services + Vault dev mode + MinIO + Jaeger), Helm umbrella chart with all 12 sub-charts, runbooks for secret-rotation, minio-encryption, notary-root-key-ceremony. Terraform directory present (deferred). Committed fd90f3d. |
-| `ui/` | NOT STARTED | — | Scaffold only: Vite + React + TypeScript. No routes or components. No blocking dependencies — can be built last. |
+| security hardening | DONE | — | 19 SEC items resolved in Sprint 4: HTTP timeouts (SEC-019/020), healthcheck timeout (SEC-021), `sslmode=require` enforcement (SEC-022), Vault token isolation (SEC-023), cert key permissions `chmod 600` (SEC-024), secure response headers via `libs/middleware/http/secure_headers.go` (SEC-007/018), auth client-IP rate limiting via `TRUSTED_PROXY_CIDRS` (SEC-009), proxy partial-blob abort (SEC-012), context propagation (SEC-028), and others. Deferred: SEC-006, SEC-015, SEC-025. |
+| `frontend/` | IN PROGRESS | — | Vite + React + TypeScript (renamed from `ui/`). Login page shipped (2026-06-12): TanStack Router file-based routing, zod+react-hook-form, frosted-glass design, QA-verified against Stitch reference. Remaining screens: Repository Dashboard, Image Details & Tags, Security Scan Results, Build History. |
 
 ---
 
@@ -228,7 +229,25 @@ All decisions resolved. No blockers.
 
 ## Current Sprint
 
-**Sprint 4 — Hardening & Integration Testing**
+**Sprint 5 — Frontend**
+> Goal: Implement all 5 Stitch-verified screens, wire real API calls, reach 80% unit test coverage on auth + core.
+
+| Task | Status |
+|---|---|
+| Login page — design, implementation, QA pass | DONE ✅ |
+| Repository Dashboard screen | NOT STARTED |
+| Image Details & Tags screen | NOT STARTED |
+| Security Scan Results screen | NOT STARTED |
+| Build History screen | NOT STARTED |
+| Auth hook + token refresh logic | NOT STARTED |
+| Unit test coverage: auth 55%→80% | NOT STARTED |
+| Unit test coverage: core 18%→80% | NOT STARTED |
+
+---
+
+## Completed Sprints (continued)
+
+### Sprint 4 — Hardening & Integration Testing (COMPLETE)
 > Goal: Close all open remediation items, achieve OCI conformance test pass, bring up the full local stack in Docker Compose, and reach 80% unit test coverage per service.
 
 ### Highest Priority (blocking end-to-end testing)
@@ -272,8 +291,8 @@ All decisions resolved. No blockers.
 | Create replica pgxpool in metadata and route list queries to it | `services/metadata` | REM-008 | DONE ✅ |
 | Wire Prometheus metrics endpoint across all services | all | — | DONE ✅ |
 | Integration tests (testcontainers) for auth, core, metadata, storage | `services/*` | — | DONE ✅ |
-| Unit test coverage to 80% minimum per service | all | — | IN PROGRESS (libs 80%+, auth 55%, core 18% — logic-only paths; rest blocked on integration infra) |
-| Troubleshooting guide — known errors + resolutions (defer until post-UI) | `docs/` | — | NOT STARTED |
+| Unit test coverage to 80% minimum per service | all | — | IN PROGRESS — libs 80%+, auth 55%, core 18%; signer/gc/webhook/scanner/proxy/tenant/metadata/storage/gateway: not assessed. |
+| Troubleshooting guide — known errors + resolutions | `docs/` | — | NOT STARTED |
 
 ---
 
@@ -283,10 +302,10 @@ All decisions resolved. No blockers.
 - **Go workspace:** `go.work` at repo root links all 14 modules (libs, proto/gen/go, 12 services). All go.mod files standardised to `go 1.25.7`. Last commit: `a9dc176`.
 - **Module path:** `github.com/steveokay/oci-janus`
 - **Full stack running (2026-06-10):** All 16 docker-compose containers (12 services + postgres, redis, rabbitmq, minio, jaeger, vault, cert-init) reach healthy/running state. Key fixes applied: `GOWORK=off` in all Dockerfiles, Viper env-seeding in all config loaders, `sslmode=prefer` for dev postgres, `embed.FS` for goose migrations, `PRIMARY KEY (id, occurred_at)` on partitioned audit table, static `/healthcheck` binary in distroless images, `chmod a+r` for cert volume permissions, OTLP endpoint without `http://` prefix.
-- OCI conformance tests (`make test-conformance` in `services/core`) must pass before any release tag.
+- **OCI conformance 75/75 PASS (2026-06-12):** `make test-conformance` passes full OCI Distribution Spec v1.1 suite. Runs in CI on every PR to `main`.
 - Vault dev mode in docker-compose is ready — `services/signer` can be tested locally now.
 - `infra/terraform/` directory is present but empty — Terraform deferred per Decision #10.
-- `ui/` scaffold exists (Vite + React + TypeScript) but has no routes or components — no blockers, lowest priority.
+- **Frontend (2026-06-12):** `ui/` renamed to `frontend/`. Login page shipped: TanStack Router, zod+react-hook-form, Hanken Grotesk font, frosted-glass card matching Stitch reference. Dev server: `cd frontend && npm run dev` → http://localhost:5173. Remaining screens: Dashboard, Image Details, Security Scan, Build History.
 - Security audit completed 2026-06-10 — SEC-019 through SEC-028 added to `security.md`. Notable open items: HTTP server timeouts missing on 6 services (SEC-019/020), healthcheck binary lacks timeout (SEC-021), `sslmode=prefer` in dev compose (SEC-022), `context.Background()` in handlers (SEC-028).
 - **CI security gaps closed (2026-06-10):** `govulncheck` added to all 12 service CI workflows; `ci-gitleaks.yml` added for secret scanning on all pushes/PRs. Commit `a919cd4`.
 - **AUTH_REALM fix (2026-06-10):** `services/core` WWW-Authenticate realm was hardcoded to `https://registry/auth/token` (internal Compose hostname). Now reads from `AUTH_REALM` env var, defaulting to `http://localhost:8080/auth/token`. Docker push/pull from host now works. Commit `cb241bd`.

@@ -750,6 +750,12 @@ oci-janus/
 │   ├── gc/                 ← go.mod, cmd/, internal/
 │   └── tenant/             ← go.mod, cmd/, internal/
 │
+├── frontend/               ← React/TypeScript SPA (Vite + TanStack Router)
+│   ├── src/routes/         ← File-based routes (login, repos, scan results, …)
+│   ├── src/components/     ← Shared UI components
+│   ├── src/lib/            ← API client, auth hook
+│   └── design/stitch/      ← Stitch reference screens (read-only)
+│
 ├── infra/
 │   ├── docker-compose/     ← Local dev stack
 │   ├── helm/               ← Kubernetes umbrella chart

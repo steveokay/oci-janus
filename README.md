@@ -28,7 +28,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | OCI Distribution Spec v1.1 (push / pull / delete / list) | Implemented |
 | Multi-tenant with per-tenant custom domains | Implemented |
 | JWT (RS256) + API key authentication | Implemented |
-| mTLS between all internal services | Implemented (dev certs via cert-init; prod via cert-manager) |
+| mTLS between all internal services | Implemented (dev certs via cert-init; private keys are `chmod 600`, owned by uid 65532; prod via cert-manager) |
 | Pull-through proxy cache for upstream registries | Implemented |
 | Pluggable storage (MinIO / AWS S3 / GCS / Azure Blob) | Implemented |
 | Vulnerability scanner plugin interface | Implemented (external process JSON-RPC only; Trivy default) |
@@ -229,6 +229,7 @@ All services use environment variables. No YAML config files are committed (only
 | `OTEL_EXPORTER` | `jaeger`/`tempo`/`datadog`/`stdout` | `stdout` |
 | `OTEL_ENDPOINT` | OTLP endpoint URL | — |
 | `OTEL_SERVICE_NAME` | Service name in traces | set per service |
+| `OTEL_INSECURE` | Set to `true` for local dev (OTLP without TLS). Never set in staging/production. | `false` |
 | `MTLS_CA_CERT_PATH` | mTLS CA certificate path | — |
 | `MTLS_CERT_PATH` | mTLS service certificate path | — |
 | `MTLS_KEY_PATH` | mTLS service private key path | — |
@@ -243,6 +244,7 @@ All services use environment variables. No YAML config files are committed (only
 | `ARGON2_MEMORY` | Argon2id memory (KiB, default `65536`) |
 | `ARGON2_THREADS` | Argon2id parallelism (default `4`) |
 | `RATE_LIMIT_BURST` | Max failed auth attempts per IP per minute |
+| `TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs of trusted reverse proxies. When set, `X-Forwarded-For` is used for IP rate limiting instead of TCP peer address. | `` (empty — falls back to RemoteAddr) |
 
 ### `registry-storage`
 
@@ -401,7 +403,7 @@ Build tag: `//go:build integration`
 cd services/core && make test-conformance
 ```
 
-> **Note:** OCI conformance suite setup is pending (Sprint 4). Once wired it will run in CI on every PR to `main`.
+> **Note:** OCI conformance suite passes 75/75 tests (0 failures, 5 optional-feature skips). Runs in CI on every PR to `main`.
 
 ---
 
@@ -439,20 +441,13 @@ SSRF protection: the upstream HTTP client validates all upstream URLs against pr
 
 ### Known Security Issues
 
-See [`security.md`](security.md) for the full issue tracker. Summary of open MEDIUM+ issues:
+See [`security.md`](security.md) for the full issue tracker. All MEDIUM+ issues from the initial audit have been resolved. Three LOW-severity items are deferred:
 
 | ID | Severity | Description |
 |---|---|---|
-| SEC-007 | MEDIUM | Missing `X-Content-Type-Options: nosniff` on auth and core HTTP responses |
-| SEC-009 | MEDIUM | Auth IP rate limiting targets gateway IP, not client IP |
-| SEC-012 | MEDIUM | Proxy blob handler may store partial blob on client disconnect |
-| SEC-018 | MEDIUM | Audit HTTP endpoints missing security headers and body size limit |
-| SEC-019 | MEDIUM | Six HTTP servers missing `ReadHeaderTimeout` (slowloris vector) |
-| SEC-020 | MEDIUM | All HTTP servers missing `ReadTimeout`/`WriteTimeout` |
-| SEC-021 | MEDIUM | Healthcheck binary uses `http.DefaultClient` without timeout |
-| SEC-022 | MEDIUM | `sslmode=prefer` in docker-compose (should be `sslmode=require`) |
-| SEC-023 | MEDIUM | Vault dev root token hardcoded in docker-compose |
-| SEC-024 | MEDIUM | Dev TLS private keys world-readable (`chmod a+r *.key`) |
+| SEC-006 | LOW | Connection pool exhaustion not mapped to `codes.ResourceExhausted`; retry interceptor amplifies load |
+| SEC-015 | MEDIUM | `registry-signer` in-memory sigstore is volatile — signatures lost on restart/rolling deploy |
+| SEC-025 | LOW | `/metrics` endpoints served on same port as business endpoints — should be a separate internal-only port |
 
 ---
 
@@ -557,6 +552,32 @@ GC_MODE=full registry-gc
 ```
 
 Safety guarantees: blobs younger than `GC_BLOB_MIN_AGE` (default 1 hour) are never deleted, protecting in-flight uploads.
+
+---
+
+## Frontend
+
+The React/TypeScript UI lives in `frontend/`. It uses Vite, TanStack Router (file-based), Tailwind CSS v4, react-hook-form + zod, and Sonner for notifications.
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173
+npm run build
+npm run typecheck
+```
+
+### Implemented screens
+
+| Screen | Route | Status |
+|---|---|---|
+| Login | `/login` | ✅ Done |
+| Repository Dashboard | `/repos` | Not started |
+| Image Details & Tags | `/repos/:name` | Not started |
+| Security Scan Results | `/repos/:name/scan/:tag` | Not started |
+| Build History | `/repos/:name/builds` | Not started |
+
+The login page POSTs to `POST /api/v1/login` and stores the Bearer token in `localStorage`. The `useAuth` hook (`src/lib/auth/useAuth.ts`) reads it back. The `index` route redirects to `/dashboard` or `/login` based on token presence.
 
 ---
 

@@ -636,14 +636,15 @@ DB_DSN_REPLICA=postgres://...?sslmode=require   # read replica; optional
 
 | Item | Status | Notes |
 |---|---|---|
-| Helm charts tested against real cluster | Not yet | Charts have correct structure; untested. Sprint 5. |
+| Helm charts tested against real cluster | Not yet | Charts have correct structure; untested. Sprint 6. |
 | Terraform for cloud infra | Not started | `infra/terraform/` is present but empty. Decision #10. |
-| OCI conformance suite in CI | Not yet | `make test-conformance` in services/core must pass before release. Sprint 4. |
-| Integration tests (testcontainers) | Not yet | Sprint 4. |
-| Prometheus metrics wired | Not yet | `/metrics` returns 200 with no data. Sprint 4. |
-| `sslmode=require` for dev Postgres | Accepted risk | Dev compose uses `sslmode=prefer`. Never use compose DSNs in prod. |
-| RBAC at org / repo / tag level | Scaffold only | Token scopes enforced; per-object ACL not implemented. Post Sprint 4. |
-| UI | Not started | Vite + React scaffold exists, no routes or components. Post Sprint 4. |
+| OCI conformance suite in CI | ✅ Done | 75/75 pass. Runs in CI on every PR to `main`. |
+| Integration tests (testcontainers) | ✅ Done | auth, core, metadata, storage covered. |
+| Prometheus metrics wired | ✅ Done | All services expose `/metrics` via `libs/observability/metrics`. |
+| `sslmode=require` for dev Postgres | Accepted risk | Dev compose uses `sslmode=prefer`. `libs/config/loader` warns at startup. Never use compose DSNs in prod. |
+| RBAC at org / repo / tag level | Scaffold only | Token scopes enforced; per-object ACL not implemented. Post Sprint 5. |
+| Frontend UI | In progress | Login page shipped (Sprint 5). Dashboard, Image Details, Security Scan, Build History remaining. |
+| SEC-015 signer volatile store | Deferred | In-memory sigstore lost on restart. Needs PostgreSQL persistence. Sprint 6. |
 
 ---
 
