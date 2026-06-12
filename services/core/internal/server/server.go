@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -16,6 +17,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -84,13 +86,26 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		metrics.Handler().ServeHTTP(w, r)
 	})
 
+	// ReadTimeout and WriteTimeout are both generous to accommodate blob streaming:
+	// clients may take tens of seconds to receive a large image layer over a slow link.
+	// ReadHeaderTimeout is short to prevent Slowloris attacks (attacker keeps connection
+	// open by sending headers one byte at a time).
 	httpSrv := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: http.MaxBytesHandler(mux, 1<<30), // 1 GiB total (individual endpoints impose stricter limits)
+		Addr:              cfg.HTTPAddr,
+		Handler:           http.MaxBytesHandler(mux, 1<<30), // 1 GiB total (individual endpoints impose stricter limits)
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second, // 60s to allow large blob layer transfers to complete
 	}
 
-	// gRPC server (health check only for now; future: expose internal gRPC if needed)
-	grpcSrv := grpc.NewServer()
+	// gRPC server (health check only for now; future: expose internal gRPC if needed).
+	// SEC-010: use standard interceptors (recovery, OTEL tracing, logging) so panics
+	// are caught and observability is consistent with other services.
+	grpcOpts, err := buildGRPCOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -117,6 +132,31 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildGRPCOptions returns server options for the health-check gRPC server.
+// Even though this server only exposes the health protocol, we attach the
+// standard interceptor chain (panic recovery, OTEL tracing, structured logging)
+// so that the health endpoint is observable and cannot panic-crash the process.
+// mTLS is applied when cert paths are configured (SEC-010).
+func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+
+	return opts, nil
 }
 
 // clientCreds returns mTLS dial credentials when all three cert paths are set,

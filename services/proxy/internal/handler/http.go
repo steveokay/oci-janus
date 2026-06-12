@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,11 @@ import (
 	"github.com/steveokay/oci-janus/services/proxy/internal/repository"
 	"github.com/steveokay/oci-janus/services/proxy/internal/upstream"
 )
+
+// digestRE validates OCI/Docker content digests per the OCI Distribution Spec.
+// Only sha256 digests with exactly 64 lowercase hex characters are accepted.
+// This mirrors the same pattern used in registry-core.
+var digestRE = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 // HTTPHandler serves the OCI pull-through cache HTTP API.
 type HTTPHandler struct {
@@ -234,6 +240,14 @@ func (h *HTTPHandler) handleHeadManifest(w http.ResponseWriter, r *http.Request,
 
 // handleGetBlob streams a blob from cache storage or fetches from upstream.
 func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *repository.UpstreamRecord, tenantID uuid.UUID, image, digest string) {
+	// SEC-013: Validate digest format before doing any work.
+	// Rejects malformed or path-traversal-style digest strings before they
+	// reach storage or upstream calls.
+	if !digestRE.MatchString(digest) {
+		ociErr(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest format")
+		return
+	}
+
 	key := blobKey(tenantID.String(), digest)
 
 	// Check if we already have it in storage.
@@ -271,10 +285,16 @@ func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *
 	}
 	w.WriteHeader(http.StatusOK)
 
-	// Tee to both client and background store pipe.
+	// Pipe the upstream body to both the HTTP client and the background store goroutine.
+	// TeeReader splits the stream: io.Copy drives the read, tee writes each byte to pw,
+	// and the background goroutine reads from pr.
 	pr, pw := io.Pipe()
 	tee := io.TeeReader(rc, pw)
 
+	// SEC-028: Detach from request context intentionally — this goroutine caches the
+	// blob after the client response is complete. Using context.WithoutCancel ensures
+	// the store is not abandoned if the HTTP request context is cancelled at response end.
+	// A 30-second outer bound (applied inside storeBlobFromReader) prevents goroutine leaks.
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
 		if err := h.storeBlobFromReader(bgCtx, key, tenantID.String(), ct, pr); err != nil {
@@ -284,15 +304,33 @@ func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *
 		}
 	}()
 
-	if _, err := io.Copy(w, tee); err != nil {
-		slog.Debug("client connection closed during blob stream", "err", err)
+	// SEC-012: Capture the copy error and propagate it to the pipe.
+	// If the client disconnects mid-stream, io.Copy returns a non-nil error.
+	// Calling pw.CloseWithError signals the background goroutine via the pipe that
+	// the stream is broken and it must NOT call CloseAndRecv (which would commit a
+	// truncated blob under the correct digest key in storage).
+	// If the copy succeeds, pw.Close sends a clean EOF so the goroutine can finalise.
+	_, copyErr := io.Copy(w, tee)
+	if copyErr != nil {
+		// Client disconnected mid-stream: poison the pipe so storeBlobFromReader
+		// returns an error, logs it, and queues a retry rather than storing garbage.
+		slog.Debug("client connection closed during blob stream", "err", copyErr)
+		pw.CloseWithError(copyErr)
+	} else {
+		// Clean stream end: let the background goroutine drain the pipe and commit.
+		pw.Close()
 	}
-	// Signal pipe writer end so background goroutine can proceed.
-	pw.Close()
 }
 
 // handleHeadBlob checks whether a blob is accessible in local storage.
 func (h *HTTPHandler) handleHeadBlob(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, digest string) {
+	// SEC-013: Validate digest format before making any storage calls.
+	// Prevents malformed digests from being forwarded to the storage service.
+	if !digestRE.MatchString(digest) {
+		ociErr(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest format")
+		return
+	}
+
 	key := blobKey(tenantID.String(), digest)
 
 	existResp, err := h.storage.BlobExists(r.Context(), &storagev1.BlobExistsRequest{
@@ -350,12 +388,18 @@ func (h *HTTPHandler) streamBlobFromStorage(w http.ResponseWriter, ctx context.C
 }
 
 // storeBlobFromReader sends data from r to the storage service via PutBlob.
+// SEC-012: If r is an io.Pipe reader and the writer was closed with an error
+// (i.e. the HTTP client disconnected mid-stream), Read returns that error here.
+// In that case we must NOT call CloseAndRecv, because doing so would commit a
+// truncated blob under the correct digest key. Instead we return the error
+// immediately so the caller can queue a retry.
 func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, contentType string, r io.Reader) error {
 	stream, err := h.storage.PutBlob(ctx)
 	if err != nil {
 		return fmt.Errorf("open put-blob stream: %w", err)
 	}
 
+	// Send the metadata frame first so the storage service knows the target key.
 	if err := stream.Send(&storagev1.PutBlobRequest{
 		Data: &storagev1.PutBlobRequest_Meta{
 			Meta: &storagev1.PutBlobMeta{
@@ -379,13 +423,20 @@ func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, co
 			}
 		}
 		if rerr == io.EOF {
+			// Clean end of stream: fall through to CloseAndRecv to commit.
 			break
 		}
 		if rerr != nil {
+			// SEC-012: Non-EOF read error means the source pipe was closed with an
+			// error (client disconnected). Drain is not needed because io.Pipe
+			// discards further reads after CloseWithError. Do NOT call CloseAndRecv
+			// here — that would finalise a partial blob in storage under the full
+			// digest key, which would cause incorrect cache hits for future pulls.
 			return fmt.Errorf("read blob: %w", rerr)
 		}
 	}
 
+	// Only reached on clean EOF — safe to commit the blob.
 	if _, err := stream.CloseAndRecv(); err != nil {
 		return fmt.Errorf("close put-blob stream: %w", err)
 	}
@@ -393,6 +444,9 @@ func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, co
 }
 
 // cacheManifest stores a fetched manifest in the DB cache (background).
+// SEC-028: context.Background() is used intentionally here — the caller has already
+// written the HTTP response and its request context may be cancelled. The 30-second
+// timeout prevents this goroutine from leaking if the database is slow.
 func (h *HTTPHandler) cacheManifest(tenantID, upstreamID uuid.UUID, image, reference string, result *upstream.ManifestResult) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

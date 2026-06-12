@@ -98,10 +98,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("POST /audit/events", httpHdl.WriteEvent)
 	httpMux.HandleFunc("GET /audit/events", httpHdl.QueryEvents)
 
+	// ReadHeaderTimeout prevents Slowloris attacks.
+	// ReadTimeout and WriteTimeout bound the full request/response cycle.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           http.MaxBytesHandler(httpMux, 1*1024*1024),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 	}
 
 	// gRPC server: health check only (no audit-specific RPC yet).

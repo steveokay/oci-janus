@@ -64,7 +64,11 @@ for svc in $SERVICES; do
   fi
 done
 
-# Make all certs world-readable so non-root service containers (uid 65532) can read them.
-chmod a+r "$CERTS_DIR"/*.crt "$CERTS_DIR"/*.key 2>/dev/null || true
+# Set certificates world-readable so service containers can verify TLS peers.
+chmod 644 "$CERTS_DIR"/*.crt
+# Private keys: owned by uid 65532 (distroless non-root user), not world-readable.
+# Do NOT use chmod a+r on private keys — they must be readable only by the owning process.
+chown 65532:65532 "$CERTS_DIR"/*.key 2>/dev/null || true  # best-effort; may fail outside Docker
+chmod 600 "$CERTS_DIR"/*.key
 
 echo "[cert-init] Dev certs ready in $CERTS_DIR/"

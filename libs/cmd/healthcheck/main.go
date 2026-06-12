@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
@@ -14,7 +15,11 @@ func main() {
 	if len(os.Args) > 1 {
 		addr = os.Args[1]
 	}
-	resp, err := http.Get(addr) //nolint:noctx,gosec
+	// Use an explicit client with a timeout instead of http.DefaultClient, which
+	// has no timeout. A hung healthcheck would block the container orchestrator's
+	// liveness probe indefinitely, preventing pod replacement.
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(addr) //nolint:noctx
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 		os.Exit(1)

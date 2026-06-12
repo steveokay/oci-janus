@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -31,7 +32,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		w.WriteHeader(http.StatusOK)
 	})
 	httpMux.HandleFunc("/metrics", metricsHandler)
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: httpMux}
+	// ReadHeaderTimeout prevents Slowloris attacks where a client stalls connection
+	// setup by dribbling HTTP headers slowly. ReadTimeout and WriteTimeout bound
+	// the full request/response cycle — essential for a public-facing gateway.
+	httpSrv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           httpMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+	}
 
 	errCh := make(chan error, 2)
 	go func() {

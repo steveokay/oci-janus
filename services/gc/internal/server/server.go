@@ -92,10 +92,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	httpMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		metrics.Handler().ServeHTTP(w, r)
 	})
+	// ReadHeaderTimeout prevents Slowloris attacks.
+	// ReadTimeout and WriteTimeout bound the full request/response cycle.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           httpMux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 	}
 
 	errCh := make(chan error, 2)

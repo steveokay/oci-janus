@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -57,9 +58,19 @@ type ProcessPlugin struct {
 	path string
 }
 
-// New validates the plugin binary checksum then returns a ProcessPlugin.
-// Returns an error and must not be used if checksum validation fails.
+// New validates the plugin binary path and checksum then returns a ProcessPlugin.
+// Returns an error and must not be used if either check fails.
+// Path sanitisation and checksum verification both happen here so the service
+// fails fast at startup rather than executing an unexpected binary at scan time.
 func New(pluginPath, expectedChecksum string) (*ProcessPlugin, error) {
+	// Sanitise plugin path per CLAUDE.md §17: filepath.Clean removes ".." segments
+	// and redundant slashes. Require an absolute path to prevent relative-path
+	// confusion attacks where the working directory affects which binary is executed.
+	pluginPath = filepath.Clean(pluginPath)
+	if !filepath.IsAbs(pluginPath) {
+		return nil, fmt.Errorf("SCANNER_PLUGIN_PATH must be an absolute path, got %q", pluginPath)
+	}
+
 	actual, err := fileSHA256(pluginPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read plugin binary %q: %w", pluginPath, err)

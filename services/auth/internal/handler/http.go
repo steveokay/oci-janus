@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -15,6 +16,42 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
+// trustedProxyCIDRs holds the parsed CIDR ranges that are allowed to set
+// X-Forwarded-For. Populated from TRUSTED_PROXY_CIDRS at process startup.
+// An empty slice means no proxy is trusted and RemoteAddr is always used.
+var trustedProxyCIDRs []*net.IPNet
+
+// init parses TRUSTED_PROXY_CIDRS (comma-separated CIDR notation) once at
+// startup. Invalid CIDR entries are silently skipped so a misconfigured value
+// degrades gracefully (falls back to RemoteAddr) rather than panicking.
+func init() {
+	raw := os.Getenv("TRUSTED_PROXY_CIDRS")
+	if raw == "" {
+		return
+	}
+	for _, cidr := range strings.Split(raw, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err == nil {
+			trustedProxyCIDRs = append(trustedProxyCIDRs, network)
+		}
+	}
+}
+
+// isTrustedProxy reports whether ip falls within one of the configured trusted
+// proxy CIDRs. Returns false when trustedProxyCIDRs is empty (no proxy trust).
+func isTrustedProxy(ip net.IP) bool {
+	for _, cidr := range trustedProxyCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // HTTPHandler implements the HTTP API for registry-auth.
 type HTTPHandler struct {
 	svc              *service.Service
@@ -23,7 +60,15 @@ type HTTPHandler struct {
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
 // devDefaultTenantID may be uuid.Nil (production) or a fixed dev UUID.
+//
+// A warning is logged when TRUSTED_PROXY_CIDRS is not set because IP-based
+// rate limiting will then target the TCP peer (the proxy) rather than the
+// actual client, rendering per-client rate limits ineffective in deployed
+// environments where traffic arrives through a load balancer or ingress proxy.
 func NewHTTPHandler(svc *service.Service, devDefaultTenantID uuid.UUID) *HTTPHandler {
+	if len(trustedProxyCIDRs) == 0 {
+		slog.Warn("TRUSTED_PROXY_CIDRS not set — IP rate limiting uses TCP peer address (degraded when behind a proxy)")
+	}
 	return &HTTPHandler{svc: svc, devDefaultTenant: devDefaultTenantID}
 }
 
@@ -149,9 +194,16 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "CONFLICT", "username or email already in use")
 			return
 		}
-		// All other errors from CreateUser are either password validation failures
-		// (bare errors.New) or hash failures (extremely rare internal errors).
-		writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
+		// ValidatePassword returns plain errors.New("password must ...") messages
+		// that are safe to forward to callers so they know which policy was
+		// violated. Hash failures from argon2 are wrapped with "hash password: ..."
+		// and must never be surfaced — log them and return a generic message.
+		if service.IsPasswordPolicyError(err) {
+			writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
+			return
+		}
+		slog.ErrorContext(r.Context(), "create user failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
 		return
 	}
 
@@ -393,13 +445,41 @@ func parseScopes(scopeParams []string) []service.RepositoryAccess {
 	return access
 }
 
-// remoteIP extracts the client IP address from r.RemoteAddr.
+// remoteIP returns the client IP for rate limiting purposes.
+//
+// When the TCP peer address belongs to a configured trusted proxy
+// (TRUSTED_PROXY_CIDRS), the leftmost non-private, non-loopback address in
+// X-Forwarded-For is returned instead. This ensures that per-client limits are
+// enforced against the actual originating IP rather than the proxy's address.
+//
+// If XFF is absent, empty, or contains only private/loopback addresses the
+// function falls back to the TCP peer address so rate limiting is never
+// silently disabled.
 func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	// Extract the raw TCP peer IP; SplitHostPort strips the port number.
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		// RemoteAddr has no port (unusual but possible in tests); use as-is.
+		peer = r.RemoteAddr
 	}
-	return host
+
+	peerIP := net.ParseIP(peer)
+	if peerIP != nil && isTrustedProxy(peerIP) {
+		// The request came through a trusted proxy — honour X-Forwarded-For.
+		// Use the leftmost address that is not private or loopback; that is the
+		// original client IP that the proxy prepended to the header chain.
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			for _, part := range strings.Split(xff, ",") {
+				ip := net.ParseIP(strings.TrimSpace(part))
+				if ip != nil && !ip.IsPrivate() && !ip.IsLoopback() {
+					return ip.String()
+				}
+			}
+		}
+	}
+
+	// No trusted proxy, or XFF yielded no usable public IP — use TCP peer.
+	return peer
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

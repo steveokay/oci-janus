@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -58,9 +59,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /metrics", metricsHandler)
+	// ReadHeaderTimeout prevents Slowloris attacks.
+	// WriteTimeout is generous (60s) because this service proxies large blob
+	// streams between storage backends and gRPC clients.
 	httpSrv := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: http.MaxBytesHandler(mux, 4<<20),
+		Addr:              cfg.HTTPAddr,
+		Handler:           http.MaxBytesHandler(mux, 4<<20),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second, // 60s for blob streaming responses
 	}
 
 	// ── 4. Start & block ──────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -92,9 +93,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	devTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
 	handler.NewHTTPHandler(svc, devTenantID).Register(mux)
 
+	// ReadHeaderTimeout prevents Slowloris attacks where a client holds connections
+	// open by sending HTTP headers one byte at a time.
+	// ReadTimeout caps the time for the full request body to arrive.
+	// WriteTimeout caps the time to write the response (token responses are small).
 	httpSrv := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: http.MaxBytesHandler(mux, 4<<20), // 4 MiB request limit
+		Addr:              cfg.HTTPAddr,
+		Handler:           http.MaxBytesHandler(mux, 4<<20), // 4 MiB request limit
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 	}
 
 	// ── 6. Start & block ──────────────────────────────────────────────────────

@@ -5,9 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"regexp"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -16,6 +20,15 @@ import (
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
+
+// domainRE matches RFC 1123 fully-qualified domain names.
+// Used to reject non-hostname values before they reach the DB, DNS lookup, or Redis key.
+// Allows only lowercase labels separated by dots, with a multi-char TLD.
+var domainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// tenantNameRE enforces the CLAUDE.md §7 org name rule: lowercase alphanumeric + hyphens,
+// 2-64 characters. Tenant names are used as subdomains so must be DNS-safe.
+var tenantNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
 
 // GRPCHandler implements tenantv1.TenantServiceServer.
 type GRPCHandler struct {
@@ -33,6 +46,13 @@ func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTena
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
+
+	// Validate tenant name: must be a DNS-safe lowercase identifier per CLAUDE.md §7.
+	// This prevents SQL injection via name, subdomain hijacking, and Redis key confusion.
+	if !tenantNameRE.MatchString(req.Name) {
+		return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
+	}
+
 	plan := req.Plan
 	if plan == "" {
 		plan = "standard"
@@ -40,6 +60,11 @@ func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTena
 
 	rec, err := h.repo.CreateTenant(ctx, req.Name, plan)
 	if err != nil {
+		// Map PostgreSQL unique violation to a gRPC AlreadyExists so callers get
+		// a meaningful status code instead of an opaque Internal error.
+		if isDuplicateKeyError(err) {
+			return nil, status.Errorf(codes.AlreadyExists, "tenant name %q is already in use", req.Name)
+		}
 		return nil, status.Errorf(codes.Internal, "create tenant: %v", err)
 	}
 	return tenantToProto(rec), nil
@@ -78,6 +103,18 @@ func (h *GRPCHandler) ResolveDomain(ctx context.Context, req *tenantv1.ResolveDo
 	if req.Domain == "" {
 		return nil, status.Error(codes.InvalidArgument, "domain is required")
 	}
+
+	// Reject raw IP addresses — a domain lookup on an IP would silently succeed
+	// and could be used to probe internal network addresses (SSRF).
+	if net.ParseIP(req.Domain) != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "domain must be a hostname, not an IP address")
+	}
+	// Validate domain is a well-formed RFC 1123 hostname — rejects null bytes,
+	// newlines, and Redis special characters before any downstream use.
+	if !domainRE.MatchString(req.Domain) {
+		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.Domain)
+	}
+
 	tenantID, found, err := h.repo.ResolveDomain(ctx, req.Domain)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolve domain: %v", err)
@@ -98,6 +135,16 @@ func (h *GRPCHandler) RegisterDomain(ctx context.Context, req *tenantv1.Register
 	tenantID, err := uuid.Parse(req.TenantId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+
+	// Validate domain is a well-formed RFC 1123 hostname — rejects IP addresses,
+	// null bytes, newlines, and Redis special characters before any downstream use.
+	// This prevents SSRF via DNS lookup on attacker-controlled IPs and Redis key injection.
+	if net.ParseIP(req.Domain) != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "domain must be a hostname, not an IP address")
+	}
+	if !domainRE.MatchString(req.Domain) {
+		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.Domain)
 	}
 
 	token, err := generateToken()
@@ -168,6 +215,16 @@ func policyToProto(p *repository.PolicyRecord) *tenantv1.TenantPolicy {
 		ExemptRepositories: p.ExemptRepositories,
 		StorageQuotaBytes:  p.StorageQuotaBytes,
 	}
+}
+
+// isDuplicateKeyError reports whether err is a PostgreSQL unique-constraint violation
+// (SQLSTATE 23505). Used to surface AlreadyExists gRPC status codes instead of
+// opaque Internal errors when callers attempt to create a duplicate resource.
+func isDuplicateKeyError(err error) bool {
+	var pgErr *pgconn.PgError
+	// errors.As unwraps wrapped errors so this works even if the repository
+	// layer wraps the pgconn error with fmt.Errorf("...: %w", err).
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // generateToken returns a 32-byte cryptographically random hex string.

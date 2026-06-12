@@ -5,6 +5,7 @@ package loader
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ type DBConfig struct {
 
 // PoolConfig constructs a pgxpool.Config from DBConfig ready for pgxpool.NewWithConfig.
 // Enforces that DB_DSN includes sslmode=require — sslmode=disable is rejected at startup.
+// A warning is emitted (but startup is not blocked) when sslmode is weaker than "require",
+// because sslmode=prefer is acceptable in local dev compose but must not reach production.
 func (c *DBConfig) PoolConfig() (*pgxpool.Config, error) {
 	if c.DBDSN == "" {
 		return nil, fmt.Errorf("DB_DSN is required")
@@ -65,6 +68,21 @@ func (c *DBConfig) PoolConfig() (*pgxpool.Config, error) {
 	if strings.Contains(dsn, "sslmode=disable") || !strings.Contains(dsn, "sslmode=") {
 		return nil, fmt.Errorf("DB_DSN must include sslmode=require; sslmode=disable is not permitted")
 	}
+
+	// Extract the sslmode value from the DSN to check for weaker modes.
+	// sslmode=prefer silently falls back to plaintext when the server has no cert —
+	// this is the case in dev compose where postgres runs without TLS.
+	// Production DSNs must always use sslmode=require.
+	sslMode := extractSSLMode(dsn)
+	if sslMode != "require" {
+		// Warn when SSL mode is weaker than require. sslmode=prefer silently falls back
+		// to plaintext when the server has no cert — this is the case in dev compose.
+		// Production DSNs must always use sslmode=require.
+		slog.Warn("DB DSN uses non-enforcing SSL mode — connections may be unencrypted",
+			"ssl_mode", sslMode,
+			"recommendation", "use sslmode=require in production")
+	}
+
 	cfg, err := pgxpool.ParseConfig(c.DBDSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse DB_DSN: %w", err)
@@ -85,6 +103,27 @@ func (c *DBConfig) PoolConfig() (*pgxpool.Config, error) {
 		cfg.MaxConnIdleTime = c.DBMaxConnIdleTime
 	}
 	return cfg, nil
+}
+
+// extractSSLMode parses the sslmode query parameter out of a lowercased DSN string.
+// It handles both URL-style DSNs (sslmode=X in query string) and key=value DSNs.
+// Returns "unknown" when sslmode cannot be determined — callers should treat that
+// conservatively and warn rather than block startup.
+func extractSSLMode(dsn string) string {
+	// Look for "sslmode=<value>" — works for both URL and key=value DSN formats.
+	const prefix = "sslmode="
+	idx := strings.Index(dsn, prefix)
+	if idx < 0 {
+		return "unknown"
+	}
+	rest := dsn[idx+len(prefix):]
+	// Value ends at next '&', ' ', or end of string
+	for i, ch := range rest {
+		if ch == '&' || ch == ' ' || ch == ';' {
+			return rest[:i]
+		}
+	}
+	return rest
 }
 
 // ReplicaPoolConfig constructs a pgxpool.Config for the optional read replica.

@@ -6,6 +6,8 @@ package otel
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -91,6 +93,17 @@ func buildResource(cfg Config) (*resource.Resource, error) {
 	)
 }
 
+// otelInsecure reads the OTEL_INSECURE environment variable. When false (the
+// production default), the OTLP exporter connects over TLS. Set OTEL_INSECURE=true
+// only in local docker-compose environments where Jaeger/Tempo run without a
+// server certificate on the collector endpoint.
+//
+// Never set OTEL_INSECURE=true in staging or production — doing so sends all
+// trace and metric data in cleartext.
+func otelInsecure() bool {
+	return strings.EqualFold(os.Getenv("OTEL_INSECURE"), "true")
+}
+
 // newTraceExporter returns a span exporter for the configured backend.
 // "stdout" is intended for local development only — it writes JSON to os.Stdout.
 func newTraceExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error) {
@@ -98,26 +111,39 @@ func newTraceExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, e
 	case "stdout":
 		return stdouttrace.New(stdouttrace.WithPrettyPrint())
 	case "jaeger", "tempo", "datadog":
-		// All three use OTLP/gRPC — differentiated only by the Endpoint env var
-		return otlptracegrpc.New(ctx,
+		// All three use OTLP/gRPC — differentiated only by the Endpoint env var.
+		// Build option list dynamically so TLS is the default; insecure mode
+		// is opt-in via OTEL_INSECURE=true for local dev stacks.
+		traceOpts := []otlptracegrpc.Option{
 			otlptracegrpc.WithEndpoint(cfg.Endpoint),
-			otlptracegrpc.WithInsecure(), // TLS terminated at the collector sidecar
-		)
+		}
+		if otelInsecure() {
+			// Only safe for local dev with no TLS on the collector endpoint.
+			traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
+		}
+		return otlptracegrpc.New(ctx, traceOpts...)
 	default:
 		return nil, fmt.Errorf("unknown OTEL_EXPORTER %q; want jaeger|tempo|datadog|stdout", cfg.Exporter)
 	}
 }
 
 // newMetricExporter returns a metric exporter for the configured backend.
+// As with newTraceExporter, the OTLP/gRPC connection uses TLS by default and
+// is downgraded to plaintext only when OTEL_INSECURE=true is explicitly set.
 func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
 	switch cfg.Exporter {
 	case "stdout":
 		return stdoutmetric.New()
 	case "jaeger", "tempo", "datadog":
-		return otlpmetricgrpc.New(ctx,
+		// Build option list dynamically so TLS is used unless OTEL_INSECURE=true.
+		metricOpts := []otlpmetricgrpc.Option{
 			otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
-			otlpmetricgrpc.WithInsecure(),
-		)
+		}
+		if otelInsecure() {
+			// Only safe for local dev with no TLS on the collector endpoint.
+			metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
+		}
+		return otlpmetricgrpc.New(ctx, metricOpts...)
 	default:
 		return nil, fmt.Errorf("unknown OTEL_EXPORTER %q; want jaeger|tempo|datadog|stdout", cfg.Exporter)
 	}

@@ -6,7 +6,13 @@
       "Bash(docker run *)",
       "Bash(docker push *)",
       "Bash(docker pull *)",
-      "PowerShell(docker run *)"
+      "PowerShell(docker run *)",
+      "Bash(go mod *)",
+      "Bash(go get *)",
+      "Bash(go build *)",
+      "Bash(go work *)",
+      "Bash(go test *)",
+      "Bash(go tool *)"
     ]
   },
   "enableAllProjectMcpServers": true,

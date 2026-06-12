@@ -324,13 +324,19 @@ func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDiges
 
 	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
 	if expectedDigest != "" && actualDigest != expectedDigest {
-		ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = r.storage.DeleteBlob(ctx2, &storagev1.DeleteBlobRequest{Key: key, TenantId: st.TenantID})
+		// The request context may already be cancelled (e.g. client disconnected), so
+		// we must use a fresh context for this cleanup DeleteBlob — otherwise the storage
+		// call would be rejected immediately and the partially-written blob would leak.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = r.storage.DeleteBlob(cleanupCtx, &storagev1.DeleteBlobRequest{Key: key, TenantId: st.TenantID})
 		return "", 0, ErrDigestMismatch
 	}
 
-	// Delete temp chunk objects asynchronously — best-effort cleanup.
+	// Detach from request context: temp chunk cleanup is best-effort and must not
+	// block the response. A 30-second timeout prevents goroutine leaks if the
+	// storage service is slow. Failures here are silent — GC will reclaim orphaned
+	// chunk objects on its next run.
 	if len(st.ChunkKeys) > 0 {
 		chunkKeys := st.ChunkKeys
 		tenantID := st.TenantID
@@ -425,7 +431,10 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		}
 	}
 
-	// publish push.completed event — best-effort, don't fail the push
+	// Publish push.completed event so downstream services (scanner, audit, webhook)
+	// can react to the push. Use the request context so traces are connected and
+	// the publish is cancelled if the broker is unreachable within the deadline.
+	// A failure here must not fail the push — the manifest is already committed.
 	payload, _ := json.Marshal(events.PushCompletedPayload{
 		RepositoryName: repoName,
 		Tag:            reference,
@@ -441,10 +450,12 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		Version:    "1.0",
 		Payload:    payload,
 	}
-	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Derive a bounded publish context from the request context so the trace
+	// span is correctly parented and the operation cannot outlive the request.
+	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pubCancel()
 	if err := r.publisher.Publish(pubCtx, events.RoutingPushCompleted, evt); err != nil {
-		// log but don't fail — the push itself succeeded
+		// Log but do not fail — the push itself succeeded and the event is best-effort.
 		fmt.Printf("warn: publish push.completed: %v\n", err)
 	}
 

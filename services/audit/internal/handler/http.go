@@ -39,6 +39,12 @@ type writeAuditRequest struct {
 // WriteEvent handles POST /audit/events.
 // Used by other internal services (e.g. auth) to record synchronous audit events.
 func (h *HTTPHandler) WriteEvent(w http.ResponseWriter, r *http.Request) {
+	// SEC-018: Enforce a per-handler body size limit as defence-in-depth.
+	// A server-level MaxBytesHandler wraps the entire mux (see server.go), but
+	// applying the limit here too prevents an oversized audit event from being
+	// processed even if the server-level wrapper is ever removed or misconfigured.
+	// 1 MiB is generous for an audit event; legitimate events are well under 64 KiB.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req writeAuditRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)

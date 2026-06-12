@@ -141,7 +141,9 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
 	}
 
-	// REM-002: check revocation by JTI in Redis
+	// Check revocation list — the key TTL matches token lifetime so an expired
+	// token's revocation entry is self-cleaning (no background cleanup needed).
+	// See RevokeToken for the TTL derivation that makes this guarantee hold.
 	revoked, err := s.isRevoked(ctx, claims.ID)
 	if err != nil {
 		return nil, fmt.Errorf("check revocation: %w", err)
@@ -153,12 +155,21 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 }
 
 // RevokeToken stores the token's JTI in Redis so ValidateToken rejects it.
-// TTL is derived from the token's remaining lifetime (REM-002) — never a constant.
+//
+// SEC-005: The Redis TTL must equal the token's remaining lifetime — not a fixed value.
+// This way the revocation entry expires exactly when the JWT itself would expire,
+// preventing both memory leaks (TTL too long) and revocation bypass (TTL too short).
+// ValidateToken relies on this coupling to avoid a separate GC process for stale entries.
 func (s *Service) RevokeToken(ctx context.Context, claims *Claims) error {
+	// Compute remaining lifetime from the token's own expiry claim.
 	ttl := time.Until(claims.ExpiresAt.Time)
 	if ttl <= 0 {
-		return nil // token already expired; nothing to store
+		// Token already expired — no need to store a revocation entry; it is
+		// already invalid and any existing Redis entry will have auto-expired.
+		return nil
 	}
+	// Store the JTI with a TTL equal to the remaining token lifetime so the
+	// entry disappears exactly when the token would naturally cease to be valid.
 	return s.redis.Set(ctx, revokedKey(claims.ID), "1", ttl).Err()
 }
 
@@ -238,9 +249,13 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keyID uuid.UUID, rawSecret
 		return nil, ErrInvalidCredentials
 	}
 
-	// Update last-used timestamp asynchronously — a failure here should not fail the auth call
+	// Detach from request context: LastUsed updates are best-effort and must not
+	// block or fail the auth response. A 5-second timeout prevents goroutine leaks
+	// if the database is slow or temporarily unavailable.
 	go func() {
-		_ = s.apiKeys.TouchLastUsed(context.Background(), key.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.apiKeys.TouchLastUsed(ctx, key.ID)
 	}()
 
 	return key, nil
