@@ -57,6 +57,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer storageConn.Close()
 
+	// Trigger eager connection establishment so the first inbound request doesn't
+	// stall while the gRPC TCP/HTTP-2 handshake completes.
+	authConn.Connect()
+	metaConn.Connect()
+	storageConn.Connect()
+
 	// RabbitMQ publisher
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
@@ -66,8 +72,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// Service layer
 	uploadStore := service.NewUploadStore(rdb)
+	referrerStore := service.NewReferrerStore(rdb)
 	authClient := service.NewAuthClient(authConn, rdb)
-	registry := service.NewRegistry(metaConn, storageConn, uploadStore, pub)
+	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub)
 
 	// HTTP handler
 	h := handler.New(authClient, registry, cfg.AuthRealm)

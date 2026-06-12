@@ -31,6 +31,7 @@ type Registry struct {
 	metadata  metadatav1.MetadataServiceClient
 	storage   storagev1.StorageServiceClient
 	uploads   *UploadStore
+	referrers *ReferrerStore
 	publisher *publisher.Publisher
 }
 
@@ -39,12 +40,14 @@ func NewRegistry(
 	metaConn *grpc.ClientConn,
 	storageConn *grpc.ClientConn,
 	uploads *UploadStore,
+	referrers *ReferrerStore,
 	pub *publisher.Publisher,
 ) *Registry {
 	return &Registry{
 		metadata:  metadatav1.NewMetadataServiceClient(metaConn),
 		storage:   storagev1.NewStorageServiceClient(storageConn),
 		uploads:   uploads,
+		referrers: referrers,
 		publisher: pub,
 	}
 }
@@ -146,7 +149,7 @@ func (r *Registry) DeleteBlob(ctx context.Context, tenantID, repoID, digest stri
 	if _, err := r.metadata.UnlinkBlob(ctx, &metadatav1.UnlinkBlobRequest{
 		RepoId:     repoID,
 		BlobDigest: digest,
-	}); err != nil {
+	}); err != nil && !isGRPCNotFound(err) {
 		return fmt.Errorf("unlink blob rpc: %w", err)
 	}
 	return nil
@@ -173,44 +176,46 @@ func (r *Registry) GetUpload(ctx context.Context, uploadUUID string) (*UploadSta
 	return r.uploads.Get(ctx, uploadUUID)
 }
 
-// AppendChunk streams a chunk to storage and advances the offset.
-// The caller is responsible for verifying Content-Range against the current offset.
-func (r *Registry) AppendChunk(ctx context.Context, uploadUUID string, chunk io.Reader, chunkSize int64) (int64, error) {
+// AppendChunk stores a PATCH chunk as a temp blob object and advances the offset.
+// Each chunk is stored under uploads/{tenantID}/{uploadUUID}/{seq} and its key is
+// appended to UploadState.ChunkKeys. CompleteUpload then assembles them in order.
+// We avoid UploadPart (MinIO multipart) because that requires a MinIO-issued upload
+// ID from NewMultipartUpload, which we do not have — the registry UUID is not valid.
+func (r *Registry) AppendChunk(ctx context.Context, uploadUUID string, chunk io.Reader, _ int64) (int64, error) {
 	st, err := r.uploads.Get(ctx, uploadUUID)
 	if err != nil {
 		return 0, err
 	}
 
-	// stream the chunk to storage using multipart (one "part" per PATCH)
-	stream, err := r.storage.UploadPart(ctx)
+	// Store this chunk as its own object; key encodes sequence position.
+	seqKey := fmt.Sprintf("uploads/%s/%s/%d", st.TenantID, uploadUUID, len(st.ChunkKeys))
+
+	stream, err := r.storage.PutBlob(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("open upload-part stream: %w", err)
+		return 0, fmt.Errorf("open put-blob stream: %w", err)
 	}
 
-	// first message: metadata
-	if err := stream.Send(&storagev1.UploadPartRequest{
-		Data: &storagev1.UploadPartRequest_Meta{
-			Meta: &storagev1.UploadPartMeta{
-				Key:      fmt.Sprintf("uploads/%s/%s/data", st.TenantID, uploadUUID),
-				UploadId: uploadUUID,
-				PartNum:  int32(st.Offset/chunkSize) + 1, // approximate part number
-				TenantId: st.TenantID,
+	if err := stream.Send(&storagev1.PutBlobRequest{
+		Data: &storagev1.PutBlobRequest_Meta{
+			Meta: &storagev1.PutBlobMeta{
+				Key:         seqKey,
+				ContentType: "application/octet-stream",
+				TenantId:    st.TenantID,
 			},
 		},
 	}); err != nil {
-		return 0, fmt.Errorf("send upload part meta: %w", err)
+		return 0, fmt.Errorf("send chunk meta: %w", err)
 	}
 
-	// stream data
 	buf := make([]byte, 64*1024)
 	var written int64
 	for {
 		n, rerr := chunk.Read(buf)
 		if n > 0 {
-			if err := stream.Send(&storagev1.UploadPartRequest{
-				Data: &storagev1.UploadPartRequest_Chunk{Chunk: buf[:n]},
+			if err := stream.Send(&storagev1.PutBlobRequest{
+				Data: &storagev1.PutBlobRequest_Chunk{Chunk: buf[:n]},
 			}); err != nil {
-				return written, fmt.Errorf("send chunk: %w", err)
+				return written, fmt.Errorf("send chunk data: %w", err)
 			}
 			written += int64(n)
 		}
@@ -223,9 +228,10 @@ func (r *Registry) AppendChunk(ctx context.Context, uploadUUID string, chunk io.
 	}
 
 	if _, err := stream.CloseAndRecv(); err != nil {
-		return written, fmt.Errorf("close upload part stream: %w", err)
+		return written, fmt.Errorf("close chunk stream: %w", err)
 	}
 
+	st.ChunkKeys = append(st.ChunkKeys, seqKey)
 	st.Offset += written
 	if err := r.uploads.Update(ctx, st); err != nil {
 		return written, fmt.Errorf("update upload state: %w", err)
@@ -233,23 +239,21 @@ func (r *Registry) AppendChunk(ctx context.Context, uploadUUID string, chunk io.
 	return written, nil
 }
 
-// CompleteUpload finalises an upload, verifies the digest, stores the blob, and returns the digest.
-func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDigest string, finalChunk io.Reader, chunkSize int64) (string, int64, error) {
+// CompleteUpload assembles all PATCH chunks (if any) followed by the final PUT body,
+// verifies the digest, writes the canonical blob, and cleans up temp chunk objects.
+func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDigest string, finalChunk io.Reader, _ int64) (string, int64, error) {
 	st, err := r.uploads.Get(ctx, uploadUUID)
 	if err != nil {
 		return "", 0, err
 	}
 
-	// If there's a final chunk (monolithic upload or last PATCH+PUT), stream it directly.
-	// For simplicity we stream everything via a single PutBlob to storage.
-	// In production the multipart assembly would happen here or in the storage service.
+	key := blobKey(st.TenantID, expectedDigest)
 
 	stream, err := r.storage.PutBlob(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("open put-blob stream: %w", err)
 	}
 
-	key := blobKey(st.TenantID, expectedDigest)
 	if err := stream.Send(&storagev1.PutBlobRequest{
 		Data: &storagev1.PutBlobRequest_Meta{
 			Meta: &storagev1.PutBlobMeta{
@@ -263,9 +267,38 @@ func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDiges
 	}
 
 	hash := sha256.New()
-	buf := make([]byte, 64*1024)
 	var totalBytes int64
 
+	// Replay any PATCH chunks that were stored as individual temp objects.
+	for _, chunkKey := range st.ChunkKeys {
+		chunkStream, err := r.storage.GetBlob(ctx, &storagev1.GetBlobRequest{
+			Key:      chunkKey,
+			TenantId: st.TenantID,
+		})
+		if err != nil {
+			return "", 0, fmt.Errorf("get chunk %s: %w", chunkKey, err)
+		}
+		for {
+			resp, err := chunkStream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return "", 0, fmt.Errorf("recv chunk %s: %w", chunkKey, err)
+			}
+			data := resp.GetChunk()
+			hash.Write(data)
+			if err := stream.Send(&storagev1.PutBlobRequest{
+				Data: &storagev1.PutBlobRequest_Chunk{Chunk: data},
+			}); err != nil {
+				return "", 0, fmt.Errorf("forward chunk data: %w", err)
+			}
+			totalBytes += int64(len(data))
+		}
+	}
+
+	// Stream the PUT body (non-empty for monolithic uploads or a final PATCH+PUT).
+	buf := make([]byte, 64*1024)
 	for {
 		n, rerr := finalChunk.Read(buf)
 		if n > 0 {
@@ -273,7 +306,7 @@ func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDiges
 			if err := stream.Send(&storagev1.PutBlobRequest{
 				Data: &storagev1.PutBlobRequest_Chunk{Chunk: buf[:n]},
 			}); err != nil {
-				return "", 0, fmt.Errorf("send blob chunk: %w", err)
+				return "", 0, fmt.Errorf("send final chunk: %w", err)
 			}
 			totalBytes += int64(n)
 		}
@@ -281,25 +314,35 @@ func (r *Registry) CompleteUpload(ctx context.Context, uploadUUID, expectedDiges
 			break
 		}
 		if rerr != nil {
-			return "", 0, fmt.Errorf("read blob: %w", rerr)
+			return "", 0, fmt.Errorf("read final chunk: %w", rerr)
 		}
 	}
 
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
+	if _, err := stream.CloseAndRecv(); err != nil {
 		return "", 0, fmt.Errorf("close put-blob stream: %w", err)
 	}
 
 	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
 	if expectedDigest != "" && actualDigest != expectedDigest {
-		// delete what we stored since digest is wrong
 		ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = r.storage.DeleteBlob(ctx2, &storagev1.DeleteBlobRequest{Key: key, TenantId: st.TenantID})
 		return "", 0, ErrDigestMismatch
 	}
 
-	_ = resp
+	// Delete temp chunk objects asynchronously — best-effort cleanup.
+	if len(st.ChunkKeys) > 0 {
+		chunkKeys := st.ChunkKeys
+		tenantID := st.TenantID
+		go func() {
+			ctx2, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			for _, ck := range chunkKeys {
+				_, _ = r.storage.DeleteBlob(ctx2, &storagev1.DeleteBlobRequest{Key: ck, TenantId: tenantID})
+			}
+		}()
+	}
+
 	_ = r.uploads.Delete(ctx, uploadUUID)
 	return actualDigest, totalBytes, nil
 }
@@ -311,8 +354,24 @@ func (r *Registry) CancelUpload(ctx context.Context, uploadUUID string) error {
 
 // --- Manifest operations ---
 
+// manifestFields is used to extract subject/artifactType/annotations from a manifest body.
+// Per OCI spec §6.2, artifactType falls back to config.mediaType when the top-level field is absent.
+type manifestFields struct {
+	Subject *struct {
+		MediaType string `json:"mediaType"`
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+	} `json:"subject"`
+	ArtifactType string `json:"artifactType"`
+	Config       *struct {
+		MediaType string `json:"mediaType"`
+	} `json:"config"`
+	Annotations map[string]string `json:"annotations"`
+}
+
 // PutManifest stores a manifest, creates/updates the tag if reference is a tag, and publishes push.completed.
-func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, reference, mediaType string, rawJSON []byte, pushedBy string) (string, error) {
+// Returns (digest, subjectDigest, error); subjectDigest is non-empty when the manifest contains a subject field.
+func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, reference, mediaType string, rawJSON []byte, pushedBy string) (string, string, error) {
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(rawJSON))
 
 	ctx5, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -327,7 +386,7 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		SizeBytes: int64(len(rawJSON)),
 	})
 	if err != nil {
-		return "", fmt.Errorf("put manifest rpc: %w", err)
+		return "", "", fmt.Errorf("put manifest rpc: %w", err)
 	}
 
 	// if reference is a tag name, also upsert the tag
@@ -338,7 +397,31 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 			Name:           reference,
 			ManifestDigest: digest,
 		}); err != nil {
-			return "", fmt.Errorf("put tag rpc: %w", err)
+			return "", "", fmt.Errorf("put tag rpc: %w", err)
+		}
+	}
+
+	// Parse manifest for subject field; if present, register this manifest as a referrer.
+	var subjectDigest string
+	var mf manifestFields
+	if json.Unmarshal(rawJSON, &mf) == nil && mf.Subject != nil && digestRE.MatchString(mf.Subject.Digest) {
+		subjectDigest = mf.Subject.Digest
+		// Effective artifact type: top-level field takes precedence; fall back to
+		// config.mediaType per OCI spec §6.2 so config-based artifacts filter correctly.
+		effectiveArtifactType := mf.ArtifactType
+		if effectiveArtifactType == "" && mf.Config != nil {
+			effectiveArtifactType = mf.Config.MediaType
+		}
+		desc := ReferrerDescriptor{
+			MediaType:    mediaType,
+			Digest:       digest,
+			Size:         int64(len(rawJSON)),
+			ArtifactType: effectiveArtifactType,
+			Annotations:  mf.Annotations,
+		}
+		if err := r.referrers.Add(ctx5, tenantID, repoName, subjectDigest, desc); err != nil {
+			// best-effort — referrer tracking failure does not fail the push
+			fmt.Printf("warn: store referrer: %v\n", err)
 		}
 	}
 
@@ -365,7 +448,26 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		fmt.Printf("warn: publish push.completed: %v\n", err)
 	}
 
-	return digest, nil
+	return digest, subjectDigest, nil
+}
+
+// GetReferrers returns the list of manifests that reference the given subject digest.
+// If artifactType is non-empty the list is filtered to that type and filtered=true is returned.
+func (r *Registry) GetReferrers(ctx context.Context, tenantID, repoName, subjectDigest, artifactType string) ([]ReferrerDescriptor, bool, error) {
+	all, err := r.referrers.List(ctx, tenantID, repoName, subjectDigest)
+	if err != nil {
+		return nil, false, err
+	}
+	if artifactType == "" {
+		return all, false, nil
+	}
+	filtered := make([]ReferrerDescriptor, 0, len(all))
+	for _, d := range all {
+		if d.ArtifactType == artifactType {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered, true, nil
 }
 
 // GetManifest retrieves a manifest by digest or tag reference.
@@ -403,38 +505,31 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 	return m, nil
 }
 
-// DeleteManifest removes a manifest and its tag (if any).
+// DeleteManifest removes a manifest by digest, or only a tag by name.
+// Per OCI spec §4.4: when the reference is a tag, ONLY the tag is deleted;
+// the underlying manifest remains accessible by digest.
 func (r *Registry) DeleteManifest(ctx context.Context, tenantID, repoID, reference string) error {
 	ctx5, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	digest := reference
 	if !digestRE.MatchString(reference) {
-		tag, err := r.metadata.GetTag(ctx5, &metadatav1.GetTagRequest{
-			RepoId:   repoID,
-			TenantId: tenantID,
-			Name:     reference,
-		})
-		if err != nil {
-			if isGRPCNotFound(err) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get tag rpc: %w", err)
-		}
-		digest = tag.GetManifestDigest()
 		if _, err := r.metadata.DeleteTag(ctx5, &metadatav1.DeleteTagRequest{
 			RepoId:   repoID,
 			TenantId: tenantID,
 			Name:     reference,
 		}); err != nil {
+			if isGRPCNotFound(err) {
+				return ErrNotFound
+			}
 			return fmt.Errorf("delete tag rpc: %w", err)
 		}
+		return nil
 	}
 
 	if _, err := r.metadata.DeleteManifest(ctx5, &metadatav1.DeleteManifestRequest{
 		RepoId:   repoID,
 		TenantId: tenantID,
-		Digest:   digest,
+		Digest:   reference,
 	}); err != nil {
 		if isGRPCNotFound(err) {
 			return ErrNotFound

@@ -51,7 +51,8 @@ func (a *AuthClient) ValidateBearer(ctx context.Context, token string) (*TokenCl
 		}
 	}
 
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Allow 15s for the first call, which must also establish the gRPC connection.
+	rpcCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	resp, err := a.grpc.ValidateToken(rpcCtx, &authv1.ValidateTokenRequest{Token: token})

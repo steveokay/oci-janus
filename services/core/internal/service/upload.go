@@ -13,10 +13,11 @@ const uploadTTL = time.Hour
 
 // UploadState is persisted in Redis for the lifetime of a chunked blob upload.
 type UploadState struct {
-	UUID     string `json:"uuid"`
-	TenantID string `json:"tenant_id"`
-	RepoName string `json:"repo_name"`
-	Offset   int64  `json:"offset"`
+	UUID      string   `json:"uuid"`
+	TenantID  string   `json:"tenant_id"`
+	RepoName  string   `json:"repo_name"`
+	Offset    int64    `json:"offset"`
+	ChunkKeys []string `json:"chunk_keys,omitempty"` // temp storage keys written by PATCH requests
 }
 
 // UploadStore manages upload state in Redis.

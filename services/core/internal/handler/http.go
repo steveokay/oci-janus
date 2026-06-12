@@ -15,6 +15,17 @@ import (
 	"github.com/steveokay/oci-janus/services/core/internal/service"
 )
 
+// responseWriter wraps http.ResponseWriter to capture the status code for logging.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 const (
 	mediaTypeDockerManifestV2 = "application/vnd.docker.distribution.manifest.v2+json"
 	mediaTypeOCIManifest      = "application/vnd.oci.image.manifest.v1+json"
@@ -47,6 +58,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 // dispatchOCI routes all /v2/ requests by path structure.
 // All OCI paths follow: /v2/<name>/(<operation>) where <name> = org/repo.
 func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
+	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+	w = rw
+	defer func() {
+		slog.InfoContext(r.Context(), "oci request",
+			"method", r.Method, "path", r.URL.Path, "status", rw.status)
+	}()
 	path := strings.TrimPrefix(r.URL.Path, "/v2")
 	path = strings.Trim(path, "/")
 
@@ -60,13 +77,13 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 	n := len(segments)
 
 	switch {
-	// /v2/<name>/tags/list — n>=4
-	case n >= 4 && segments[n-2] == "tags" && segments[n-1] == "list":
+	// /v2/<name>/tags/list — n>=3 (name may be single-segment for cross-repo operations)
+	case n >= 3 && segments[n-2] == "tags" && segments[n-1] == "list":
 		name := strings.Join(segments[:n-2], "/")
 		h.handleTagsList(w, r, name)
 
-	// /v2/<name>/blobs/uploads/<uuid> — n>=5
-	case n >= 5 && segments[n-3] == "blobs" && segments[n-2] == "uploads":
+	// /v2/<name>/blobs/uploads/<uuid> — n>=4
+	case n >= 4 && segments[n-3] == "blobs" && segments[n-2] == "uploads":
 		name := strings.Join(segments[:n-3], "/")
 		uploadUUID := segments[n-1]
 		switch r.Method {
@@ -82,8 +99,8 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 			ociError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 		}
 
-	// /v2/<name>/blobs/uploads  (POST — trailing slash stripped) — n>=4
-	case n >= 4 && segments[n-2] == "blobs" && segments[n-1] == "uploads":
+	// /v2/<name>/blobs/uploads  (POST — trailing slash stripped) — n>=3
+	case n >= 3 && segments[n-2] == "blobs" && segments[n-1] == "uploads":
 		name := strings.Join(segments[:n-2], "/")
 		if r.Method != http.MethodPost {
 			ociError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
@@ -91,8 +108,8 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleInitiateUpload(w, r, name)
 
-	// /v2/<name>/manifests/<reference> — n>=4
-	case n >= 4 && segments[n-2] == "manifests":
+	// /v2/<name>/manifests/<reference> — n>=3
+	case n >= 3 && segments[n-2] == "manifests":
 		name := strings.Join(segments[:n-2], "/")
 		ref := segments[n-1]
 		switch r.Method {
@@ -108,8 +125,8 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 			ociError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 		}
 
-	// /v2/<name>/blobs/<digest> — n>=4
-	case n >= 4 && segments[n-2] == "blobs":
+	// /v2/<name>/blobs/<digest> — n>=3
+	case n >= 3 && segments[n-2] == "blobs":
 		name := strings.Join(segments[:n-2], "/")
 		digest := segments[n-1]
 		switch r.Method {
@@ -120,6 +137,16 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 		case http.MethodDelete:
 			h.handleDeleteBlob(w, r, name, digest)
 		default:
+			ociError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
+		}
+
+	// /v2/<name>/referrers/<digest> — OCI referrers API — n>=3
+	case n >= 3 && segments[n-2] == "referrers":
+		name := strings.Join(segments[:n-2], "/")
+		digest := segments[n-1]
+		if r.Method == http.MethodGet {
+			h.handleReferrers(w, r, name, digest)
+		} else {
 			ociError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 		}
 
@@ -163,7 +190,7 @@ func (h *Handler) authenticate(r *http.Request) (*service.TokenClaims, error) {
 func (h *Handler) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 	_, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -171,8 +198,14 @@ func (h *Handler) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("{}"))
 }
 
-func (h *Handler) challengeAuth(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="registry-core"`, h.authRealm))
+// challengeAuth sends a 401 Bearer challenge. scope should be
+// "repository:<name>:<actions>" for resource endpoints, or "" for /v2/.
+func (h *Handler) challengeAuth(w http.ResponseWriter, scope string) {
+	challenge := fmt.Sprintf(`Bearer realm=%q,service="registry-core"`, h.authRealm)
+	if scope != "" {
+		challenge += fmt.Sprintf(`,scope=%q`, scope)
+	}
+	w.Header().Set("WWW-Authenticate", challenge)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	writeErrors(w, ociErr{Code: "UNAUTHORIZED", Message: "authentication required"})
@@ -183,7 +216,7 @@ func (h *Handler) challengeAuth(w http.ResponseWriter) {
 func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
@@ -191,7 +224,7 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 
@@ -237,11 +270,11 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 
@@ -272,11 +305,11 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 
@@ -306,11 +339,11 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
@@ -337,7 +370,7 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	digest, err := h.registry.PutManifest(
+	digest, subjectDigest, err := h.registry.PutManifest(
 		r.Context(), tenantID, repo.GetRepoId(), name, reference, mediaType, body, claims.UserID,
 	)
 	if err != nil {
@@ -348,17 +381,21 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, digest))
+	// OCI-Subject signals to clients that this manifest is a referrer; required by OCI spec §4.5.
+	if subjectDigest != "" {
+		w.Header().Set("OCI-Subject", subjectDigest)
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
 func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
 	if !claims.HasAction(name, "delete") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
 
@@ -385,11 +422,11 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -415,11 +452,11 @@ func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, d
 func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -450,11 +487,11 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, di
 func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
 	if !claims.HasAction(name, "delete") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -485,21 +522,20 @@ func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name,
 func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, name string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
-		return
-	}
-	if err := service.ValidateName(name); err != nil {
-		ociError(w, http.StatusBadRequest, "NAME_INVALID", "invalid repository name")
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 
-	// cross-repo blob mount: ?from=<repo>&mount=<digest>
+	// Cross-repo blob mount: ?mount=<digest>&from=<repo>
+	// Per OCI spec §4.6: both parameters MUST be present to attempt mount;
+	// if only ?mount is given, the registry MUST begin a regular upload (202).
 	mountDigest := r.URL.Query().Get("mount")
-	if mountDigest != "" && digestRE.MatchString(mountDigest) {
+	fromRepo := r.URL.Query().Get("from")
+	if mountDigest != "" && fromRepo != "" && digestRE.MatchString(mountDigest) {
 		exists, _, _ := h.registry.BlobExists(r.Context(), claims.TenantID, mountDigest)
 		if exists {
 			w.Header().Set("Docker-Content-Digest", mountDigest)
@@ -524,11 +560,11 @@ func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, n
 func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 
@@ -542,8 +578,12 @@ func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 
+	rangeEnd := st.Offset - 1
+	if rangeEnd < 0 {
+		rangeEnd = 0
+	}
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadUUID))
-	w.Header().Set("Range", fmt.Sprintf("0-%d", st.Offset))
+	w.Header().Set("Range", fmt.Sprintf("0-%d", rangeEnd))
 	w.Header().Set("Docker-Upload-UUID", uploadUUID)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -551,12 +591,34 @@ func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, 
 func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
+	}
+
+	// Validate Content-Range if present — OCI spec requires 416 when start != current offset.
+	if cr := r.Header.Get("Content-Range"); cr != "" {
+		start, _, ok := parseContentRange(cr)
+		if !ok {
+			ociError(w, http.StatusRequestedRangeNotSatisfiable, "BLOB_UPLOAD_INVALID", "invalid Content-Range header")
+			return
+		}
+		st, err := h.registry.GetUpload(r.Context(), uploadUUID)
+		if err == service.ErrUploadNotFound {
+			ociError(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
+			return
+		}
+		if err != nil {
+			ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
+			return
+		}
+		if start != st.Offset {
+			ociError(w, http.StatusRequestedRangeNotSatisfiable, "BLOB_UPLOAD_INVALID", "content range start does not match current offset")
+			return
+		}
 	}
 
 	_, err = h.registry.AppendChunk(r.Context(), uploadUUID, r.Body, r.ContentLength)
@@ -585,11 +647,11 @@ func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name
 func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 
@@ -622,11 +684,11 @@ func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, n
 func (h *Handler) handleCancelUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
 	claims, err := h.authenticate(r)
 	if err != nil {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w)
+		h.challengeAuth(w, "repository:"+name+":push")
 		return
 	}
 
@@ -657,4 +719,75 @@ func ociError(w http.ResponseWriter, statusCode int, code, message string) {
 
 func writeErrors(w http.ResponseWriter, errs ...ociErr) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"errors": errs})
+}
+
+// handleReferrers implements GET /v2/<name>/referrers/<digest> per OCI Distribution Spec v1.1 §4.5.
+// It returns an OCI image index containing all manifests that reference the given subject digest.
+// An optional ?artifactType= query parameter filters the results; when filtering is applied,
+// OCI-Filters-Applied: artifactType is set in the response.
+func (h *Handler) handleReferrers(w http.ResponseWriter, r *http.Request, name, digest string) {
+	claims, err := h.authenticate(r)
+	if err != nil {
+		h.challengeAuth(w, "repository:"+name+":pull")
+		return
+	}
+	if !claims.HasAction(name, "pull") {
+		h.challengeAuth(w, "repository:"+name+":pull")
+		return
+	}
+	if !digestRE.MatchString(digest) {
+		ociError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
+		return
+	}
+
+	artifactType := r.URL.Query().Get("artifactType")
+
+	descs, filtered, err := h.registry.GetReferrers(r.Context(), claims.TenantID, name, digest, artifactType)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "get referrers", "err", err)
+		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
+		return
+	}
+
+	// OCI spec §4.5.1: manifests field must be a non-null array (empty if no referrers).
+	if descs == nil {
+		descs = []service.ReferrerDescriptor{}
+	}
+
+	resp := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests":     descs,
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+	// Only set OCI-Filters-Applied when we actually applied a filter (OCI spec §4.5.1).
+	if filtered {
+		w.Header().Set("OCI-Filters-Applied", "artifactType")
+	}
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// parseContentRange parses an HTTP Content-Range header.
+// Supports both OCI Distribution Spec format ("0-20") and RFC 7233 format
+// ("bytes 0-20/21" or "bytes 0-20/*"). Returns (start, end, true) on success.
+func parseContentRange(s string) (start, end int64, ok bool) {
+	// Strip optional RFC 7233 "bytes " unit prefix.
+	s = strings.TrimPrefix(s, "bytes ")
+	// Strip optional "/<total>" suffix.
+	if idx := strings.IndexByte(s, '/'); idx >= 0 {
+		s = s[:idx]
+	}
+	idx := strings.IndexByte(s, '-')
+	if idx < 0 {
+		return 0, 0, false
+	}
+	var errS, errE error
+	start, errS = strconv.ParseInt(s[:idx], 10, 64)
+	end, errE = strconv.ParseInt(s[idx+1:], 10, 64)
+	if errS != nil || errE != nil {
+		return 0, 0, false
+	}
+	return start, end, true
 }
