@@ -112,15 +112,17 @@ function LoginPage() {
           <span className="text-xl font-bold text-[#0b1c30]">ContainerRegistry</span>
         </div>
         <div className="flex items-center gap-4">
+          {/* label-caps in the reference is 12px/700/0.05em tracking but NOT text-transform:uppercase
+              — the reference renders "Documentation" and "Support" in mixed case */}
           <a
             href="#"
-            className="text-xs font-bold uppercase tracking-widest text-[#44474d] hover:text-[#000917] transition-colors"
+            className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917] transition-colors"
           >
             Documentation
           </a>
           <a
             href="#"
-            className="text-xs font-bold uppercase tracking-widest text-[#44474d] hover:text-[#000917] transition-colors"
+            className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917] transition-colors"
           >
             Support
           </a>
@@ -150,8 +152,8 @@ function LoginPage() {
           </div>
         </div>
 
-        {/* Login card */}
-        <div className="w-full max-w-[440px] login-card-blur border border-[#c4c6cd] p-6 md:p-8 shadow-lg relative z-10 rounded-sm">
+        {/* Login card — rounded-[4px] matches reference's custom "lg" = 0.25rem border-radius */}
+        <div className="w-full max-w-[440px] login-card-blur border border-[#c4c6cd] p-6 md:p-8 shadow-lg relative z-10 rounded-[4px]">
           {/* Heading */}
           <div className="mb-8">
             <h1 className="text-[28px] leading-9 font-semibold text-[#0b1c30] mb-1">
@@ -192,7 +194,8 @@ function LoginPage() {
                   aria-invalid={!!errors.username}
                   aria-describedby={errors.username ? 'username-error' : undefined}
                   className={[
-                    'w-full pl-12 pr-4 py-2 bg-[#eff4ff] border rounded-lg text-sm',
+                    // rounded-[4px] matches reference rounded-lg = 0.25rem (custom scale overrides Tailwind default 8px)
+                    'w-full pl-12 pr-4 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
                     'focus:outline-none focus:ring-0 transition-all',
                     errors.username
                       ? 'border-[#ba1a1a] focus:border-[#ba1a1a]'
@@ -217,9 +220,10 @@ function LoginPage() {
                 >
                   Password
                 </label>
+                {/* label-caps: 12px/700/0.05em — NOT uppercase; reference renders "Forgot Password?" in mixed case */}
                 <a
                   href="#"
-                  className="text-xs font-bold uppercase tracking-widest text-[#2f6096] hover:underline"
+                  className="text-xs font-bold tracking-[0.05em] text-[#2f6096] hover:underline"
                 >
                   Forgot Password?
                 </a>
@@ -237,7 +241,8 @@ function LoginPage() {
                   aria-invalid={!!errors.password}
                   aria-describedby={errors.password ? 'password-error' : undefined}
                   className={[
-                    'w-full pl-12 pr-12 py-2 bg-[#eff4ff] border rounded-lg text-sm',
+                    // rounded-[4px] matches reference rounded-lg = 0.25rem (custom scale overrides Tailwind default 8px)
+                    'w-full pl-12 pr-12 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
                     'focus:outline-none focus:ring-0 transition-all',
                     errors.password
                       ? 'border-[#ba1a1a] focus:border-[#ba1a1a]'
@@ -270,11 +275,12 @@ function LoginPage() {
               )}
             </div>
 
-            {/* Submit */}
+            {/* Submit — py-4 (16px) matches reference py-md=16px; mt-6 (24px) matches mt-lg=24px;
+                text-[20px] leading-7 font-semibold matches headline-md: 20px/28px/600 */}
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3 mt-2 bg-[#0d2137] text-white text-base font-semibold rounded-lg
+              className="w-full py-4 mt-6 bg-[#0d2137] text-white text-[20px] leading-7 font-semibold rounded-[4px]
                          hover:opacity-90 active:scale-[0.98] transition-all
                          flex items-center justify-center gap-2
                          disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
@@ -302,11 +308,12 @@ function LoginPage() {
             <div className="flex-grow border-t border-[#c4c6cd]" />
           </div>
 
-          {/* SSO */}
+          {/* SSO — py-4 (16px) matches reference py-md=16px; text-[20px] matches headline-md;
+              rounded-[4px] matches reference rounded-lg=0.25rem; hover bg matches surface-container-low */}
           <button
             type="button"
-            className="w-full py-3 border border-[#c4c6cd] bg-white text-[#0b1c30] text-base font-semibold
-                       rounded-lg hover:bg-[#eff4ff] active:scale-[0.98] transition-all
+            className="w-full py-4 border border-[#c4c6cd] bg-white text-[#0b1c30] text-[20px] leading-7 font-semibold
+                       rounded-[4px] hover:bg-[#eff4ff] active:scale-[0.98] transition-all
                        flex items-center justify-center gap-2"
           >
             {/* ShieldCheck maps to shield_person / verified_user from Material */}
@@ -338,19 +345,20 @@ function LoginPage() {
               FIPS 140-2 Compliant Registry
             </span>
           </div>
+          {/* label-caps is 12px/700/0.05em tracking — reference renders these in mixed case, NOT all-caps */}
           <div className="flex items-center gap-8">
-            <span className="text-xs font-bold uppercase tracking-widest text-[#44474d]">
+            <span className="text-xs font-bold tracking-[0.05em] text-[#44474d]">
               © 2024 ContainerRegistry
             </span>
             <a
               href="#"
-              className="text-xs font-bold uppercase tracking-widest text-[#44474d] hover:text-[#000917]"
+              className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917]"
             >
               Privacy Policy
             </a>
             <a
               href="#"
-              className="text-xs font-bold uppercase tracking-widest text-[#44474d] hover:text-[#000917]"
+              className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917]"
             >
               Terms of Service
             </a>
