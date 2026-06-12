@@ -33,10 +33,13 @@ Thumbs.db
 *.swo
 
 # Frontend
-ui/node_modules/
-ui/dist/
-ui/.env
-ui/.env.local
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# Dev Playwright screenshots
+frontend/*.png
 
 # Terraform
 infra/terraform/.terraform/

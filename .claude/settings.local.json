@@ -12,7 +12,8 @@
       "Bash(go build *)",
       "Bash(go work *)",
       "Bash(go test *)",
-      "Bash(go tool *)"
+      "Bash(go tool *)",
+      "Bash(git add *)"
     ]
   },
   "enableAllProjectMcpServers": true,
