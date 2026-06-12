@@ -1,10 +1,10 @@
-name: CI — ui
+name: CI — frontend
 
 on:
   push:
-    paths: ["ui/**"]
+    paths: ["frontend/**"]
   pull_request:
-    paths: ["ui/**"]
+    paths: ["frontend/**"]
 
 jobs:
   lint:
@@ -12,25 +12,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm, cache-dependency-path: ui/package-lock.json }
-      - run: cd ui && npm ci
-      - run: cd ui && npm run lint
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run lint
 
   typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm, cache-dependency-path: ui/package-lock.json }
-      - run: cd ui && npm ci && npm run typecheck
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: cd frontend && npm ci && npm run typecheck
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm, cache-dependency-path: ui/package-lock.json }
-      - run: cd ui && npm ci && npm run test -- --coverage
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: cd frontend && npm ci && npm run test -- --coverage
 
   build:
     runs-on: ubuntu-latest
@@ -38,17 +38,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm, cache-dependency-path: ui/package-lock.json }
-      - run: cd ui && npm ci && npm run build
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: cd frontend && npm ci && npm run build
       - name: Build Docker image
         run: |
           docker build \
-            -f ui/Dockerfile \
-            -t ghcr.io/steveokay/oci-janus/ui:${{ github.sha }} \
-            ui/
+            -f frontend/Dockerfile \
+            -t ghcr.io/steveokay/oci-janus/frontend:${{ github.sha }} \
+            frontend/
       - name: Scan image
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ghcr.io/steveokay/oci-janus/ui:${{ github.sha }}
+          image-ref: ghcr.io/steveokay/oci-janus/frontend:${{ github.sha }}
           exit-code: "1"
           severity: CRITICAL

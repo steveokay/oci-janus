@@ -93,7 +93,7 @@ github.com/<org>/registry/          # single git repo
 │   ├── audit/                      # Audit log writer + query API
 │   ├── gc/                         # Garbage collection worker
 │   └── tenant/                     # Tenant + custom domain management
-├── ui/                             # React/TypeScript frontend
+├── frontend/                       # React/TypeScript frontend
 ├── infra/                          # Helm charts, Docker Compose, Terraform, runbooks
 ├── .github/workflows/              # CI — path-filtered jobs per service
 ├── Makefile                        # Top-level: make build-all, make test-all, make lint-all
