@@ -5,7 +5,8 @@
       "Bash(docker network *)",
       "Bash(docker run *)",
       "Bash(docker push *)",
-      "Bash(docker pull *)"
+      "Bash(docker pull *)",
+      "PowerShell(docker run *)"
     ]
   },
   "enableAllProjectMcpServers": true,
