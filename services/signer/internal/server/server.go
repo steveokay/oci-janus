@@ -17,6 +17,7 @@ import (
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/services/signer/internal/config"
 	"github.com/steveokay/oci-janus/services/signer/internal/handler"
@@ -59,9 +60,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.
+	// SecureHeaders adds X-Content-Type-Options, X-Frame-Options to every response.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpMux,
+		Handler:           httpmiddleware.SecureHeaders(httpMux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

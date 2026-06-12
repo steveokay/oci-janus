@@ -19,7 +19,9 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
@@ -39,11 +41,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
-	poolCfg, err := pgxpool.ParseConfig(cfg.DBDSN)
+	// Use loader.DBConfig.PoolConfig() so that sslmode=disable is rejected at startup
+	// (SEC-031) and pool tuning defaults are applied consistently with other services.
+	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns}
+	poolCfg, err := tmpDB.PoolConfig()
 	if err != nil {
-		return fmt.Errorf("parse DB_DSN: %w", err)
+		return fmt.Errorf("build pool config: %w", err)
 	}
-	poolCfg.MaxConns = cfg.DBMaxConns
 	// Every connection in the runtime pool assumes the low-privilege role so that
 	// FORCE ROW LEVEL SECURITY on audit_events applies correctly (SEC-001).
 	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
@@ -100,9 +104,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.
+	// SecureHeaders is outermost so security headers appear on all responses including
+	// error responses from MaxBytesHandler before the inner mux runs.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           http.MaxBytesHandler(httpMux, 1*1024*1024),
+		Handler:           httpmiddleware.SecureHeaders(http.MaxBytesHandler(httpMux, 1*1024*1024)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

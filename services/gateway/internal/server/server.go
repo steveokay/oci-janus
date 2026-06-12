@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/services/gateway/internal/config"
 )
@@ -35,9 +36,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// ReadHeaderTimeout prevents Slowloris attacks where a client stalls connection
 	// setup by dribbling HTTP headers slowly. ReadTimeout and WriteTimeout bound
 	// the full request/response cycle — essential for a public-facing gateway.
+	// SecureHeaders adds X-Content-Type-Options, X-Frame-Options to every response.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpMux,
+		Handler:           httpmiddleware.SecureHeaders(httpMux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

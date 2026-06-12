@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -427,7 +428,7 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		}
 		if err := r.referrers.Add(ctx5, tenantID, repoName, subjectDigest, desc); err != nil {
 			// best-effort — referrer tracking failure does not fail the push
-			fmt.Printf("warn: store referrer: %v\n", err)
+			slog.WarnContext(ctx5, "store referrer failed (best-effort)", "error", err)
 		}
 	}
 
@@ -456,7 +457,7 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 	defer pubCancel()
 	if err := r.publisher.Publish(pubCtx, events.RoutingPushCompleted, evt); err != nil {
 		// Log but do not fail — the push itself succeeded and the event is best-effort.
-		fmt.Printf("warn: publish push.completed: %v\n", err)
+		slog.WarnContext(ctx, "push.completed publish failed (best-effort)", "error", err)
 	}
 
 	return digest, subjectDigest, nil

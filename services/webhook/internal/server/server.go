@@ -18,7 +18,9 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
@@ -35,11 +37,13 @@ import (
 
 // Run initialises all dependencies and starts the webhook service.
 func Run(ctx context.Context, cfg *config.Config) error {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DBDSN)
+	// Use loader.DBConfig.PoolConfig() so that sslmode=disable is rejected at startup
+	// (SEC-031) and pool tuning defaults are applied consistently with other services.
+	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns}
+	poolCfg, err := tmpDB.PoolConfig()
 	if err != nil {
-		return fmt.Errorf("parse DB_DSN: %w", err)
+		return fmt.Errorf("build pool config: %w", err)
 	}
-	poolCfg.MaxConns = cfg.DBMaxConns
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -109,9 +113,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.
+	// SecureHeaders adds X-Content-Type-Options, X-Frame-Options to every response.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpMux,
+		Handler:           httpmiddleware.SecureHeaders(httpMux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

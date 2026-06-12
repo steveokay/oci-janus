@@ -21,6 +21,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/config"
@@ -106,9 +107,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	mux.HandleFunc("GET /metrics", metricsHandler)
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.
+	// SecureHeaders is outermost so security headers appear on all responses.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           http.MaxBytesHandler(mux, 4<<20),
+		Handler:           httpmiddleware.SecureHeaders(http.MaxBytesHandler(mux, 4<<20)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

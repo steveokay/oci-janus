@@ -18,6 +18,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -86,13 +87,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		metrics.Handler().ServeHTTP(w, r)
 	})
 
+	// SecureHeaders is the outermost wrapper so security response headers appear on
+	// every response, including error responses emitted by MaxBytesHandler.
 	// ReadTimeout and WriteTimeout are both generous to accommodate blob streaming:
 	// clients may take tens of seconds to receive a large image layer over a slow link.
 	// ReadHeaderTimeout is short to prevent Slowloris attacks (attacker keeps connection
 	// open by sending headers one byte at a time).
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           http.MaxBytesHandler(mux, 1<<30), // 1 GiB total (individual endpoints impose stricter limits)
+		Handler:           httpmiddleware.SecureHeaders(http.MaxBytesHandler(mux, 1<<30)), // 1 GiB total (individual endpoints impose stricter limits)
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second, // 60s to allow large blob layer transfers to complete

@@ -20,6 +20,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -150,9 +151,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// WriteTimeout is generous (60s) because this service streams upstream blobs
 	// directly to Docker clients — transfers can take many seconds for large layers.
+	// SecureHeaders is outermost so security headers appear on all responses.
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           http.MaxBytesHandler(mux, 4*1024*1024), // 4 MiB body limit (blobs are streamed)
+		Handler:           httpmiddleware.SecureHeaders(http.MaxBytesHandler(mux, 4*1024*1024)), // 4 MiB body limit (blobs are streamed)
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second, // 60s to allow large upstream layer streaming

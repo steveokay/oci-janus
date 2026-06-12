@@ -37,6 +37,11 @@ func init() {
 		_, network, err := net.ParseCIDR(cidr)
 		if err == nil {
 			trustedProxyCIDRs = append(trustedProxyCIDRs, network)
+		} else {
+			// A malformed CIDR is skipped so startup is not blocked, but the operator
+			// should know their TRUSTED_PROXY_CIDRS value has an invalid entry because
+			// the remaining valid entries may not provide the expected coverage.
+			slog.Warn("TRUSTED_PROXY_CIDRS: invalid CIDR skipped", "entry", cidr, "error", err)
 		}
 	}
 }
