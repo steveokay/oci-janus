@@ -80,11 +80,12 @@ function TopNavBar() {
      * h-16 (64px) is the canonical top bar height used by both the nav and
      * the sidebar top offset (top-16 in SideNavBar).
      */
-    <header className="sticky top-0 z-50 h-16 bg-surface border-b border-outline-variant flex items-center px-md">
-      <div className="flex items-center justify-between w-full max-w-[1440px] mx-auto">
+    <header className="sticky top-0 z-50 h-16 bg-surface border-b border-outline-variant w-full">
+      {/* w-full so justify-between spreads items edge-to-edge across the full nav width */}
+      <div className="flex items-center justify-between h-full px-gutter w-full">
 
         {/* ── Left: wordmark + primary nav links ─────────────────────────── */}
-        <div className="flex items-center gap-xl">
+        <div className="flex items-center gap-[48px]">
           {/*
            * Wordmark — text only, no icon prefix, matching the reference design.
            * gap-xl (32px) between wordmark and nav links matches the reference's
@@ -95,7 +96,7 @@ function TopNavBar() {
           </span>
 
           {/* Top-level marketing/docs nav — lower visual weight than the wordmark */}
-          <nav className="hidden md:flex items-center gap-lg">
+          <nav className="hidden md:flex items-center gap-[32px]">
             <a
               href="#"
               className="text-body-md text-on-surface-variant hover:text-primary transition-colors"
@@ -272,7 +273,7 @@ function SideNavBar() {
       </button>
 
       {/* ── Main navigation links ────────────────────────────────────────── */}
-      <nav className="flex flex-col gap-xs flex-1" aria-label="Main navigation">
+      <nav className="flex flex-col gap-1 flex-1" aria-label="Main navigation">
         {mainNavItems.map((item) => (
           <SideNavLink key={item.to} item={item} />
         ))}
@@ -308,7 +309,7 @@ function SideNavLink({ item }: { item: NavItem }) {
     <Link
       to={item.to}
       className={[
-        'flex items-center gap-sm px-sm py-xs rounded-lg text-body-md transition-colors',
+        'flex items-center gap-sm px-sm py-2.5 rounded-lg text-body-md transition-colors',
         item.active
           ? 'bg-secondary-container text-on-secondary-container font-bold'
           : 'text-on-surface-variant hover:bg-surface-variant hover:text-on-surface',
