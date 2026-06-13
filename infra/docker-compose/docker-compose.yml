@@ -27,6 +27,7 @@ version: "3.9"
 #   registry-audit:     8088 (HTTP), 50059 (gRPC)
 #   registry-gc:        8089 (HTTP), 50060 (gRPC)
 #   registry-tenant:    8090 (HTTP), 50061 (gRPC)
+#   registry-management: 8091 (HTTP — REST/BFF, no gRPC server)
 #
 # Scanner requires a plugin binary; start it separately:
 #   docker compose --profile scanner up -d registry-scanner
@@ -615,6 +616,48 @@ services:
       - registry
     healthcheck:
       <<: *healthcheck
+      start_period: 10s
+    restart: unless-stopped
+
+  registry-management:
+    build:
+      context: ../../
+      dockerfile: services/management/Dockerfile
+      args:
+        SERVICE: management
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: registry-management
+      HTTP_ADDR: ":8085"
+      AUTH_GRPC_ADDR: registry-auth:50051
+      METADATA_GRPC_ADDR: registry-metadata:50051
+      # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
+      # Defaults to http://localhost:5173 inside the service for local dev.
+      CORS_ALLOWED_ORIGIN: http://localhost:5173
+      MTLS_CA_CERT_PATH: /certs/ca.crt
+      MTLS_CERT_PATH: /certs/management.crt
+      MTLS_KEY_PATH: /certs/management.key
+      LOG_FORMAT: text
+      LOG_LEVEL: info
+    volumes:
+      - certs_data:/certs:ro
+    ports:
+      # External 8091 avoids collision with registry-scanner (8085) in the scanner profile.
+      - "8091:8085"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+      registry-auth:
+        condition: service_healthy
+      registry-metadata:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://localhost:8085/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 10s
     restart: unless-stopped
 

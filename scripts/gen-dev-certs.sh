@@ -13,7 +13,7 @@ set -eu
 CERTS_DIR="${CERTS_DIR:-$(dirname "$0")/../certs}"
 mkdir -p "$CERTS_DIR"
 
-SERVICES="auth core storage metadata proxy scanner signer webhook audit gc tenant gateway"
+SERVICES="auth core storage metadata proxy scanner signer webhook audit gc tenant gateway management"
 
 # Install openssl if running inside Alpine (best-effort — skipped if no network)
 if ! command -v openssl > /dev/null 2>&1; then
