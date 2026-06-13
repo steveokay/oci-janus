@@ -17,6 +17,7 @@ import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authe
 import { Route as AuthenticatedDashboardRepoNameRouteImport } from './routes/_authenticated/dashboard/$repoName'
 import { Route as AuthenticatedDashboardRepoNameIndexRouteImport } from './routes/_authenticated/dashboard/$repoName/index'
 import { Route as AuthenticatedDashboardRepoNameScanRouteImport } from './routes/_authenticated/dashboard/$repoName/scan'
+import { Route as AuthenticatedDashboardRepoNameBuildsRouteImport } from './routes/_authenticated/dashboard/$repoName/builds'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -61,6 +62,12 @@ const AuthenticatedDashboardRepoNameScanRoute =
     path: '/scan',
     getParentRoute: () => AuthenticatedDashboardRepoNameRoute,
   } as any)
+const AuthenticatedDashboardRepoNameBuildsRoute =
+  AuthenticatedDashboardRepoNameBuildsRouteImport.update({
+    id: '/builds',
+    path: '/builds',
+    getParentRoute: () => AuthenticatedDashboardRepoNameRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -68,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRouteWithChildren
   '/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
   '/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
   '/dashboard/$repoName/': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
@@ -75,6 +83,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
+  '/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
   '/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
   '/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
@@ -86,6 +95,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRouteWithChildren
   '/_authenticated/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/_authenticated/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
   '/_authenticated/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
   '/_authenticated/dashboard/$repoName/': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/dashboard/$repoName'
     | '/dashboard/'
+    | '/dashboard/$repoName/builds'
     | '/dashboard/$repoName/scan'
     | '/dashboard/$repoName/'
   fileRoutesByTo: FileRoutesByTo
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/dashboard/$repoName/builds'
     | '/dashboard/$repoName/scan'
     | '/dashboard/$repoName'
   id:
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/_authenticated/dashboard/$repoName'
     | '/_authenticated/dashboard/'
+    | '/_authenticated/dashboard/$repoName/builds'
     | '/_authenticated/dashboard/$repoName/scan'
     | '/_authenticated/dashboard/$repoName/'
   fileRoutesById: FileRoutesById
@@ -182,16 +195,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRepoNameScanRouteImport
       parentRoute: typeof AuthenticatedDashboardRepoNameRoute
     }
+    '/_authenticated/dashboard/$repoName/builds': {
+      id: '/_authenticated/dashboard/$repoName/builds'
+      path: '/builds'
+      fullPath: '/dashboard/$repoName/builds'
+      preLoaderRoute: typeof AuthenticatedDashboardRepoNameBuildsRouteImport
+      parentRoute: typeof AuthenticatedDashboardRepoNameRoute
+    }
   }
 }
 
 interface AuthenticatedDashboardRepoNameRouteChildren {
+  AuthenticatedDashboardRepoNameBuildsRoute: typeof AuthenticatedDashboardRepoNameBuildsRoute
   AuthenticatedDashboardRepoNameScanRoute: typeof AuthenticatedDashboardRepoNameScanRoute
   AuthenticatedDashboardRepoNameIndexRoute: typeof AuthenticatedDashboardRepoNameIndexRoute
 }
 
 const AuthenticatedDashboardRepoNameRouteChildren: AuthenticatedDashboardRepoNameRouteChildren =
   {
+    AuthenticatedDashboardRepoNameBuildsRoute:
+      AuthenticatedDashboardRepoNameBuildsRoute,
     AuthenticatedDashboardRepoNameScanRoute:
       AuthenticatedDashboardRepoNameScanRoute,
     AuthenticatedDashboardRepoNameIndexRoute:
