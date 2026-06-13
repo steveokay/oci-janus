@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-13 (Sprint 4 COMPLETE; Sprint 5 active — dashboard UI shipped; services/management scaffolded; RBAC tracking added; CLAUDE.md §4.13 added)
+> Last updated: 2026-06-13 (Sprint 5 active — Security Scan Results + Build History screens shipped; management docker-compose wiring merged; frontend still on mock data)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -240,8 +240,8 @@ All decisions resolved. No blockers.
 | Login page — design, implementation, QA pass | DONE ✅ |
 | Repository Dashboard screen — UI | DONE ✅ |
 | Image Details & Tags screen — UI | IN PROGRESS |
-| Security Scan Results screen — UI | NOT STARTED |
-| Build History screen — UI | NOT STARTED |
+| Security Scan Results screen — UI | DONE ✅ |
+| Build History screen — UI | DONE ✅ |
 | Auth hook + token refresh logic | NOT STARTED |
 | Unit test coverage: auth 55%→80% | NOT STARTED |
 | Unit test coverage: core 18%→80% | NOT STARTED |
@@ -273,7 +273,7 @@ Listed in CLAUDE.md §1 Core Capabilities but never tracked as a work item. Work
 | CORS + RequestID middleware | `CORS_ALLOWED_ORIGIN` env var; preflight 204; X-Request-ID injection | DONE ✅ |
 | All route handlers | `GET /api/v1/stats`, `GET /api/v1/repositories`, single-repo, tags, scan, builds; all wrapped with `RequireAuth` | DONE ✅ |
 | `go mod tidy` + compile check | Run `go mod tidy` in `services/management/`; verify `go build ./...` from workspace | DONE ✅ |
-| Add to docker-compose | New container wired to `registry-auth` + `registry-metadata`; gateway routes `/api/v1/` to it | NOT STARTED |
+| Add to docker-compose | New container wired to `registry-auth` + `registry-metadata`; gateway routes `/api/v1/` to it | DONE ✅ |
 | Add proto `GetRepositoryByName` RPC | Replace `findRepoByName` stream-scan workaround in `handler.go` | NOT STARTED |
 | Wire frontend hooks | Replace mock data in dashboard with `useStats()` + `useRepositories()` TanStack Query hooks | NOT STARTED |
 
