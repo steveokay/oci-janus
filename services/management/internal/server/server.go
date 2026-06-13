@@ -13,8 +13,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/config"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -43,10 +46,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer metaConn.Close()
 
+	auditConn, err := grpc.NewClient(cfg.AuditGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+	if err != nil {
+		return fmt.Errorf("dial audit grpc: %w", err)
+	}
+	defer auditConn.Close()
+
+	// RabbitMQ publisher for scan.queued events (manually triggered scans).
+	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
+	if err != nil {
+		return fmt.Errorf("rabbitmq publisher: %w", err)
+	}
+	defer pub.Close()
+
 	authClient := authv1.NewAuthServiceClient(authConn)
 	metaClient := metadatav1.NewMetadataServiceClient(metaConn)
+	auditClient := auditv1.NewAuditServiceClient(auditConn)
 
-	h := handler.New(authClient, metaClient)
+	h := handler.New(authClient, metaClient, auditClient, pub)
 
 	mux := http.NewServeMux()
 	h.Register(mux)

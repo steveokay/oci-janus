@@ -110,6 +110,54 @@ func (r *Repository) Query(ctx context.Context, f QueryFilter) ([]*AuditEvent, e
 	return out, rows.Err()
 }
 
+// BuildHistoryRow is a single row returned by GetBuildHistory.
+type BuildHistoryRow struct {
+	ID          uuid.UUID
+	ActorID     string
+	Outcome     string
+	Metadata    json.RawMessage
+	OccurredAt  time.Time
+}
+
+// GetBuildHistory returns push/build audit events for a repository and tag,
+// ordered newest-first. The resource column format is "org/repo:tag". The query
+// uses a LIKE pattern so it covers both "push.image" and future build events.
+// limit is capped at 100 to prevent runaway queries.
+func (r *Repository) GetBuildHistory(ctx context.Context, tenantID uuid.UUID, repoID, tag string, limit int) ([]*BuildHistoryRow, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+
+	// The resource field stores "org/repo:tag". We match by repo_id embedded in
+	// the metadata JSON, filtering action = "push.image" for build history.
+	// We use metadata->>'repo_id' = $2 to avoid a LIKE scan across all resources.
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, actor_id, outcome, metadata, occurred_at
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND action    = 'push.image'
+		   AND metadata->>'repo_id' = $2
+		   AND ($3 = '' OR metadata->>'tag' = $3)
+		 ORDER BY occurred_at DESC
+		 LIMIT $4`,
+		tenantID, repoID, tag, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("audit GetBuildHistory: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*BuildHistoryRow
+	for rows.Next() {
+		e := &BuildHistoryRow{}
+		if err := rows.Scan(&e.ID, &e.ActorID, &e.Outcome, &e.Metadata, &e.OccurredAt); err != nil {
+			return nil, fmt.Errorf("audit GetBuildHistory scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // PurgeOlderThan deletes audit events older than cutoff. This is the only
 // deletion path and is used by the retention cleanup goroutine.
 func (r *Repository) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

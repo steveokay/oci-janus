@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package registry.audit.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/audit/v1;auditv1";
+
+import "google/protobuf/timestamp.proto";
+
+// AuditService exposes query operations over the append-only audit event store.
+service AuditService {
+  // GetBuildHistory returns the most recent push/build audit events for a
+  // specific tenant repository and tag, ordered newest-first.
+  rpc GetBuildHistory(GetBuildHistoryRequest) returns (GetBuildHistoryResponse);
+}
+
+// GetBuildHistoryRequest filters build history for a specific tag in a repository.
+message GetBuildHistoryRequest {
+  // tenant_id scopes the query to prevent cross-tenant data leakage.
+  string tenant_id = 1;
+  // repo_id is the UUID of the repository as stored in registry-metadata.
+  string repo_id   = 2;
+  // tag is the tag name to filter history by (e.g. "latest").
+  string tag       = 3;
+  // limit caps the number of returned records; 0 means use the service default (25).
+  int32  limit     = 4;
+}
+
+// BuildRecord represents a single push or build event from the audit trail.
+message BuildRecord {
+  // build_id is the UUID of the audit event row.
+  string build_id      = 1;
+  // status is derived from the audit outcome field ("success" | "failure").
+  string status        = 2;
+  // commit_hash is extracted from the event metadata.commit_hash field if present.
+  string commit_hash   = 3;
+  // triggered_by is the actor_id that performed the push.
+  string triggered_by  = 4;
+  // duration is a human-readable string extracted from event metadata (e.g. "3m 45s").
+  string duration      = 5;
+  // occurred_at is the timestamp of the audit event.
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+// GetBuildHistoryResponse contains the list of build records and the total count.
+message GetBuildHistoryResponse {
+  repeated BuildRecord builds = 1;
+  // total is the count of records returned (not the total in the database).
+  int32 total                 = 2;
+}

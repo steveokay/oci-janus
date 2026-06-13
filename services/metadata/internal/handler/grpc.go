@@ -200,3 +200,17 @@ func (h *MetadataHandler) GetScanResult(ctx context.Context, req *metadatav1.Get
 	sr, err := h.repo.GetScanResult(ctx, req.TenantId, req.ManifestDigest)
 	return sr, mapErr(err)
 }
+
+// GetTenantVulnerabilityCount returns the aggregated CRITICAL+HIGH vulnerability
+// counts across all completed scans for the tenant.
+func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
+	total, critical, high, err := h.repo.GetTenantVulnerabilityCount(ctx, req.TenantId)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.VulnerabilityCountResponse{
+		Total:         total,
+		CriticalCount: critical,
+		HighCount:     high,
+	}, nil
+}

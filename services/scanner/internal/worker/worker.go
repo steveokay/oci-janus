@@ -287,6 +287,45 @@ func ConsumerConfig() consumer.Config {
 	}
 }
 
+// ScanQueuedConsumerConfig returns the consumer.Config for the scan.queued queue.
+// This queue receives manually triggered scan requests from registry-management,
+// allowing scans to be started outside the normal push.completed flow.
+func ScanQueuedConsumerConfig() consumer.Config {
+	return consumer.Config{
+		Queue:      "scanner.scan.queued",
+		RoutingKey: events.RoutingScanQueued,
+		MaxRetries: 3,
+	}
+}
+
+// HandleScanQueued is the consumer.Handler for scan.queued events.
+// It parses the ScanQueuedPayload, allocates a scan_id, and enqueues the job.
+func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
+	var payload events.ScanQueuedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal scan.queued payload: %w", err)
+	}
+
+	scanID := uuid.New().String()
+	p.scanStore.Create(scanID, event.TenantID, payload.ManifestDigest, payload.RepositoryName)
+
+	p.Enqueue(scanJob{
+		tenantID:       event.TenantID,
+		repoID:         payload.RepoID,
+		repositoryName: payload.RepositoryName,
+		manifestDigest: payload.ManifestDigest,
+		scanID:         scanID,
+	})
+
+	slog.InfoContext(ctx, "scan job enqueued via scan.queued event",
+		"scan_id", scanID,
+		"tenant_id", event.TenantID,
+		"tag", payload.TagName,
+		"manifest_digest", payload.ManifestDigest,
+	)
+	return nil
+}
+
 // TriggerScanJob creates a scan_id, registers it, and enqueues a job without
 // waiting for a RabbitMQ event. Used by the TriggerScan gRPC handler.
 func (p *Pool) TriggerScanJob(tenantID, repoID, repoName, manifestDigest string) string {

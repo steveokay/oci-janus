@@ -23,6 +23,7 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -114,7 +115,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		WriteTimeout:      60 * time.Second,
 	}
 
-	// gRPC server: health check only (no audit-specific RPC yet).
+	// gRPC server: health check + AuditService (GetBuildHistory for management).
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
@@ -122,6 +123,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
+	// Register the AuditService so registry-management can query build history.
+	auditv1.RegisterAuditServiceServer(grpcSrv, handler.NewGRPC(repo))
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
