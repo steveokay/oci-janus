@@ -1,0 +1,22 @@
+# Enforce LF line endings for shell scripts and Dockerfiles so they work
+# correctly inside Linux containers regardless of the host OS checkout settings.
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+Makefile    text eol=lf
+*.proto     text eol=lf
+*.go        text eol=lf
+*.sql       text eol=lf
+*.md        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.css       text eol=lf
+
+# Binaries — never modify line endings
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.woff2 binary
+*.woff  binary

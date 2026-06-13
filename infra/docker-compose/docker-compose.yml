@@ -376,7 +376,11 @@ services:
       <<: *otel
       OTEL_SERVICE_NAME: registry-core
       AUTH_GRPC_ADDR: registry-auth:50051
-      AUTH_REALM: ${AUTH_REALM:-http://localhost:8080/auth/token}
+      # AUTH_REALM must be a URL reachable by the Docker daemon (host-side).
+      # Hardcoded to localhost:8080 — never use the internal Docker hostname
+      # (registry-auth:8080) here, as that is not resolvable outside the
+      # registry network.
+      AUTH_REALM: http://localhost:8080/auth/token
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       REDIS_ADDR: redis:6379
@@ -422,7 +426,7 @@ services:
       REDIS_ADDR: redis:6379
       AUTH_GRPC_ADDR: registry-auth:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
-      AUTH_REALM: ${AUTH_REALM:-http://localhost:8080/auth/token}
+      AUTH_REALM: http://localhost:8080/auth/token
       CREDENTIAL_KEY_HEX: ${PROXY_CREDENTIAL_KEY_HEX}
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/proxy.crt
