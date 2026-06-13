@@ -1,4 +1,13 @@
 // Package handler implements the management REST API handlers.
+//
+// Every handler extracts tenant_id from the request context (injected by
+// RequireAuth middleware) and passes it to every gRPC call. Tenant ID is
+// never accepted from user-supplied headers or body fields — this enforces
+// the isolation guarantee from CLAUDE.md §9.
+//
+// Handler methods are grouped by resource in the following order:
+//   /healthz → stats → repositories (CRUD) → tags (list/delete)
+//   → scan (get/trigger) → builds (list)
 package handler
 
 import (
@@ -15,6 +24,9 @@ import (
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
+// maxBodyBytes caps incoming JSON request bodies to prevent large-payload attacks.
+const maxBodyBytes = 4096
+
 // Handler holds gRPC client dependencies for all management endpoints.
 type Handler struct {
 	auth authv1.AuthServiceClient
@@ -27,22 +39,46 @@ func New(auth authv1.AuthServiceClient, meta metadatav1.MetadataServiceClient) *
 }
 
 // Register mounts all management routes onto mux.
-// Auth middleware is applied per-route so /healthz remains open.
+//
+// /healthz is open (no auth). Every other route is wrapped with RequireAuth,
+// which validates the Bearer token via registry-auth gRPC and stores the
+// tenant_id in the request context.
+//
+// Route patterns use Go 1.22+ net/http syntax: {param} captures a single
+// path segment, {param...} captures the remainder.
 func (h *Handler) Register(mux *http.ServeMux) {
 	authMW := middleware.RequireAuth(h.auth)
 
+	// Health — unauthenticated, used by docker-compose and K8s probes.
 	mux.Handle("GET /healthz", http.HandlerFunc(handleHealthz))
+
+	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
+
+	// Repository management.
 	mux.Handle("GET /api/v1/repositories", authMW(http.HandlerFunc(h.handleListRepositories)))
+	mux.Handle("POST /api/v1/repositories", authMW(http.HandlerFunc(h.handleCreateRepository)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleGetRepository)))
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleDeleteRepository)))
+
+	// Tag management.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleListTags)))
-	mux.Handle("GET /api/v1/repositories/{org}/{repo}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}", authMW(http.HandlerFunc(h.handleDeleteTag)))
+
+	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))
+
+	// Build / audit history — returns empty list until registry-audit query API is ready.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
 }
 
 // ---------------------------------------------------------------------------
-// /healthz
+// GET /healthz
 // ---------------------------------------------------------------------------
 
+// handleHealthz returns a 200 JSON body. Used by Compose healthcheck and K8s
+// probes. Intentionally unauthenticated — no tenant information is disclosed.
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -51,14 +87,14 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // GET /api/v1/stats
 // ---------------------------------------------------------------------------
 
-// StatsResponse is the JSON body returned by /api/v1/stats.
+// StatsResponse is the JSON body returned by GET /api/v1/stats.
 type StatsResponse struct {
 	TotalRepos         int     `json:"total_repos"`
 	StorageUsedBytes   int64   `json:"storage_used_bytes"`
 	StorageQuotaBytes  int64   `json:"storage_quota_bytes"`
-	DailyPulls         int64   `json:"daily_pulls"`          // TODO: wire pull counter
-	VulnerabilityCount int     `json:"vulnerability_count"`  // TODO: aggregate from scan results
-	SystemHealthPct    float64 `json:"system_health_pct"`    // TODO: derive from health checks
+	DailyPulls         int64   `json:"daily_pulls"`         // TODO: wire pull counter from registry-audit
+	VulnerabilityCount int     `json:"vulnerability_count"` // TODO: aggregate from scan_results table
+	SystemHealthPct    float64 `json:"system_health_pct"`   // TODO: derive from gRPC health checks
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +109,8 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Count repos by draining the stream — replace with a dedicated Count RPC once added.
+	// Count repos by draining ListRepositories stream.
+	// TODO: replace with a dedicated CountRepositories RPC to avoid O(n) drain.
 	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
 		TenantId: tenantID,
 		PageSize: 1000,
@@ -83,6 +120,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to count repositories")
 		return
 	}
+
 	var totalRepos int
 	for {
 		_, recvErr := stream.Recv()
@@ -121,8 +159,11 @@ type RepoResponse struct {
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
-	visibility := r.URL.Query().Get("visibility") // "public" | "private" | ""
 
+	// Optional filter: "public" | "private" | "" (all).
+	visibility := r.URL.Query().Get("visibility")
+
+	// per_page: 1–100, default 25.
 	pageSize := int32(25)
 	if s := r.URL.Query().Get("per_page"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
@@ -151,6 +192,7 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 			slog.Error("ListRepositories stream", "err", recvErr)
 			break
 		}
+		// Apply client-side visibility filter — metadata streams all repos.
 		if visibility == "public" && !repo.GetIsPublic() {
 			continue
 		}
@@ -170,19 +212,121 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/v1/repositories
+// ---------------------------------------------------------------------------
+
+// createRepositoryBody is the expected JSON body for repository creation.
+type createRepositoryBody struct {
+	// Org is the organisation namespace for the new repository (e.g. "myorg").
+	Org string `json:"org"`
+	// Name is the short repository name within the org (e.g. "myimage").
+	// The full name stored in metadata is "org/name".
+	Name string `json:"name"`
+	// IsPublic controls whether the repository is publicly pullable.
+	IsPublic bool `json:"is_public"`
+	// StorageQuota is the max storage in bytes; 0 uses the metadata default (10 GB).
+	StorageQuota int64 `json:"storage_quota"`
+}
+
+func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
+	// Cap body size to prevent large-payload attacks before decoding.
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
+	var body createRepositoryBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate names against CLAUDE.md §7 allowlists before any gRPC call.
+	if err := validateOrgName(body.Org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(body.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	tenantID := middleware.TenantIDFromContext(r.Context())
+
+	// Pass the full "org/name" form as the name field. The metadata service
+	// parses this, upserts the org, and returns the populated org_id — so we
+	// leave org_id empty here and let metadata resolve it.
+	repo, err := h.meta.CreateRepository(r.Context(), &metadatav1.CreateRepositoryRequest{
+		TenantId:     tenantID,
+		Name:         body.Org + "/" + body.Name,
+		IsPublic:     body.IsPublic,
+		StorageQuota: body.StorageQuota,
+	})
+	if err != nil {
+		slog.Error("CreateRepository", "err", err, "org", body.Org, "name", body.Name)
+		writeError(w, http.StatusInternalServerError, "failed to create repository")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, repoToResponse(repo))
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/v1/repositories/{org}/{repo}
 // ---------------------------------------------------------------------------
 
 func (h *Handler) handleGetRepository(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
-	repoName := r.PathValue("repo")
+	org, repoName := r.PathValue("org"), r.PathValue("repo")
 
-	repo, err := h.findRepoByName(r, tenantID, repoName)
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, repoToResponse(repo))
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/repositories/{org}/{repo}
+// ---------------------------------------------------------------------------
+
+func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName := r.PathValue("org"), r.PathValue("repo")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// Resolve the repo_id — DeleteRepositoryRequest requires an ID, not a name.
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	if _, err := h.meta.DeleteRepository(r.Context(), &metadatav1.DeleteRepositoryRequest{
+		RepoId:   repo.GetRepoId(),
+		TenantId: tenantID,
+	}); err != nil {
+		slog.Error("DeleteRepository", "err", err, "repo_id", repo.GetRepoId())
+		writeError(w, http.StatusInternalServerError, "failed to delete repository")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------
@@ -199,9 +343,18 @@ type TagResponse struct {
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
-	repoName := r.PathValue("repo")
+	org, repoName := r.PathValue("org"), r.PathValue("repo")
 
-	repo, err := h.findRepoByName(r, tenantID, repoName)
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return
@@ -243,34 +396,101 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/v1/repositories/{org}/{repo}/scan
+// DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}
 // ---------------------------------------------------------------------------
 
-// ScanResponse is the JSON representation of the latest scan result.
-type ScanResponse struct {
-	ScanID          string           `json:"scan_id"`
-	Status          string           `json:"status"`
-	ScannerName     string           `json:"scanner_name"`
-	ScannerVersion  string           `json:"scanner_version"`
-	SeverityCounts  map[string]int32 `json:"severity_counts"`
-	FindingsJSON    []byte           `json:"findings_json,omitempty"`
-	StartedAt       time.Time        `json:"started_at"`
-	CompletedAt     time.Time        `json:"completed_at"`
-}
-
-func (h *Handler) handleGetScan(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
-	repoName := r.PathValue("repo")
+	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
 
-	repo, err := h.findRepoByName(r, tenantID, repoName)
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+	if err := validateTagName(tagName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return
 	}
 
-	result, err := h.meta.GetScanResult(r.Context(), &metadatav1.GetScanResultRequest{
-		TenantId: tenantID,
+	// DeleteTagRequest accepts a tag name directly — no need to look up a tag_id.
+	if _, err := h.meta.DeleteTag(r.Context(), &metadatav1.DeleteTagRequest{
 		RepoId:   repo.GetRepoId(),
+		TenantId: tenantID,
+		Name:     tagName,
+	}); err != nil {
+		slog.Error("DeleteTag", "err", err, "repo_id", repo.GetRepoId(), "tag", tagName)
+		writeError(w, http.StatusInternalServerError, "failed to delete tag")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan
+// ---------------------------------------------------------------------------
+
+// ScanResponse is the JSON representation of the latest scan result for a tag.
+type ScanResponse struct {
+	ScanID         string           `json:"scan_id"`
+	Status         string           `json:"status"`          // pending|running|complete|failed
+	ScannerName    string           `json:"scanner_name"`
+	ScannerVersion string           `json:"scanner_version"`
+	SeverityCounts map[string]int32 `json:"severity_counts"` // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE → count
+	FindingsJSON   []byte           `json:"findings_json,omitempty"`
+	StartedAt      time.Time        `json:"started_at"`
+	CompletedAt    time.Time        `json:"completed_at"`
+}
+
+func (h *Handler) handleGetScan(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+	if err := validateTagName(tagName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	// Resolve the manifest digest for this tag — GetScanResult is keyed by digest.
+	tag, err := h.meta.GetTag(r.Context(), &metadatav1.GetTagRequest{
+		RepoId:   repo.GetRepoId(),
+		TenantId: tenantID,
+		Name:     tagName,
+	})
+	if err != nil {
+		slog.Error("GetTag for scan lookup", "err", err, "tag", tagName)
+		writeError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	result, err := h.meta.GetScanResult(r.Context(), &metadatav1.GetScanResultRequest{
+		ManifestDigest: tag.GetManifestDigest(),
+		RepoId:         repo.GetRepoId(),
+		TenantId:       tenantID,
 	})
 	if err != nil {
 		slog.Error("GetScanResult", "err", err)
@@ -291,14 +511,135 @@ func (h *Handler) handleGetScan(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan
 // ---------------------------------------------------------------------------
 
-// findRepoByName scans ListRepositories for the first repo matching name.
-// TODO: replace with a direct GetRepositoryByName gRPC call once added to the
-// MetadataService proto — scanning the full list is O(n) and not suitable for
-// tenants with hundreds of repositories.
-func (h *Handler) findRepoByName(r *http.Request, tenantID, name string) (*metadatav1.Repository, error) {
+// scanTriggerResponse is returned when a scan request is accepted.
+type scanTriggerResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// handleTriggerScan validates the request and returns 202 Accepted.
+//
+// Triggering a scan requires publishing to the RabbitMQ exchange so
+// registry-scanner consumes it (its normal path is via push.completed).
+// registry-management does not currently have a RabbitMQ client or a
+// direct gRPC connection to registry-scanner.
+//
+// TODO: add a TriggerScan gRPC RPC to registry-scanner and wire a client
+// here, or publish a scan.queued event via libs/rabbitmq/publisher.
+// Until then this endpoint validates existence and acknowledges receipt.
+func (h *Handler) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+	if err := validateTagName(tagName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	// Verify the repo exists before accepting the request — return 404 rather
+	// than a misleading 202 if the caller has a typo in the repo or tag name.
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+	if _, err := h.meta.GetTag(r.Context(), &metadatav1.GetTagRequest{
+		RepoId:   repo.GetRepoId(),
+		TenantId: tenantID,
+		Name:     tagName,
+	}); err != nil {
+		writeError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, scanTriggerResponse{
+		Status:  "queued",
+		Message: "scan request accepted — scanner wiring pending (see handleTriggerScan TODO)",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds
+// ---------------------------------------------------------------------------
+
+// BuildResponse is the JSON representation of a single build run.
+// Fields align with the BuildRow type used in the frontend builds.tsx screen.
+type BuildResponse struct {
+	BuildID     string `json:"build_id"`
+	Status      string `json:"status"`       // "in_progress" | "success" | "failed"
+	CommitHash  string `json:"commit_hash"`
+	TriggeredBy string `json:"triggered_by"` // actor login or CI system name
+	Duration    string `json:"duration"`     // formatted, e.g. "3m 45s" or "--" when running
+	Timestamp   string `json:"timestamp"`    // relative age, e.g. "2m ago"
+}
+
+// handleListBuilds returns the build history for a specific tag.
+//
+// A full implementation requires a build-event query RPC on registry-audit
+// (which stores all push/build events as audit records). Until that API is
+// added this endpoint returns an empty list so the frontend shows its
+// EmptyState component instead of crashing.
+//
+// TODO: add GetBuildHistory(repo_id, tag, tenant_id) to registry-audit and
+// wire it here once the audit query API is available.
+func (h *Handler) handleListBuilds(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+	if err := validateTagName(tagName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	// Return 404 for unknown repos rather than an empty list that could be
+	// confused with "no builds yet" on a repo that doesn't exist.
+	if _, err := h.findRepo(r, tenantID, org, repoName); err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	// Empty list until registry-audit query API is wired.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"builds": []BuildResponse{},
+		"total":  0,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+// findRepo resolves a repository by its org + short name within a tenant.
+//
+// The metadata service stores the full name as "org/repo". This helper
+// constructs the full name and scans the ListRepositories stream for a match.
+//
+// This is O(n) over all tenant repositories — a known limitation.
+// TODO: replace with a GetRepositoryByName gRPC RPC once added to the
+// MetadataService proto (requires buf generate; proto stubs cannot be
+// hand-edited — see CLAUDE.md §15 for proto conventions).
+func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*metadatav1.Repository, error) {
+	fullName := org + "/" + repoName
+
 	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
 		TenantId: tenantID,
 		PageSize: 1000,
@@ -306,6 +647,7 @@ func (h *Handler) findRepoByName(r *http.Request, tenantID, name string) (*metad
 	if err != nil {
 		return nil, err
 	}
+
 	for {
 		repo, recvErr := stream.Recv()
 		if recvErr == io.EOF {
@@ -314,13 +656,16 @@ func (h *Handler) findRepoByName(r *http.Request, tenantID, name string) (*metad
 		if recvErr != nil {
 			return nil, recvErr
 		}
-		if repo.GetName() == name {
+		// Compare against the full "org/repo" name as stored in metadata.
+		if repo.GetName() == fullName {
 			return repo, nil
 		}
 	}
-	return nil, fmt.Errorf("repository %q not found for tenant %s", name, tenantID)
+
+	return nil, fmt.Errorf("repository %q not found for tenant %s", fullName, tenantID)
 }
 
+// repoToResponse converts a proto Repository message to its JSON wire form.
 func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	return RepoResponse{
 		RepoID:       r.GetRepoId(),
@@ -333,6 +678,9 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	}
 }
 
+// writeJSON sets Content-Type, writes the given status code, and encodes v as JSON.
+// Errors from the encoder are logged but not returned to the caller — the
+// response headers are already sent at that point.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -341,6 +689,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// writeError writes a generic {"error": msg} JSON body with the given status.
+// The message must never contain internal details (gRPC status codes, service
+// names, stack traces) — see CLAUDE.md §4.13 error response rules.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
