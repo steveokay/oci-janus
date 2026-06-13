@@ -14,6 +14,7 @@
 
 import { createFileRoute, Outlet, redirect, Link, useRouterState } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useAuthStore } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
 // Route definition
@@ -22,12 +23,14 @@ import { useState } from 'react'
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: () => {
     /*
-     * Redirect to /login if no access token is stored.
+     * Redirect to /login if no access token is in the Zustand memory store.
      * Using throw redirect() (not navigate()) here because beforeLoad runs
      * synchronously during route resolution — throwing is the correct escape
      * hatch that aborts the current navigation and starts a new one.
+     * Token lives in memory only (FE-SEC-001/002) — page reload clears it,
+     * which intentionally forces re-login for this ops tool.
      */
-    if (!localStorage.getItem('access_token')) {
+    if (!useAuthStore.getState().isAuthenticated()) {
       throw redirect({ to: '/login' })
     }
   },
@@ -57,7 +60,7 @@ function AuthenticatedLayout() {
          * p-gutter uses the --spacing-gutter custom token (20px) for consistent
          * page gutters. bg-surface ensures the content area matches the shell.
          */}
-        <main className="ml-64 flex-1 p-gutter bg-surface min-h-screen">
+        <main className="ml-64 flex-1 py-gutter px-[56px] bg-surface min-h-screen">
           <div className="max-w-[1440px] mx-auto">
             <Outlet />
           </div>
@@ -309,7 +312,7 @@ function SideNavLink({ item }: { item: NavItem }) {
     <Link
       to={item.to}
       className={[
-        'flex items-center gap-sm px-sm py-2.5 rounded-lg text-body-md transition-colors',
+        'flex items-center gap-md px-md py-2.5 rounded-lg transition-colors',
         item.active
           ? 'bg-secondary-container text-on-secondary-container font-bold'
           : 'text-on-surface-variant hover:bg-surface-variant hover:text-on-surface',
@@ -317,7 +320,7 @@ function SideNavLink({ item }: { item: NavItem }) {
       aria-current={item.active ? 'page' : undefined}
     >
       <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-      {item.label}
+      <span className="text-label-caps">{item.label}</span>
     </Link>
   )
 }

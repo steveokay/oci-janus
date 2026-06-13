@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-12 (Sprint 4 COMPLETE; Sprint 5 started — frontend login page shipped, QA pass done; SEC-033 resolved; ui/ renamed to frontend/)
+> Last updated: 2026-06-13 (Sprint 4 COMPLETE; Sprint 5 active — dashboard UI shipped; services/management scaffolded; RBAC tracking added; CLAUDE.md §4.13 added)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -35,9 +35,10 @@
 | `services/gc` | DONE | — | Mark-sweep GC algorithm (collector.go), dry-run / manifests / blobs / full modes, RabbitMQ event publishing on deletion. REM-009 not yet applied (see Remediation Plans). Committed f226e81. |
 | `services/tenant` | DONE | — | Tenant CRUD, domain verification worker (5-minute poll, 48h cutoff), per-tenant quota config. REM-004 partially applied (see Remediation Plans). Committed ff5875e. |
 | `services/signer` | DONE | — | Cosign-compatible ECDSA P-256 signing, Vault key backend, signing/sigstore subpackages, SignManifest/VerifyManifest/ListSignatures gRPC handlers. Committed e4ba6c7. |
+| `services/management` | IN PROGRESS | — | Management REST API — BFF for the frontend, CLI, and Terraform consumers. Endpoint surface will grow (RBAC management, webhooks, API keys, audit log queries, tenant settings). Scaffolded and building cleanly: all middleware, handler routes, server, config, Dockerfile, go.sum. Pending: docker-compose wiring, proto `GetRepositoryByName` RPC, frontend data hooks. Documented in CLAUDE.md §4.13. |
 | `infra/` | DONE | — | docker-compose.yml (all services + Vault dev mode + MinIO + Jaeger), Helm umbrella chart with all 12 sub-charts, runbooks for secret-rotation, minio-encryption, notary-root-key-ceremony. Terraform directory present (deferred). Committed fd90f3d. |
 | security hardening | DONE | — | 19 SEC items resolved in Sprint 4: HTTP timeouts (SEC-019/020), healthcheck timeout (SEC-021), `sslmode=require` enforcement (SEC-022), Vault token isolation (SEC-023), cert key permissions `chmod 600` (SEC-024), secure response headers via `libs/middleware/http/secure_headers.go` (SEC-007/018), auth client-IP rate limiting via `TRUSTED_PROXY_CIDRS` (SEC-009), proxy partial-blob abort (SEC-012), context propagation (SEC-028), and others. Deferred: SEC-006, SEC-015, SEC-025. |
-| `frontend/` | IN PROGRESS | — | Vite + React + TypeScript (renamed from `ui/`). Login page shipped (2026-06-12): TanStack Router file-based routing, zod+react-hook-form, frosted-glass design, QA-verified against Stitch reference. Remaining screens: Repository Dashboard, Image Details & Tags, Security Scan Results, Build History. |
+| `frontend/` | IN PROGRESS | — | Vite + React + TypeScript. Login page: QA-verified ✅. Repository Dashboard: QA-verified ✅ (new Stitch design — Operations Overview). Image Details & Tags: UI built, QA pass pending. Security Scan Results + Build History: not started. Vite dev proxy wired (`/api` → `localhost:8080`). JWT stored in Zustand memory only (FE-SEC-001/002 resolved). Blocked on `services/management` for data wiring. |
 
 ---
 
@@ -229,19 +230,52 @@ All decisions resolved. No blockers.
 
 ## Current Sprint
 
-**Sprint 5 — Frontend**
-> Goal: Implement all 5 Stitch-verified screens, wire real API calls, reach 80% unit test coverage on auth + core.
+**Sprint 5 — Frontend + Management API**
+> Goal: Implement all 5 Stitch-verified screens, build `services/management` REST API to wire real data, reach 80% unit test coverage on auth + core.
+
+### Frontend Screens
 
 | Task | Status |
 |---|---|
 | Login page — design, implementation, QA pass | DONE ✅ |
-| Repository Dashboard screen | NOT STARTED |
-| Image Details & Tags screen | NOT STARTED |
-| Security Scan Results screen | NOT STARTED |
-| Build History screen | NOT STARTED |
+| Repository Dashboard screen — UI | DONE ✅ |
+| Image Details & Tags screen — UI | IN PROGRESS |
+| Security Scan Results screen — UI | NOT STARTED |
+| Build History screen — UI | NOT STARTED |
 | Auth hook + token refresh logic | NOT STARTED |
 | Unit test coverage: auth 55%→80% | NOT STARTED |
 | Unit test coverage: core 18%→80% | NOT STARTED |
+
+### RBAC — Role-Based Access Control (org / repo / tag)
+
+Listed in CLAUDE.md §1 Core Capabilities but never tracked as a work item. Work spans auth, metadata, management API, and frontend.
+
+| Task | Service | Status |
+|---|---|---|
+| Define RBAC schema: roles table, role_assignments (user, role, scope), scope enum (org/repo/tag) | `services/auth` + `services/metadata` | NOT STARTED |
+| Add `GetUserPermissions` gRPC handler — returns user's effective roles scoped to a repo/org | `services/auth` | NOT STARTED |
+| Enforce RBAC in `registry-core` push/pull handlers — check role before allowing write or pull on private repos | `services/core` | NOT STARTED |
+| Enforce RBAC in `registry-management` — `POST /api/v1/repositories`, `DELETE` routes require admin/write role | `services/management` | NOT STARTED |
+| RBAC admin API: `GET/POST/DELETE /api/v1/orgs/:org/members`, `GET/POST/DELETE /api/v1/repositories/:org/:repo/members` | `services/management` | NOT STARTED |
+| Frontend: show/hide management actions (delete repo, delete tag, add member) based on user role from JWT claims | `frontend/` | NOT STARTED |
+| Audit all RBAC changes (role grant / revoke) via `registry-audit` | `services/audit` | NOT STARTED |
+
+> **Prerequisite:** RBAC schema decisions (which roles: owner/admin/write/read? flat or hierarchical?) need to be finalised before implementation starts. Add an Architecture Decision entry when agreed.
+
+---
+
+### Management API (`services/management`) — Blocks all dashboard data-wiring
+
+| Task | Detail | Status |
+|---|---|---|
+| Scaffold service | `cmd/server/main.go`, `internal/` layout, `go.mod`, `Dockerfile`, add to `go.work` | DONE ✅ |
+| JWT middleware | Validate Bearer token via `registry-auth` gRPC; extract `tenant_id` into request context | DONE ✅ |
+| CORS + RequestID middleware | `CORS_ALLOWED_ORIGIN` env var; preflight 204; X-Request-ID injection | DONE ✅ |
+| All route handlers | `GET /api/v1/stats`, `GET /api/v1/repositories`, single-repo, tags, scan, builds; all wrapped with `RequireAuth` | DONE ✅ |
+| `go mod tidy` + compile check | Run `go mod tidy` in `services/management/`; verify `go build ./...` from workspace | DONE ✅ |
+| Add to docker-compose | New container wired to `registry-auth` + `registry-metadata`; gateway routes `/api/v1/` to it | NOT STARTED |
+| Add proto `GetRepositoryByName` RPC | Replace `findRepoByName` stream-scan workaround in `handler.go` | NOT STARTED |
+| Wire frontend hooks | Replace mock data in dashboard with `useStats()` + `useRepositories()` TanStack Query hooks | NOT STARTED |
 
 ---
 

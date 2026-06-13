@@ -22,8 +22,8 @@
 | Screen | Route | Reference File | Status |
 |---|---|---|---|
 | Login | `/login` | `stitch/login/code.html` | ✅ Done — QA verified |
-| Repository Dashboard | `/dashboard` | `stitch/repository_dashboard/code.html` | ✅ UI Done — wiring pending |
-| Image Details & Tags | `/dashboard/:org/:repo` | `stitch/image_details_tags/code.html` | ⬜ Not Started |
+| Repository Dashboard | `/dashboard` | `stitch/repository_dashboard/code.html` | ✅ Done — QA verified |
+| Image Details & Tags | `/dashboard/:org/:repo` | `stitch/image_details_tags/code.html` | ✅ UI Done — QA pass pending |
 | Security Scan Results | `/dashboard/:org/:repo/security` | `stitch/security_scan_results/code.html` | ⬜ Not Started |
 | Build History | `/dashboard/:org/:repo/builds` | `stitch/build_history/code.html` | ⬜ Not Started |
 
@@ -33,9 +33,9 @@
 
 | Task | Detail | Status |
 |---|---|---|
-| Vite dev proxy | Add `server.proxy` in `vite.config.ts` — forward `/api` → `http://localhost:8081` so the browser avoids CORS in dev | ⬜ |
-| CORS on auth service | Add `Access-Control-Allow-Origin: http://localhost:5173` to `services/auth` HTTP server | ⬜ |
-| `VITE_TENANT_ID` env var | Create `frontend/.env.local` with `VITE_TENANT_ID=<dev-tenant-uuid>` — login form sends it as `tenant_id` | ⬜ |
+| Vite dev proxy | Add `server.proxy` in `vite.config.ts` — forward `/api` → `http://localhost:8080` so the browser avoids CORS in dev | ✅ |
+| CORS on auth service | Proxy avoids CORS entirely in dev — no change needed on auth service for local dev | ✅ |
+| `VITE_TENANT_ID` env var | Created `frontend/.env.local` with `VITE_TENANT_ID=98dbe36b-ef28-4903-b25c-bff1b2921c9e` | ✅ |
 | Dev seed user | Add seed migration / script that creates a test user + tenant so there is something to log in with | ⬜ |
 | Post-login redirect | Verify `/dashboard` loads after `access_token` is stored and TanStack Router redirects | ⬜ |
 | Error states | Test 401 (bad creds), 403 (locked), 429 (rate limit) — confirm toast messages | ⬜ |
@@ -159,8 +159,8 @@ The management API will be called from the browser. Add CORS middleware to whate
 
 | # | Item | Detail | Status |
 |---|---|---|---|
-| FE-SEC-001 | JWT in localStorage | `login.tsx` saves `access_token` to `localStorage` — XSS can steal it. `CLAUDE-frontend.md §10` requires **memory-only** (Zustand store). Move token to Zustand; update `useAuth`, `_authenticated.tsx` beforeLoad, and the axios interceptor to read from the store instead. Also remove `localStorage.getItem('access_token')` from `index.tsx` guard. | 🔴 |
-| FE-SEC-002 | Auth guard reads stale localStorage | `_authenticated.tsx` and `index.tsx` both call `localStorage.getItem('access_token')` — once token is moved to Zustand this breaks. Both guards must read from the Zustand store. | 🔴 |
+| FE-SEC-001 | JWT in localStorage | `login.tsx` saves `access_token` to `localStorage` — XSS can steal it. `CLAUDE-frontend.md §10` requires **memory-only** (Zustand store). Move token to Zustand; update `useAuth`, `_authenticated.tsx` beforeLoad, and the axios interceptor to read from the store instead. Also remove `localStorage.getItem('access_token')` from `index.tsx` guard. | ✅ |
+| FE-SEC-002 | Auth guard reads stale localStorage | `_authenticated.tsx` and `index.tsx` both call `localStorage.getItem('access_token')` — once token is moved to Zustand this breaks. Both guards must read from the Zustand store. | ✅ |
 
 ### High — Before First Real User
 

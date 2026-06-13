@@ -1,15 +1,18 @@
 /**
- * Thin hook that reads the access token from localStorage.
+ * useAuth — convenience hook exposing auth state from the Zustand store.
  *
- * We intentionally keep this primitive: the token is written by the login
- * page and cleared by the axios 401 interceptor in client.ts, so any
- * component that needs auth state just calls this hook rather than
- * duplicating the localStorage key name.
- *
- * A richer hook (refresh logic, decoded claims, etc.) can extend this
- * later without changing call sites.
+ * Token is stored in memory only (never localStorage) per CLAUDE-frontend.md §13.
+ * Components should use this hook rather than importing the store directly so
+ * the abstraction boundary is preserved if the store shape changes.
  */
+import { useAuthStore } from '@/store/authStore'
+
 export function useAuth() {
-  const token = localStorage.getItem('access_token')
-  return { isAuthenticated: !!token, token }
+  const token = useAuthStore((s) => s.token)
+  const user = useAuthStore((s) => s.user)
+  const tenantId = useAuthStore((s) => s.tenantId)
+  const clearAuth = useAuthStore((s) => s.clearAuth)
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+
+  return { token, user, tenantId, isAuthenticated, logout: clearAuth }
 }

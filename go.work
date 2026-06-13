@@ -8,6 +8,7 @@ use (
 	./services/core
 	./services/gateway
 	./services/gc
+	./services/management
 	./services/metadata
 	./services/proxy
 	./services/scanner

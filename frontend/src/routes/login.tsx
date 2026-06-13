@@ -10,6 +10,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { apiClient } from '@/lib/api/client'
+import { useAuthStore, type AuthUser } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
 // Route
@@ -38,12 +39,19 @@ interface LoginResponse {
   token: string
 }
 
+/** Decode the JWT payload (middle segment) without verifying the signature. */
+function decodeJwtPayload(token: string): AuthUser {
+  const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+  return JSON.parse(atob(b64)) as AuthUser
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 function LoginPage() {
   const navigate = useNavigate()
+  const setAuth = useAuthStore((s) => s.setAuth)
   /* Password visibility toggle removed — reference design has no eye icon */
 
   /*
@@ -78,7 +86,9 @@ function LoginPage() {
         password: values.password,
       })
 
-      localStorage.setItem('access_token', data.token)
+      // Decode claims from JWT payload; no need for a separate user endpoint.
+      // Store token in Zustand memory — never localStorage (FE-SEC-001).
+      setAuth(data.token, decodeJwtPayload(data.token))
       navigate({ to: '/dashboard' })
     } catch (err: unknown) {
       /*

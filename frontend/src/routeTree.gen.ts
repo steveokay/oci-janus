@@ -13,6 +13,10 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
+import { Route as AuthenticatedDashboardRepoNameRouteImport } from './routes/_authenticated/dashboard/$repoName'
+import { Route as AuthenticatedDashboardRepoNameIndexRouteImport } from './routes/_authenticated/dashboard/$repoName/index'
+import { Route as AuthenticatedDashboardRepoNameScanRouteImport } from './routes/_authenticated/dashboard/$repoName/scan'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -33,35 +37,85 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedDashboardIndexRoute =
+  AuthenticatedDashboardIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedDashboardRoute,
+  } as any)
+const AuthenticatedDashboardRepoNameRoute =
+  AuthenticatedDashboardRepoNameRouteImport.update({
+    id: '/$repoName',
+    path: '/$repoName',
+    getParentRoute: () => AuthenticatedDashboardRoute,
+  } as any)
+const AuthenticatedDashboardRepoNameIndexRoute =
+  AuthenticatedDashboardRepoNameIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedDashboardRepoNameRoute,
+  } as any)
+const AuthenticatedDashboardRepoNameScanRoute =
+  AuthenticatedDashboardRepoNameScanRouteImport.update({
+    id: '/scan',
+    path: '/scan',
+    getParentRoute: () => AuthenticatedDashboardRepoNameRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/dashboard': typeof AuthenticatedDashboardRoute
+  '/dashboard': typeof AuthenticatedDashboardRouteWithChildren
+  '/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
+  '/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
+  '/dashboard/$repoName/': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
-  '/dashboard': typeof AuthenticatedDashboardRoute
+  '/dashboard': typeof AuthenticatedDashboardIndexRoute
+  '/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
+  '/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
-  '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/dashboard': typeof AuthenticatedDashboardRouteWithChildren
+  '/_authenticated/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
+  '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/_authenticated/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
+  '/_authenticated/dashboard/$repoName/': typeof AuthenticatedDashboardRepoNameIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dashboard'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/dashboard/$repoName'
+    | '/dashboard/'
+    | '/dashboard/$repoName/scan'
+    | '/dashboard/$repoName/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dashboard'
+  to:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/dashboard/$repoName/scan'
+    | '/dashboard/$repoName'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/dashboard/$repoName'
+    | '/_authenticated/dashboard/'
+    | '/_authenticated/dashboard/$repoName/scan'
+    | '/_authenticated/dashboard/$repoName/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -100,15 +154,78 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/dashboard/': {
+      id: '/_authenticated/dashboard/'
+      path: '/'
+      fullPath: '/dashboard/'
+      preLoaderRoute: typeof AuthenticatedDashboardIndexRouteImport
+      parentRoute: typeof AuthenticatedDashboardRoute
+    }
+    '/_authenticated/dashboard/$repoName': {
+      id: '/_authenticated/dashboard/$repoName'
+      path: '/$repoName'
+      fullPath: '/dashboard/$repoName'
+      preLoaderRoute: typeof AuthenticatedDashboardRepoNameRouteImport
+      parentRoute: typeof AuthenticatedDashboardRoute
+    }
+    '/_authenticated/dashboard/$repoName/': {
+      id: '/_authenticated/dashboard/$repoName/'
+      path: '/'
+      fullPath: '/dashboard/$repoName/'
+      preLoaderRoute: typeof AuthenticatedDashboardRepoNameIndexRouteImport
+      parentRoute: typeof AuthenticatedDashboardRepoNameRoute
+    }
+    '/_authenticated/dashboard/$repoName/scan': {
+      id: '/_authenticated/dashboard/$repoName/scan'
+      path: '/scan'
+      fullPath: '/dashboard/$repoName/scan'
+      preLoaderRoute: typeof AuthenticatedDashboardRepoNameScanRouteImport
+      parentRoute: typeof AuthenticatedDashboardRepoNameRoute
+    }
   }
 }
 
+interface AuthenticatedDashboardRepoNameRouteChildren {
+  AuthenticatedDashboardRepoNameScanRoute: typeof AuthenticatedDashboardRepoNameScanRoute
+  AuthenticatedDashboardRepoNameIndexRoute: typeof AuthenticatedDashboardRepoNameIndexRoute
+}
+
+const AuthenticatedDashboardRepoNameRouteChildren: AuthenticatedDashboardRepoNameRouteChildren =
+  {
+    AuthenticatedDashboardRepoNameScanRoute:
+      AuthenticatedDashboardRepoNameScanRoute,
+    AuthenticatedDashboardRepoNameIndexRoute:
+      AuthenticatedDashboardRepoNameIndexRoute,
+  }
+
+const AuthenticatedDashboardRepoNameRouteWithChildren =
+  AuthenticatedDashboardRepoNameRoute._addFileChildren(
+    AuthenticatedDashboardRepoNameRouteChildren,
+  )
+
+interface AuthenticatedDashboardRouteChildren {
+  AuthenticatedDashboardRepoNameRoute: typeof AuthenticatedDashboardRepoNameRouteWithChildren
+  AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
+}
+
+const AuthenticatedDashboardRouteChildren: AuthenticatedDashboardRouteChildren =
+  {
+    AuthenticatedDashboardRepoNameRoute:
+      AuthenticatedDashboardRepoNameRouteWithChildren,
+    AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
+  }
+
+const AuthenticatedDashboardRouteWithChildren =
+  AuthenticatedDashboardRoute._addFileChildren(
+    AuthenticatedDashboardRouteChildren,
+  )
+
 interface AuthenticatedRouteChildren {
-  AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRouteWithChildren
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
-  AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedDashboardRoute: AuthenticatedDashboardRouteWithChildren,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

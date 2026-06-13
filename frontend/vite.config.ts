@@ -13,6 +13,15 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
   },
+  server: {
+    // Proxy /api/* → auth service in dev so the browser avoids CORS
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     target: 'es2020',
     sourcemap: false,

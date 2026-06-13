@@ -817,6 +817,69 @@ Phase 3 — Update quota:
 
 ---
 
+### 4.13 `registry-management`
+
+**Purpose:** Management REST API — BFF (Backend For Frontend) serving the React dashboard and any CI/CD tooling, CLIs, or Terraform providers that need programmatic access to registry metadata. Translates HTTP REST calls into gRPC calls against `registry-auth` and `registry-metadata`. No gRPC server of its own.
+
+**Endpoints (HTTP, default port `:8085`):**
+
+This list covers the initial set of routes. The surface area will grow to cover RBAC management, webhook management, API key management, audit log queries, and tenant settings — any operation the dashboard or a CLI/Terraform consumer needs that requires translating an HTTP call into one or more internal gRPC calls.
+
+```
+GET  /healthz                             # Health check (no auth required)
+
+# Stats & overview
+GET  /api/v1/stats                        # Tenant-scoped aggregated stats
+
+# Repository management
+GET  /api/v1/repositories                 # List repositories for tenant
+POST /api/v1/repositories                 # Create repository
+GET  /api/v1/repositories/:org/:repo      # Get single repository
+DELETE /api/v1/repositories/:org/:repo    # Delete repository
+
+# Tag management
+GET  /api/v1/repositories/:org/:repo/tags          # List tags
+DELETE /api/v1/repositories/:org/:repo/tags/:tag   # Delete tag
+
+# Vulnerability scanning
+GET  /api/v1/repositories/:org/:repo/tags/:tag/scan  # Get scan result for a tag
+POST /api/v1/repositories/:org/:repo/tags/:tag/scan  # Trigger a scan
+
+# Build / audit history
+GET  /api/v1/repositories/:org/:repo/tags/:tag/builds  # List build history
+
+# Future — RBAC, webhooks, API keys, tenant settings, audit queries (added as needed)
+```
+
+**Rules:**
+- Every route except `/healthz` is wrapped with `RequireAuth` middleware (validates JWT against `registry-auth` gRPC)
+- `TenantIDFromContext` used for every metadata gRPC call — never a user-supplied header or body value
+- Error responses: `{"error":"<generic message>"}` only — no gRPC status codes, stack traces, or internal service names
+- `CORS_ALLOWED_ORIGIN` env var controls allowed origin; dev default `http://localhost:5173`
+- mTLS configured for gRPC connections in production (`MTLS_CA_CERT_PATH`, `MTLS_CERT_PATH`, `MTLS_KEY_PATH`)
+- HTTP server timeouts: `ReadTimeout: 10s`, `WriteTimeout: 30s`, `IdleTimeout: 120s`
+
+**gRPC calls made by this service:**
+- `registry-auth`: `ValidateToken`
+- `registry-metadata`: `ListRepositories`, `GetRepository`, `CreateRepository`, `DeleteRepository`, `ListTags`, `DeleteTag`, `GetScanResult`, `GetTenantQuotaUsage`
+
+**Environment variables:**
+```
+HTTP_ADDR=:8085
+AUTH_GRPC_ADDR=                  # required
+METADATA_GRPC_ADDR=              # required
+CORS_ALLOWED_ORIGIN=             # required in production; default http://localhost:5173 in dev
+MTLS_CA_CERT_PATH=               # required in production
+MTLS_CERT_PATH=                  # required in production
+MTLS_KEY_PATH=                   # required in production
+```
+
+**Known limitations (TODO before GA):**
+- `findRepoByName` scans the full `ListRepositories` stream for name matching — needs a `GetRepositoryByName` RPC added to the metadata proto
+- Build history endpoint returns mock data pending a `registry-audit` build-event query API
+
+---
+
 ## 5. Shared Libraries (`libs/`)
 
 **Module path:** `github.com/<org>/registry/libs`
