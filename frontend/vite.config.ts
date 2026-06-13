@@ -14,12 +14,16 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, './src') },
   },
   server: {
-    // Proxy /api/* → auth service in dev so the browser avoids CORS
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-      },
+      // Management service (port 8091) — more specific paths listed first so
+      // they take priority over the catch-all /api rule below.
+      '/api/v1/stats': { target: 'http://localhost:8091', changeOrigin: true },
+      '/api/v1/repositories': { target: 'http://localhost:8091', changeOrigin: true },
+
+      // Auth service (port 8080) — /api/v1/login, /api/v1/apikeys, /api/v1/logout, etc.
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/auth': { target: 'http://localhost:8080', changeOrigin: true },
+      '/.well-known': { target: 'http://localhost:8080', changeOrigin: true },
     },
   },
   build: {

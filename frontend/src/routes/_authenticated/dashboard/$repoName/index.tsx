@@ -1,18 +1,21 @@
 /**
- * $repoName.tsx — Image Details & Tags screen.
+ * $repoName/index.tsx — Image Details & Tags screen.
  *
  * Route path: /dashboard/:repoName
  * Displays the repository header, docker pull command, tag table, push
  * frequency bar chart, and recent activity feed.
  *
- * All data is static/mock in this initial build. Replace MOCK_* constants
- * with TanStack Query hooks once the management REST API is available.
+ * Tags are fetched from GET /api/v1/repositories/{org}/{repo}/tags.
+ * Missing fields (architectures, compressedSize) are displayed as '—'.
+ * Security status defaults to 'unknown' until scan data is available.
  *
  * @see frontend/design/stitch/image_details_tags/code.html
  */
 
 import { createFileRoute, Link, useParams } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { apiClient } from '@/lib/api/client'
 
 // ---------------------------------------------------------------------------
 // Route definition
@@ -29,13 +32,13 @@ export const Route = createFileRoute(
 // ---------------------------------------------------------------------------
 
 /** Security status of a tag from the scan service. */
-type TagSecurityStatus = 'clean' | 'vulnerable'
+type TagSecurityStatus = 'clean' | 'vulnerable' | 'unknown'
 
 /** A single tag entry displayed in the tags table. */
 interface TagRow {
   name: string
   architectures: string[]    // e.g. ['linux/amd64', 'linux/arm64']
-  compressedSize: string     // pre-formatted, e.g. '42.8 MB'
+  compressedSize: string     // pre-formatted, e.g. '42.8 MB', or '—' when unavailable
   security: TagSecurityStatus
   vulnCount?: number         // only set when security === 'vulnerable'
   lastPushed: string         // human-readable relative time
@@ -56,42 +59,24 @@ interface PushBar {
   active?: boolean           // true = current day, uses primary-container colour
 }
 
+/** Shape of each tag item returned by the management API. */
+interface ApiTag {
+  name: string
+  manifest_digest: string
+  updated_at: string   // ISO-8601 timestamp
+  created_at: string   // ISO-8601 timestamp
+}
+
+/** Shape of GET /api/v1/repositories/{org}/{repo}/tags response. */
+interface TagsApiResponse {
+  tags: ApiTag[]
+}
+
 // ---------------------------------------------------------------------------
-// Mock data — replace with API calls in production
+// Mock data — kept as type reference and fallbacks; not used in render
 // ---------------------------------------------------------------------------
 
-const MOCK_TAGS: TagRow[] = [
-  {
-    name: 'latest',
-    architectures: ['linux/amd64', 'linux/arm64'],
-    compressedSize: '42.8 MB',
-    security: 'clean',
-    lastPushed: '2 hours ago',
-  },
-  {
-    name: 'v2.4.0-stable',
-    architectures: ['linux/amd64'],
-    compressedSize: '41.2 MB',
-    security: 'clean',
-    lastPushed: '2 days ago',
-  },
-  {
-    name: 'v2.3.9-rc1',
-    architectures: ['linux/amd64'],
-    compressedSize: '40.9 MB',
-    security: 'vulnerable',
-    vulnCount: 2,
-    lastPushed: '1 week ago',
-  },
-  {
-    name: 'beta-nightly',
-    architectures: ['linux/amd64', 'linux/arm/v7'],
-    compressedSize: '45.1 MB',
-    security: 'clean',
-    lastPushed: 'Today, 04:12 AM',
-  },
-]
-
+/** Static push-frequency chart bars — no API equivalent yet. */
 const MOCK_PUSH_BARS: PushBar[] = [
   { day: 'MON', heightPct: 30 },
   { day: 'TUE', heightPct: 45 },
@@ -102,6 +87,7 @@ const MOCK_PUSH_BARS: PushBar[] = [
   { day: 'SUN', heightPct: 15 },
 ]
 
+/** Static recent-activity feed — no API equivalent yet. */
 const MOCK_ACTIVITY: ActivityEntry[] = [
   {
     dotColor: 'bg-tertiary-fixed-dim',
@@ -122,12 +108,77 @@ const MOCK_ACTIVITY: ActivityEntry[] = [
 ]
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Formats an ISO-8601 timestamp as a human-readable relative time string,
+ * e.g. '2 hours ago', '3 days ago'. Falls back to the raw string on error.
+ */
+function formatRelativeTime(isoString: string): string {
+  try {
+    const date = new Date(isoString)
+    const diffMs = Date.now() - date.getTime()
+    const diffSecs = Math.floor(diffMs / 1000)
+    if (diffSecs < 60) return 'just now'
+    const diffMins = Math.floor(diffSecs / 60)
+    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
+    const diffDays = Math.floor(diffHours / 24)
+    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
+    const diffWeeks = Math.floor(diffDays / 7)
+    if (diffWeeks < 5) return `${diffWeeks} week${diffWeeks !== 1 ? 's' : ''} ago`
+    const diffMonths = Math.floor(diffDays / 30)
+    return `${diffMonths} month${diffMonths !== 1 ? 's' : ''} ago`
+  } catch {
+    return isoString
+  }
+}
+
+/**
+ * Splits the `repoName` param (which is encoded as `org%2Frepo` in the URL
+ * but arrives decoded as `org/repo`) into its org and repo parts.
+ */
+function splitRepoName(repoName: string): { org: string; repo: string } {
+  const slash = repoName.indexOf('/')
+  if (slash === -1) return { org: '', repo: repoName }
+  return { org: repoName.slice(0, slash), repo: repoName.slice(slash + 1) }
+}
+
+// ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
 
 function ImageDetailsPage() {
   const { repoName } = useParams({ from: '/_authenticated/dashboard/$repoName' })
   const [copied, setCopied] = useState(false)
+
+  const { org, repo } = splitRepoName(repoName)
+
+  // Fetch real tag list from the management API.
+  const {
+    data: tagsData,
+    isLoading: tagsLoading,
+    isError: tagsError,
+  } = useQuery<TagsApiResponse>({
+    queryKey: ['tags', org, repo],
+    queryFn: async () => {
+      const res = await apiClient.get<TagsApiResponse>(
+        `/repositories/${org}/${repo}/tags`,
+      )
+      return res.data
+    },
+  })
+
+  // Map API response to the TagRow shape used by the table.
+  const tagRows: TagRow[] = (tagsData?.tags ?? []).map((t) => ({
+    name: t.name,
+    architectures: [],          // not provided by the tags API
+    compressedSize: '—',        // not provided by the tags API
+    security: 'unknown',        // default until scan data is available
+    lastPushed: formatRelativeTime(t.updated_at),
+  }))
 
   const dockerPullCmd = `docker pull cr.io/prod/${repoName}:latest`
 
@@ -176,7 +227,7 @@ function ImageDetailsPage() {
             {/* Docker pull command card */}
             <div className="bg-primary-container rounded-lg p-lg border border-on-primary-container shadow-lg">
               <div className="flex justify-between items-center mb-sm">
-                <span className="text-on-primary-container text-label-caps uppercase">
+                <span className="text-on-primary-container font-label-caps text-label-caps uppercase">
                   Docker Pull Command
                 </span>
                 {copied && (
@@ -184,7 +235,7 @@ function ImageDetailsPage() {
                 )}
               </div>
               <div className="flex items-center justify-between bg-black/30 rounded px-md py-sm">
-                <code className="text-code-md text-tertiary-fixed-dim font-mono">
+                <code className="font-code-md text-code-md text-tertiary-fixed-dim">
                   {dockerPullCmd}
                 </code>
                 <button
@@ -217,13 +268,13 @@ function ImageDetailsPage() {
         <div className="grid grid-rows-2 gap-lg">
           {/* Total Pulls */}
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg flex flex-col justify-center">
-            <span className="text-label-caps text-on-surface-variant mb-sm uppercase">
+            <span className="font-label-caps text-label-caps text-on-surface-variant mb-sm uppercase">
               Total Pulls
             </span>
             <div className="flex items-end gap-sm">
               <span className="text-4xl font-bold text-on-surface">1.2M</span>
-              {/* Trending indicator — on-tertiary-container (#009c54 green) */}
-              <span className="flex items-center text-sm font-bold mb-1 text-on-tertiary-container">
+              {/* Trending indicator — tertiary-fixed-variant colour from Stitch reference */}
+              <span className="flex items-center text-sm font-bold mb-1 text-tertiary-fixed-dim">
                 <span className="material-symbols-outlined text-sm">trending_up</span>
                 12%
               </span>
@@ -232,7 +283,7 @@ function ImageDetailsPage() {
 
           {/* Vulnerability Scan status */}
           <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg flex flex-col justify-center">
-            <span className="text-label-caps text-on-surface-variant mb-sm uppercase">
+            <span className="font-label-caps text-label-caps text-on-surface-variant mb-sm uppercase">
               Vulnerability Scan
             </span>
             <div className="flex items-center gap-md">
@@ -274,50 +325,71 @@ function ImageDetailsPage() {
           </div>
         </div>
 
-        {/* Table */}
+        {/* Table body — loading skeleton, error state, or real rows */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-surface-container-low border-b border-outline-variant">
-              <tr>
-                <th className="px-xl py-md text-label-caps text-on-surface-variant uppercase">Tag Name</th>
-                <th className="px-xl py-md text-label-caps text-on-surface-variant uppercase">OS/Architecture</th>
-                <th className="px-xl py-md text-label-caps text-on-surface-variant uppercase">Compressed Size</th>
-                <th className="px-xl py-md text-label-caps text-on-surface-variant uppercase">Security Status</th>
-                <th className="px-xl py-md text-label-caps text-on-surface-variant uppercase">Last Pushed</th>
-                <th className="px-xl py-md" aria-hidden="true" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-variant">
-              {MOCK_TAGS.map((tag) => (
-                <TagTableRow key={tag.name} tag={tag} repoName={repoName} />
-              ))}
-            </tbody>
-          </table>
+          {tagsLoading ? (
+            <TagsTableSkeleton />
+          ) : tagsError ? (
+            <div className="px-xl py-xl text-center text-on-surface-variant text-body-md">
+              <span className="material-symbols-outlined text-[32px] block mb-sm text-error">
+                error_outline
+              </span>
+              Failed to load tags. Please try refreshing the page.
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-surface-container-low border-b border-outline-variant">
+                <tr>
+                  <th className="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Tag Name</th>
+                  <th className="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">OS/Architecture</th>
+                  <th className="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Compressed Size</th>
+                  <th className="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Security Status</th>
+                  <th className="px-xl py-md font-label-caps text-label-caps text-on-surface-variant uppercase">Last Pushed</th>
+                  <th className="px-xl py-md" aria-hidden="true" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-outline-variant">
+                {tagRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-xl py-xl text-center text-on-surface-variant text-body-md">
+                      No tags found for this repository.
+                    </td>
+                  </tr>
+                ) : (
+                  tagRows.map((tag) => (
+                    <TagTableRow key={tag.name} tag={tag} repoName={repoName} />
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* Pagination footer */}
-        <div className="px-xl py-md bg-surface-container-low border-t border-outline-variant flex items-center justify-between">
-          <p className="text-xs text-on-surface-variant font-medium">
-            Showing 1 to {MOCK_TAGS.length} of 28 tags
-          </p>
-          <div className="flex items-center gap-sm">
-            <button
-              type="button"
-              disabled
-              aria-label="Previous page"
-              className="p-1 border border-outline-variant rounded disabled:opacity-30"
-            >
-              <span className="material-symbols-outlined text-lg">chevron_left</span>
-            </button>
-            <button
-              type="button"
-              aria-label="Next page"
-              className="p-1 border border-outline-variant rounded hover:bg-surface-variant transition-colors"
-            >
-              <span className="material-symbols-outlined text-lg">chevron_right</span>
-            </button>
+        {!tagsLoading && !tagsError && (
+          <div className="px-xl py-md bg-surface-container-low border-t border-outline-variant flex items-center justify-between">
+            <p className="text-xs text-on-surface-variant font-medium">
+              Showing 1 to {tagRows.length} of {tagRows.length} tags
+            </p>
+            <div className="flex items-center gap-sm">
+              <button
+                type="button"
+                disabled
+                aria-label="Previous page"
+                className="p-1 border border-outline-variant rounded disabled:opacity-30"
+              >
+                <span className="material-symbols-outlined text-lg">chevron_left</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Next page"
+                className="p-1 border border-outline-variant rounded hover:bg-surface-variant transition-colors"
+              >
+                <span className="material-symbols-outlined text-lg">chevron_right</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ── Bottom row: push frequency + recent activity ────────────────── */}
@@ -399,30 +471,36 @@ function TagTableRow({ tag, repoName }: { tag: TagRow; repoName: string }) {
         isVulnerable ? 'border-l-4 border-error' : '',
       ].join(' ')}
     >
-      {/* Tag name chip */}
+      {/* Tag name chip — links to the scan screen for this tag */}
       <td className="px-xl py-md">
         <Link
           to="/dashboard/$repoName/scan"
           params={{ repoName }}
           search={{ tag: tag.name }}
-          className="font-mono text-code-md bg-secondary-fixed/50 px-sm py-xs rounded hover:bg-secondary-fixed transition-colors"
+          className="font-code-md text-code-md bg-secondary-fixed/50 px-sm py-xs rounded hover:bg-secondary-fixed transition-colors"
         >
           {tag.name}
         </Link>
       </td>
 
-      {/* OS/Architecture — multi-arch stacked */}
+      {/* OS/Architecture — '—' when not available from tags API */}
       <td className="px-xl py-md">
-        <div className="flex flex-col">
-          <span className="text-body-md font-medium">{tag.architectures[0]}</span>
-          {tag.architectures[1] && (
-            <span className="text-xs text-on-surface-variant">{tag.architectures[1]}</span>
-          )}
-        </div>
+        {tag.architectures.length > 0 ? (
+          <div className="flex flex-col">
+            <span className="text-body-md font-medium">{tag.architectures[0]}</span>
+            {tag.architectures[1] && (
+              <span className="text-xs text-on-surface-variant">{tag.architectures[1]}</span>
+            )}
+          </div>
+        ) : (
+          <span className="text-body-md text-on-surface-variant">—</span>
+        )}
       </td>
 
-      {/* Compressed size */}
-      <td className="px-xl py-md text-body-md">{tag.compressedSize}</td>
+      {/* Compressed size — '—' when not available from tags API */}
+      <td className="px-xl py-md text-body-md">
+        {tag.compressedSize}
+      </td>
 
       {/* Security status badge */}
       <td className="px-xl py-md">
@@ -451,8 +529,12 @@ function TagTableRow({ tag, repoName }: { tag: TagRow; repoName: string }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Inline badge showing CLEAN (green) or N Vulnerabilities Found (red).
- * The filled check_circle / warning icon ensures status is not colour-only.
+ * Inline badge for tag security status.
+ * - clean    → green check badge
+ * - vulnerable → red warning badge with count
+ * - unknown  → grey shield badge (default when scan data not yet available)
+ *
+ * The filled icon ensures status is not communicated by colour alone.
  */
 function SecurityStatusBadge({ tag }: { tag: TagRow }) {
   if (tag.security === 'clean') {
@@ -469,15 +551,60 @@ function SecurityStatusBadge({ tag }: { tag: TagRow }) {
     )
   }
 
+  if (tag.security === 'vulnerable') {
+    return (
+      <div className="inline-flex items-center gap-xs px-sm py-1 rounded bg-error-container text-on-error-container text-xs font-bold uppercase">
+        <span
+          className="material-symbols-outlined text-sm"
+          style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
+        >
+          warning
+        </span>
+        {tag.vulnCount} Vulnerabilities Found
+      </div>
+    )
+  }
+
+  // unknown — grey shield badge shown when no scan result is available yet
   return (
-    <div className="inline-flex items-center gap-xs px-sm py-1 rounded bg-error-container text-on-error-container text-xs font-bold uppercase">
+    <div className="inline-flex items-center gap-xs px-sm py-1 rounded bg-surface-container text-on-surface-variant text-xs font-bold uppercase">
       <span
         className="material-symbols-outlined text-sm"
-        style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
+        style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
       >
-        warning
+        shield
       </span>
-      {tag.vulnCount} Vulnerabilities Found
+      Unknown
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TagsTableSkeleton
+// ---------------------------------------------------------------------------
+
+/**
+ * Pulse skeleton placeholder for the tags table while data is loading.
+ * Mirrors the table structure so layout shift is minimal on data arrival.
+ */
+function TagsTableSkeleton() {
+  return (
+    <div className="animate-pulse">
+      {/* Fake thead */}
+      <div className="bg-surface-container-low border-b border-outline-variant px-xl py-md h-12" />
+      {/* Fake rows */}
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-xl px-xl py-md border-b border-outline-variant"
+        >
+          <div className="h-6 w-24 bg-surface-container rounded" />
+          <div className="h-4 w-20 bg-surface-container rounded" />
+          <div className="h-4 w-16 bg-surface-container rounded" />
+          <div className="h-6 w-20 bg-surface-container rounded" />
+          <div className="h-4 w-24 bg-surface-container rounded" />
+        </div>
+      ))}
     </div>
   )
 }

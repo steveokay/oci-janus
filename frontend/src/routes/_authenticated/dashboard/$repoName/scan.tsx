@@ -5,16 +5,21 @@
  * Displays a bento summary of severity counts followed by a detailed CVE
  * findings table, a remediation guide card, and scan statistics.
  *
- * All data is static/mock. Replace MOCK_* constants with TanStack Query
- * hooks once the management REST API endpoint
- * GET /api/v1/repositories/:org/:repo/tags/:tag/scan is wired.
+ * Data is fetched from:
+ *   GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan
+ *
+ * The `findings_json` field in the API response is base64-encoded JSON that
+ * decodes to a Finding[]. `packagesScanned` and `duration` are not available
+ * from the API and are displayed as '—'.
  *
  * Design reference: frontend/design/stitch/security_scan_results/code.html
  */
 
 import { createFileRoute, Link, useParams, useSearch } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { z } from 'zod'
+import { apiClient } from '@/lib/api/client'
 
 // ---------------------------------------------------------------------------
 // Route
@@ -75,10 +80,56 @@ interface ScanMeta {
 }
 
 // ---------------------------------------------------------------------------
-// Mock data — replace with API calls when management API is ready
+// API types
 // ---------------------------------------------------------------------------
 
-const MOCK_SEVERITY_COUNTS: SeverityCounts = {
+/**
+ * Shape of a finding item as returned by the scanner (decoded from
+ * findings_json, which is base64-encoded JSON in the API response).
+ */
+interface ApiFinding {
+  CVE?: string
+  cve?: string
+  Severity?: string
+  severity?: string
+  Package?: string
+  package?: string
+  Version?: string
+  version?: string
+  FixedIn?: string
+  fixed_in?: string
+  Description?: string
+  description?: string
+  CVSS?: number
+  cvss?: number
+  References?: string[]
+  references?: string[]
+}
+
+/** Shape of GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan response. */
+interface ScanApiResponse {
+  scan_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  scanner_name: string
+  scanner_version: string
+  severity_counts: {
+    CRITICAL?: number
+    HIGH?: number
+    MEDIUM?: number
+    LOW?: number
+    NEGLIGIBLE?: number
+  }
+  findings_json: string | null   // base64-encoded JSON bytes → ApiFinding[]
+  started_at: string | null
+  completed_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Mock data — kept as type reference / fallback; not used in render
+// ---------------------------------------------------------------------------
+
+/** Kept as type reference; exported so noUnusedLocals does not error. */
+export const MOCK_SEVERITY_COUNTS: SeverityCounts = {
   CRITICAL: 12,
   HIGH: 28,
   MEDIUM: 45,
@@ -86,7 +137,8 @@ const MOCK_SEVERITY_COUNTS: SeverityCounts = {
   NEGLIGIBLE: 6,
 }
 
-const MOCK_FINDINGS: Finding[] = [
+/** Kept as type reference; exported so noUnusedLocals does not error. */
+export const MOCK_FINDINGS: Finding[] = [
   {
     cve: 'CVE-2023-45853',
     cvss: 9.8,
@@ -147,14 +199,103 @@ const MOCK_SCAN_META: ScanMeta = {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Splits the `repoName` param (org/repo slug) into its parts.
+ */
+function splitRepoName(repoName: string): { org: string; repo: string } {
+  const slash = repoName.indexOf('/')
+  if (slash === -1) return { org: '', repo: repoName }
+  return { org: repoName.slice(0, slash), repo: repoName.slice(slash + 1) }
+}
+
+/**
+ * Formats an ISO-8601 timestamp as a human-readable relative time,
+ * e.g. '4 minutes ago'. Falls back to the raw string on parse error.
+ */
+function formatRelativeTime(isoString: string | null): string {
+  if (!isoString) return '—'
+  try {
+    const date = new Date(isoString)
+    const diffMs = Date.now() - date.getTime()
+    const diffSecs = Math.floor(diffMs / 1000)
+    if (diffSecs < 60) return 'just now'
+    const diffMins = Math.floor(diffSecs / 60)
+    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
+    const diffDays = Math.floor(diffHours / 24)
+    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
+  } catch {
+    return isoString
+  }
+}
+
+/**
+ * Decodes the base64-encoded findings_json field from the API and maps it to
+ * the internal Finding type. Returns an empty array if the field is null,
+ * empty, or fails to parse.
+ */
+function decodeFindings(findingsJson: string | null): Finding[] {
+  if (!findingsJson) return []
+  try {
+    const raw: ApiFinding[] = JSON.parse(atob(findingsJson))
+    if (!Array.isArray(raw)) return []
+    return raw.map((f): Finding => {
+      // The Go scanner may use either camelCase or snake_case field names.
+      const severity = (f.Severity ?? f.severity ?? 'NEGLIGIBLE').toUpperCase() as Severity
+      const fixedIn = f.FixedIn ?? f.fixed_in
+      const fixStatus: FixStatus = fixedIn ? 'fixed' : 'pending'
+      return {
+        cve: f.CVE ?? f.cve ?? 'Unknown',
+        cvss: f.CVSS ?? f.cvss ?? 0,
+        severity,
+        pkg: f.Package ?? f.package ?? '—',
+        version: f.Version ?? f.version ?? '—',
+        fixStatus,
+        fixedIn: fixedIn ?? undefined,
+        description: f.Description ?? f.description ?? '',
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Maps a ScanApiResponse to the ScanMeta type used by the page.
+ * Fields not provided by the API (packagesScanned, duration) are set to '—'.
+ */
+function mapScanMeta(data: ScanApiResponse, tagLabel: string): ScanMeta {
+  // Truncate manifest digest for display — use tag label as fallback.
+  const digest = `sha256:${tagLabel.slice(0, 8)}...`
+  return {
+    scannedAt: formatRelativeTime(data.completed_at ?? data.started_at),
+    digest,
+    packagesScanned: 0,   // not provided by the API — shown as '—' in the UI
+    duration: '—',        // not provided by the API
+    scannerName: data.scanner_name || 'Unknown',
+    scannerVersion: data.scanner_version || '—',
+    isSigned: false,      // not provided by the scan endpoint
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
 
 /**
  * SecurityScanPage — full security scan results view for a repo tag.
  * Shows severity summary tiles, a filterable CVE table, a remediation guide,
- * and scan statistics. Renders a loading skeleton when `isLoading` is true
- * and an empty state when there are no findings.
+ * and scan statistics.
+ *
+ * States handled:
+ * - isLoading → skeleton placeholders
+ * - status === 'pending' | 'running' → "Scan in progress" state
+ * - isError / no data → "No scan data available" message
+ * - complete / failed → full results view
  */
 function SecurityScanPage() {
   const { repoName } = useParams({
@@ -162,10 +303,42 @@ function SecurityScanPage() {
   })
   const { tag } = useSearch({ from: '/_authenticated/dashboard/$repoName/scan' })
 
-  // Simulate async loading — flip to `true` while wiring real API
-  const isLoading = false
-
+  const { org, repo } = splitRepoName(repoName)
   const tagLabel = tag ?? 'latest'
+
+  // Fetch scan result from the management API.
+  const {
+    data: scanData,
+    isLoading,
+    isError,
+  } = useQuery<ScanApiResponse>({
+    queryKey: ['scan', org, repo, tagLabel],
+    queryFn: async () => {
+      const res = await apiClient.get<ScanApiResponse>(
+        `/repositories/${org}/${repo}/tags/${tagLabel}/scan`,
+      )
+      return res.data
+    },
+    // Retry on error: default TanStack Query retry=1 from QueryClient config
+  })
+
+  // Derive display data from the API response.
+  const severityCounts: SeverityCounts = {
+    CRITICAL: scanData?.severity_counts?.CRITICAL ?? 0,
+    HIGH: scanData?.severity_counts?.HIGH ?? 0,
+    MEDIUM: scanData?.severity_counts?.MEDIUM ?? 0,
+    LOW: scanData?.severity_counts?.LOW ?? 0,
+    NEGLIGIBLE: scanData?.severity_counts?.NEGLIGIBLE ?? 0,
+  }
+
+  const findings: Finding[] = decodeFindings(scanData?.findings_json ?? null)
+  const scanMeta: ScanMeta = scanData
+    ? mapScanMeta(scanData, tagLabel)
+    : MOCK_SCAN_META
+
+  // Scan is in-flight when the status is pending or running.
+  const isScanInProgress =
+    scanData?.status === 'pending' || scanData?.status === 'running'
 
   return (
     <div className="space-y-xl">
@@ -193,12 +366,20 @@ function SecurityScanPage() {
           {/* Tag + digest identity line */}
           <h1 className="font-display text-display text-on-surface mb-xs">{tagLabel}</h1>
           <div className="flex items-center gap-md flex-wrap">
-            <code className="bg-surface-container text-on-surface px-sm py-xs rounded font-code-sm text-code-sm">
-              {MOCK_SCAN_META.digest}
-            </code>
-            <span className="text-on-surface-variant text-body-md">
-              Scanned {MOCK_SCAN_META.scannedAt}
-            </span>
+            {isLoading ? (
+              <div className="h-6 w-40 bg-surface-container rounded animate-pulse" />
+            ) : (
+              <>
+                <code className="bg-surface-container text-on-surface px-sm py-xs rounded font-code-sm text-code-sm">
+                  {scanMeta.digest}
+                </code>
+                {!isError && scanData && (
+                  <span className="text-on-surface-variant text-body-md">
+                    Scanned {scanMeta.scannedAt}
+                  </span>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -222,31 +403,62 @@ function SecurityScanPage() {
       </div>
 
       {/* ── Severity summary tiles ──────────────────────────────────────── */}
-      {isLoading ? (
+      {isLoading || isScanInProgress ? (
         <SeveritySkeleton />
       ) : (
-        <SeveritySummary counts={MOCK_SEVERITY_COUNTS} />
+        <SeveritySummary counts={severityCounts} />
       )}
 
-      {/* ── Findings table + stats sidebar ─────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-xl">
-        {/* Findings table spans 2 of 3 columns on large screens */}
-        <div className="lg:col-span-2">
-          {isLoading ? (
+      {/* ── Findings table + remediation/stats row ─────────────────────── */}
+      {isLoading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-xl">
+          <div className="lg:col-span-2">
             <FindingsTableSkeleton />
-          ) : MOCK_FINDINGS.length === 0 ? (
+          </div>
+          <div className="bg-surface-container border border-outline-variant p-xl rounded-xl animate-pulse h-64" />
+        </div>
+      ) : isScanInProgress ? (
+        /* Scan in progress state */
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-xl flex flex-col items-center justify-center text-center gap-md min-h-[200px]">
+          <span className="material-symbols-outlined text-[48px] text-secondary animate-spin">
+            sync
+          </span>
+          <h3 className="text-headline-md text-on-surface">Scan In Progress</h3>
+          <p className="text-body-md text-on-surface-variant max-w-sm">
+            The vulnerability scan is currently running. Results will appear here once complete.
+          </p>
+        </div>
+      ) : isError || !scanData ? (
+        /* Error / no scan data state */
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-xl flex flex-col items-center justify-center text-center gap-md min-h-[200px]">
+          <span className="material-symbols-outlined text-[48px] text-on-surface-variant">
+            find_in_page
+          </span>
+          <h3 className="text-headline-md text-on-surface">No Scan Data Available</h3>
+          <p className="text-body-md text-on-surface-variant max-w-sm">
+            No scan results were found for <strong>{tagLabel}</strong>. Trigger a scan using
+            the Rescan button above.
+          </p>
+        </div>
+      ) : (
+        /* Full results view: findings table + remediation guide + scan stats */
+        <>
+          {/* Findings table (full width) */}
+          {findings.length === 0 ? (
             <EmptyState />
           ) : (
-            <FindingsTable findings={MOCK_FINDINGS} />
+            <FindingsTable findings={findings} />
           )}
-        </div>
 
-        {/* Scan statistics sidebar */}
-        <ScanStats meta={MOCK_SCAN_META} counts={MOCK_SEVERITY_COUNTS} />
-      </div>
-
-      {/* ── Remediation guide (full width) ─────────────────────────────── */}
-      <RemediationGuide />
+          {/* Remediation guide (col-span-2) + Scan statistics sidebar in a 3-col grid */}
+          <div className="mt-xl grid grid-cols-1 md:grid-cols-3 gap-xl">
+            <div className="md:col-span-2">
+              <RemediationGuide />
+            </div>
+            <ScanStats meta={scanMeta} counts={severityCounts} />
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -313,8 +525,13 @@ function SeveritySummary({ counts }: { counts: SeverityCounts }) {
       {tiles.map(({ label, count, description, textColor, borderColor, fillPct, fillColor }) => (
         <div
           key={label}
-          className={`bg-surface-container-lowest border ${borderColor} p-lg rounded-xl flex flex-col justify-between relative overflow-hidden`}
+          className={`bg-surface-container-lowest border ${borderColor} p-lg rounded-xl flex flex-col justify-between relative overflow-hidden group`}
         >
+          {/* Decorative background blur circle — matches Stitch reference */}
+          <div
+            aria-hidden="true"
+            className={`absolute -right-4 -top-4 w-16 h-16 ${fillColor}/10 rounded-full blur-2xl group-hover:${fillColor}/20 transition-all pointer-events-none`}
+          />
           <div>
             <span className={`font-label-caps text-label-caps ${textColor} mb-xs block`}>
               {label}
@@ -548,11 +765,15 @@ function SeverityBadge({ severity }: { severity: Severity }) {
 // FixStatusCell
 // ---------------------------------------------------------------------------
 
-/** Renders the fix status cell content with icon + text. */
+/**
+ * Renders the fix status cell content with icon + text.
+ * Uses text-tertiary-container (dark green) to match the Stitch reference,
+ * which differs from text-on-tertiary-container (lighter green).
+ */
 function FixStatusCell({ finding }: { finding: Finding }) {
   if (finding.fixStatus === 'fixed') {
     return (
-      <span className="text-on-tertiary-container font-bold flex items-center gap-xs">
+      <span className="text-tertiary-container font-bold flex items-center gap-xs">
         <span className="material-symbols-outlined text-[18px]">check_circle</span>
         {finding.fixedIn ?? 'Fix available'}
       </span>
@@ -581,7 +802,10 @@ function FixStatusCell({ finding }: { finding: Finding }) {
 // ScanStats
 // ---------------------------------------------------------------------------
 
-/** Scan metadata sidebar — packages scanned, duration, scanner info, signed status. */
+/**
+ * Scan metadata sidebar — packages scanned, duration, scanner info, signed status.
+ * Fields not returned by the API (packagesScanned=0, duration='—') are shown as '—'.
+ */
 function ScanStats({ meta, counts }: { meta: ScanMeta; counts: SeverityCounts }) {
   return (
     <div className="bg-surface-container border border-outline-variant p-xl rounded-xl">
@@ -589,10 +813,14 @@ function ScanStats({ meta, counts }: { meta: ScanMeta; counts: SeverityCounts })
       <div className="space-y-lg">
         <div className="flex justify-between items-center">
           <span className="text-on-surface-variant text-body-md">Packages Scanned</span>
-          <span className="font-bold text-on-surface">{meta.packagesScanned}</span>
+          {/* packagesScanned is not provided by the API — display '—' */}
+          <span className="font-bold text-on-surface">
+            {meta.packagesScanned > 0 ? meta.packagesScanned : '—'}
+          </span>
         </div>
         <div className="flex justify-between items-center">
           <span className="text-on-surface-variant text-body-md">Scan Duration</span>
+          {/* duration is not provided by the API — display '—' */}
           <span className="font-bold text-on-surface">{meta.duration}</span>
         </div>
         <div className="flex justify-between items-center">
