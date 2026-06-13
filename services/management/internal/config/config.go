@@ -42,8 +42,22 @@ func Load() (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	return loader.RequireFields(map[string]string{
+	if err := loader.RequireFields(map[string]string{
 		"AUTH_GRPC_ADDR":     cfg.AuthGRPCAddr,
 		"METADATA_GRPC_ADDR": cfg.MetadataGRPCAddr,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// In production, CORS origin and mTLS certs are mandatory.
+	// Plaintext gRPC in production would expose every token validation response.
+	if cfg.OTELEnvironment == "production" {
+		if cfg.CORSAllowedOrigin == "" {
+			return fmt.Errorf("CORS_ALLOWED_ORIGIN is required in production")
+		}
+		if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+			return fmt.Errorf("MTLS_CA_CERT_PATH, MTLS_CERT_PATH, and MTLS_KEY_PATH are all required in production")
+		}
+	}
+	return nil
 }
