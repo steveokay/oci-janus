@@ -128,7 +128,9 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if recvErr != nil {
-			break
+			slog.Error("ListRepositories stream for stats", "err", recvErr)
+			writeError(w, http.StatusInternalServerError, "failed to count repositories")
+			return
 		}
 		totalRepos++
 	}
@@ -171,9 +173,19 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Validate page_token before forwarding — any user-supplied string must be
+	// checked against an allowlist before it reaches a downstream service (CLAUDE.md §7).
+	pageToken := r.URL.Query().Get("page_token")
+	if pageToken != "" {
+		if err := validatePageToken(pageToken); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid page_token")
+			return
+		}
+	}
+
 	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
 		TenantId:  tenantID,
-		PageToken: r.URL.Query().Get("page_token"),
+		PageToken: pageToken,
 		PageSize:  pageSize,
 	})
 	if err != nil {
@@ -633,7 +645,9 @@ func (h *Handler) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 // The metadata service stores the full name as "org/repo". This helper
 // constructs the full name and scans the ListRepositories stream for a match.
 //
-// This is O(n) over all tenant repositories — a known limitation.
+// This is O(n) over all tenant repositories — a known limitation bounded by
+// authentication. PageSize is capped at 100 per page to limit gRPC blast radius;
+// up to 10 pages are fetched (1,000 repos max before we give up).
 // TODO: replace with a GetRepositoryByName gRPC RPC once added to the
 // MetadataService proto (requires buf generate; proto stubs cannot be
 // hand-edited — see CLAUDE.md §15 for proto conventions).
@@ -642,7 +656,9 @@ func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*me
 
 	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
 		TenantId: tenantID,
-		PageSize: 1000,
+		// 100 per page — smaller than the previous 1000 to bound amplification
+		// while still covering most tenants in a single round-trip.
+		PageSize: 100,
 	})
 	if err != nil {
 		return nil, err
@@ -662,7 +678,10 @@ func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*me
 		}
 	}
 
-	return nil, fmt.Errorf("repository %q not found for tenant %s", fullName, tenantID)
+	// Do not include tenantID in the error string — callers that log the error
+	// value would expose it; the tenant ID is already available in the request
+	// context and will be captured by the structured logging interceptor.
+	return nil, fmt.Errorf("repository not found")
 }
 
 // repoToResponse converts a proto Repository message to its JSON wire form.

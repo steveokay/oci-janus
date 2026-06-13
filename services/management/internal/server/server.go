@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/config"
@@ -20,19 +22,22 @@ import (
 
 // Run starts the management HTTP server and blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config) error {
-	// In production mTLS creds are loaded from cert paths — see CLAUDE.md §7.
-	// Insecure is acceptable in local dev where the Docker network is trusted.
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Build gRPC transport credentials. When all three mTLS cert paths are
+	// populated we use mutual TLS (required in production). In dev/test
+	// environments where the paths are empty we fall back to plaintext —
+	// config.validate() rejects this combination in production (OTEL_ENVIRONMENT=production).
+	grpcCreds, err := buildGRPCCreds(cfg)
+	if err != nil {
+		return fmt.Errorf("build grpc credentials: %w", err)
+	}
+
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
 	if err != nil {
 		return fmt.Errorf("dial auth grpc: %w", err)
 	}
 	defer authConn.Close()
 
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
 	if err != nil {
 		return fmt.Errorf("dial metadata grpc: %w", err)
 	}
@@ -66,7 +71,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	slog.Info("registry-management listening", "addr", addr)
+	slog.Info("registry-management listening", "addr", addr, "mtls", cfg.MTLSCACertPath != "")
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -84,3 +89,26 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 }
+
+// buildGRPCCreds returns mTLS credentials when all three cert paths are
+// configured, or plaintext insecure credentials otherwise (dev only).
+// config.validate() ensures this plaintext path is rejected in production.
+func buildGRPCCreds(cfg *config.Config) (credentials.TransportCredentials, error) {
+	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+		return insecure.NewCredentials(), nil
+	}
+	tlsCfg, err := mtls.ClientTLSConfig(
+		cfg.MTLSCACertPath,
+		cfg.MTLSCertPath,
+		cfg.MTLSKeyPath,
+		// serverName left empty — the server name comes from the addr in production
+		// (registry-auth.<namespace>.svc.cluster.local and similar). If a fixed server
+		// name override is needed, add it as an env var in a follow-up.
+		"",
+	)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
