@@ -97,58 +97,7 @@ function repoIcon(name: string): string {
   return icons[h % icons.length]
 }
 
-/** A single repository item returned by GET /api/v1/repositories */
-interface RepoItem {
-  name: string               // "org/repo" format
-  is_public: boolean
-  storage_used_bytes: number
-  created_at: string         // ISO 8601 timestamp
-}
-
-/** Response shape for GET /api/v1/repositories */
-interface RepositoriesResponse {
-  repositories: RepoItem[]
-  total: number
-}
-
-// ---------------------------------------------------------------------------
-// Data fetching
-// ---------------------------------------------------------------------------
-
-/** Fetch the repository list from the management API. */
-async function fetchRepositories(): Promise<RepositoriesResponse> {
-  const { data } = await apiClient.get<RepositoriesResponse>('/repositories')
-  return data
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Format an ISO timestamp as a human-readable relative time string.
- * Covers seconds, minutes, hours, days, months and years.
- */
-function formatRelativeTime(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime()
-  const seconds = Math.floor(diff / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo ago`
-  return `${Math.floor(months / 12)}y ago`
-}
-
-/**
- * Derive a deterministic Tailwind background-colour class from a repo name.
- * Uses a simple character-code sum mod the palette length so the same name
- * always maps to the same colour without needing a hash library.
- */
+/** Derive a deterministic Tailwind background-colour class from a repo name. */
 function repoIconColor(name: string): string {
   const palette = [
     'bg-secondary',
