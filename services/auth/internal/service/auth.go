@@ -70,8 +70,8 @@ type JWK struct {
 
 // Service is the core authentication business logic.
 type Service struct {
-	users   *repository.UserRepository
-	apiKeys *repository.APIKeyRepository
+	users   userRepo
+	apiKeys apiKeyRepo
 	redis   *redis.Client
 	privKey *rsa.PrivateKey
 	pubKey  *rsa.PublicKey
