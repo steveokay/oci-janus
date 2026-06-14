@@ -124,7 +124,7 @@ function RepositoryDashboard() {
     isLoading: reposLoading,
   } = useQuery({
     queryKey: ['repositories'],
-    queryFn: fetchRepositories,
+    queryFn: () => apiClient.get<ReposResponse>('/repositories').then((r) => r.data),
   })
 
   return (
