@@ -24,6 +24,8 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/auth/internal/config"
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
 	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
@@ -68,6 +70,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("init service: %w", err)
 	}
 
+	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
+	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC
+	// events are skipped silently. In production the URL must be set.
+	var pub *publisher.Publisher
+	if cfg.RabbitMQURL != "" {
+		pub, err = publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
+		if err != nil {
+			return fmt.Errorf("init rabbitmq publisher: %w", err)
+		}
+		defer pub.Close()
+	} else {
+		slog.Warn("RABBITMQ_URL not set — RBAC audit events will not be published")
+	}
+
 	// ── 4. gRPC server ────────────────────────────────────────────────────────
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {
@@ -79,7 +95,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	// RegisterAuthServiceRBACServer registers all six methods: ValidateToken, ValidateAPIKey,
 	// GetUserPermissions, GrantRole, RevokeRole, ListMembers.
-	authv1.RegisterAuthServiceRBACServer(grpcSrv, handler.NewGRPCHandler(svc))
+	authv1.RegisterAuthServiceRBACServer(grpcSrv, handler.NewGRPCHandler(svc, pub))
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)

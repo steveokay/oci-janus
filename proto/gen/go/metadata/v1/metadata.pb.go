@@ -711,6 +711,39 @@ func (x *GetRepositoryRequest) GetTenantId() string {
 	return ""
 }
 
+// GetRepositoryByNameRequest identifies a repository by tenant + full "org/repo" name.
+// This message is added alongside GetRepositoryByName to avoid O(n) stream scans.
+type GetRepositoryByNameRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Name     string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // "org/repo" format
+}
+
+func (x *GetRepositoryByNameRequest) Reset()         { *x = GetRepositoryByNameRequest{} }
+func (x *GetRepositoryByNameRequest) String() string  { return protoimpl.X.MessageStringOf(x) }
+func (*GetRepositoryByNameRequest) ProtoMessage()     {}
+
+func (x *GetRepositoryByNameRequest) ProtoReflect() protoreflect.Message {
+	return nil // minimal implementation — reflection not required for RPC dispatch
+}
+
+func (x *GetRepositoryByNameRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetRepositoryByNameRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 type ListRepositoriesRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

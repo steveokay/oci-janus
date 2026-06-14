@@ -11,6 +11,7 @@ service MetadataService {
   // Repositories
   rpc CreateRepository(CreateRepositoryRequest) returns (Repository);
   rpc GetRepository(GetRepositoryRequest) returns (Repository);
+  rpc GetRepositoryByName(GetRepositoryByNameRequest) returns (Repository);
   rpc ListRepositories(ListRepositoriesRequest) returns (stream Repository);
   rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
   rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
@@ -112,6 +113,10 @@ message CreateRepositoryRequest {
   int64  storage_quota = 5;
 }
 message GetRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
+message GetRepositoryByNameRequest {
+  string tenant_id = 1;
+  string name      = 2; // "org/repo" format
+}
 message ListRepositoriesRequest { string org_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; }
 message DeleteRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
 message UpdateRepositoryQuotaRequest { string repo_id = 1; string tenant_id = 2; int64 storage_quota = 3; }

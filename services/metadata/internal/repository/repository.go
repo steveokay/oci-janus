@@ -92,6 +92,18 @@ func (r *Repository) GetRepositoryByName(ctx context.Context, tenantID, orgID, n
 	return r.scanOneRepo(ctx, q, orgID, name, tenantID)
 }
 
+// GetRepositoryByFullName looks up a repository by its combined "org/repo" full name within a tenant.
+// The SQL JOIN avoids an application-side split and keeps the query parameterised (CLAUDE.md §13).
+func (r *Repository) GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error) {
+	const q = `
+		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public, r.storage_quota, r.storage_used, r.created_at
+		FROM repositories r
+		JOIN organizations o ON o.id = r.org_id
+		WHERE r.tenant_id = $1 AND o.name || '/' || r.name = $2
+		LIMIT 1`
+	return r.scanOneRepo(ctx, q, tenantID, fullName)
+}
+
 // ListRepositories returns all repositories for the given tenant (+ optional org filter).
 func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error) {
 	var (

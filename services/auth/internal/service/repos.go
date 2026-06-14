@@ -21,6 +21,11 @@ type userRepo interface {
 	RecordFailedLogin(ctx context.Context, id uuid.UUID) (int, error)
 	LockUntil(ctx context.Context, id uuid.UUID, until time.Time) error
 	ResetFailedLogins(ctx context.Context, id uuid.UUID) error
+	// RBAC methods — used by the GRPC handler's role management endpoints.
+	GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error)
+	GrantRole(ctx context.Context, a repository.RoleAssignment) error
+	RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error
+	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error)
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

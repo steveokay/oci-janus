@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion8
 const (
 	MetadataService_CreateRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/CreateRepository"
 	MetadataService_GetRepository_FullMethodName               = "/registry.metadata.v1.MetadataService/GetRepository"
+	MetadataService_GetRepositoryByName_FullMethodName         = "/registry.metadata.v1.MetadataService/GetRepositoryByName"
 	MetadataService_ListRepositories_FullMethodName            = "/registry.metadata.v1.MetadataService/ListRepositories"
 	MetadataService_DeleteRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/DeleteRepository"
 	MetadataService_UpdateRepositoryQuota_FullMethodName       = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
@@ -51,6 +52,7 @@ type MetadataServiceClient interface {
 	// Repositories
 	CreateRepository(ctx context.Context, in *CreateRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
 	GetRepository(ctx context.Context, in *GetRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
+	GetRepositoryByName(ctx context.Context, in *GetRepositoryByNameRequest, opts ...grpc.CallOption) (*Repository, error)
 	ListRepositories(ctx context.Context, in *ListRepositoriesRequest, opts ...grpc.CallOption) (MetadataService_ListRepositoriesClient, error)
 	DeleteRepository(ctx context.Context, in *DeleteRepositoryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(ctx context.Context, in *UpdateRepositoryQuotaRequest, opts ...grpc.CallOption) (*Repository, error)
@@ -101,6 +103,16 @@ func (c *metadataServiceClient) GetRepository(ctx context.Context, in *GetReposi
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_GetRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetRepositoryByName(ctx context.Context, in *GetRepositoryByNameRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_GetRepositoryByName_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -406,6 +418,7 @@ type MetadataServiceServer interface {
 	// Repositories
 	CreateRepository(context.Context, *CreateRepositoryRequest) (*Repository, error)
 	GetRepository(context.Context, *GetRepositoryRequest) (*Repository, error)
+	GetRepositoryByName(context.Context, *GetRepositoryByNameRequest) (*Repository, error)
 	ListRepositories(*ListRepositoriesRequest, MetadataService_ListRepositoriesServer) error
 	DeleteRepository(context.Context, *DeleteRepositoryRequest) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(context.Context, *UpdateRepositoryQuotaRequest) (*Repository, error)
@@ -443,6 +456,9 @@ func (UnimplementedMetadataServiceServer) CreateRepository(context.Context, *Cre
 }
 func (UnimplementedMetadataServiceServer) GetRepository(context.Context, *GetRepositoryRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRepository not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetRepositoryByName(context.Context, *GetRepositoryByNameRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRepositoryByName not implemented")
 }
 func (UnimplementedMetadataServiceServer) ListRepositories(*ListRepositoriesRequest, MetadataService_ListRepositoriesServer) error {
 	return status.Errorf(codes.Unimplemented, "method ListRepositories not implemented")
@@ -548,6 +564,24 @@ func _MetadataService_GetRepository_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).GetRepository(ctx, req.(*GetRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetRepositoryByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepositoryByNameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetRepositoryByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetRepositoryByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetRepositoryByName(ctx, req.(*GetRepositoryByNameRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -938,6 +972,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRepository",
 			Handler:    _MetadataService_GetRepository_Handler,
+		},
+		{
+			MethodName: "GetRepositoryByName",
+			Handler:    _MetadataService_GetRepositoryByName_Handler,
 		},
 		{
 			MethodName: "DeleteRepository",
