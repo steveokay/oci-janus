@@ -157,6 +157,39 @@ func (h *Handler) dispatchOCI(w http.ResponseWriter, r *http.Request) {
 
 // --- Auth helpers ---
 
+// checkAccess enforces RBAC for the given repository and action ("push" or "pull").
+//
+// It calls GetUserPermissions on registry-auth to retrieve the caller's RBAC access
+// list and checks that at least one entry covers the requested repository+action.
+// This is called in addition to the JWT token's own access list: the JWT records what
+// the client *requested* at token-issuance time, while RBAC records what the user is
+// *allowed* to do at the server — these must both agree for access to proceed.
+//
+// Returns nil when access is permitted, or an error suitable for returning 403.
+func (h *Handler) checkAccess(r *http.Request, claims *service.TokenClaims, repoName, action string) error {
+	perms, err := h.auth.GetUserPermissions(r.Context(), claims.UserID, claims.TenantID)
+	if err != nil {
+		// GetUserPermissions failing must not grant access — fail closed.
+		slog.ErrorContext(r.Context(), "get user permissions failed", "err", err)
+		return service.ErrForbidden
+	}
+	// Walk the returned access list; accept if any entry matches the repo and action.
+	// A wildcard name ("*") or wildcard action ("*") is also accepted so that org-level
+	// admin grants can cover all repos under an org without listing each one explicitly.
+	for _, a := range perms {
+		name := a.GetName()
+		if name != repoName && name != "*" {
+			continue
+		}
+		for _, act := range a.GetActions() {
+			if act == action || act == "*" {
+				return nil
+			}
+		}
+	}
+	return service.ErrForbidden
+}
+
 func (h *Handler) authenticate(r *http.Request) (*service.TokenClaims, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -227,6 +260,11 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
+	// Enforce RBAC: verify the user holds at least reader access for pull operations.
+	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return
+	}
 
 	tenantID := claims.TenantID
 	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
@@ -277,6 +315,11 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
+	// Enforce RBAC: verify the user holds at least reader access for pull operations.
+	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return
+	}
 
 	tenantID := claims.TenantID
 	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
@@ -310,6 +353,11 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 	}
 	if !claims.HasAction(name, "pull") {
 		h.challengeAuth(w, "repository:"+name+":pull")
+		return
+	}
+	// Enforce RBAC: verify the user holds at least reader access for pull operations.
+	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 
@@ -348,6 +396,11 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 	}
 	if err := service.ValidateName(name); err != nil {
 		ociError(w, http.StatusBadRequest, "NAME_INVALID", "invalid repository name")
+		return
+	}
+	// Enforce RBAC: verify the user holds at least writer access for push operations.
+	if err := h.checkAccess(r, claims, name, "push"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 
@@ -398,6 +451,11 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
+	// Enforce RBAC: delete is a write operation; require at least writer role.
+	if err := h.checkAccess(r, claims, name, "push"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return
+	}
 
 	tenantID := claims.TenantID
 	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
@@ -429,6 +487,11 @@ func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, d
 		h.challengeAuth(w, "repository:"+name+":pull")
 		return
 	}
+	// Enforce RBAC: verify the user holds at least reader access for pull operations.
+	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return
+	}
 	if !digestRE.MatchString(digest) {
 		ociError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
 		return
@@ -457,6 +520,11 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, di
 	}
 	if !claims.HasAction(name, "pull") {
 		h.challengeAuth(w, "repository:"+name+":pull")
+		return
+	}
+	// Enforce RBAC: verify the user holds at least reader access for pull operations.
+	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -494,6 +562,11 @@ func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name,
 		h.challengeAuth(w, "repository:"+name+":delete")
 		return
 	}
+	// Enforce RBAC: delete is a write operation; require at least writer role.
+	if err := h.checkAccess(r, claims, name, "push"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return
+	}
 	if !digestRE.MatchString(digest) {
 		ociError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
 		return
@@ -527,6 +600,11 @@ func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, n
 	}
 	if !claims.HasAction(name, "push") {
 		h.challengeAuth(w, "repository:"+name+":push")
+		return
+	}
+	// Enforce RBAC: verify the user holds at least writer access before starting an upload.
+	if err := h.checkAccess(r, claims, name, "push"); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 

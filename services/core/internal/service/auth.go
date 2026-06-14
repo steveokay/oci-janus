@@ -117,3 +117,20 @@ func (c *TokenClaims) HasAction(repoName, action string) bool {
 	}
 	return false
 }
+
+// GetUserPermissions fetches the RBAC access list for the given user+tenant from
+// registry-auth. The returned slice contains one entry per repository the user has
+// been explicitly granted access to; callers should check it for the required action.
+func (a *AuthClient) GetUserPermissions(ctx context.Context, userID, tenantID string) ([]*authv1.RepositoryAccess, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := a.grpc.GetUserPermissions(ctx, &authv1.GetUserPermissionsRequest{
+		UserId:   userID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get user permissions rpc: %w", err)
+	}
+	return resp.GetAccess(), nil
+}
