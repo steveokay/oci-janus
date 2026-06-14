@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-12 (SEC-005/007/009/010/011/012/013/016/017/018/019/020/021/022/023/024/026/027/028/029/030/031/032/033/034 resolved; SEC-006/015/025 deferred)
+> Last updated: 2026-06-14 (SEC-005/007/009/010/011/012/013/016/017/018/019/020/021/022/023/024/026/027/028/029/030/031/032/033/034/035/036 resolved; SEC-006/015/025 deferred)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -110,6 +110,8 @@
 | SEC-031 | tenant/webhook/audit bypass sslmode validation on DB pool | `registry-tenant`, `registry-webhook`, `registry-audit` | 2026-06-12 | Replaced direct `pgxpool.ParseConfig(cfg.DBDSN)` calls with `loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns}.PoolConfig()` in all three service Run() functions. sslmode=disable now rejected at startup; weaker modes logged as warning. audit AfterConnect (SET ROLE) preserved after the new PoolConfig call. |
 | SEC-032 | fmt.Printf for warnings in core service loses structured context | `registry-core` | 2026-06-12 | Replaced two `fmt.Printf` calls in `registry.go` with `slog.WarnContext` — referrer store failure uses `ctx5`, push.completed publish failure uses `ctx`. Added `"log/slog"` to imports. Warnings now carry trace_id/span_id and appear in the structured log pipeline. |
 | SEC-034 | TRUSTED_PROXY_CIDRS parse errors silently discarded | `registry-auth` | 2026-06-12 | `init()` in `http.go` now calls `slog.Warn` with the offending CIDR entry and parse error when `net.ParseCIDR` fails, so operators see misconfigured entries at startup rather than silently operating with reduced proxy trust coverage. |
+| SEC-035 | No server-side RBAC enforcement on OCI push/pull | `registry-core` | 2026-06-14 | `checkAccess()` added to `services/core/internal/handler/http.go`. Calls `GetUserPermissions` on `registry-auth` (5s deadline, fails closed). Enforced on every write handler (`"push"` action: InitiateUpload, PutManifest, DeleteManifest, DeleteBlob) and every read handler (`"pull"` action: GetManifest, HeadManifest, GetBlob, HeadBlob, ListTags). Returns HTTP 403 OCI DENIED on miss or RPC error. Wildcard `*` entries in permission list supported for org-level grants. |
+| SEC-036 | RBAC membership changes not audit-logged | `registry-auth` | 2026-06-14 | `GrantRole` and `RevokeRole` gRPC handlers publish `rbac.role_granted` / `rbac.role_revoked` RabbitMQ events after successful DB writes. `registry-audit` consumers record these as audit events. Publish failure is logged but does not roll back the grant/revoke — audit gap is acceptable vs. transaction complexity. `RABBITMQ_URL` is optional in auth config; events are silently skipped when unset (dev environments without a broker). |
 
 ---
 

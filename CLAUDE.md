@@ -279,8 +279,27 @@ service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse);
   rpc GetUserPermissions(GetUserPermissionsRequest) returns (GetUserPermissionsResponse);
+  // RBAC management — called by registry-management and registry-core
+  rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
+  rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
 }
 ```
+
+**RBAC role model (implemented in `services/auth/migrations/20260614000001_create_rbac.sql`):**
+
+| Role | Actions granted | Scope types |
+|---|---|---|
+| `owner` | push, pull, delete + can grant/revoke roles | `org` or `repo` |
+| `admin` | push, pull, delete + can grant/revoke roles | `org` or `repo` |
+| `writer` | push, pull | `org` or `repo` |
+| `reader` | pull only | `org` or `repo` |
+
+Roles are stored in a seeded `roles` table (fixed UUIDs). Assignments live in `role_assignments(user_id, role_id, scope_type, scope_value, tenant_id)`. `scope_type` is `"org"` or `"repo"`; `scope_value` is the org name or `"org/repo"` string. An org-scoped assignment covers all repos within that org (resolved as `"org/*"` wildcard during permission checks).
+
+`GetUserPermissions` maps assignments to `RepositoryAccess` entries using the hierarchy above. It is called by `registry-core` on every push/pull handler to enforce access at the OCI protocol layer, and by `registry-management` to gate destructive REST operations. Fails closed on error — a gRPC failure from auth denies the request.
+
+On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / `rbac.role_revoked` to RabbitMQ so `registry-audit` can record membership changes without a direct gRPC coupling. A publish failure is logged but does not roll back the DB write.
 
 ---
 
@@ -321,9 +340,17 @@ DELETE /v2/<name>/blobs/uploads/<uuid>              # Cancel upload
 - `name` in all routes = `<org>/<repo>`. Reject single-component names.
 
 **gRPC calls made by this service:**
-- `registry-auth`: ValidateToken, ValidateAPIKey
+- `registry-auth`: ValidateToken, ValidateAPIKey, GetUserPermissions (RBAC enforcement on every push/pull)
 - `registry-metadata`: CreateTag, GetManifest, ListTags, DeleteTag
 - `registry-storage`: PutBlob, GetBlob, StatBlob, DeleteBlob, InitiateUpload, AppendChunk, CompleteUpload
+
+**RBAC enforcement in registry-core:**
+- `checkAccess(r, claims, repoName, action)` is called after JWT validation on every handler.
+- Write handlers (InitiateUpload, PutManifest, DeleteManifest, DeleteBlob) require action `"push"`.
+- Read handlers (GetManifest, HeadManifest, GetBlob, HeadBlob, ListTags) require action `"pull"`.
+- Access is denied with HTTP 403 + OCI `{"errors":[{"code":"DENIED","message":"access denied"}]}` if the user lacks the required action.
+- Wildcard names (`*`) and wildcard actions (`*`) in the permission list are accepted (covers org-level grants).
+- `GET /v2/` version check is intentionally exempt — OCI spec requires it to be reachable unauthenticated.
 
 ---
 
@@ -414,6 +441,7 @@ service MetadataService {
   // Repositories
   rpc CreateRepository(CreateRepositoryRequest) returns (Repository);
   rpc GetRepository(GetRepositoryRequest) returns (Repository);
+  rpc GetRepositoryByName(GetRepositoryByNameRequest) returns (Repository); // tenant_id + "org/repo" name
   rpc ListRepositories(ListRepositoriesRequest) returns (stream Repository);
   rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
   rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
@@ -848,7 +876,15 @@ POST /api/v1/repositories/:org/:repo/tags/:tag/scan  # Trigger a scan
 # Build / audit history
 GET  /api/v1/repositories/:org/:repo/tags/:tag/builds  # List build history
 
-# Future — RBAC, webhooks, API keys, tenant settings, audit queries (added as needed)
+# RBAC member management (implemented)
+GET    /api/v1/orgs/:org/members                               # List org members (all roles)
+POST   /api/v1/orgs/:org/members                               # Grant role to user in org (admin+ only)
+DELETE /api/v1/orgs/:org/members/:assignmentID                 # Revoke org role assignment (admin+ only)
+GET    /api/v1/repositories/:org/:repo/members                 # List repo members (all roles)
+POST   /api/v1/repositories/:org/:repo/members                 # Grant role to user in repo (admin+ only)
+DELETE /api/v1/repositories/:org/:repo/members/:assignmentID   # Revoke repo role assignment (admin+ only)
+
+# Future — webhooks, API keys, tenant settings, audit queries (added as needed)
 ```
 
 **Rules:**
@@ -858,16 +894,20 @@ GET  /api/v1/repositories/:org/:repo/tags/:tag/builds  # List build history
 - `CORS_ALLOWED_ORIGIN` env var controls allowed origin; dev default `http://localhost:5173`
 - mTLS configured for gRPC connections in production (`MTLS_CA_CERT_PATH`, `MTLS_CERT_PATH`, `MTLS_KEY_PATH`)
 - HTTP server timeouts: `ReadTimeout: 10s`, `WriteTimeout: 30s`, `IdleTimeout: 120s`
+- RBAC DELETE routes (delete repo, delete tag) require caller to hold at least `writer` role. Member grant/revoke endpoints require `admin` or `owner`. Checked via `GetUserPermissions` before the operation proceeds.
 
 **gRPC calls made by this service:**
-- `registry-auth`: `ValidateToken`
-- `registry-metadata`: `ListRepositories`, `GetRepository`, `CreateRepository`, `DeleteRepository`, `ListTags`, `DeleteTag`, `GetScanResult`, `GetTenantQuotaUsage`
+- `registry-auth`: `ValidateToken`, `GetUserPermissions` (role check on destructive routes), `GrantRole`, `RevokeRole`, `ListMembers` (RBAC member management endpoints)
+- `registry-metadata`: `ListRepositories`, `GetRepository`, `GetRepositoryByName`, `CreateRepository`, `DeleteRepository`, `ListTags`, `DeleteTag`, `GetScanResult`, `GetTenantQuotaUsage`
+- `registry-audit`: `WriteEvent` (audit log for management-plane operations)
 
 **Environment variables:**
 ```
 HTTP_ADDR=:8085
 AUTH_GRPC_ADDR=                  # required
 METADATA_GRPC_ADDR=              # required
+AUDIT_GRPC_ADDR=                 # required
+RABBITMQ_URL=                    # required (for scan.queued events)
 CORS_ALLOWED_ORIGIN=             # required in production; default http://localhost:5173 in dev
 MTLS_CA_CERT_PATH=               # required in production
 MTLS_CERT_PATH=                  # required in production
@@ -875,7 +915,6 @@ MTLS_KEY_PATH=                   # required in production
 ```
 
 **Known limitations (TODO before GA):**
-- `findRepoByName` scans the full `ListRepositories` stream for name matching — needs a `GetRepositoryByName` RPC added to the metadata proto
 - Build history endpoint returns mock data pending a `registry-audit` build-event query API
 
 ---
@@ -1304,6 +1343,9 @@ Routing keys:
   image.signed
   tenant.created
   tenant.domain.verified
+  store.queued            # proxy background-store retry
+  rbac.role_granted       # published by registry-auth on GrantRole success
+  rbac.role_revoked       # published by registry-auth on RevokeRole success
 ```
 
 ### Event Envelope
@@ -1341,6 +1383,33 @@ type ScanCompletedPayload struct {
     SeverityCounts  map[string]int `json:"severity_counts"`
     PolicyViolation bool           `json:"policy_violation"`
     Blocked         bool           `json:"blocked"`
+}
+```
+
+### `rbac.role_granted` Payload
+
+Published by `registry-auth` after a successful `GrantRole` gRPC call. Consumed by `registry-audit` to append an audit record without a direct gRPC dependency on auth.
+
+```go
+type RoleGrantedPayload struct {
+    TenantID   string `json:"tenant_id"`
+    UserID     string `json:"user_id"`
+    Role       string `json:"role"`       // "owner"|"admin"|"writer"|"reader"
+    ScopeType  string `json:"scope_type"` // "org" or "repo"
+    ScopeValue string `json:"scope_value"` // org name or "org/repo"
+    GrantedBy  string `json:"granted_by"` // user_id of the granting actor
+}
+```
+
+### `rbac.role_revoked` Payload
+
+Published by `registry-auth` after a successful `RevokeRole` gRPC call.
+
+```go
+type RoleRevokedPayload struct {
+    TenantID     string `json:"tenant_id"`
+    AssignmentID string `json:"assignment_id"` // UUID of the deleted role_assignments row
+    RevokedBy    string `json:"revoked_by"`     // user_id of the revoking actor
 }
 ```
 
