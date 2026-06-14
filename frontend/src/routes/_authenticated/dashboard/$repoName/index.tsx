@@ -42,6 +42,8 @@ interface TagRow {
   security: TagSecurityStatus
   vulnCount?: number         // only set when security === 'vulnerable'
   lastPushed: string         // human-readable relative time
+  /** Short digest label, e.g. 'sha256:8f2a9c1d3e5b' (first 12 hex chars). */
+  shortDigest: string
 }
 
 /** A single entry in the recent activity feed. */
@@ -137,6 +139,18 @@ function formatRelativeTime(isoString: string): string {
 }
 
 /**
+ * Truncates a full SHA256 digest to a short display label.
+ * Given 'sha256:8f2a9c1d3e5b...', returns 'sha256:8f2a9c1d3e5b' (prefix + 12 hex chars).
+ * Falls back to the full string if it doesn't match the expected format.
+ */
+function truncateDigest(digest: string): string {
+  const match = digest.match(/^(sha256:)([a-f0-9]{12})/)
+  if (match) return `${match[1]}${match[2]}`
+  // Fallback: return first 19 chars (covers 'sha256:' + 12 hex) or the full string.
+  return digest.length > 19 ? `${digest.slice(0, 19)}` : digest
+}
+
+/**
  * Splits the `repoName` param (which is encoded as `org%2Frepo` in the URL
  * but arrives decoded as `org/repo`) into its org and repo parts.
  */
@@ -178,6 +192,7 @@ function ImageDetailsPage() {
     compressedSize: '—',        // not provided by the tags API
     security: 'unknown',        // default until scan data is available
     lastPushed: formatRelativeTime(t.updated_at),
+    shortDigest: truncateDigest(t.manifest_digest),
   }))
 
   const dockerPullCmd = `docker pull cr.io/prod/${repoName}:latest`
@@ -471,7 +486,7 @@ function TagTableRow({ tag, repoName }: { tag: TagRow; repoName: string }) {
         isVulnerable ? 'border-l-4 border-error' : '',
       ].join(' ')}
     >
-      {/* Tag name chip — links to the scan screen for this tag */}
+      {/* Tag name chip — links to the scan screen for this tag. Digest shown below. */}
       <td className="px-xl py-md">
         <Link
           to="/dashboard/$repoName/scan"
@@ -481,6 +496,10 @@ function TagTableRow({ tag, repoName }: { tag: TagRow; repoName: string }) {
         >
           {tag.name}
         </Link>
+        {/* Truncated manifest digest for quick identification */}
+        <p className="mt-1 font-code-sm text-[10px] text-on-surface-variant">
+          {tag.shortDigest}
+        </p>
       </td>
 
       {/* OS/Architecture — '—' when not available from tags API */}

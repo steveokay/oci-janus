@@ -18,6 +18,13 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
+// Session expiry threshold
+// ---------------------------------------------------------------------------
+
+/** How many milliseconds before JWT expiry to show the "Renew Session" button. */
+const SESSION_WARN_MS = 90_000
+
+// ---------------------------------------------------------------------------
 // Route definition
 // ---------------------------------------------------------------------------
 
@@ -45,28 +52,43 @@ export const Route = createFileRoute('/_authenticated')({
 function AuthenticatedLayout() {
   // Warn the user 60 seconds before their JWT expires so they can save work.
   const token = useAuthStore((s) => s.token)
+
+  // Show the "Renew Session" button when the JWT is within 90 seconds of expiry.
+  const [sessionExpiringSoon, setSessionExpiringSoon] = useState(false)
+
   useEffect(() => {
     if (!token) return
 
-    let timerId: ReturnType<typeof setTimeout> | undefined
+    let toastTimerId: ReturnType<typeof setTimeout> | undefined
+    let renewTimerId: ReturnType<typeof setTimeout> | undefined
 
     try {
       // Decode the JWT payload (middle segment) to read the exp claim.
       const payload = JSON.parse(atob(token.split('.')[1])) as { exp: number }
-      // exp is in seconds; warn 60 s before expiry.
-      const msUntilWarning = payload.exp * 1000 - Date.now() - 60_000
+      const msLeft = payload.exp * 1000 - Date.now()
 
-      if (msUntilWarning > 0) {
-        timerId = setTimeout(() => {
+      // Schedule the 60-second toast warning.
+      const msUntilToast = msLeft - 60_000
+      if (msUntilToast > 0) {
+        toastTimerId = setTimeout(() => {
           toast.warning('Your session expires in 60 seconds. Please save your work.')
-        }, msUntilWarning)
+        }, msUntilToast)
+      }
+
+      // Show the renewal button 90 seconds before expiry.
+      if (msLeft <= SESSION_WARN_MS) {
+        // Already within the warning window — show the button immediately.
+        setSessionExpiringSoon(true)
+      } else {
+        renewTimerId = setTimeout(() => setSessionExpiringSoon(true), msLeft - SESSION_WARN_MS)
       }
     } catch {
       // Malformed JWT — silently ignore; the API will 401 when it actually expires.
     }
 
     return () => {
-      if (timerId !== undefined) clearTimeout(timerId)
+      if (toastTimerId !== undefined) clearTimeout(toastTimerId)
+      if (renewTimerId !== undefined) clearTimeout(renewTimerId)
     }
   }, [token])
 
@@ -80,7 +102,7 @@ function AuthenticatedLayout() {
       className="bg-surface text-on-surface min-h-screen"
       style={{ fontFamily: '"Hanken Grotesk", sans-serif' }}
     >
-      <TopNavBar />
+      <TopNavBar sessionExpiringSoon={sessionExpiringSoon} />
       <div className="flex">
         <SideNavBar />
         {/*
@@ -102,7 +124,7 @@ function AuthenticatedLayout() {
 // TopNavBar
 // ---------------------------------------------------------------------------
 
-function TopNavBar() {
+function TopNavBar({ sessionExpiringSoon }: { sessionExpiringSoon: boolean }) {
   const [searchValue, setSearchValue] = useState('')
 
   return (
@@ -176,6 +198,17 @@ function TopNavBar() {
               "
             />
           </div>
+
+          {/* Session-expiry renewal button — shown when JWT is within 90 seconds of expiry */}
+          {sessionExpiringSoon && (
+            <Link
+              to="/login"
+              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-error-container text-on-error-container text-[11px] font-bold animate-pulse hover:opacity-90 transition-opacity"
+            >
+              <span className="material-symbols-outlined text-[14px]">warning</span>
+              Session expiring — renew
+            </Link>
+          )}
 
           {/* Notifications icon button */}
           <button
