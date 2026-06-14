@@ -13,7 +13,8 @@
  */
 
 import { createFileRoute, Outlet, redirect, Link, useRouterState } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,33 @@ export const Route = createFileRoute('/_authenticated')({
 // ---------------------------------------------------------------------------
 
 function AuthenticatedLayout() {
+  // Warn the user 60 seconds before their JWT expires so they can save work.
+  const token = useAuthStore((s) => s.token)
+  useEffect(() => {
+    if (!token) return
+
+    let timerId: ReturnType<typeof setTimeout> | undefined
+
+    try {
+      // Decode the JWT payload (middle segment) to read the exp claim.
+      const payload = JSON.parse(atob(token.split('.')[1])) as { exp: number }
+      // exp is in seconds; warn 60 s before expiry.
+      const msUntilWarning = payload.exp * 1000 - Date.now() - 60_000
+
+      if (msUntilWarning > 0) {
+        timerId = setTimeout(() => {
+          toast.warning('Your session expires in 60 seconds. Please save your work.')
+        }, msUntilWarning)
+      }
+    } catch {
+      // Malformed JWT — silently ignore; the API will 401 when it actually expires.
+    }
+
+    return () => {
+      if (timerId !== undefined) clearTimeout(timerId)
+    }
+  }, [token])
+
   return (
     /*
      * bg-surface / text-on-surface are the MD3 semantic surface tokens defined

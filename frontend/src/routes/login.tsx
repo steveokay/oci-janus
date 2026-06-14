@@ -16,7 +16,14 @@ import { useAuthStore, type AuthUser } from '@/store/authStore'
 // Route
 // ---------------------------------------------------------------------------
 
+// Search schema — `reason` is appended by the 401 interceptor when the
+// session has expired so the login page can display a contextual banner.
+const loginSearchSchema = z.object({
+  reason: z.string().optional(),
+})
+
 export const Route = createFileRoute('/login')({
+  validateSearch: loginSearchSchema,
   component: LoginPage,
 })
 
@@ -52,6 +59,8 @@ function decodeJwtPayload(token: string): AuthUser {
 function LoginPage() {
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
+  // Read the reason search param injected by the 401 interceptor.
+  const { reason } = Route.useSearch()
   /* Password visibility toggle removed — reference design has no eye icon */
 
   /*
@@ -181,6 +190,13 @@ function LoginPage() {
               Access your secure image repositories.
             </p>
           </div>
+
+          {/* Session-expired banner — shown when the 401 interceptor redirects here */}
+          {reason === 'session_expired' && (
+            <div className="mb-md p-md bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-yellow-300 text-sm text-center">
+              Your session has expired. Please sign in again.
+            </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>

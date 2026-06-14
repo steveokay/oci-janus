@@ -8,6 +8,8 @@
 
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { apiClient } from '@/lib/api/client'
 
 export const Route = createFileRoute('/_authenticated/dashboard/')({
   component: RepositoryDashboard,
@@ -19,11 +21,87 @@ export const Route = createFileRoute('/_authenticated/dashboard/')({
 
 type FeaturedFilter = 'ALL' | 'PUBLIC'
 
+/** A single repository item returned by GET /api/v1/repositories */
+interface RepoItem {
+  name: string               // "org/repo" format
+  is_public: boolean
+  storage_used_bytes: number
+  created_at: string         // ISO 8601 timestamp
+}
+
+/** Response shape for GET /api/v1/repositories */
+interface RepositoriesResponse {
+  repositories: RepoItem[]
+  total: number
+}
+
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
+
+/** Fetch the repository list from the management API. */
+async function fetchRepositories(): Promise<RepositoriesResponse> {
+  const { data } = await apiClient.get<RepositoriesResponse>('/repositories')
+  return data
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an ISO timestamp as a human-readable relative time string.
+ * Covers seconds, minutes, hours, days, months and years.
+ */
+function formatRelativeTime(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime()
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return `${Math.floor(months / 12)}y ago`
+}
+
+/**
+ * Derive a deterministic Tailwind background-colour class from a repo name.
+ * Uses a simple character-code sum mod the palette length so the same name
+ * always maps to the same colour without needing a hash library.
+ */
+function repoIconColor(name: string): string {
+  const palette = [
+    'bg-secondary',
+    'bg-primary',
+    'bg-tertiary-fixed',
+    'bg-on-secondary-container',
+    'bg-secondary-container',
+    'bg-on-tertiary-container',
+    'bg-outline',
+  ]
+  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return palette[sum % palette.length]
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 function RepositoryDashboard() {
+  // Single query for the full repository list — passed down to RecentBuilds
+  // so that component doesn't need its own network request.
+  const {
+    data: reposData,
+    isLoading: reposLoading,
+  } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: fetchRepositories,
+  })
+
   return (
     <div className="space-y-xl">
       {/* ── Operations Overview header ──────────────────────────────────── */}
@@ -44,7 +122,10 @@ function RepositoryDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-xl">
         <div className="lg:col-span-2 space-y-xl">
           <FeaturedRepositories />
-          <RecentBuilds />
+          <RecentBuilds
+            repositories={reposData?.repositories ?? []}
+            isLoading={reposLoading}
+          />
         </div>
         <div className="space-y-xl">
           <QuickActions />
@@ -238,62 +319,99 @@ function FeaturedRepositories() {
 }
 
 // ---------------------------------------------------------------------------
-// Recent CI/CD Builds table
+// Recent Activity (formerly "CI/CD Builds") — driven by real repo data
 // ---------------------------------------------------------------------------
 
-function RecentBuilds() {
+interface RecentBuildsProps {
+  /** All repositories fetched from the management API. */
+  repositories: RepoItem[]
+  /** True while the parent query is still loading. */
+  isLoading: boolean
+}
+
+/**
+ * RecentBuilds shows the 5 most recently created repositories as activity
+ * rows. Each row has a colour-coded icon, repo name, relative-time subtitle,
+ * and a green "Active" pill. Clicking a row navigates to the repo detail page.
+ */
+function RecentBuilds({ repositories, isLoading }: RecentBuildsProps) {
+  // Sort descending by created_at, take the first 5.
+  const recent = [...repositories]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5)
+
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
 
+      {/* Toolbar */}
       <div className="px-md py-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
-        <h3 className="text-label-caps text-on-surface">Recent CI/CD Builds</h3>
+        <h3 className="text-label-caps text-on-surface">Recent Activity</h3>
         <button type="button" className="text-[11px] font-bold text-primary hover:underline">VIEW ALL</button>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-surface-container-low/50">
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">BUILD ID</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">TAG</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">STATUS</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant text-right">DURATION</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-outline-variant">
+      {/* Loading skeleton — 3 grey placeholder rows */}
+      {isLoading && (
+        <div className="divide-y divide-outline-variant animate-pulse">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-md px-lg py-md">
+              <div className="w-8 h-8 rounded bg-surface-container shrink-0" />
+              <div className="flex-1 space-y-1">
+                <div className="h-3 bg-surface-container rounded w-1/3" />
+                <div className="h-2 bg-surface-container rounded w-1/4" />
+              </div>
+              <div className="h-5 bg-surface-container rounded w-14" />
+            </div>
+          ))}
+        </div>
+      )}
 
-            <tr className="transition-all duration-200">
-              <td className="px-lg py-md">
-                <p className="text-code-md text-on-surface">#9842-web-app</p>
-              </td>
-              <td className="px-lg py-md text-code-sm text-on-surface-variant">v2.4.1-rc</td>
-              <td className="px-lg py-md">
-                {/* on-tertiary-container = green */}
-                <div className="flex items-center gap-sm text-on-tertiary-container font-bold text-[11px]">
-                  <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                  SUCCESS
+      {/* Empty state */}
+      {!isLoading && recent.length === 0 && (
+        <div className="px-lg py-xl text-center text-on-surface-variant text-body-md">
+          No repositories yet.
+        </div>
+      )}
+
+      {/* Activity rows */}
+      {!isLoading && recent.length > 0 && (
+        <div className="divide-y divide-outline-variant">
+          {recent.map((repo) => {
+            // Derive a stable icon colour from the repo name.
+            const colorClass = repoIconColor(repo.name)
+            // Use the first letter of the repo name as the icon glyph.
+            const initial = repo.name.charAt(0).toUpperCase()
+
+            return (
+              <Link
+                key={repo.name}
+                to="/dashboard/$repoName"
+                params={{ repoName: repo.name }}
+                className="flex items-center gap-md px-lg py-md hover:bg-surface-container transition-colors"
+              >
+                {/* Coloured icon square with the repo initial */}
+                <div
+                  className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${colorClass}`}
+                >
+                  <span className="text-on-primary text-xs font-bold leading-none">{initial}</span>
                 </div>
-              </td>
-              <td className="px-lg py-md text-right text-code-sm text-on-surface-variant">4m 32s</td>
-            </tr>
 
-            <tr className="transition-all duration-200">
-              <td className="px-lg py-md">
-                <p className="text-code-md text-on-surface">#9841-auth-svc</p>
-              </td>
-              <td className="px-lg py-md text-code-sm text-on-surface-variant">hotfix-login</td>
-              <td className="px-lg py-md">
-                <div className="flex items-center gap-sm text-error font-bold text-[11px]">
-                  <span className="material-symbols-outlined text-[16px]">cancel</span>
-                  FAILED
+                {/* Repo name + "Pushed X ago" subtitle */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-code-md font-bold text-on-surface truncate">{repo.name}</p>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Pushed {formatRelativeTime(repo.created_at)}
+                  </p>
                 </div>
-              </td>
-              <td className="px-lg py-md text-right text-code-sm text-on-surface-variant">1m 12s</td>
-            </tr>
 
-          </tbody>
-        </table>
-      </div>
+                {/* Active pill */}
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed text-[10px] font-bold uppercase shrink-0">
+                  Active
+                </span>
+              </Link>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
