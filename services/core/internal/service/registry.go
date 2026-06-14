@@ -27,13 +27,22 @@ var (
 	digestRE   = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 )
 
+// eventPublisher is the subset of *publisher.Publisher used by Registry so
+// that tests can supply a no-op implementation without a real AMQP broker.
+type eventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
+
+// Ensure *publisher.Publisher satisfies the interface at compile time.
+var _ eventPublisher = (*publisher.Publisher)(nil)
+
 // Registry is the core OCI registry service.
 type Registry struct {
 	metadata  metadatav1.MetadataServiceClient
 	storage   storagev1.StorageServiceClient
 	uploads   *UploadStore
 	referrers *ReferrerStore
-	publisher *publisher.Publisher
+	publisher eventPublisher
 }
 
 // NewRegistry constructs a Registry.
