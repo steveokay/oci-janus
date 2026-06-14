@@ -20,14 +20,27 @@ apiClient.interceptors.request.use((config) => {
  * this interceptor lives outside any React component, so the router context
  * is unavailable. The hard navigation also serves as a full memory wipe of
  * any in-flight query cache that might contain sensitive data.
+ *
+ * isRedirecting prevents multiple concurrent 401 responses from firing
+ * multiple redirects. It is reset on popstate so re-entering the app after
+ * navigating back works correctly.
  */
+let isRedirecting = false
+
 apiClient.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && !isRedirecting) {
+      isRedirecting = true
       useAuthStore.getState().clearAuth()
-      window.location.href = '/login'
+      // Append reason so the login page can display a session-expired banner.
+      window.location.href = '/login?reason=session_expired'
     }
     return Promise.reject(err)
   }
 )
+
+// Reset the flag when the user navigates back so future 401s redirect again.
+window.addEventListener('popstate', () => {
+  isRedirecting = false
+})

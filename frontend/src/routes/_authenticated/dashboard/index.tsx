@@ -18,29 +18,13 @@ import { apiClient } from '@/lib/api/client'
 // RBAC hook — role-gating (UX layer only; server enforces authoritatively)
 // ---------------------------------------------------------------------------
 
-/**
- * useUserIsAdmin decodes the JWT stored in localStorage and checks whether the
- * caller has an admin or owner role claim. This is UX-layer gating only —
- * the management API re-enforces roles on every request.
- *
- * @param _org - reserved for future per-org role lookups; currently unused
- * @returns true when the decoded JWT payload contains an admin or owner role
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function useUserIsAdmin(_org?: string): boolean {
-  // Retrieve the raw JWT from localStorage (set by the auth layer on login).
   const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
   if (!token) return false
   try {
-    // Decode the base64url-encoded middle segment (payload) without verifying the
-    // signature — verification is performed server-side on every API call.
     const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return (
-      Array.isArray(payload.roles) &&
-      (payload.roles.includes('admin') || payload.roles.includes('owner'))
-    )
+    return Array.isArray(payload.roles) && (payload.roles.includes('admin') || payload.roles.includes('owner'))
   } catch {
-    // Malformed token — deny access at the UX layer; the server will reject anyway.
     return false
   }
 }
@@ -113,11 +97,87 @@ function repoIcon(name: string): string {
   return icons[h % icons.length]
 }
 
+/** A single repository item returned by GET /api/v1/repositories */
+interface RepoItem {
+  name: string               // "org/repo" format
+  is_public: boolean
+  storage_used_bytes: number
+  created_at: string         // ISO 8601 timestamp
+}
+
+/** Response shape for GET /api/v1/repositories */
+interface RepositoriesResponse {
+  repositories: RepoItem[]
+  total: number
+}
+
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
+
+/** Fetch the repository list from the management API. */
+async function fetchRepositories(): Promise<RepositoriesResponse> {
+  const { data } = await apiClient.get<RepositoriesResponse>('/repositories')
+  return data
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an ISO timestamp as a human-readable relative time string.
+ * Covers seconds, minutes, hours, days, months and years.
+ */
+function formatRelativeTime(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime()
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return `${Math.floor(months / 12)}y ago`
+}
+
+/**
+ * Derive a deterministic Tailwind background-colour class from a repo name.
+ * Uses a simple character-code sum mod the palette length so the same name
+ * always maps to the same colour without needing a hash library.
+ */
+function repoIconColor(name: string): string {
+  const palette = [
+    'bg-secondary',
+    'bg-primary',
+    'bg-tertiary-fixed',
+    'bg-on-secondary-container',
+    'bg-secondary-container',
+    'bg-on-tertiary-container',
+    'bg-outline',
+  ]
+  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return palette[sum % palette.length]
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 function RepositoryDashboard() {
+  // Single query for the full repository list — passed down to RecentBuilds
+  // so that component doesn't need its own network request.
+  const {
+    data: reposData,
+    isLoading: reposLoading,
+  } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: fetchRepositories,
+  })
+
   return (
     <div className="space-y-xl">
       {/* ── Operations Overview header ──────────────────────────────────── */}
@@ -136,7 +196,10 @@ function RepositoryDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-xl">
         <div className="lg:col-span-2 space-y-xl">
           <FeaturedRepositories />
-          <RecentBuilds />
+          <RecentBuilds
+            repositories={reposData?.repositories ?? []}
+            isLoading={reposLoading}
+          />
         </div>
         <div className="space-y-xl">
           <QuickActions />
@@ -456,20 +519,87 @@ function RepoRow({ repo, isAdmin }: { repo: RepoItem; isAdmin: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
-// Recent CI/CD Builds table (static — audit query API pending)
+// Recent Activity — driven by real repo data
 // ---------------------------------------------------------------------------
 
-function RecentBuilds() {
+interface RecentBuildsProps {
+  /** All repositories fetched from the management API. */
+  repositories: RepoItem[]
+  /** True while the parent query is still loading. */
+  isLoading: boolean
+}
+
+/**
+ * RecentBuilds shows the 5 most recently created repositories as activity
+ * rows. Each row has a colour-coded icon, repo name, relative-time subtitle,
+ * and a green "Active" pill. Clicking a row navigates to the repo detail page.
+ */
+function RecentBuilds({ repositories, isLoading }: RecentBuildsProps) {
+  // Sort descending by created_at, take the first 5.
+  const recent = [...repositories]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5)
+
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+
+      {/* Toolbar */}
       <div className="px-md py-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
-        <h3 className="text-label-caps text-on-surface">Recent CI/CD Builds</h3>
-        <span className="text-[11px] text-on-surface-variant">Audit API pending</span>
+        <h3 className="text-label-caps text-on-surface">Recent Activity</h3>
+        <button type="button" className="text-[11px] font-bold text-primary hover:underline">VIEW ALL</button>
       </div>
-      <div className="px-lg py-xl text-center text-on-surface-variant text-body-md">
-        <span className="material-symbols-outlined text-[32px] mb-sm block">history</span>
-        Build history will appear here once the audit query API is wired.
-      </div>
+
+      {/* Loading skeleton */}
+      {isLoading && (
+        <div className="divide-y divide-outline-variant animate-pulse">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-md px-lg py-md">
+              <div className="w-8 h-8 rounded bg-surface-container shrink-0" />
+              <div className="flex-1 space-y-1">
+                <div className="h-3 bg-surface-container rounded w-1/3" />
+                <div className="h-2 bg-surface-container rounded w-1/4" />
+              </div>
+              <div className="h-5 bg-surface-container rounded w-14" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && recent.length === 0 && (
+        <div className="px-lg py-xl text-center text-on-surface-variant text-body-md">
+          No repositories yet.
+        </div>
+      )}
+
+      {/* Activity rows */}
+      {!isLoading && recent.length > 0 && (
+        <div className="divide-y divide-outline-variant">
+          {recent.map((repo) => {
+            const colorClass = repoIconColor(repo.name)
+            const initial = repo.name.charAt(0).toUpperCase()
+            return (
+              <Link
+                key={repo.name}
+                to="/dashboard/$repoName"
+                params={{ repoName: repo.name }}
+                className="flex items-center gap-md px-lg py-md hover:bg-surface-container transition-colors"
+              >
+                <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${colorClass}`}>
+                  <span className="text-on-primary text-xs font-bold leading-none">{initial}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-code-md font-bold text-on-surface truncate">{repo.name}</p>
+                  <p className="text-[11px] text-on-surface-variant">Pushed {formatRelativeTime(repo.created_at)}</p>
+                </div>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed text-[10px] font-bold uppercase shrink-0">
+                  Active
+                </span>
+              </Link>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
