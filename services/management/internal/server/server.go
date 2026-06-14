@@ -43,7 +43,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer metaConn.Close()
 
-	authClient := authv1.NewAuthServiceClient(authConn)
+	// Use the RBAC-extended client so the handler can call GrantRole, RevokeRole,
+	// and ListMembers in addition to the base ValidateToken / GetUserPermissions RPCs.
+	authClient := authv1.NewAuthServiceClientWithRBAC(authConn)
 	metaClient := metadatav1.NewMetadataServiceClient(metaConn)
 
 	h := handler.New(authClient, metaClient)

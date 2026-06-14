@@ -9,6 +9,37 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
 
+// ---------------------------------------------------------------------------
+// RBAC hook — role-gating (UX layer only; server enforces authoritatively)
+// ---------------------------------------------------------------------------
+
+/**
+ * useUserIsAdmin decodes the JWT stored in localStorage and checks whether the
+ * caller has an admin or owner role claim. This is UX-layer gating only —
+ * the management API re-enforces roles on every request.
+ *
+ * @param _org - reserved for future per-org role lookups; currently unused
+ * @returns true when the decoded JWT payload contains an admin or owner role
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function useUserIsAdmin(_org?: string): boolean {
+  // Retrieve the raw JWT from localStorage (set by the auth layer on login).
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+  if (!token) return false
+  try {
+    // Decode the base64url-encoded middle segment (payload) without verifying the
+    // signature — verification is performed server-side on every API call.
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return (
+      Array.isArray(payload.roles) &&
+      (payload.roles.includes('admin') || payload.roles.includes('owner'))
+    )
+  } catch {
+    // Malformed token — deny access at the UX layer; the server will reject anyway.
+    return false
+  }
+}
+
 export const Route = createFileRoute('/_authenticated/dashboard/')({
   component: RepositoryDashboard,
 })
@@ -132,11 +163,13 @@ function StatsCards() {
 // ---------------------------------------------------------------------------
 
 /**
- * Two-row featured table. Columns: REPOSITORY, STATUS, PULLS, LAST PUSH.
+ * Two-row featured table. Columns: REPOSITORY, STATUS, PULLS, LAST PUSH, (delete for admins).
  * ALL / PUBLIC filter tabs in the toolbar (PRIVATE omitted per new design).
+ * Delete buttons are gated by useUserIsAdmin — server enforces the real check.
  */
 function FeaturedRepositories() {
   const [activeFilter, setActiveFilter] = useState<FeaturedFilter>('ALL')
+  const isAdmin = useUserIsAdmin()
 
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
@@ -172,6 +205,10 @@ function FeaturedRepositories() {
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">STATUS</th>
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant text-right">PULLS</th>
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">LAST PUSH</th>
+              {/* Delete column is only rendered for admin/owner users */}
+              {isAdmin && (
+                <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant" />
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-outline-variant">
@@ -201,6 +238,19 @@ function FeaturedRepositories() {
               </td>
               <td className="px-lg py-md text-right text-code-sm text-on-surface-variant">1.2M</td>
               <td className="px-lg py-md text-body-md text-on-surface-variant">2h ago</td>
+              {/* Delete button — visible to admins/owners only (UX gating; server enforces) */}
+              {isAdmin && (
+                <td className="px-lg py-md text-right">
+                  <button
+                    type="button"
+                    aria-label="Delete web-app repository"
+                    className="text-error hover:text-on-error-container transition-colors"
+                    onClick={(e) => { e.stopPropagation(); /* TODO: wire DELETE /api/v1/repositories/org/web-app */ }}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                  </button>
+                </td>
+              )}
             </tr>
 
             <tr className="hover:bg-surface-container transition-colors cursor-pointer">
@@ -228,6 +278,19 @@ function FeaturedRepositories() {
               </td>
               <td className="px-lg py-md text-right text-code-sm text-on-surface-variant">892K</td>
               <td className="px-lg py-md text-body-md text-on-surface-variant">14h ago</td>
+              {/* Delete button — visible to admins/owners only (UX gating; server enforces) */}
+              {isAdmin && (
+                <td className="px-lg py-md text-right">
+                  <button
+                    type="button"
+                    aria-label="Delete api-service repository"
+                    className="text-error hover:text-on-error-container transition-colors"
+                    onClick={(e) => { e.stopPropagation(); /* TODO: wire DELETE /api/v1/repositories/org/api-service */ }}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                  </button>
+                </td>
+              )}
             </tr>
 
           </tbody>

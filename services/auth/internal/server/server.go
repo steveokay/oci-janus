@@ -77,7 +77,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	healthSrv := grpchealth.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
-	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc))
+	// RegisterAuthServiceRBACServer registers all six methods: ValidateToken, ValidateAPIKey,
+	// GetUserPermissions, GrantRole, RevokeRole, ListMembers.
+	authv1.RegisterAuthServiceRBACServer(grpcSrv, handler.NewGRPCHandler(svc))
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)

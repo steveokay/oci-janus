@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
@@ -15,9 +16,10 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
-// GRPCHandler implements authv1.AuthServiceServer.
+// GRPCHandler implements authv1.AuthServiceRBACServer (which extends AuthServiceServer).
 type GRPCHandler struct {
 	authv1.UnimplementedAuthServiceServer
+	authv1.UnimplementedAuthServiceRBACServer
 	svc *service.Service
 }
 
@@ -79,11 +81,16 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 }
 
 // GetUserPermissions returns the access scopes and roles for a user.
-// Sprint 1: RBAC is not yet implemented; returns empty access and roles if the user exists.
+// It loads RBAC role assignments from the database and maps them to RepositoryAccess
+// entries based on the role hierarchy: owner/admin → push+pull+delete, writer → push+pull, reader → pull.
 func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUserPermissionsRequest) (*authv1.GetUserPermissionsResponse, error) {
 	userID, err := uuid.Parse(req.GetUserId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
 	}
 
 	_, err = h.svc.GetUserByID(ctx, userID)
@@ -94,10 +101,151 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
+	assignments, err := h.svc.GetUserRoles(ctx, userID, tenantID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+
+	// Map each role assignment to a RepositoryAccess entry.
+	// Scope "repo" assignments target "org/repo"; scope "org" assignments use "*" within the org.
+	var protoAccess []*authv1.RepositoryAccess
+	var roleNames []string
+
+	for _, a := range assignments {
+		actions := actionsForRole(a.RoleName)
+		name := a.ScopeValue
+		if a.ScopeType == "org" {
+			// Grant access to all repos in the org via "org/*" pattern.
+			name = a.ScopeValue + "/*"
+		}
+		protoAccess = append(protoAccess, &authv1.RepositoryAccess{
+			Type:    "repository",
+			Name:    name,
+			Actions: actions,
+		})
+		roleNames = append(roleNames, a.RoleName)
+	}
+
+	if protoAccess == nil {
+		protoAccess = []*authv1.RepositoryAccess{}
+	}
+	if roleNames == nil {
+		roleNames = []string{}
+	}
+
 	return &authv1.GetUserPermissionsResponse{
-		Access: []*authv1.RepositoryAccess{},
-		Roles:  []string{},
+		Access: protoAccess,
+		Roles:  roleNames,
 	}, nil
+}
+
+// actionsForRole returns the OCI action list for a given role name.
+// Role hierarchy: reader < writer < admin < owner.
+func actionsForRole(role string) []string {
+	switch role {
+	case "owner", "admin":
+		return []string{"push", "pull", "delete"}
+	case "writer":
+		return []string{"push", "pull"}
+	default: // "reader" and any unknown role
+		return []string{"pull"}
+	}
+}
+
+// GrantRole creates a role assignment for a user within a tenant scope.
+func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleRequest) (*emptypb.Empty, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+
+	// granted_by is optional; zero UUID is acceptable.
+	grantedBy := uuid.Nil
+	if gb := req.GetGrantedBy(); gb != "" {
+		if grantedBy, err = uuid.Parse(gb); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid granted_by")
+		}
+	}
+
+	if req.GetRole() == "" {
+		return nil, status.Error(codes.InvalidArgument, "role must not be empty")
+	}
+	if req.GetScopeType() == "" {
+		return nil, status.Error(codes.InvalidArgument, "scope_type must not be empty")
+	}
+	if req.GetScopeValue() == "" {
+		return nil, status.Error(codes.InvalidArgument, "scope_value must not be empty")
+	}
+
+	err = h.svc.GrantRole(ctx, repository.RoleAssignment{
+		TenantID:   tenantID,
+		UserID:     userID,
+		RoleName:   req.GetRole(),
+		ScopeType:  req.GetScopeType(),
+		ScopeValue: req.GetScopeValue(),
+		GrantedBy:  grantedBy,
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// RevokeRole deletes the role assignment with the given ID within the tenant.
+func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequest) (*emptypb.Empty, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	assignmentID, err := uuid.Parse(req.GetAssignmentId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid assignment_id")
+	}
+
+	err = h.svc.RevokeRole(ctx, assignmentID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "assignment not found")
+		}
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// ListMembers returns all role assignments within a tenant scope.
+func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRequest) (*authv1.ListMembersResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	if req.GetScopeType() == "" {
+		return nil, status.Error(codes.InvalidArgument, "scope_type must not be empty")
+	}
+	if req.GetScopeValue() == "" {
+		return nil, status.Error(codes.InvalidArgument, "scope_value must not be empty")
+	}
+
+	assignments, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+
+	members := make([]*authv1.RoleAssignment, len(assignments))
+	for i, a := range assignments {
+		members[i] = &authv1.RoleAssignment{
+			Id:         a.ID.String(),
+			UserId:     a.UserID.String(),
+			Role:       a.RoleName,
+			ScopeType:  a.ScopeType,
+			ScopeValue: a.ScopeValue,
+			GrantedBy:  a.GrantedBy.String(),
+		}
+	}
+	return &authv1.ListMembersResponse{Members: members}, nil
 }
 
 // scopesToProto wraps a flat scope list as a single wildcard RepositoryAccess.
