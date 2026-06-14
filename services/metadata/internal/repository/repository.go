@@ -606,3 +606,20 @@ func (r *Repository) GetScanResult(ctx context.Context, tenantID, manifestDigest
 
 	return &sr, nil
 }
+
+// GetTenantVulnerabilityCount aggregates CRITICAL and HIGH vulnerability counts
+// across all completed scan_results for a tenant. The total is the sum of both.
+func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error) {
+	const q = `
+		SELECT
+		  COALESCE(SUM((severity_counts->>'CRITICAL')::int), 0) AS critical_count,
+		  COALESCE(SUM((severity_counts->>'HIGH')::int),     0) AS high_count
+		FROM scan_results
+		WHERE tenant_id = $1
+		  AND status    = 'complete'`
+
+	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high); err != nil {
+		return 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
+	}
+	return critical + high, critical, high, nil
+}

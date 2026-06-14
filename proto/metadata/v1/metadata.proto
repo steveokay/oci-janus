@@ -40,6 +40,9 @@ service MetadataService {
   // Scan status
   rpc UpdateScanStatus(UpdateScanStatusRequest) returns (google.protobuf.Empty);
   rpc GetScanResult(GetScanResultRequest) returns (ScanResult);
+
+  // Vulnerability aggregate
+  rpc GetTenantVulnerabilityCount(GetTenantVulnerabilityCountRequest) returns (VulnerabilityCountResponse);
 }
 
 message Repository {
@@ -138,3 +141,11 @@ message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 // Scan requests
 message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
 message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }
+
+// Vulnerability count requests
+message GetTenantVulnerabilityCountRequest { string tenant_id = 1; }
+message VulnerabilityCountResponse {
+  int64 total          = 1;
+  int64 critical_count = 2;
+  int64 high_count     = 3;
+}

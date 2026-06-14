@@ -19,8 +19,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
@@ -29,13 +33,21 @@ const maxBodyBytes = 4096
 
 // Handler holds gRPC client dependencies for all management endpoints.
 type Handler struct {
-	auth authv1.AuthServiceClient
-	meta metadatav1.MetadataServiceClient
+	auth  authv1.AuthServiceClient
+	meta  metadatav1.MetadataServiceClient
+	audit auditv1.AuditServiceClient
+	// pub publishes events to the registry.events RabbitMQ exchange.
+	pub *publisher.Publisher
 }
 
-// New creates a Handler wired to the given gRPC clients.
-func New(auth authv1.AuthServiceClient, meta metadatav1.MetadataServiceClient) *Handler {
-	return &Handler{auth: auth, meta: meta}
+// New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
+func New(
+	auth authv1.AuthServiceClient,
+	meta metadatav1.MetadataServiceClient,
+	audit auditv1.AuditServiceClient,
+	pub *publisher.Publisher,
+) *Handler {
+	return &Handler{auth: auth, meta: meta, audit: audit, pub: pub}
 }
 
 // Register mounts all management routes onto mux.
@@ -135,12 +147,22 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		totalRepos++
 	}
 
+	vulns, err := h.meta.GetTenantVulnerabilityCount(r.Context(), &metadatav1.GetTenantVulnerabilityCountRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.Error("GetTenantVulnerabilityCount", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to fetch vulnerability counts")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, StatsResponse{
-		TotalRepos:        totalRepos,
-		StorageUsedBytes:  quota.GetUsedBytes(),
-		StorageQuotaBytes: quota.GetQuotaBytes(),
-		DailyPulls:        0,
-		SystemHealthPct:   99.9,
+		TotalRepos:         totalRepos,
+		StorageUsedBytes:   quota.GetUsedBytes(),
+		StorageQuotaBytes:  quota.GetQuotaBytes(),
+		DailyPulls:         0,
+		VulnerabilityCount: int(vulns.GetTotal()),
+		SystemHealthPct:    99.9,
 	})
 }
 
@@ -532,16 +554,8 @@ type scanTriggerResponse struct {
 	Message string `json:"message"`
 }
 
-// handleTriggerScan validates the request and returns 202 Accepted.
-//
-// Triggering a scan requires publishing to the RabbitMQ exchange so
-// registry-scanner consumes it (its normal path is via push.completed).
-// registry-management does not currently have a RabbitMQ client or a
-// direct gRPC connection to registry-scanner.
-//
-// TODO: add a TriggerScan gRPC RPC to registry-scanner and wire a client
-// here, or publish a scan.queued event via libs/rabbitmq/publisher.
-// Until then this endpoint validates existence and acknowledges receipt.
+// handleTriggerScan validates the request, then publishes a scan.queued event to
+// RabbitMQ so registry-scanner picks it up outside the normal push.completed flow.
 func (h *Handler) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
@@ -559,25 +573,50 @@ func (h *Handler) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the repo exists before accepting the request — return 404 rather
-	// than a misleading 202 if the caller has a typo in the repo or tag name.
+	// Verify the repo and tag exist before accepting the request — return 404
+	// rather than a misleading 202 if the caller has a typo in the name.
 	repo, err := h.findRepo(r, tenantID, org, repoName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return
 	}
-	if _, err := h.meta.GetTag(r.Context(), &metadatav1.GetTagRequest{
+	tag, err := h.meta.GetTag(r.Context(), &metadatav1.GetTagRequest{
 		RepoId:   repo.GetRepoId(),
 		TenantId: tenantID,
 		Name:     tagName,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	// Build the scan.queued event envelope and publish it. The scanner service
+	// binds a second consumer on scan.queued (in addition to push.completed) so
+	// manually triggered scans reach the same worker pool.
+	payload, _ := json.Marshal(events.ScanQueuedPayload{
+		TenantID:       tenantID,
+		RepositoryName: org + "/" + repoName,
+		RepoID:         repo.GetRepoId(),
+		TagName:        tagName,
+		ManifestDigest: tag.GetManifestDigest(),
+	})
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingScanQueued,
+		TenantID:   tenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := h.pub.Publish(r.Context(), events.RoutingScanQueued, evt); err != nil {
+		slog.Error("publish scan.queued", "err", err, "repo", org+"/"+repoName, "tag", tagName)
+		writeError(w, http.StatusInternalServerError, "failed to queue scan")
 		return
 	}
 
 	writeJSON(w, http.StatusAccepted, scanTriggerResponse{
 		Status:  "queued",
-		Message: "scan request accepted — scanner wiring pending (see handleTriggerScan TODO)",
+		Message: "scan request accepted",
 	})
 }
 
@@ -596,15 +635,8 @@ type BuildResponse struct {
 	Timestamp   string `json:"timestamp"`    // relative age, e.g. "2m ago"
 }
 
-// handleListBuilds returns the build history for a specific tag.
-//
-// A full implementation requires a build-event query RPC on registry-audit
-// (which stores all push/build events as audit records). Until that API is
-// added this endpoint returns an empty list so the frontend shows its
-// EmptyState component instead of crashing.
-//
-// TODO: add GetBuildHistory(repo_id, tag, tenant_id) to registry-audit and
-// wire it here once the audit query API is available.
+// handleListBuilds returns the push/build history for a specific tag by
+// querying the audit service's GetBuildHistory RPC.
 func (h *Handler) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
@@ -622,18 +654,68 @@ func (h *Handler) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return 404 for unknown repos rather than an empty list that could be
-	// confused with "no builds yet" on a repo that doesn't exist.
-	if _, err := h.findRepo(r, tenantID, org, repoName); err != nil {
+	// Return 404 for unknown repos rather than an empty build list that could
+	// be confused with "no builds yet" on a non-existent repo.
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return
 	}
 
-	// Empty list until registry-audit query API is wired.
-	writeJSON(w, http.StatusOK, map[string]any{
-		"builds": []BuildResponse{},
-		"total":  0,
+	// Optional limit from query string; default is 25 (the audit service applies its own cap).
+	limit := int32(25)
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, parseErr := strconv.Atoi(s); parseErr == nil && n > 0 && n <= 100 {
+			limit = int32(n)
+		}
+	}
+
+	resp, err := h.audit.GetBuildHistory(r.Context(), &auditv1.GetBuildHistoryRequest{
+		TenantId: tenantID,
+		RepoId:   repo.GetRepoId(),
+		Tag:      tagName,
+		Limit:    limit,
 	})
+	if err != nil {
+		slog.Error("GetBuildHistory", "err", err, "repo_id", repo.GetRepoId(), "tag", tagName)
+		writeError(w, http.StatusInternalServerError, "failed to fetch build history")
+		return
+	}
+
+	builds := make([]BuildResponse, 0, len(resp.GetBuilds()))
+	for _, b := range resp.GetBuilds() {
+		// Format the occurred_at timestamp as a relative-age string for the frontend.
+		ts := b.GetOccurredAt().AsTime()
+		builds = append(builds, BuildResponse{
+			BuildID:     b.GetBuildId(),
+			Status:      b.GetStatus(),
+			CommitHash:  b.GetCommitHash(),
+			TriggeredBy: b.GetTriggeredBy(),
+			Duration:    b.GetDuration(),
+			Timestamp:   formatRelativeAge(ts),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"builds": builds,
+		"total":  resp.GetTotal(),
+	})
+}
+
+// formatRelativeAge converts t to a human-readable relative string such as
+// "2m ago" or "3h ago". Used for the build history Timestamp field.
+func formatRelativeAge(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // ---------------------------------------------------------------------------

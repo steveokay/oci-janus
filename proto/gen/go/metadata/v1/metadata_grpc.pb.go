@@ -20,27 +20,28 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	MetadataService_CreateRepository_FullMethodName       = "/registry.metadata.v1.MetadataService/CreateRepository"
-	MetadataService_GetRepository_FullMethodName          = "/registry.metadata.v1.MetadataService/GetRepository"
-	MetadataService_ListRepositories_FullMethodName       = "/registry.metadata.v1.MetadataService/ListRepositories"
-	MetadataService_DeleteRepository_FullMethodName       = "/registry.metadata.v1.MetadataService/DeleteRepository"
-	MetadataService_UpdateRepositoryQuota_FullMethodName  = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
-	MetadataService_PutTag_FullMethodName                 = "/registry.metadata.v1.MetadataService/PutTag"
-	MetadataService_GetTag_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetTag"
-	MetadataService_ListTags_FullMethodName               = "/registry.metadata.v1.MetadataService/ListTags"
-	MetadataService_DeleteTag_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteTag"
-	MetadataService_PutManifest_FullMethodName            = "/registry.metadata.v1.MetadataService/PutManifest"
-	MetadataService_GetManifest_FullMethodName            = "/registry.metadata.v1.MetadataService/GetManifest"
-	MetadataService_DeleteManifest_FullMethodName         = "/registry.metadata.v1.MetadataService/DeleteManifest"
-	MetadataService_ListUntaggedManifests_FullMethodName  = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
-	MetadataService_LinkBlob_FullMethodName               = "/registry.metadata.v1.MetadataService/LinkBlob"
-	MetadataService_UnlinkBlob_FullMethodName             = "/registry.metadata.v1.MetadataService/UnlinkBlob"
-	MetadataService_ListOrphanedBlobs_FullMethodName      = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
-	MetadataService_GetTenantQuotaUsage_FullMethodName    = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
-	MetadataService_IncrementTenantStorage_FullMethodName = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
-	MetadataService_DecrementTenantStorage_FullMethodName = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
-	MetadataService_UpdateScanStatus_FullMethodName       = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
-	MetadataService_GetScanResult_FullMethodName          = "/registry.metadata.v1.MetadataService/GetScanResult"
+	MetadataService_CreateRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/CreateRepository"
+	MetadataService_GetRepository_FullMethodName               = "/registry.metadata.v1.MetadataService/GetRepository"
+	MetadataService_ListRepositories_FullMethodName            = "/registry.metadata.v1.MetadataService/ListRepositories"
+	MetadataService_DeleteRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/DeleteRepository"
+	MetadataService_UpdateRepositoryQuota_FullMethodName       = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
+	MetadataService_PutTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/PutTag"
+	MetadataService_GetTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/GetTag"
+	MetadataService_ListTags_FullMethodName                    = "/registry.metadata.v1.MetadataService/ListTags"
+	MetadataService_DeleteTag_FullMethodName                   = "/registry.metadata.v1.MetadataService/DeleteTag"
+	MetadataService_PutManifest_FullMethodName                 = "/registry.metadata.v1.MetadataService/PutManifest"
+	MetadataService_GetManifest_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetManifest"
+	MetadataService_DeleteManifest_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteManifest"
+	MetadataService_ListUntaggedManifests_FullMethodName       = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
+	MetadataService_LinkBlob_FullMethodName                    = "/registry.metadata.v1.MetadataService/LinkBlob"
+	MetadataService_UnlinkBlob_FullMethodName                  = "/registry.metadata.v1.MetadataService/UnlinkBlob"
+	MetadataService_ListOrphanedBlobs_FullMethodName           = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
+	MetadataService_GetTenantQuotaUsage_FullMethodName         = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
+	MetadataService_IncrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
+	MetadataService_DecrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
+	MetadataService_UpdateScanStatus_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
+	MetadataService_GetScanResult_FullMethodName               = "/registry.metadata.v1.MetadataService/GetScanResult"
+	MetadataService_GetTenantVulnerabilityCount_FullMethodName = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -74,6 +75,8 @@ type MetadataServiceClient interface {
 	// Scan status
 	UpdateScanStatus(ctx context.Context, in *UpdateScanStatusRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetScanResult(ctx context.Context, in *GetScanResultRequest, opts ...grpc.CallOption) (*ScanResult, error)
+	// Vulnerability aggregate
+	GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -386,6 +389,16 @@ func (c *metadataServiceClient) GetScanResult(ctx context.Context, in *GetScanRe
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VulnerabilityCountResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetTenantVulnerabilityCount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -417,6 +430,8 @@ type MetadataServiceServer interface {
 	// Scan status
 	UpdateScanStatus(context.Context, *UpdateScanStatusRequest) (*emptypb.Empty, error)
 	GetScanResult(context.Context, *GetScanResultRequest) (*ScanResult, error)
+	// Vulnerability aggregate
+	GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -485,6 +500,9 @@ func (UnimplementedMetadataServiceServer) UpdateScanStatus(context.Context, *Upd
 }
 func (UnimplementedMetadataServiceServer) GetScanResult(context.Context, *GetScanResultRequest) (*ScanResult, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetScanResult not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTenantVulnerabilityCount not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -888,6 +906,24 @@ func _MetadataService_GetScanResult_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetTenantVulnerabilityCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantVulnerabilityCountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetTenantVulnerabilityCount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetTenantVulnerabilityCount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetTenantVulnerabilityCount(ctx, req.(*GetTenantVulnerabilityCountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -962,6 +998,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetScanResult",
 			Handler:    _MetadataService_GetScanResult_Handler,
+		},
+		{
+			MethodName: "GetTenantVulnerabilityCount",
+			Handler:    _MetadataService_GetTenantVulnerabilityCount_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

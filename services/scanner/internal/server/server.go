@@ -58,12 +58,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer pub.Close()
 
-	// Consumer for push.completed events.
+	// Consumer for push.completed events (automatic scan on every image push).
 	cons, err := consumer.New(cfg.RabbitMQURL, worker.ConsumerConfig())
 	if err != nil {
 		return fmt.Errorf("rabbitmq consumer: %w", err)
 	}
 	defer cons.Close()
+
+	// Consumer for scan.queued events (manually triggered scans via management API).
+	scanQueuedCons, err := consumer.New(cfg.RabbitMQURL, worker.ScanQueuedConsumerConfig())
+	if err != nil {
+		return fmt.Errorf("rabbitmq scan.queued consumer: %w", err)
+	}
+	defer scanQueuedCons.Close()
 
 	scanStore := store.New()
 	pool := worker.NewPool(
@@ -83,7 +90,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	go func() {
 		slog.Info("starting push.completed consumer")
 		if err := cons.Consume(ctx, pool.HandlePushCompleted); err != nil {
-			slog.Error("consumer stopped", "error", err)
+			slog.Error("push.completed consumer stopped", "error", err)
+		}
+	}()
+
+	// Consume scan.queued events for manually triggered scans (from management API).
+	go func() {
+		slog.Info("starting scan.queued consumer")
+		if err := scanQueuedCons.Consume(ctx, pool.HandleScanQueued); err != nil {
+			slog.Error("scan.queued consumer stopped", "error", err)
 		}
 	}()
 

@@ -80,6 +80,17 @@ type StoreQueuedPayload struct {
 	Tag            string `json:"tag,omitempty"`
 }
 
+// ScanQueuedPayload is the payload for scan.queued events.
+// Published by registry-management when a user manually triggers a scan via the API,
+// and consumed by registry-scanner to enqueue a scan job outside the normal push.completed flow.
+type ScanQueuedPayload struct {
+	TenantID       string `json:"tenant_id"`
+	RepositoryName string `json:"repository_name"` // "org/repo"
+	RepoID         string `json:"repo_id"`
+	TagName        string `json:"tag_name"`
+	ManifestDigest string `json:"manifest_digest"`
+}
+
 // GCRunStartedPayload is the payload for gc.run.started events.
 type GCRunStartedPayload struct {
 	Mode string `json:"mode"`

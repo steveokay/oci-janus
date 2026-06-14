@@ -18,6 +18,10 @@ type Config struct {
 	// gRPC addresses of upstream services (host:port).
 	AuthGRPCAddr     string `mapstructure:"AUTH_GRPC_ADDR"`
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
+	AuditGRPCAddr    string `mapstructure:"AUDIT_GRPC_ADDR"`
+
+	// RabbitMQ connection URL for publishing scan.queued events.
+	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
 	// CORS_ALLOWED_ORIGIN is the single origin permitted to call the API from a browser.
 	// Must be set explicitly — never wildcarded. Dev default: http://localhost:5173.
@@ -45,6 +49,8 @@ func validate(cfg *Config) error {
 	if err := loader.RequireFields(map[string]string{
 		"AUTH_GRPC_ADDR":     cfg.AuthGRPCAddr,
 		"METADATA_GRPC_ADDR": cfg.MetadataGRPCAddr,
+		"RABBITMQ_URL":       cfg.RabbitMQURL,
+		"AUDIT_GRPC_ADDR":    cfg.AuditGRPCAddr,
 	}); err != nil {
 		return err
 	}
