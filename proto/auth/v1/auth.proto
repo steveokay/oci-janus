@@ -4,6 +4,7 @@ package registry.auth.v1;
 
 option go_package = "github.com/steveokay/oci-janus/proto/gen/go/auth/v1;authv1";
 
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 // AuthService validates tokens and API keys for internal service consumption.
@@ -12,6 +13,9 @@ service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse);
   rpc GetUserPermissions(GetUserPermissionsRequest) returns (GetUserPermissionsResponse);
+  rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
+  rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
 }
 
 message ValidateTokenRequest {
@@ -53,4 +57,42 @@ message RepositoryAccess {
   string type    = 1; // "repository"
   string name    = 2; // "org/repo"
   repeated string actions = 3; // ["push", "pull"]
+}
+
+// RoleAssignment represents a user's role within a specific scope.
+message RoleAssignment {
+  string id          = 1;
+  string user_id     = 2;
+  string role        = 3; // "owner" | "admin" | "writer" | "reader"
+  string scope_type  = 4; // "org" | "repo"
+  string scope_value = 5; // org name or "org/repo"
+  string granted_by  = 6;
+}
+
+// GrantRoleRequest assigns a named role to a user within a tenant scope.
+message GrantRoleRequest {
+  string tenant_id   = 1;
+  string user_id     = 2;
+  string role        = 3; // "owner" | "admin" | "writer" | "reader"
+  string scope_type  = 4; // "org" | "repo"
+  string scope_value = 5;
+  string granted_by  = 6;
+}
+
+// RevokeRoleRequest removes a specific role assignment by its ID.
+message RevokeRoleRequest {
+  string tenant_id    = 1;
+  string assignment_id = 2;
+}
+
+// ListMembersRequest queries all role assignments within a tenant scope.
+message ListMembersRequest {
+  string tenant_id   = 1;
+  string scope_type  = 2; // "org" | "repo"
+  string scope_value = 3;
+}
+
+// ListMembersResponse contains all role assignments for the requested scope.
+message ListMembersResponse {
+  repeated RoleAssignment members = 1;
 }

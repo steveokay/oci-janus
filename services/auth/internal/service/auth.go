@@ -301,6 +301,26 @@ func (s *Service) GetUserByID(ctx context.Context, id uuid.UUID) (*repository.Us
 	return s.users.GetByID(ctx, id)
 }
 
+// GetUserRoles returns all role assignments for a user within a tenant.
+func (s *Service) GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
+	return s.users.GetUserRoles(ctx, userID, tenantID)
+}
+
+// GrantRole creates a role assignment. The role is looked up by name.
+func (s *Service) GrantRole(ctx context.Context, a repository.RoleAssignment) error {
+	return s.users.GrantRole(ctx, a)
+}
+
+// RevokeRole deletes the role assignment with the given ID, scoped to the tenant.
+func (s *Service) RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error {
+	return s.users.RevokeRole(ctx, assignmentID, tenantID)
+}
+
+// ListMembers returns all role assignments within a tenant scope.
+func (s *Service) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error) {
+	return s.users.ListMembers(ctx, tenantID, scopeType, scopeValue)
+}
+
 // ListAPIKeys returns all active API keys owned by the given user.
 func (s *Service) ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]*repository.APIKey, error) {
 	return s.apiKeys.ListByUser(ctx, userID)

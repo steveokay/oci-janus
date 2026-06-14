@@ -14,6 +14,37 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { apiClient } from '@/lib/api/client'
 
+// ---------------------------------------------------------------------------
+// RBAC hook — role-gating (UX layer only; server enforces authoritatively)
+// ---------------------------------------------------------------------------
+
+/**
+ * useUserIsAdmin decodes the JWT stored in localStorage and checks whether the
+ * caller has an admin or owner role claim. This is UX-layer gating only —
+ * the management API re-enforces roles on every request.
+ *
+ * @param _org - reserved for future per-org role lookups; currently unused
+ * @returns true when the decoded JWT payload contains an admin or owner role
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function useUserIsAdmin(_org?: string): boolean {
+  // Retrieve the raw JWT from localStorage (set by the auth layer on login).
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+  if (!token) return false
+  try {
+    // Decode the base64url-encoded middle segment (payload) without verifying the
+    // signature — verification is performed server-side on every API call.
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return (
+      Array.isArray(payload.roles) &&
+      (payload.roles.includes('admin') || payload.roles.includes('owner'))
+    )
+  } catch {
+    // Malformed token — deny access at the UX layer; the server will reject anyway.
+    return false
+  }
+}
+
 export const Route = createFileRoute('/_authenticated/dashboard/')({
   component: RepositoryDashboard,
 })
@@ -223,9 +254,11 @@ function StatsCards() {
  * Repository list driven by GET /api/v1/repositories.
  * Rows link to /dashboard/$repoName (Image Details + sub-tabs).
  * ALL / PUBLIC / PRIVATE tabs filter client-side.
+ * Delete buttons are gated by useUserIsAdmin — server enforces the real check.
  */
 function FeaturedRepositories() {
   const [activeFilter, setActiveFilter] = useState<FeaturedFilter>('ALL')
+  const isAdmin = useUserIsAdmin()
 
   const { data, isLoading, isError } = useQuery<ReposResponse>({
     queryKey: ['repositories'],
@@ -277,14 +310,14 @@ function FeaturedRepositories() {
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">VISIBILITY</th>
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant text-right">STORAGE</th>
               <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">CREATED</th>
-              <th className="px-lg py-md border-b border-outline-variant" aria-hidden="true" />
+              {isAdmin && <th className="px-lg py-md border-b border-outline-variant" aria-hidden="true" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-outline-variant">
             {isLoading && (
               Array.from({ length: 3 }).map((_, i) => (
                 <tr key={i}>
-                  <td colSpan={5} className="px-lg py-md">
+                  <td colSpan={isAdmin ? 5 : 4} className="px-lg py-md">
                     <div className="h-6 bg-surface-container rounded animate-pulse" />
                   </td>
                 </tr>
@@ -292,21 +325,21 @@ function FeaturedRepositories() {
             )}
             {isError && (
               <tr>
-                <td colSpan={5} className="px-lg py-xl text-center text-on-surface-variant text-body-md">
+                <td colSpan={isAdmin ? 5 : 4} className="px-lg py-xl text-center text-on-surface-variant text-body-md">
                   Failed to load repositories.
                 </td>
               </tr>
             )}
             {!isLoading && !isError && repos.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-lg py-xl text-center text-on-surface-variant text-body-md">
+                <td colSpan={isAdmin ? 5 : 4} className="px-lg py-xl text-center text-on-surface-variant text-body-md">
                   No repositories yet.{' '}
                   <span className="text-secondary font-bold">Push your first image to get started.</span>
                 </td>
               </tr>
             )}
             {repos.map((repo) => (
-              <RepoRow key={repo.repo_id} repo={repo} />
+              <RepoRow key={repo.repo_id} repo={repo} isAdmin={isAdmin} />
             ))}
           </tbody>
         </table>
@@ -328,7 +361,7 @@ function FeaturedRepositories() {
 // RepoRow
 // ---------------------------------------------------------------------------
 
-function RepoRow({ repo }: { repo: RepoItem }) {
+function RepoRow({ repo, isAdmin }: { repo: RepoItem; isAdmin: boolean }) {
   const shortName = repo.name.split('/').pop() ?? repo.name
 
   return (
@@ -394,17 +427,30 @@ function RepoRow({ repo }: { repo: RepoItem }) {
         {formatRelativeTime(repo.created_at)}
       </td>
 
-      {/* Row action — navigate to image details */}
-      <td className="px-lg py-md text-right">
-        <Link
-          to="/dashboard/$repoName"
-          params={{ repoName: repo.name }}
-          aria-label={`Open ${repo.name}`}
-          className="material-symbols-outlined text-on-surface-variant hover:text-secondary transition-colors opacity-0 group-hover:opacity-100 text-[20px]"
-        >
-          chevron_right
-        </Link>
-      </td>
+      {/* Row action — chevron or admin delete */}
+      {isAdmin ? (
+        <td className="px-lg py-md text-right">
+          <button
+            type="button"
+            aria-label={`Delete ${repo.name}`}
+            className="material-symbols-outlined text-error hover:text-on-error-container transition-colors opacity-0 group-hover:opacity-100 text-[20px]"
+            onClick={(e) => { e.preventDefault(); /* TODO: call DELETE /api/v1/repositories/:org/:repo */ }}
+          >
+            delete
+          </button>
+        </td>
+      ) : (
+        <td className="px-lg py-md text-right">
+          <Link
+            to="/dashboard/$repoName"
+            params={{ repoName: repo.name }}
+            aria-label={`Open ${repo.name}`}
+            className="material-symbols-outlined text-on-surface-variant hover:text-secondary transition-colors opacity-0 group-hover:opacity-100 text-[20px]"
+          >
+            chevron_right
+          </Link>
+        </td>
+      )}
     </tr>
   )
 }

@@ -68,12 +68,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
 
 	// Repository management.
+	// POST and DELETE require admin role or above (enforced in handler body).
 	mux.Handle("GET /api/v1/repositories", authMW(http.HandlerFunc(h.handleListRepositories)))
 	mux.Handle("POST /api/v1/repositories", authMW(http.HandlerFunc(h.handleCreateRepository)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleGetRepository)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleDeleteRepository)))
 
 	// Tag management.
+	// DELETE requires writer role or above (enforced in handler body).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleListTags)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}", authMW(http.HandlerFunc(h.handleDeleteTag)))
 
@@ -83,6 +85,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Build / audit history — returns empty list until registry-audit query API is ready.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
+
+	// RBAC management — org and repo membership endpoints.
+	h.RegisterRBAC(mux, authMW)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +268,12 @@ type createRepositoryBody struct {
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
+	// Enforce: only admin or owner may create repositories.
+	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
 	// Cap body size to prevent large-payload attacks before decoding.
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
@@ -332,6 +343,12 @@ func (h *Handler) handleGetRepository(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	// Enforce: only admin or owner may delete repositories.
+	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName := r.PathValue("org"), r.PathValue("repo")
 
@@ -434,6 +451,12 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
+	// Enforce: writer or above may delete tags.
+	if roles := h.getUserRoles(r); !hasRole(roles, "writer") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
 
