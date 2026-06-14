@@ -71,6 +71,19 @@ func (h *MetadataHandler) GetRepository(ctx context.Context, req *metadatav1.Get
 	return repo, mapErr(err)
 }
 
+// GetRepositoryByName resolves a repository by its full "org/repo" name within a tenant.
+// This replaces the O(n) stream-scan pattern in registry-management with a single indexed SQL lookup.
+func (h *MetadataHandler) GetRepositoryByName(ctx context.Context, req *metadatav1.GetRepositoryByNameRequest) (*metadatav1.Repository, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	repo, err := h.repo.GetRepositoryByFullName(ctx, req.TenantId, req.Name)
+	return repo, mapErr(err)
+}
+
 func (h *MetadataHandler) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
 	repos, err := h.repo.ListRepositories(stream.Context(), req.TenantId, req.OrgId)
 	if err != nil {

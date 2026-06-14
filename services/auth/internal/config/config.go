@@ -29,6 +29,10 @@ type Config struct {
 	// DevDefaultTenantID is used in local dev when no X-Tenant-ID header is present.
 	// Must not be set in production.
 	DevDefaultTenantID string `mapstructure:"DEV_DEFAULT_TENANT_ID"`
+
+	// RabbitMQURL is the AMQP connection URL for publishing RBAC audit events.
+	// Required so that GrantRole / RevokeRole changes are traceable via registry-audit.
+	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 }
 
 // Load binds environment variables into Config and validates required fields.

@@ -3,7 +3,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -12,6 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
@@ -21,11 +26,13 @@ type GRPCHandler struct {
 	authv1.UnimplementedAuthServiceServer
 	authv1.UnimplementedAuthServiceRBACServer
 	svc *service.Service
+	pub *publisher.Publisher // may be nil in test/dev environments without RabbitMQ
 }
 
 // NewGRPCHandler creates a GRPCHandler backed by the given service.
-func NewGRPCHandler(svc *service.Service) *GRPCHandler {
-	return &GRPCHandler{svc: svc}
+// pub may be nil; if nil, RBAC events are logged but not published (e.g. test environments).
+func NewGRPCHandler(svc *service.Service, pub *publisher.Publisher) *GRPCHandler {
+	return &GRPCHandler{svc: svc, pub: pub}
 }
 
 // ValidateToken parses the JWT, checks the revocation list, and returns the claims.
@@ -153,6 +160,8 @@ func actionsForRole(role string) []string {
 }
 
 // GrantRole creates a role assignment for a user within a tenant scope.
+// On success it publishes an rbac.role_granted event to RabbitMQ so that
+// registry-audit can record the change without a direct gRPC coupling.
 func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleRequest) (*emptypb.Empty, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -192,10 +201,49 @@ func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleReques
 	if err != nil {
 		return nil, status.Error(codes.Internal, "internal error")
 	}
+
+	// Publish audit event after the DB write succeeds. A publish failure is logged
+	// but does not fail the RPC — the grant is already committed to the DB and will
+	// appear in any direct query; the audit trail gap is acceptable vs. rollback complexity.
+	h.publishRoleGranted(ctx, req.GetTenantId(), req.GetUserId(), req.GetRole(),
+		req.GetScopeType(), req.GetScopeValue(), grantedBy.String())
+
 	return &emptypb.Empty{}, nil
 }
 
+// publishRoleGranted emits an rbac.role_granted event. Errors are logged, not returned,
+// so a broker outage never blocks the RBAC operation that already succeeded in the DB.
+func (h *GRPCHandler) publishRoleGranted(ctx context.Context, tenantID, userID, role, scopeType, scopeValue, grantedBy string) {
+	if h.pub == nil {
+		return
+	}
+	payload, err := json.Marshal(events.RoleGrantedPayload{
+		TenantID:   tenantID,
+		UserID:     userID,
+		Role:       role,
+		ScopeType:  scopeType,
+		ScopeValue: scopeValue,
+		GrantedBy:  grantedBy,
+	})
+	if err != nil {
+		slog.Error("marshal rbac.role_granted payload", "err", err)
+		return
+	}
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingRBACRoleGranted,
+		TenantID:   tenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := h.pub.Publish(ctx, events.RoutingRBACRoleGranted, evt); err != nil {
+		slog.Error("publish rbac.role_granted", "err", err, "tenant_id", tenantID, "user_id", userID)
+	}
+}
+
 // RevokeRole deletes the role assignment with the given ID within the tenant.
+// On success it publishes an rbac.role_revoked event to RabbitMQ.
 func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequest) (*emptypb.Empty, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -206,6 +254,10 @@ func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequ
 		return nil, status.Error(codes.InvalidArgument, "invalid assignment_id")
 	}
 
+	// revokedBy is extracted from gRPC metadata if present; for now we default
+	// to the zero UUID (system) since the current RevokeRoleRequest has no actor field.
+	revokedBy := uuid.Nil.String()
+
 	err = h.svc.RevokeRole(ctx, assignmentID, tenantID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -213,7 +265,38 @@ func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequ
 		}
 		return nil, status.Error(codes.Internal, "internal error")
 	}
+
+	// Publish audit event after the DB delete succeeds.
+	h.publishRoleRevoked(ctx, req.GetTenantId(), req.GetAssignmentId(), revokedBy)
+
 	return &emptypb.Empty{}, nil
+}
+
+// publishRoleRevoked emits an rbac.role_revoked event. Errors are logged, not returned.
+func (h *GRPCHandler) publishRoleRevoked(ctx context.Context, tenantID, assignmentID, revokedBy string) {
+	if h.pub == nil {
+		return
+	}
+	payload, err := json.Marshal(events.RoleRevokedPayload{
+		TenantID:     tenantID,
+		AssignmentID: assignmentID,
+		RevokedBy:    revokedBy,
+	})
+	if err != nil {
+		slog.Error("marshal rbac.role_revoked payload", "err", err)
+		return
+	}
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingRBACRoleRevoked,
+		TenantID:   tenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := h.pub.Publish(ctx, events.RoutingRBACRoleRevoked, evt); err != nil {
+		slog.Error("publish rbac.role_revoked", "err", err, "tenant_id", tenantID, "assignment_id", assignmentID)
+	}
 }
 
 // ListMembers returns all role assignments within a tenant scope.

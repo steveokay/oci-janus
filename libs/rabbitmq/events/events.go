@@ -10,22 +10,25 @@ import (
 
 // Routing keys — all events are published to the registry.events topic exchange.
 const (
-	RoutingPushCompleted      = "push.completed"
-	RoutingPushFailed         = "push.failed"
-	RoutingManifestDeleted    = "manifest.deleted"
-	RoutingTagDeleted         = "tag.deleted"
-	RoutingScanQueued         = "scan.queued"
-	RoutingScanCompleted      = "scan.completed"
-	RoutingScanPolicyBlocked  = "scan.policy_blocked"
-	RoutingWebhookQueued      = "webhook.queued"
-	RoutingWebhookDelivered   = "webhook.delivered"
-	RoutingWebhookFailed      = "webhook.failed"
-	RoutingGCRunStarted       = "gc.run.started"
-	RoutingGCRunCompleted     = "gc.run.completed"
-	RoutingImageSigned        = "image.signed"
-	RoutingTenantCreated      = "tenant.created"
+	RoutingPushCompleted        = "push.completed"
+	RoutingPushFailed           = "push.failed"
+	RoutingManifestDeleted      = "manifest.deleted"
+	RoutingTagDeleted           = "tag.deleted"
+	RoutingScanQueued           = "scan.queued"
+	RoutingScanCompleted        = "scan.completed"
+	RoutingScanPolicyBlocked    = "scan.policy_blocked"
+	RoutingWebhookQueued        = "webhook.queued"
+	RoutingWebhookDelivered     = "webhook.delivered"
+	RoutingWebhookFailed        = "webhook.failed"
+	RoutingGCRunStarted         = "gc.run.started"
+	RoutingGCRunCompleted       = "gc.run.completed"
+	RoutingImageSigned          = "image.signed"
+	RoutingTenantCreated        = "tenant.created"
 	RoutingTenantDomainVerified = "tenant.domain.verified"
-	RoutingStoreQueued        = "store.queued" // proxy background store
+	RoutingStoreQueued          = "store.queued" // proxy background store
+	// RBAC audit events — consumed by registry-audit to record membership changes.
+	RoutingRBACRoleGranted = "rbac.role_granted"
+	RoutingRBACRoleRevoked = "rbac.role_revoked"
 )
 
 // Exchange names
@@ -103,4 +106,25 @@ type GCRunCompletedPayload struct {
 	BlobsDeleted     int    `json:"blobs_deleted"`
 	BytesFreed       int64  `json:"bytes_freed"`
 	DryRun           bool   `json:"dry_run"`
+}
+
+// RoleGrantedPayload is the payload for rbac.role_granted events.
+// Published by registry-auth when a role assignment is created so registry-audit
+// can record the change without a direct gRPC dependency on the auth service.
+// Never include passwords, tokens, or secret values in this payload.
+type RoleGrantedPayload struct {
+	TenantID   string `json:"tenant_id"`
+	UserID     string `json:"user_id"`
+	Role       string `json:"role"`
+	ScopeType  string `json:"scope_type"`
+	ScopeValue string `json:"scope_value"`
+	GrantedBy  string `json:"granted_by"`
+}
+
+// RoleRevokedPayload is the payload for rbac.role_revoked events.
+// Published by registry-auth when a role assignment is deleted.
+type RoleRevokedPayload struct {
+	TenantID     string `json:"tenant_id"`
+	AssignmentID string `json:"assignment_id"`
+	RevokedBy    string `json:"revoked_by"`
 }
