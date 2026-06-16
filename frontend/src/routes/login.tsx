@@ -5,8 +5,6 @@ import { z } from 'zod'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import {
-  User,
-  Lock,
   Loader2,
 } from 'lucide-react'
 import { apiClient } from '@/lib/api/client'
@@ -119,33 +117,32 @@ function LoginPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Header                                                               */}
       {/* ------------------------------------------------------------------ */}
-      <header className="px-6 flex items-center justify-between w-full max-w-[1440px] mx-auto h-16 sticky top-0 z-50">
-        <div className="flex items-center gap-1">
+      <header className="p-lg flex items-center justify-between w-full max-w-[1440px] mx-auto h-16 sticky top-0 z-50">
+        <div className="flex items-center gap-xs">
           {/*
            * Material Symbols inventory_2 matches the reference exactly —
            * FILL 1 renders the solid/filled variant of the box icon.
            * The font is already loaded via index.html via Google Fonts CDN.
            */}
           <span
-            className="material-symbols-outlined text-[#000917] text-[20px] leading-none"
+            className="material-symbols-outlined text-[#000917] text-headline-md leading-none"
             style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
           >
             inventory_2
           </span>
-          <span className="text-xl font-bold text-[#0b1c30]">ContainerRegistry</span>
+          <span className="font-headline-md text-headline-md font-bold text-[#0b1c30]">ContainerRegistry</span>
         </div>
-        <div className="flex items-center gap-4">
-          {/* label-caps in the reference is 12px/700/0.05em tracking but NOT text-transform:uppercase
-              — the reference renders "Documentation" and "Support" in mixed case */}
+        <div className="flex items-center gap-md">
+          {/* label-caps in the reference: 12px/700/0.05em — mixed case per globals.css note */}
           <a
             href="#"
-            className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917] transition-colors"
+            className="font-label-caps text-label-caps text-[#44474d] hover:text-[#000917] transition-colors"
           >
             Documentation
           </a>
           <a
             href="#"
-            className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917] transition-colors"
+            className="font-label-caps text-label-caps text-[#44474d] hover:text-[#000917] transition-colors"
           >
             Support
           </a>
@@ -179,14 +176,14 @@ function LoginPage() {
           </div>
         </div>
 
-        {/* Login card — rounded-[4px] matches reference's custom "lg" = 0.25rem border-radius */}
-        <div className="w-full max-w-[440px] login-card-blur border border-[#c4c6cd] p-6 md:p-8 shadow-lg relative z-10 rounded-[4px]">
+        {/* Login card — reference: max-w-[440px] login-card-blur border border-outline-variant p-lg md:p-xl shadow-lg relative z-10 */}
+        <div className="w-full max-w-[440px] login-card-blur border border-outline-variant p-lg md:p-xl shadow-lg relative z-10">
           {/* Heading */}
-          <div className="mb-8">
-            <h1 className="text-[28px] leading-9 font-semibold text-[#0b1c30] mb-1">
+          <div className="mb-xl">
+            <h1 className="font-headline-lg text-headline-lg text-[#0b1c30] mb-xs">
               Welcome back
             </h1>
-            <p className="text-sm text-[#44474d]">
+            <p className="font-body-md text-body-md text-[#44474d]">
               Access your secure image repositories.
             </p>
           </div>
@@ -199,7 +196,7 @@ function LoginPage() {
           )}
 
           {/* Form */}
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-md" noValidate>
             {/* Root/server error banner */}
             {errors.root && (
               <p className="text-xs text-[#ba1a1a] bg-[#ffdad6] border border-[#ba1a1a]/30 rounded px-3 py-2">
@@ -208,18 +205,18 @@ function LoginPage() {
             )}
 
             {/* Username / email */}
-            <div className="space-y-1">
+            <div className="space-y-xs">
               <label
                 htmlFor="username"
-                className="block text-xs font-bold uppercase tracking-widest text-[#44474d]"
+                className="font-label-caps text-label-caps text-[#44474d] block"
               >
-                Username or Email
+                USERNAME OR EMAIL
               </label>
               <div className="relative group">
-                <User
-                  className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#74777d] group-focus-within:text-[#000917] transition-colors"
+                <span
+                  className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-outline group-focus-within:text-primary transition-colors"
                   aria-hidden="true"
-                />
+                >person</span>
                 <input
                   id="username"
                   type="text"
@@ -228,12 +225,13 @@ function LoginPage() {
                   aria-invalid={!!errors.username}
                   aria-describedby={errors.username ? 'username-error' : undefined}
                   className={[
-                    // rounded-[4px] matches reference rounded-lg = 0.25rem (custom scale overrides Tailwind default 8px)
-                    'w-full pl-12 pr-4 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
+                    // pl-[48px] = 16px icon left-md + 24px icon width + 8px gap — matches reference
+                    // rounded-lg = 0.25rem per the custom scale in globals.css
+                    'w-full pl-[48px] pr-md py-sm bg-surface-container-low border rounded-lg font-body-md',
                     'focus:outline-none focus:ring-0 transition-all',
                     errors.username
                       ? 'border-[#ba1a1a] focus:border-[#ba1a1a]'
-                      : 'border-[#c4c6cd] focus:border-[#000917]',
+                      : 'border-outline-variant focus:border-primary',
                   ].join(' ')}
                   {...register('username')}
                 />
@@ -246,18 +244,18 @@ function LoginPage() {
             </div>
 
             {/* Password */}
-            <div className="space-y-1">
+            <div className="space-y-xs">
               <div className="flex items-center justify-between">
                 <label
                   htmlFor="password"
-                  className="block text-xs font-bold uppercase tracking-widest text-[#44474d]"
+                  className="font-label-caps text-label-caps text-[#44474d] block"
                 >
-                  Password
+                  PASSWORD
                 </label>
                 {/* label-caps: 12px/700/0.05em — NOT uppercase; reference renders "Forgot Password?" in mixed case */}
                 <a
                   href="#"
-                  className="text-xs font-bold tracking-[0.05em] text-[#2f6096] hover:underline"
+                  className="font-label-caps text-label-caps text-secondary hover:underline"
                 >
                   Forgot Password?
                 </a>
@@ -268,10 +266,10 @@ function LoginPage() {
                * used (same as username) since there is no right-side button.
                */}
               <div className="relative group">
-                <Lock
-                  className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#74777d] group-focus-within:text-[#000917] transition-colors"
+                <span
+                  className="material-symbols-outlined absolute left-md top-1/2 -translate-y-1/2 text-outline group-focus-within:text-primary transition-colors"
                   aria-hidden="true"
-                />
+                >lock</span>
                 <input
                   id="password"
                   type="password"
@@ -280,13 +278,13 @@ function LoginPage() {
                   aria-invalid={!!errors.password}
                   aria-describedby={errors.password ? 'password-error' : undefined}
                   className={[
-                    // rounded-[4px] matches reference rounded-lg = 0.25rem (custom scale overrides Tailwind default 8px)
-                    // pr-4 instead of pr-12: no eye-toggle button on the right
-                    'w-full pl-12 pr-4 py-2 bg-[#eff4ff] border rounded-[4px] text-sm',
+                    // pl-[48px] matches reference; pr-md since there is no eye-toggle button
+                    // rounded-lg = 0.25rem per the custom scale in globals.css
+                    'w-full pl-[48px] pr-md py-sm bg-surface-container-low border rounded-lg font-body-md',
                     'focus:outline-none focus:ring-0 transition-all',
                     errors.password
                       ? 'border-[#ba1a1a] focus:border-[#ba1a1a]'
-                      : 'border-[#c4c6cd] focus:border-[#000917]',
+                      : 'border-outline-variant focus:border-primary',
                   ].join(' ')}
                   {...register('password')}
                 />
@@ -303,9 +301,9 @@ function LoginPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-4 mt-6 bg-[#0d2137] text-white text-[20px] leading-7 font-semibold rounded-[4px]
+              className="w-full py-md mt-lg bg-primary-container text-surface font-headline-md text-headline-md rounded-lg
                          hover:opacity-90 active:scale-[0.98] transition-all
-                         flex items-center justify-center gap-2
+                         flex items-center justify-center gap-sm
                          disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
             >
               {isSubmitting ? (
@@ -329,21 +327,18 @@ function LoginPage() {
           </form>
 
           {/* Divider */}
-          <div className="relative flex items-center my-8">
+          <div className="relative flex items-center my-xl">
             <div className="flex-grow border-t border-[#c4c6cd]" />
-            <span className="px-4 text-xs font-bold uppercase tracking-widest text-[#44474d]">
-              Or continue with
-            </span>
+            <span className="px-md font-label-caps text-label-caps text-[#44474d]">OR CONTINUE WITH</span>
             <div className="flex-grow border-t border-[#c4c6cd]" />
           </div>
 
-          {/* SSO — py-4 (16px) matches reference py-md=16px; text-[20px] matches headline-md;
-              rounded-[4px] matches reference rounded-lg=0.25rem; hover bg matches surface-container-low */}
+          {/* SSO — matches reference exactly: py-md, border-outline-variant, rounded-lg, font-headline-md */}
           <button
             type="button"
-            className="w-full py-4 border border-[#c4c6cd] bg-white text-[#0b1c30] text-[20px] leading-7 font-semibold
-                       rounded-[4px] hover:bg-[#eff4ff] active:scale-[0.98] transition-all
-                       flex items-center justify-center gap-2"
+            className="w-full py-md border border-outline-variant bg-white text-on-surface font-headline-md text-headline-md
+                       rounded-lg hover:bg-surface-container-low active:scale-[0.98] transition-all
+                       flex items-center justify-center gap-sm"
           >
             {/*
              * Material Symbols shield_person with FILL 1 (filled style) matches the reference.
@@ -360,8 +355,8 @@ function LoginPage() {
           </button>
 
           {/* Registration link */}
-          <div className="mt-8 text-center">
-            <p className="text-sm text-[#44474d]">
+          <div className="mt-xl text-center">
+            <p className="font-body-md text-body-md text-[#44474d]">
               New user?{' '}
               <a href="#" className="text-[#2f6096] font-bold hover:underline">
                 Request Access
@@ -374,37 +369,38 @@ function LoginPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Footer                                                               */}
       {/* ------------------------------------------------------------------ */}
-      <footer className="px-6 py-6 border-t border-[#c4c6cd] bg-white">
-        <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
+      <footer className="p-lg border-t border-[#c4c6cd] bg-[#ffffff]">
+        <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center justify-between gap-md">
+          <div className="flex items-center gap-sm">
             {/*
              * Material Symbols verified_user matches the reference footer icon exactly.
              * on-tertiary-container (#009c54) is the green color used in the reference.
+             * text-body-lg matches the reference `text-body-lg` class on this icon.
              */}
             <span
-              className="material-symbols-outlined text-[#009c54] text-[16px] leading-none"
+              className="material-symbols-outlined text-[#009c54] text-body-lg"
               aria-hidden="true"
             >
               verified_user
             </span>
-            <span className="text-xs font-bold uppercase tracking-widest text-[#44474d]">
-              FIPS 140-2 Compliant Registry
+            <span className="font-label-caps text-label-caps text-[#44474d]">
+              FIPS 140-2 COMPLIANT REGISTRY
             </span>
           </div>
-          {/* label-caps is 12px/700/0.05em tracking — reference renders these in mixed case, NOT all-caps */}
-          <div className="flex items-center gap-8">
-            <span className="text-xs font-bold tracking-[0.05em] text-[#44474d]">
+          {/* Reference uses gap-xl (32px) between the three right-side items */}
+          <div className="flex items-center gap-xl">
+            <span className="font-label-caps text-label-caps text-[#44474d]">
               © 2024 ContainerRegistry
             </span>
             <a
               href="#"
-              className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917]"
+              className="font-label-caps text-label-caps text-[#44474d] hover:text-[#000917]"
             >
               Privacy Policy
             </a>
             <a
               href="#"
-              className="text-xs font-bold tracking-[0.05em] text-[#44474d] hover:text-[#000917]"
+              className="font-label-caps text-label-caps text-[#44474d] hover:text-[#000917]"
             >
               Terms of Service
             </a>

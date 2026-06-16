@@ -226,14 +226,14 @@ function ImageDetailsPage() {
           <div className="relative z-10">
             {/* Title row — repo name + PUBLIC badge */}
             <div className="flex items-center gap-md mb-md">
-              <h1 className="text-display text-on-surface">{repoName}</h1>
+              <h1 className="font-display text-display text-on-surface">{repoName}</h1>
               <span className="bg-secondary-fixed text-on-secondary-fixed px-sm py-xs rounded text-label-caps font-bold uppercase">
                 PUBLIC
               </span>
             </div>
 
             {/* Description */}
-            <p className="text-body-lg text-on-surface-variant mb-xl" style={{ maxWidth: '42rem' }}>
+            <p className="font-body-lg text-body-lg text-on-surface-variant mb-xl" style={{ maxWidth: '42rem' }}>
               Core application container for the global production cluster. Optimized
               for high-throughput processing and secure data handling. Updated daily
               via automated CI/CD pipelines.
@@ -321,7 +321,7 @@ function ImageDetailsPage() {
       <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
         {/* Table toolbar */}
         <div className="px-xl py-lg border-b border-outline-variant flex items-center justify-between">
-          <h2 className="text-headline-md text-on-surface">Available Tags</h2>
+          <h2 className="font-headline-md text-headline-md text-on-surface">Available Tags</h2>
           <div className="flex items-center gap-sm">
             <button
               type="button"
@@ -412,7 +412,7 @@ function ImageDetailsPage() {
 
         {/* Push Frequency chart */}
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
-          <h3 className="text-headline-md text-on-surface mb-md flex items-center gap-sm">
+          <h3 className="font-headline-md text-headline-md text-on-surface mb-md flex items-center gap-sm">
             <span className="material-symbols-outlined text-primary">analytics</span>
             Push Frequency
           </h3>
@@ -436,7 +436,7 @@ function ImageDetailsPage() {
 
         {/* Recent Activity feed */}
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
-          <h3 className="text-headline-md text-on-surface mb-md flex items-center gap-sm">
+          <h3 className="font-headline-md text-headline-md text-on-surface mb-md flex items-center gap-sm">
             <span className="material-symbols-outlined text-primary">history</span>
             Recent Activity
           </h3>

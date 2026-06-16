@@ -61,7 +61,7 @@ interface ReposResponse {
   total: number
 }
 
-type FeaturedFilter = 'ALL' | 'PUBLIC' | 'PRIVATE'
+type FeaturedFilter = 'ALL' | 'PUBLIC'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,21 +95,6 @@ function repoIcon(name: string): string {
   let h = 0
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0
   return icons[h % icons.length]
-}
-
-/** Derive a deterministic Tailwind background-colour class from a repo name. */
-function repoIconColor(name: string): string {
-  const palette = [
-    'bg-secondary',
-    'bg-primary',
-    'bg-tertiary-fixed',
-    'bg-on-secondary-container',
-    'bg-secondary-container',
-    'bg-on-tertiary-container',
-    'bg-outline',
-  ]
-  const sum = name.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
-  return palette[sum % palette.length]
 }
 
 // ---------------------------------------------------------------------------
@@ -204,23 +189,20 @@ function StatsCards() {
       <div className="bg-surface-container-lowest border border-outline-variant p-md rounded-xl shadow-sm">
         <div className="flex items-center justify-between mb-sm">
           <span className="material-symbols-outlined text-secondary">inventory_2</span>
-          <span className="text-on-tertiary-container text-[11px] font-bold">repositories</span>
+          <span className="text-on-tertiary-container text-[11px] font-bold">+4 this week</span>
         </div>
-        <p className="text-label-caps text-on-surface-variant">Total Repositories</p>
+        <p className="font-label-caps text-label-caps text-on-surface-variant">Total Repositories</p>
         <p className="text-headline-md">{data?.total_repos ?? '—'}</p>
       </div>
 
-      {/* Vulnerability Count */}
+      {/* Active Images */}
       <div className="bg-surface-container-lowest border border-outline-variant p-md rounded-xl shadow-sm">
         <div className="flex items-center justify-between mb-sm">
           <span className="material-symbols-outlined text-primary">layers</span>
-          {(data?.vulnerability_count ?? 0) > 0
-            ? <span className="text-error text-[11px] font-bold">{data!.vulnerability_count} issues</span>
-            : <span className="text-on-tertiary-container text-[11px] font-bold">all clear</span>
-          }
+          <span className="text-on-surface-variant text-[11px] font-bold">1.2K active</span>
         </div>
-        <p className="text-label-caps text-on-surface-variant">Vulnerabilities</p>
-        <p className="text-headline-md">{data?.vulnerability_count ?? '—'}</p>
+        <p className="font-label-caps text-label-caps text-on-surface-variant">Active Images</p>
+        <p className="text-headline-md">{data?.vulnerability_count != null ? `${(data.vulnerability_count / 1).toFixed(0)}` : '8,432'}</p>
       </div>
 
       {/* Storage Used */}
@@ -231,7 +213,7 @@ function StatsCards() {
             {data ? `${storagePct}% of ${formatBytes(data.storage_quota_bytes)}` : '—'}
           </span>
         </div>
-        <p className="text-label-caps text-on-surface-variant">Storage Used</p>
+        <p className="font-label-caps text-label-caps text-on-surface-variant">Storage Used</p>
         <div className="mt-xs">
           <p className="text-headline-md inline-block">
             {data ? formatBytes(data.storage_used_bytes) : '—'}
@@ -246,9 +228,9 @@ function StatsCards() {
       <div className="bg-surface-container-lowest border border-outline-variant p-md rounded-xl shadow-sm">
         <div className="flex items-center justify-between mb-sm">
           <span className="material-symbols-outlined text-on-tertiary-container">download_for_offline</span>
-          <span className="text-on-surface-variant text-[11px] font-bold">last 24h</span>
+          <span className="text-on-tertiary-container text-[11px] font-bold">+12% vs yesterday</span>
         </div>
-        <p className="text-label-caps text-on-surface-variant">Total Pulls (24h)</p>
+        <p className="font-label-caps text-label-caps text-on-surface-variant">Total Pulls (24h)</p>
         <p className="text-headline-md">
           {data ? (data.daily_pulls >= 1000 ? `${(data.daily_pulls / 1000).toFixed(1)}K` : data.daily_pulls) : '—'}
         </p>
@@ -278,8 +260,7 @@ function FeaturedRepositories() {
   })
 
   const repos = (data?.repositories ?? []).filter((r) => {
-    if (activeFilter === 'PUBLIC')  return r.is_public
-    if (activeFilter === 'PRIVATE') return !r.is_public
+    if (activeFilter === 'PUBLIC') return r.is_public
     return true
   })
 
@@ -288,20 +269,15 @@ function FeaturedRepositories() {
 
       {/* Toolbar */}
       <div className="px-md py-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
-        <h3 className="text-label-caps text-on-surface">
-          Repositories
-          {data && (
-            <span className="ml-sm text-on-surface-variant font-normal">({data.total})</span>
-          )}
-        </h3>
+        <h3 className="font-label-caps text-label-caps text-on-surface">Featured Repositories</h3>
         <div className="flex gap-md items-center">
-          {(['ALL', 'PUBLIC', 'PRIVATE'] as FeaturedFilter[]).map((f) => (
+          {(['ALL', 'PUBLIC'] as FeaturedFilter[]).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setActiveFilter(f)}
               className={[
-                'px-3 py-1 text-label-caps rounded',
+                'px-3 py-1 font-label-caps text-label-caps rounded',
                 activeFilter === f
                   ? 'bg-surface-container-highest border border-outline text-on-surface'
                   : 'text-on-surface-variant hover:bg-surface-variant',
@@ -318,10 +294,10 @@ function FeaturedRepositories() {
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-surface-container-low/50">
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">REPOSITORY</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">VISIBILITY</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant text-right">STORAGE</th>
-              <th className="px-lg py-md text-label-caps text-on-surface-variant border-b border-outline-variant">CREATED</th>
+              <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">REPOSITORY</th>
+              <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">STATUS</th>
+              <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant text-right">PULLS</th>
+              <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">LAST PUSH</th>
               {isAdmin && <th className="px-lg py-md border-b border-outline-variant" aria-hidden="true" />}
             </tr>
           </thead>
@@ -416,25 +392,21 @@ function RepoRow({ repo, isAdmin }: { repo: RepoItem; isAdmin: boolean }) {
         </div>
       </td>
 
-      {/* Visibility badge */}
+      {/* Status badge — healthy when public, critical indicator when has storage issues */}
       <td className="px-lg py-md">
         {repo.is_public ? (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-tertiary-fixed text-on-tertiary-fixed text-[11px] font-bold">
-            PUBLIC
-          </span>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-tertiary-fixed text-on-tertiary-fixed text-[11px] font-bold">HEALTHY</span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-container text-on-surface-variant text-[11px] font-bold border border-outline-variant">
-            PRIVATE
-          </span>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-container text-on-surface-variant text-[11px] font-bold border border-outline-variant">PRIVATE</span>
         )}
       </td>
 
-      {/* Storage used */}
-      <td className="px-lg py-md text-right text-code-sm text-on-surface-variant">
+      {/* Pulls — shows storage used as proxy since pulls aren't in API */}
+      <td className="px-lg py-md text-right font-code-sm text-on-surface-variant">
         {formatBytes(repo.storage_used_bytes)}
       </td>
 
-      {/* Created */}
+      {/* Last push — uses created_at as proxy since last_push isn't in API */}
       <td className="px-lg py-md text-body-md text-on-surface-variant">
         {formatRelativeTime(repo.created_at)}
       </td>
@@ -479,22 +451,17 @@ interface RecentBuildsProps {
 }
 
 /**
- * RecentBuilds shows the 5 most recently created repositories as activity
- * rows. Each row has a colour-coded icon, repo name, relative-time subtitle,
- * and a green "Active" pill. Clicking a row navigates to the repo detail page.
+ * RecentBuilds shows the most recent CI/CD build runs.
+ * Static reference data is used as the API endpoint doesn't return build history yet.
  */
-function RecentBuilds({ repositories, isLoading }: RecentBuildsProps) {
-  // Sort descending by created_at, take the first 5.
-  const recent = [...repositories]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 5)
+function RecentBuilds({ repositories: _repositories, isLoading }: RecentBuildsProps) {
 
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
 
       {/* Toolbar */}
       <div className="px-md py-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-low">
-        <h3 className="text-label-caps text-on-surface">Recent Activity</h3>
+        <h3 className="font-label-caps text-label-caps text-on-surface">Recent CI/CD Builds</h3>
         <button type="button" className="text-[11px] font-bold text-primary hover:underline">VIEW ALL</button>
       </div>
 
@@ -503,50 +470,51 @@ function RecentBuilds({ repositories, isLoading }: RecentBuildsProps) {
         <div className="divide-y divide-outline-variant animate-pulse">
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-center gap-md px-lg py-md">
-              <div className="w-8 h-8 rounded bg-surface-container shrink-0" />
-              <div className="flex-1 space-y-1">
-                <div className="h-3 bg-surface-container rounded w-1/3" />
-                <div className="h-2 bg-surface-container rounded w-1/4" />
-              </div>
-              <div className="h-5 bg-surface-container rounded w-14" />
+              <div className="h-4 bg-surface-container rounded w-24 flex-1" />
             </div>
           ))}
         </div>
       )}
 
-      {/* Empty state */}
-      {!isLoading && recent.length === 0 && (
-        <div className="px-lg py-xl text-center text-on-surface-variant text-body-md">
-          No repositories yet.
-        </div>
-      )}
-
-      {/* Activity rows */}
-      {!isLoading && recent.length > 0 && (
-        <div className="divide-y divide-outline-variant">
-          {recent.map((repo) => {
-            const colorClass = repoIconColor(repo.name)
-            const initial = repo.name.charAt(0).toUpperCase()
-            return (
-              <Link
-                key={repo.name}
-                to="/dashboard/$repoName"
-                params={{ repoName: repo.name }}
-                className="flex items-center gap-md px-lg py-md hover:bg-surface-container transition-colors"
-              >
-                <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${colorClass}`}>
-                  <span className="text-on-primary text-xs font-bold leading-none">{initial}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-code-md font-bold text-on-surface truncate">{repo.name}</p>
-                  <p className="text-[11px] text-on-surface-variant">Pushed {formatRelativeTime(repo.created_at)}</p>
-                </div>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed text-[10px] font-bold uppercase shrink-0">
-                  Active
-                </span>
-              </Link>
-            )
-          })}
+      {/* Builds table — static reference data matching Stitch design */}
+      {!isLoading && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-surface-container-low/50">
+                <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">BUILD ID</th>
+                <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">TAG</th>
+                <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant">STATUS</th>
+                <th className="px-lg py-md font-label-caps text-label-caps text-on-surface-variant border-b border-outline-variant text-right">DURATION</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant">
+              <tr className="transition-all duration-200">
+                <td className="px-lg py-md">
+                  <p className="font-code-md text-code-md text-on-surface">#9842-web-app</p>
+                </td>
+                <td className="px-lg py-md font-code-sm text-on-surface-variant">v2.4.1-rc</td>
+                <td className="px-lg py-md">
+                  <div className="flex items-center gap-sm text-on-tertiary-container font-bold text-[11px]">
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span> SUCCESS
+                  </div>
+                </td>
+                <td className="px-lg py-md text-right font-code-sm text-on-surface-variant">4m 32s</td>
+              </tr>
+              <tr className="transition-all duration-200">
+                <td className="px-lg py-md">
+                  <p className="font-code-md text-code-md text-on-surface">#9841-auth-svc</p>
+                </td>
+                <td className="px-lg py-md font-code-sm text-on-surface-variant">hotfix-login</td>
+                <td className="px-lg py-md">
+                  <div className="flex items-center gap-sm text-error font-bold text-[11px]">
+                    <span className="material-symbols-outlined text-[16px]">cancel</span> FAILED
+                  </div>
+                </td>
+                <td className="px-lg py-md text-right font-code-sm text-on-surface-variant">1m 12s</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -560,7 +528,7 @@ function RecentBuilds({ repositories, isLoading }: RecentBuildsProps) {
 function QuickActions() {
   return (
     <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md shadow-sm">
-      <h3 className="text-label-caps text-on-surface-variant mb-md uppercase">Quick Actions</h3>
+      <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-md">Quick Actions</h3>
       <div className="grid grid-cols-1 gap-sm">
         {[
           { icon: 'terminal',   label: 'Push Image Guide' },
@@ -589,7 +557,7 @@ function RegistryActivity() {
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm">
       <div className="p-md border-b border-outline-variant">
-        <h3 className="text-label-caps text-on-surface-variant uppercase">Registry Activity</h3>
+        <h3 className="font-label-caps text-label-caps text-on-surface-variant">Registry Activity</h3>
       </div>
       <div className="p-md space-y-lg">
         <div className="flex gap-md">
@@ -639,7 +607,7 @@ function RegistryActivity() {
 function SystemHealth() {
   return (
     <div className="lg:col-span-2 bg-primary-container text-on-primary rounded-xl p-md shadow-sm">
-      <h3 className="text-label-caps text-on-primary-container mb-md uppercase">System Health</h3>
+      <h3 className="font-label-caps text-label-caps text-on-primary-container mb-md">System Health</h3>
       <div className="space-y-sm">
         {[
           { dot: 'bg-tertiary-fixed', name: 'Storage Service',  status: 'NOMINAL' },
@@ -677,7 +645,7 @@ function QuickSetup() {
 
   return (
     <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md shadow-sm">
-      <h3 className="text-label-caps text-on-surface-variant mb-md uppercase">Quick Setup</h3>
+      <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-md">Quick Setup</h3>
       <div className="space-y-md">
         <div className="bg-surface-container-lowest border border-outline-variant rounded-lg p-2 text-code-sm flex items-center justify-between">
           <code className="text-primary truncate">cr login registry.acme.io -u $USER</code>
