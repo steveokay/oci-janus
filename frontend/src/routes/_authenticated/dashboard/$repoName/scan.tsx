@@ -576,7 +576,7 @@ function FindingsTable({ findings }: { findings: Finding[] }) {
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
       {/* Toolbar */}
       <div className="p-md bg-surface-container-low border-b border-outline-variant flex flex-col md:flex-row md:items-center justify-between gap-md">
-        <h3 className="text-headline-md text-on-surface">Vulnerability Details</h3>
+        <h3 className="font-headline-md text-headline-md text-on-surface">Vulnerability Details</h3>
         <div className="flex items-center gap-sm">
           {/* Search input */}
           <div className="relative">
@@ -809,7 +809,7 @@ function FixStatusCell({ finding }: { finding: Finding }) {
 function ScanStats({ meta, counts }: { meta: ScanMeta; counts: SeverityCounts }) {
   return (
     <div className="bg-surface-container border border-outline-variant p-xl rounded-xl">
-      <h3 className="text-headline-md text-on-surface mb-md">Scan Statistics</h3>
+      <h3 className="font-headline-md text-headline-md text-on-surface mb-md">Scan Statistics</h3>
       <div className="space-y-lg">
         <div className="flex justify-between items-center">
           <span className="text-on-surface-variant text-body-md">Packages Scanned</span>
@@ -897,7 +897,7 @@ function RemediationGuide() {
   return (
     <div className="bg-primary-container text-on-primary p-xl rounded-xl relative overflow-hidden">
       <div className="relative z-10">
-        <h3 className="text-headline-lg mb-md">Remediation Guide</h3>
+        <h3 className="font-headline-lg text-headline-lg mb-md">Remediation Guide</h3>
         <p className="mb-lg opacity-80 text-body-lg">
           We detected several base OS vulnerabilities that can be resolved by upgrading your
           base image from{' '}

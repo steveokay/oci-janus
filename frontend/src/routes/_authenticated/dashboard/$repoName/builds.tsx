@@ -276,7 +276,7 @@ function BuildHistoryPage() {
             <span className="text-on-surface font-bold">Build History</span>
           </nav>
 
-          <h1 className="font-display text-display text-on-surface">Build History</h1>
+          <h1 className="font-display text-display text-on-surface leading-tight">Build History</h1>
           <p className="text-on-surface-variant font-body-lg text-body-lg mt-xs">
             Tracking automated CI/CD builds for{' '}
             <code className="font-code-md text-code-md bg-surface-variant px-xs rounded">
@@ -690,7 +690,7 @@ function ConsolePreview() {
   return (
     <div>
       <div className="flex items-center justify-between mb-md">
-        <h3 className="text-headline-md text-on-surface">Quick Console Preview</h3>
+        <h3 className="font-headline-md text-headline-md text-on-surface">Quick Console Preview</h3>
         <div className="flex items-center gap-xs">
           <span className="w-2 h-2 rounded-full bg-tertiary-fixed-dim" />
           <span className="font-label-caps text-label-caps text-on-surface-variant">Live Output</span>
@@ -806,7 +806,7 @@ function ScanSummary() {
 
   return (
     <div>
-      <h3 className="text-headline-md text-on-surface mb-md">Scan Summary</h3>
+      <h3 className="font-headline-md text-headline-md text-on-surface mb-md">Scan Summary</h3>
       <div className="bg-surface-container-lowest border border-outline-variant p-md rounded-xl h-full flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between mb-md">

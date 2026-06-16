@@ -172,7 +172,7 @@ function AuthenticatedLayout() {
          * p-gutter uses the --spacing-gutter custom token (20px) for consistent
          * page gutters. bg-surface ensures the content area matches the shell.
          */}
-        <main className="ml-64 flex-1 py-gutter px-[56px] bg-surface min-h-screen">
+        <main className="ml-64 flex-1 p-gutter bg-surface min-h-screen">
           <div className="max-w-[1440px] mx-auto">
             <Outlet />
           </div>
@@ -319,6 +319,7 @@ interface NavItem {
   label: string       // Display text
   to: string          // Route path
   active?: boolean    // Highlight as the current page
+  compact?: boolean   // Bottom utility links use smaller vertical padding
 }
 
 /**
@@ -359,61 +360,55 @@ function SideNavBar() {
     <aside className="fixed left-0 top-16 h-[calc(100vh-64px)] w-64 bg-surface-container-low border-r border-outline-variant z-40 flex flex-col py-md px-sm">
 
       {/* ── Organisation header ──────────────────────────────────────────── */}
-      <div className="flex items-center gap-sm px-sm mb-md">
-        {/*
-         * Icon container uses bg-primary-container with a monospace terminal
-         * icon to signal this is a developer-facing registry product.
-         */}
-        <div className="w-8 h-8 bg-primary-container rounded flex items-center justify-center flex-shrink-0">
-          <span className="material-symbols-outlined text-on-primary-container text-[16px]">
-            terminal
-          </span>
-        </div>
-        <div className="min-w-0">
-          <p className="text-label-caps text-on-surface truncate">Registry Admin</p>
-          <p className="text-[10px] uppercase tracking-wider text-on-surface-variant truncate">
-            Production Cluster
-          </p>
+      <div className="px-sm mb-lg">
+        <div className="flex items-center gap-sm mb-base">
+          {/*
+           * Icon container uses bg-primary-container with a terminal icon
+           * to signal this is a developer-facing registry product.
+           */}
+          <div className="w-8 h-8 bg-primary rounded flex items-center justify-center flex-shrink-0">
+            <span
+              className="material-symbols-outlined text-on-primary text-[20px]"
+              style={{ fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}
+            >
+              inventory_2
+            </span>
+          </div>
+          <div className="min-w-0">
+            <p className="font-label-caps text-label-caps text-on-surface-variant truncate">Registry Admin</p>
+            <p className="text-xs text-on-surface-variant/70 truncate">Production Cluster</p>
+          </div>
         </div>
       </div>
 
-      {/* ── Primary action — New Repository ─────────────────────────────── */}
-      {/*
-       * The button is mx-md (margin left/right 16px each) so it aligns with
-       * the inner content region while still having visual separation from the
-       * sidebar edge. mb-lg adds breathing room before the nav links.
-       */}
-      <button
-        type="button"
-        className="
-          mx-md mb-lg
-          flex items-center justify-center gap-xs
-          bg-primary text-on-primary
-          rounded-lg py-sm
-          text-label-caps
-          hover:opacity-90 active:scale-[0.98] transition-all
-        "
-      >
-        <span className="material-symbols-outlined text-[18px]">add</span>
-        New Repository
-      </button>
-
       {/* ── Main navigation links ────────────────────────────────────────── */}
-      <nav className="flex flex-col gap-1 flex-1" aria-label="Main navigation">
+      <nav className="flex-1 flex flex-col gap-1 px-sm" aria-label="Main navigation">
         {mainNavItems.map((item) => (
           <SideNavLink key={item.to} item={item} />
         ))}
       </nav>
 
+      {/* ── Primary action — New Repository ─────────────────────────────── */}
+      {/*
+       * Placed after the main nav items, before the bottom utility links.
+       * Uses mt-lg to separate from the nav, mb-md before the divider.
+       */}
+      <button
+        type="button"
+        className="mx-sm mt-lg mb-md py-sm bg-primary-container text-on-primary font-label-caps text-label-caps font-bold rounded-lg flex items-center justify-center gap-xs hover:opacity-90 transition-opacity active:scale-95"
+      >
+        <span className="material-symbols-outlined text-sm">add</span>
+        New Repository
+      </button>
+
       {/* ── Bottom utility links ─────────────────────────────────────────── */}
       {/*
-       * mt-auto pushes this section to the bottom of the flex column,
-       * creating a stable footer region regardless of how many main nav items
-       * are above it. border-t visually separates it from the main nav.
+       * mt-auto would push too far if the button is already handling spacing.
+       * border-t visually separates bottom utility links from the main nav.
        */}
-      <div className="mt-auto border-t border-outline-variant pt-sm flex flex-col gap-xs">
+      <div className="border-t border-outline-variant pt-md flex flex-col gap-1 px-sm">
         {bottomNavItems.map((item) => (
-          <SideNavLink key={item.to} item={item} />
+          <SideNavLink key={item.to} item={item} compact />
         ))}
       </div>
     </aside>
@@ -430,20 +425,26 @@ function SideNavBar() {
  * Inactive state uses a subtle hover so the sidebar doesn't compete with
  * the main content area for visual weight.
  */
-function SideNavLink({ item }: { item: NavItem }) {
+function SideNavLink({ item, compact }: { item: NavItem; compact?: boolean }) {
   return (
     <Link
       to={item.to}
       className={[
-        'flex items-center gap-md px-md py-2.5 rounded-lg transition-colors',
+        'flex items-center gap-md px-md rounded-lg transition-all',
+        compact ? 'py-sm' : 'py-sm',
         item.active
           ? 'bg-secondary-container text-on-secondary-container font-bold'
-          : 'text-on-surface-variant hover:bg-surface-variant hover:text-on-surface',
+          : 'text-on-surface-variant hover:bg-surface-variant',
       ].join(' ')}
       aria-current={item.active ? 'page' : undefined}
     >
-      <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-      <span className="text-label-caps">{item.label}</span>
+      <span
+        className={`material-symbols-outlined ${compact ? 'text-[18px]' : 'text-[20px]'}`}
+        style={item.active ? { fontVariationSettings: "'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24" } : undefined}
+      >
+        {item.icon}
+      </span>
+      <span className="font-label-caps text-label-caps">{item.label}</span>
     </Link>
   )
 }
