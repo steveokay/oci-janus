@@ -84,6 +84,23 @@ func (s *handlerFakeAuthServer) ValidateToken(_ context.Context, req *authv1.Val
 	}
 }
 
+// GetUserPermissions mirrors the access granted by ValidateToken so that
+// checkAccess() in the handler passes for the same tokens.
+func (s *handlerFakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUserPermissionsRequest) (*authv1.GetUserPermissionsResponse, error) {
+	switch req.GetUserId() {
+	case "readonly-user":
+		return &authv1.GetUserPermissionsResponse{
+			Access: []*authv1.RepositoryAccess{{Type: "repository", Name: "*", Actions: []string{"pull"}}},
+		}, nil
+	case "nobody":
+		return &authv1.GetUserPermissionsResponse{}, nil
+	default: // "test-user" and any other authenticated user
+		return &authv1.GetUserPermissionsResponse{
+			Access: []*authv1.RepositoryAccess{{Type: "repository", Name: "*", Actions: []string{"push", "pull", "delete"}}},
+		}, nil
+	}
+}
+
 // ── fakeMetadataServer ───────────────────────────────────────────────────────
 
 type handlerFakeMetaServer struct {
