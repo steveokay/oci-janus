@@ -14,15 +14,39 @@
 
 import { createFileRoute, Outlet, redirect, Link, useRouterState } from '@tanstack/react-router'
 import { useState, useEffect } from 'react'
+import axios from 'axios'
 import { toast } from 'sonner'
-import { useAuthStore } from '@/store/authStore'
+import { useAuthStore, AuthUser } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
 // Session expiry threshold
 // ---------------------------------------------------------------------------
 
-/** How many milliseconds before JWT expiry to show the "Renew Session" button. */
-const SESSION_WARN_MS = 90_000
+/** How many milliseconds before JWT expiry to attempt silent refresh. */
+const SESSION_REFRESH_MS = 60_000
+
+// ---------------------------------------------------------------------------
+// Isolated axios instance for token refresh — must NOT share the apiClient
+// instance because apiClient's 401 interceptor would redirect to /login,
+// creating an infinite loop when the refresh request itself receives a 401.
+// ---------------------------------------------------------------------------
+
+const authRefreshClient = axios.create({
+  // The Vite dev proxy routes /api to the auth service (port 8080).
+  // In production this resolves through the gateway as normal.
+  baseURL: '/',
+  timeout: 10_000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+/**
+ * Decodes the JWT payload segment (no signature verification — that is the
+ * backend's job). Used only to read exp/sub/tenant_id for Zustand state.
+ */
+function decodeJwtPayload(token: string): AuthUser {
+  const base64 = token.split('.')[1]
+  return JSON.parse(atob(base64)) as AuthUser
+}
 
 // ---------------------------------------------------------------------------
 // Route definition
@@ -50,47 +74,85 @@ export const Route = createFileRoute('/_authenticated')({
 // ---------------------------------------------------------------------------
 
 function AuthenticatedLayout() {
-  // Warn the user 60 seconds before their JWT expires so they can save work.
   const token = useAuthStore((s) => s.token)
+  const setAuth = useAuthStore((s) => s.setAuth)
+  const clearAuth = useAuthStore((s) => s.clearAuth)
 
-  // Show the "Renew Session" button when the JWT is within 90 seconds of expiry.
+  // sessionExpiringSoon is kept only as a fallback visual indicator. Under
+  // normal operation the silent refresh fires before the user ever sees it.
   const [sessionExpiringSoon, setSessionExpiringSoon] = useState(false)
 
   useEffect(() => {
     if (!token) return
 
+    // Timers — tracked so we can cancel all of them on cleanup / token change.
     let toastTimerId: ReturnType<typeof setTimeout> | undefined
-    let renewTimerId: ReturnType<typeof setTimeout> | undefined
+    let warnTimerId: ReturnType<typeof setTimeout> | undefined
+    let refreshTimerId: ReturnType<typeof setTimeout> | undefined
 
     try {
       // Decode the JWT payload (middle segment) to read the exp claim.
       const payload = JSON.parse(atob(token.split('.')[1])) as { exp: number }
       const msLeft = payload.exp * 1000 - Date.now()
 
-      // Schedule the 60-second toast warning.
+      // ── Silent auto-refresh ─────────────────────────────────────────────
+      // Fire 60 seconds before expiry. If the token has already entered the
+      // last 60 s window, refresh immediately (msLeft ≤ SESSION_REFRESH_MS).
+      const msUntilRefresh = Math.max(msLeft - SESSION_REFRESH_MS, 0)
+
+      refreshTimerId = setTimeout(async () => {
+        try {
+          const resp = await authRefreshClient.post<{ token: string }>(
+            '/api/v1/token/refresh',
+            null,
+            { headers: { Authorization: `Bearer ${token}` } },
+          )
+          const newToken = resp.data.token
+          const newPayload = decodeJwtPayload(newToken)
+          // Update Zustand — apiClient's request interceptor picks up the new
+          // token automatically on the next outgoing request.
+          setAuth(newToken, newPayload)
+          // Hide the expiry warning button if it was already shown.
+          setSessionExpiringSoon(false)
+        } catch {
+          // Refresh failed (network error, 401, etc.) — treat as session end.
+          // Mirrors the behaviour of apiClient's 401 interceptor so UX is
+          // consistent regardless of which path triggers the session expiry.
+          clearAuth()
+          window.location.href = '/login?reason=session_expired'
+        }
+      }, msUntilRefresh)
+
+      // ── 60-second toast warning ──────────────────────────────────────────
+      // Kept as a user-visible signal so they are not surprised if a pending
+      // form submission falls just before the refresh fires.
       const msUntilToast = msLeft - 60_000
       if (msUntilToast > 0) {
         toastTimerId = setTimeout(() => {
-          toast.warning('Your session expires in 60 seconds. Please save your work.')
+          toast.warning('Renewing your session…')
         }, msUntilToast)
       }
 
-      // Show the renewal button 90 seconds before expiry.
-      if (msLeft <= SESSION_WARN_MS) {
-        // Already within the warning window — show the button immediately.
+      // ── Fallback expiry-warning button ───────────────────────────────────
+      // Shown only if the silent refresh somehow hasn't fired yet. Under
+      // normal operation the refreshTimerId fires first and resets this flag.
+      const msUntilWarn = msLeft - 90_000
+      if (msLeft <= 90_000) {
         setSessionExpiringSoon(true)
       } else {
-        renewTimerId = setTimeout(() => setSessionExpiringSoon(true), msLeft - SESSION_WARN_MS)
+        warnTimerId = setTimeout(() => setSessionExpiringSoon(true), msUntilWarn)
       }
     } catch {
-      // Malformed JWT — silently ignore; the API will 401 when it actually expires.
+      // Malformed JWT payload — silently ignore; the API will 401 on the next
+      // authenticated request and the 401 interceptor in apiClient will redirect.
     }
 
     return () => {
       if (toastTimerId !== undefined) clearTimeout(toastTimerId)
-      if (renewTimerId !== undefined) clearTimeout(renewTimerId)
+      if (warnTimerId !== undefined) clearTimeout(warnTimerId)
+      if (refreshTimerId !== undefined) clearTimeout(refreshTimerId)
     }
-  }, [token])
+  }, [token, setAuth, clearAuth])
 
   return (
     /*

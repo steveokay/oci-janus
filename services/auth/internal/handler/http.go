@@ -86,6 +86,7 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users", h.createUser)
 	mux.HandleFunc("POST /api/v1/login", h.login)
 	mux.HandleFunc("POST /api/v1/logout", h.logout)
+	mux.HandleFunc("POST /api/v1/token/refresh", h.refreshToken)
 	mux.HandleFunc("POST /api/v1/apikeys", h.createAPIKey)
 	mux.HandleFunc("GET /api/v1/apikeys", h.listAPIKeys)
 	mux.HandleFunc("DELETE /api/v1/apikeys/{id}", h.deleteAPIKey)
@@ -278,6 +279,35 @@ func (h *HTTPHandler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// refreshToken issues a new JWT in exchange for a currently-valid one.
+//
+// The caller must present its current Bearer token in the Authorization header.
+// The token must be valid and non-expired — refresh of an already-expired
+// session is not supported and returns 401. On success the old token's JTI is
+// revoked in Redis and a fresh token (same subject/tenant, new JTI, new exp)
+// is returned. This allows the frontend to silently renew the session without
+// prompting the user for credentials again.
+func (h *HTTPHandler) refreshToken(w http.ResponseWriter, r *http.Request) {
+	// Extract and validate the existing Bearer token. requireAuth already calls
+	// svc.ValidateToken which rejects expired, revoked, or malformed tokens.
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
+		return
+	}
+	rawToken := strings.TrimPrefix(auth, "Bearer ")
+
+	newToken, err := h.svc.RefreshToken(r.Context(), rawToken)
+	if err != nil {
+		// All errors from RefreshToken (expired, invalid, revoked) map to 401 so
+		// callers cannot distinguish them (SEC-036: avoid error oracle attacks).
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"token": newToken})
 }
 
 // ── API key management ────────────────────────────────────────────────────────

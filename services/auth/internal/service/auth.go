@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -171,6 +172,47 @@ func (s *Service) RevokeToken(ctx context.Context, claims *Claims) error {
 	// Store the JTI with a TTL equal to the remaining token lifetime so the
 	// entry disappears exactly when the token would naturally cease to be valid.
 	return s.redis.Set(ctx, revokedKey(claims.ID), "1", ttl).Err()
+}
+
+// RefreshToken validates an existing, non-expired JWT and issues a replacement
+// with a fresh JTI and a new 300-second lifetime. The original token's JTI is
+// revoked in Redis so it cannot be replayed after the refresh succeeds.
+//
+// Only valid, non-expired tokens may be refreshed — callers that present an
+// expired token receive ErrInvalidCredentials so the HTTP handler can return
+// 401 without leaking why validation failed.
+func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, error) {
+	// ValidateToken parses the JWT, verifies the RS256 signature, checks the
+	// exp claim (rejects expired tokens), and consults the Redis revocation list.
+	claims, err := s.ValidateToken(ctx, tokenStr)
+	if err != nil {
+		return "", ErrInvalidCredentials
+	}
+
+	// Issue a new token carrying the same subject and tenant, but with a fresh
+	// JTI and updated iat/exp. Access scopes are not carried over because
+	// session tokens (login flow) are issued without explicit scopes (nil);
+	// Docker-scoped tokens are short-lived and are never refreshed this way.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access)
+	if err != nil {
+		return "", fmt.Errorf("issue refresh token: %w", err)
+	}
+
+	// Revoke the old JTI so the caller cannot use both the old and new token
+	// simultaneously. A failure here is logged but does not prevent the refresh
+	// from succeeding — the worst case is a brief window where both tokens are
+	// valid, which is acceptable given the 300-second TTL.
+	if revokeErr := s.RevokeToken(ctx, claims); revokeErr != nil {
+		// Non-fatal: log the error but return the new token. The old token will
+		// expire naturally within its remaining TTL (≤ 300s) even without an
+		// explicit revocation entry in Redis.
+		slog.WarnContext(ctx, "refresh: failed to revoke old token JTI",
+			"jti", claims.ID,
+			"error", revokeErr,
+		)
+	}
+
+	return newToken, nil
 }
 
 // Login validates credentials, enforces account lockout, and issues a token.
