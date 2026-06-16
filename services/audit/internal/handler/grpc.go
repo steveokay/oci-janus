@@ -19,10 +19,17 @@ import (
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 
+// auditRepo is the subset of repository.Repository used by GRPCHandler,
+// defined as an interface so unit tests can inject a fake.
+type auditRepo interface {
+	GetBuildHistory(ctx context.Context, tenantID uuid.UUID, repoID, tag string, limit int) ([]*repository.BuildHistoryRow, error)
+	CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error)
+}
+
 // GRPCHandler implements auditv1.AuditServiceServer.
 type GRPCHandler struct {
 	auditv1.UnimplementedAuditServiceServer
-	repo *repository.Repository
+	repo auditRepo
 }
 
 // NewGRPC returns a GRPCHandler backed by repo.
