@@ -96,6 +96,17 @@ func (f *handlerFakeUserRepo) ResetFailedLogins(_ context.Context, id uuid.UUID)
 	return nil
 }
 
+func (f *handlerFakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]repository.RoleAssignment, error) {
+	return nil, nil
+}
+func (f *handlerFakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error {
+	return nil
+}
+func (f *handlerFakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+	return nil, nil
+}
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey

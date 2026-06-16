@@ -101,6 +101,15 @@ func (f *fakeUserRepo) ResetFailedLogins(_ context.Context, id uuid.UUID) error 
 	return nil
 }
 
+func (f *fakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]repository.RoleAssignment, error) {
+	return nil, nil
+}
+func (f *fakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error { return nil }
+func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }
+func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+	return nil, nil
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
 	keys        map[uuid.UUID]*repository.APIKey

@@ -22,7 +22,7 @@ func buildGRPCHandler(t *testing.T) (*GRPCHandler, *testCtx) {
 	t.Helper()
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
-	return NewGRPCHandler(tc.svc), tc
+	return NewGRPCHandler(tc.svc, nil), tc
 }
 
 // ── ValidateToken ─────────────────────────────────────────────────────────────
@@ -230,7 +230,8 @@ func TestGetUserPermissions_validUser_returnsEmptyAccessAndRoles(t *testing.T) {
 	userID := registerTestUser(t, tc.svc, tenantID, "rbacuser", "Str0ng!Password123")
 
 	resp, err := h.GetUserPermissions(context.Background(), &authv1.GetUserPermissionsRequest{
-		UserId: userID.String(),
+		UserId:   userID.String(),
+		TenantId: tenantID.String(),
 	})
 	if err != nil {
 		t.Fatalf("GetUserPermissions: unexpected error: %v", err)
@@ -273,7 +274,8 @@ func TestGetUserPermissions_unknownUser_returnsNotFound(t *testing.T) {
 	h, _ := buildGRPCHandler(t)
 
 	_, err := h.GetUserPermissions(context.Background(), &authv1.GetUserPermissionsRequest{
-		UserId: uuid.New().String(),
+		UserId:   uuid.New().String(),
+		TenantId: uuid.New().String(),
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown user, got nil")

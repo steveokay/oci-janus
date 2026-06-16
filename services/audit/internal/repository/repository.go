@@ -158,6 +158,23 @@ func (r *Repository) GetBuildHistory(ctx context.Context, tenantID uuid.UUID, re
 	return out, rows.Err()
 }
 
+// CountPulls returns the number of pull.image audit events for a tenant since the given time.
+func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error) {
+	var count int64
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND action    = 'pull.image'
+		   AND occurred_at >= $2`,
+		tenantID, since,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("audit CountPulls: %w", err)
+	}
+	return count, nil
+}
+
 // PurgeOlderThan deletes audit events older than cutoff. This is the only
 // deletion path and is used by the retention cleanup goroutine.
 func (r *Repository) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

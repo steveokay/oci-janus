@@ -11,6 +11,11 @@ service AuditService {
   // GetBuildHistory returns the most recent push/build audit events for a
   // specific tenant repository and tag, ordered newest-first.
   rpc GetBuildHistory(GetBuildHistoryRequest) returns (GetBuildHistoryResponse);
+
+  // GetDailyPullCount returns the number of pull.image events for a tenant
+  // in the past 24 hours. Used by registry-management to populate the
+  // DailyPulls stat tile on the operations overview dashboard.
+  rpc GetDailyPullCount(GetDailyPullCountRequest) returns (GetDailyPullCountResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -46,4 +51,15 @@ message GetBuildHistoryResponse {
   repeated BuildRecord builds = 1;
   // total is the count of records returned (not the total in the database).
   int32 total                 = 2;
+}
+
+// GetDailyPullCountRequest scopes the pull count to a single tenant.
+message GetDailyPullCountRequest {
+  // tenant_id scopes the query to prevent cross-tenant data leakage.
+  string tenant_id = 1;
+}
+
+// GetDailyPullCountResponse carries the number of pull events in the last 24h.
+message GetDailyPullCountResponse {
+  int64 count = 1;
 }

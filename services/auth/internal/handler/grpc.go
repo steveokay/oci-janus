@@ -21,10 +21,9 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
-// GRPCHandler implements authv1.AuthServiceRBACServer (which extends AuthServiceServer).
+// GRPCHandler implements authv1.AuthServiceServer.
 type GRPCHandler struct {
 	authv1.UnimplementedAuthServiceServer
-	authv1.UnimplementedAuthServiceRBACServer
 	svc *service.Service
 	pub *publisher.Publisher // may be nil in test/dev environments without RabbitMQ
 }
