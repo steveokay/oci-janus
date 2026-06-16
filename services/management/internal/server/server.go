@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
@@ -63,7 +64,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	metaClient := metadatav1.NewMetadataServiceClient(metaConn)
 	auditClient := auditv1.NewAuditServiceClient(auditConn)
 
-	h := handler.New(authClient, metaClient, auditClient, pub)
+	h := handler.New(authClient, metaClient, auditClient, pub,
+		healthpb.NewHealthClient(authConn),
+		healthpb.NewHealthClient(metaConn),
+		healthpb.NewHealthClient(auditConn),
+	)
 
 	mux := http.NewServeMux()
 	h.Register(mux)

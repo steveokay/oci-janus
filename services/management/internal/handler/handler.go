@@ -11,6 +11,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // maxBodyBytes caps incoming JSON request bodies to prevent large-payload attacks.
@@ -37,17 +39,39 @@ type Handler struct {
 	meta  metadatav1.MetadataServiceClient
 	audit auditv1.AuditServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
-	pub *publisher.Publisher
+	pub           *publisher.Publisher
+	healthClients []healthpb.HealthClient
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
+// healthClients are optional; when provided they are polled by handleStats to compute SystemHealthPct.
 func New(
 	auth authv1.AuthServiceClient,
 	meta metadatav1.MetadataServiceClient,
 	audit auditv1.AuditServiceClient,
 	pub *publisher.Publisher,
+	healthClients ...healthpb.HealthClient,
 ) *Handler {
-	return &Handler{auth: auth, meta: meta, audit: audit, pub: pub}
+	return &Handler{auth: auth, meta: meta, audit: audit, pub: pub, healthClients: healthClients}
+}
+
+// checkServicesHealth calls the gRPC health check on each configured service and
+// returns the percentage (0–100) that are currently SERVING.
+// Uses a 2-second deadline so a slow or unreachable service never stalls the stats page.
+func (h *Handler) checkServicesHealth(ctx context.Context) float64 {
+	if len(h.healthClients) == 0 {
+		return 100.0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	healthy := 0
+	for _, c := range h.healthClients {
+		resp, err := c.Check(ctx, &healthpb.HealthCheckRequest{Service: ""})
+		if err == nil && resp.GetStatus() == healthpb.HealthCheckResponse_SERVING {
+			healthy++
+		}
+	}
+	return float64(healthy) / float64(len(h.healthClients)) * 100.0
 }
 
 // Register mounts all management routes onto mux.
@@ -109,9 +133,9 @@ type StatsResponse struct {
 	TotalRepos         int     `json:"total_repos"`
 	StorageUsedBytes   int64   `json:"storage_used_bytes"`
 	StorageQuotaBytes  int64   `json:"storage_quota_bytes"`
-	DailyPulls         int64   `json:"daily_pulls"`         // TODO: wire pull counter from registry-audit
-	VulnerabilityCount int     `json:"vulnerability_count"` // TODO: aggregate from scan_results table
-	SystemHealthPct    float64 `json:"system_health_pct"`   // TODO: derive from gRPC health checks
+	DailyPulls         int64   `json:"daily_pulls"`
+	VulnerabilityCount int     `json:"vulnerability_count"`
+	SystemHealthPct    float64 `json:"system_health_pct"`
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -161,13 +185,22 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var dailyPulls int64
+	if pullResp, pullErr := h.audit.GetDailyPullCount(r.Context(), &auditv1.GetDailyPullCountRequest{
+		TenantId: tenantID,
+	}); pullErr == nil {
+		dailyPulls = pullResp.GetCount()
+	} else {
+		slog.Warn("GetDailyPullCount", "err", pullErr)
+	}
+
 	writeJSON(w, http.StatusOK, StatsResponse{
 		TotalRepos:         totalRepos,
 		StorageUsedBytes:   quota.GetUsedBytes(),
 		StorageQuotaBytes:  quota.GetQuotaBytes(),
-		DailyPulls:         0,
+		DailyPulls:         dailyPulls,
 		VulnerabilityCount: int(vulns.GetTotal()),
-		SystemHealthPct:    99.9,
+		SystemHealthPct:    h.checkServicesHealth(r.Context()),
 	})
 }
 

@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	AuditService_GetBuildHistory_FullMethodName = "/registry.audit.v1.AuditService/GetBuildHistory"
+	AuditService_GetBuildHistory_FullMethodName   = "/registry.audit.v1.AuditService/GetBuildHistory"
+	AuditService_GetDailyPullCount_FullMethodName = "/registry.audit.v1.AuditService/GetDailyPullCount"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -31,6 +32,10 @@ type AuditServiceClient interface {
 	// GetBuildHistory returns the most recent push/build audit events for a
 	// specific tenant repository and tag, ordered newest-first.
 	GetBuildHistory(ctx context.Context, in *GetBuildHistoryRequest, opts ...grpc.CallOption) (*GetBuildHistoryResponse, error)
+	// GetDailyPullCount returns the number of pull.image events for a tenant
+	// in the past 24 hours. Used by registry-management to populate the
+	// DailyPulls stat tile on the operations overview dashboard.
+	GetDailyPullCount(ctx context.Context, in *GetDailyPullCountRequest, opts ...grpc.CallOption) (*GetDailyPullCountResponse, error)
 }
 
 type auditServiceClient struct {
@@ -51,6 +56,16 @@ func (c *auditServiceClient) GetBuildHistory(ctx context.Context, in *GetBuildHi
 	return out, nil
 }
 
+func (c *auditServiceClient) GetDailyPullCount(ctx context.Context, in *GetDailyPullCountRequest, opts ...grpc.CallOption) (*GetDailyPullCountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDailyPullCountResponse)
+	err := c.cc.Invoke(ctx, AuditService_GetDailyPullCount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -60,6 +75,10 @@ type AuditServiceServer interface {
 	// GetBuildHistory returns the most recent push/build audit events for a
 	// specific tenant repository and tag, ordered newest-first.
 	GetBuildHistory(context.Context, *GetBuildHistoryRequest) (*GetBuildHistoryResponse, error)
+	// GetDailyPullCount returns the number of pull.image events for a tenant
+	// in the past 24 hours. Used by registry-management to populate the
+	// DailyPulls stat tile on the operations overview dashboard.
+	GetDailyPullCount(context.Context, *GetDailyPullCountRequest) (*GetDailyPullCountResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -68,6 +87,9 @@ type UnimplementedAuditServiceServer struct {
 
 func (UnimplementedAuditServiceServer) GetBuildHistory(context.Context, *GetBuildHistoryRequest) (*GetBuildHistoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBuildHistory not implemented")
+}
+func (UnimplementedAuditServiceServer) GetDailyPullCount(context.Context, *GetDailyPullCountRequest) (*GetDailyPullCountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetDailyPullCount not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -99,6 +121,24 @@ func _AuditService_GetBuildHistory_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetDailyPullCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDailyPullCountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetDailyPullCount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetDailyPullCount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetDailyPullCount(ctx, req.(*GetDailyPullCountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -109,6 +149,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBuildHistory",
 			Handler:    _AuditService_GetBuildHistory_Handler,
+		},
+		{
+			MethodName: "GetDailyPullCount",
+			Handler:    _AuditService_GetDailyPullCount_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

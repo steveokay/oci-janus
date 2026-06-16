@@ -11,6 +11,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -22,6 +23,9 @@ const (
 	AuthService_ValidateToken_FullMethodName      = "/registry.auth.v1.AuthService/ValidateToken"
 	AuthService_ValidateAPIKey_FullMethodName     = "/registry.auth.v1.AuthService/ValidateAPIKey"
 	AuthService_GetUserPermissions_FullMethodName = "/registry.auth.v1.AuthService/GetUserPermissions"
+	AuthService_GrantRole_FullMethodName          = "/registry.auth.v1.AuthService/GrantRole"
+	AuthService_RevokeRole_FullMethodName         = "/registry.auth.v1.AuthService/RevokeRole"
+	AuthService_ListMembers_FullMethodName        = "/registry.auth.v1.AuthService/ListMembers"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -34,6 +38,9 @@ type AuthServiceClient interface {
 	ValidateToken(ctx context.Context, in *ValidateTokenRequest, opts ...grpc.CallOption) (*ValidateTokenResponse, error)
 	ValidateAPIKey(ctx context.Context, in *ValidateAPIKeyRequest, opts ...grpc.CallOption) (*ValidateAPIKeyResponse, error)
 	GetUserPermissions(ctx context.Context, in *GetUserPermissionsRequest, opts ...grpc.CallOption) (*GetUserPermissionsResponse, error)
+	GrantRole(ctx context.Context, in *GrantRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ListMembers(ctx context.Context, in *ListMembersRequest, opts ...grpc.CallOption) (*ListMembersResponse, error)
 }
 
 type authServiceClient struct {
@@ -74,6 +81,36 @@ func (c *authServiceClient) GetUserPermissions(ctx context.Context, in *GetUserP
 	return out, nil
 }
 
+func (c *authServiceClient) GrantRole(ctx context.Context, in *GrantRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, AuthService_GrantRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, AuthService_RevokeRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) ListMembers(ctx context.Context, in *ListMembersRequest, opts ...grpc.CallOption) (*ListMembersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListMembersResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListMembers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -84,6 +121,9 @@ type AuthServiceServer interface {
 	ValidateToken(context.Context, *ValidateTokenRequest) (*ValidateTokenResponse, error)
 	ValidateAPIKey(context.Context, *ValidateAPIKeyRequest) (*ValidateAPIKeyResponse, error)
 	GetUserPermissions(context.Context, *GetUserPermissionsRequest) (*GetUserPermissionsResponse, error)
+	GrantRole(context.Context, *GrantRoleRequest) (*emptypb.Empty, error)
+	RevokeRole(context.Context, *RevokeRoleRequest) (*emptypb.Empty, error)
+	ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -98,6 +138,15 @@ func (UnimplementedAuthServiceServer) ValidateAPIKey(context.Context, *ValidateA
 }
 func (UnimplementedAuthServiceServer) GetUserPermissions(context.Context, *GetUserPermissionsRequest) (*GetUserPermissionsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUserPermissions not implemented")
+}
+func (UnimplementedAuthServiceServer) GrantRole(context.Context, *GrantRoleRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GrantRole not implemented")
+}
+func (UnimplementedAuthServiceServer) RevokeRole(context.Context, *RevokeRoleRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeRole not implemented")
+}
+func (UnimplementedAuthServiceServer) ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMembers not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -165,6 +214,60 @@ func _AuthService_GetUserPermissions_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_GrantRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GrantRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GrantRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GrantRole(ctx, req.(*GrantRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_RevokeRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).RevokeRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_RevokeRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).RevokeRole(ctx, req.(*RevokeRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_ListMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMembersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListMembers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListMembers(ctx, req.(*ListMembersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -183,6 +286,18 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetUserPermissions",
 			Handler:    _AuthService_GetUserPermissions_Handler,
+		},
+		{
+			MethodName: "GrantRole",
+			Handler:    _AuthService_GrantRole_Handler,
+		},
+		{
+			MethodName: "RevokeRole",
+			Handler:    _AuthService_RevokeRole_Handler,
+		},
+		{
+			MethodName: "ListMembers",
+			Handler:    _AuthService_ListMembers_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

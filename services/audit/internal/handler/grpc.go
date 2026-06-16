@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -61,6 +62,24 @@ func (h *GRPCHandler) GetBuildHistory(ctx context.Context, req *auditv1.GetBuild
 		Builds: builds,
 		Total:  int32(len(builds)),
 	}, nil
+}
+
+// GetDailyPullCount returns the count of pull.image events for the tenant in the
+// last 24 hours. Non-zero counts surface on the management dashboard stat tile.
+func (h *GRPCHandler) GetDailyPullCount(ctx context.Context, req *auditv1.GetDailyPullCountRequest) (*auditv1.GetDailyPullCountResponse, error) {
+	tenantUUID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	count, err := h.repo.CountPulls(ctx, tenantUUID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		slog.ErrorContext(ctx, "GetDailyPullCount query failed",
+			"tenant_id", req.GetTenantId(),
+			"error", err,
+		)
+		return nil, status.Error(codes.Internal, "failed to count pull events")
+	}
+	return &auditv1.GetDailyPullCountResponse{Count: count}, nil
 }
 
 // buildRecordFromRow converts a repository.BuildHistoryRow into the proto wire type.

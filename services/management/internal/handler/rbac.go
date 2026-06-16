@@ -64,20 +64,6 @@ func (h *Handler) getUserRoles(r *http.Request) []string {
 	return resp.GetRoles()
 }
 
-// authClient returns the auth client as AuthServiceClientWithRBAC.
-// The cast is safe because New() receives the connection and constructs an
-// extended client — see the management cmd/server/main.go wiring.
-func (h *Handler) rbacClient() authv1.AuthServiceClientWithRBAC {
-	c, ok := h.auth.(authv1.AuthServiceClientWithRBAC)
-	if !ok {
-		// Fallback: wrap in the extended client using the underlying connection.
-		// This should never happen in production since main.go uses
-		// NewAuthServiceClientWithRBAC.
-		return nil
-	}
-	return c
-}
-
 // ---------------------------------------------------------------------------
 // Route registration for RBAC endpoints (called from Register)
 // ---------------------------------------------------------------------------
@@ -126,13 +112,7 @@ func (h *Handler) handleListOrgMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	resp, err := rc.ListMembers(r.Context(), &authv1.ListMembersRequest{
+	resp, err := h.auth.ListMembers(r.Context(), &authv1.ListMembersRequest{
 		TenantId:   tenantID,
 		ScopeType:  "org",
 		ScopeValue: org,
@@ -182,13 +162,7 @@ func (h *Handler) handleGrantOrgMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	if _, err := rc.GrantRole(r.Context(), &authv1.GrantRoleRequest{
+	if _, err := h.auth.GrantRole(r.Context(), &authv1.GrantRoleRequest{
 		TenantId:   tenantID,
 		UserId:     body.UserID,
 		Role:       body.Role,
@@ -221,13 +195,7 @@ func (h *Handler) handleRevokeOrgMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	if _, err := rc.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
+	if _, err := h.auth.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
 		TenantId:     tenantID,
 		AssignmentId: assignmentID,
 	}); err != nil {
@@ -256,13 +224,7 @@ func (h *Handler) handleListRepoMembers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	resp, err := rc.ListMembers(r.Context(), &authv1.ListMembersRequest{
+	resp, err := h.auth.ListMembers(r.Context(), &authv1.ListMembersRequest{
 		TenantId:   tenantID,
 		ScopeType:  "repo",
 		ScopeValue: org + "/" + repoName,
@@ -292,7 +254,7 @@ func (h *Handler) handleGrantRepoMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Writer or above may grant repo-level roles.
+	// Admin or owner may grant repo-level roles.
 	roles := h.getUserRoles(r)
 	if !hasRole(roles, "admin") {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
@@ -310,13 +272,7 @@ func (h *Handler) handleGrantRepoMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	if _, err := rc.GrantRole(r.Context(), &authv1.GrantRoleRequest{
+	if _, err := h.auth.GrantRole(r.Context(), &authv1.GrantRoleRequest{
 		TenantId:   tenantID,
 		UserId:     body.UserID,
 		Role:       body.Role,
@@ -353,13 +309,7 @@ func (h *Handler) handleRevokeRepoMember(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rc := h.rbacClient()
-	if rc == nil {
-		writeError(w, http.StatusInternalServerError, "rbac client unavailable")
-		return
-	}
-
-	if _, err := rc.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
+	if _, err := h.auth.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
 		TenantId:     tenantID,
 		AssignmentId: assignmentID,
 	}); err != nil {
