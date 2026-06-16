@@ -78,10 +78,29 @@ interface BuildStats {
 // API types
 // ---------------------------------------------------------------------------
 
+/**
+ * Shape of a single build record as returned by the management REST API.
+ * Field names are snake_case to match the Go JSON serialisation of BuildResponse.
+ */
+interface ApiBuildRow {
+  /** Unique build identifier, e.g. '#BD-8921'. Maps to BuildRow.id. */
+  build_id: string
+  status: string
+  /** Full or abbreviated commit hash. Maps to BuildRow.commitHash. */
+  commit_hash: string
+  /**
+   * Plain string identifying who triggered the build — either a user login or
+   * a CI system name (e.g. "GitHub Actions"). Maps to BuildRow.triggeredBy.
+   */
+  triggered_by: string
+  duration: string
+  timestamp: string
+}
+
 /** Shape of GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds response. */
 interface BuildsApiResponse {
   /** Build run records. Currently always [] — audit RPC not yet implemented. */
-  builds: BuildRow[]
+  builds: ApiBuildRow[]
   total: number
 }
 
@@ -96,6 +115,43 @@ function splitRepoName(repoName: string): { org: string; repo: string } {
   const slash = repoName.indexOf('/')
   if (slash === -1) return { org: '', repo: repoName }
   return { org: repoName.slice(0, slash), repo: repoName.slice(slash + 1) }
+}
+
+/**
+ * Known CI system names returned by the management API in the `triggered_by`
+ * field. Any value matching this set is treated as a CI actor; all others are
+ * treated as a human user login.
+ */
+const CI_SYSTEM_NAMES = new Set([
+  'GitHub Actions',
+  'GitLab CI',
+  'CircleCI',
+  'Jenkins',
+  'ci',
+])
+
+/**
+ * Maps a raw API build record (snake_case) to the internal BuildRow type.
+ *
+ * - build_id  → id
+ * - commit_hash → commitHash
+ * - triggered_by (string) → BuildActor union based on CI_SYSTEM_NAMES lookup
+ * - status, duration, timestamp passed through unchanged
+ */
+function mapBuildRow(api: ApiBuildRow): BuildRow {
+  // Determine actor type: CI system or human user.
+  const triggeredBy: BuildActor = CI_SYSTEM_NAMES.has(api.triggered_by)
+    ? { kind: 'ci', system: api.triggered_by }
+    : { kind: 'user', login: api.triggered_by }
+
+  return {
+    id: api.build_id,
+    status: api.status as BuildStatus,
+    commitHash: api.commit_hash,
+    triggeredBy,
+    duration: api.duration,
+    timestamp: api.timestamp,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,10 +247,10 @@ function BuildHistoryPage() {
     },
   })
 
-  // When the API returns no data yet, fall back to an empty list.
+  // Map the snake_case API records to the internal BuildRow type.
   // MOCK_STATS are used as fallback defaults for the bento tiles
   // so the layout looks reasonable once builds are wired later.
-  const builds: BuildRow[] = buildsData?.builds ?? []
+  const builds: BuildRow[] = buildsData?.builds.map(mapBuildRow) ?? []
   const stats: BuildStats = MOCK_STATS
 
   return (
