@@ -26,7 +26,7 @@ func TestResult_dryRunMode(t *testing.T) {
 // TestResult_fullMode verifies that mode "full" produces DryRun=false.
 func TestResult_fullMode(t *testing.T) {
 	c := &Collector{mode: "full"}
-	res := &Result{Mode: c.mode, DryRun: c.mode == "dry-run"}
+	res := &Result{DryRun: c.mode == "dry-run"}
 	if res.DryRun {
 		t.Error("expected DryRun=false for mode=full")
 	}
@@ -35,7 +35,7 @@ func TestResult_fullMode(t *testing.T) {
 // TestResult_blobsMode verifies mode "blobs" does not set DryRun.
 func TestResult_blobsMode(t *testing.T) {
 	c := &Collector{mode: "blobs"}
-	res := &Result{Mode: c.mode, DryRun: c.mode == "dry-run"}
+	res := &Result{DryRun: c.mode == "dry-run"}
 	if res.DryRun {
 		t.Error("expected DryRun=false for mode=blobs")
 	}
@@ -44,7 +44,7 @@ func TestResult_blobsMode(t *testing.T) {
 // TestResult_manifestsMode verifies mode "manifests" does not set DryRun.
 func TestResult_manifestsMode(t *testing.T) {
 	c := &Collector{mode: "manifests"}
-	res := &Result{Mode: c.mode, DryRun: c.mode == "dry-run"}
+	res := &Result{DryRun: c.mode == "dry-run"}
 	if res.DryRun {
 		t.Error("expected DryRun=false for mode=manifests")
 	}

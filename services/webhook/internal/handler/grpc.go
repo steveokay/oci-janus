@@ -18,15 +18,29 @@ import (
 	"github.com/steveokay/oci-janus/services/webhook/internal/repository"
 )
 
+// webhookRepo is the database interface used by the handler.
+// Extracted as an interface so unit tests can substitute a fake without a real
+// PostgreSQL connection.
+type webhookRepo interface {
+	CreateEndpoint(ctx context.Context, tenantID uuid.UUID, url string, events []string, secretEnc string) (*repository.EndpointRecord, error)
+	DeleteEndpoint(ctx context.Context, endpointID, tenantID uuid.UUID) error
+	ListEndpoints(ctx context.Context, tenantID uuid.UUID) ([]*repository.EndpointRecord, error)
+}
+
 // GRPCHandler implements webhookv1.WebhookServiceServer.
 type GRPCHandler struct {
 	webhookv1.UnimplementedWebhookServiceServer
-	repo          *repository.Repository
+	repo          webhookRepo
 	credentialKey []byte
 }
 
 // New creates a GRPCHandler with the given repository and credential key.
 func New(repo *repository.Repository, credentialKeyHex string) (*GRPCHandler, error) {
+	return newWithRepo(repo, credentialKeyHex)
+}
+
+// newWithRepo is the internal constructor used by both New and tests.
+func newWithRepo(repo webhookRepo, credentialKeyHex string) (*GRPCHandler, error) {
 	key, err := hex.DecodeString(credentialKeyHex)
 	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX must be a 64-character hex string (32 bytes)")

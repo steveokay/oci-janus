@@ -14,10 +14,47 @@ import (
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
+// metadataRepo is the subset of repository.Repository used by MetadataHandler.
+// It is defined as an interface so unit tests can inject a hand-written fake
+// without requiring a real PostgreSQL connection (CLAUDE.md §18).
+type metadataRepo interface {
+	// Repositories
+	GetOrCreateOrganization(ctx context.Context, tenantID, orgName string) (string, error)
+	CreateRepository(ctx context.Context, tenantID, orgID, name string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error)
+	GetRepository(ctx context.Context, tenantID, repoID string) (*metadatav1.Repository, error)
+	GetRepositoryByName(ctx context.Context, tenantID, orgID, name string) (*metadatav1.Repository, error)
+	GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error)
+	ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error)
+	DeleteRepository(ctx context.Context, tenantID, repoID string) error
+	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
+	// Tags
+	PutTag(ctx context.Context, tenantID, repoID, name, manifestDigest string) (*metadatav1.Tag, error)
+	GetTag(ctx context.Context, tenantID, repoID, name string) (*metadatav1.Tag, error)
+	ListTags(ctx context.Context, tenantID, repoID string, pageSize int32, last string) ([]*metadatav1.Tag, error)
+	DeleteTag(ctx context.Context, tenantID, repoID, name string) error
+	// Manifests
+	PutManifest(ctx context.Context, tenantID, repoID, digest, mediaType string, rawJSON []byte, sizeBytes int64) (*metadatav1.Manifest, error)
+	GetManifest(ctx context.Context, tenantID, repoID, reference string) (*metadatav1.Manifest, error)
+	DeleteManifest(ctx context.Context, tenantID, repoID, digest string) error
+	ListUntaggedManifests(ctx context.Context, tenantID, repoID string) ([]*metadatav1.Manifest, error)
+	// Blobs
+	LinkBlob(ctx context.Context, repoID, digest, storageKey string, sizeBytes int64) error
+	UnlinkBlob(ctx context.Context, repoID, digest string) error
+	ListOrphanedBlobs(ctx context.Context) ([]*metadatav1.BlobRef, error)
+	// Quota
+	GetTenantQuotaUsage(ctx context.Context, tenantID string) (*metadatav1.QuotaUsage, error)
+	IncrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
+	DecrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
+	// Scan results
+	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
+	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
+	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error)
+}
+
 // MetadataHandler implements metadatav1.MetadataServiceServer.
 type MetadataHandler struct {
 	metadatav1.UnimplementedMetadataServiceServer
-	repo *repository.Repository
+	repo metadataRepo
 }
 
 // New returns a MetadataHandler backed by repo.

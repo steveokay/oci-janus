@@ -1,6 +1,6 @@
 # Frontend Tracker
 
-> Last updated: 2026-06-12
+> Last updated: 2026-06-17
 > Reference designs: `frontend/design/stitch/` — treat as law for every screen.
 > Dev server: `cd frontend && npm run dev` → http://localhost:5173
 
@@ -21,11 +21,11 @@
 
 | Screen | Route | Reference File | Status |
 |---|---|---|---|
-| Login | `/login` | `stitch/login/code.html` | ✅ Done — QA verified |
-| Repository Dashboard | `/dashboard` | `stitch/repository_dashboard/code.html` | ✅ Done — QA verified |
-| Image Details & Tags | `/dashboard/:org/:repo` | `stitch/image_details_tags/code.html` | ✅ UI Done — QA pass pending |
-| Security Scan Results | `/dashboard/:org/:repo/security` | `stitch/security_scan_results/code.html` | ⬜ Not Started |
-| Build History | `/dashboard/:org/:repo/builds` | `stitch/build_history/code.html` | ⬜ Not Started |
+| Login | `/login` | `stitch/login/code.html` | ✅ Done — QA verified, pixel-perfect |
+| Repository Dashboard | `/dashboard` | `stitch/repository_dashboard/code.html` | ✅ Done — QA verified, real data wired, pixel-perfect |
+| Image Details & Tags | `/dashboard/:org/:repo` | `stitch/image_details_tags/code.html` | ✅ Done — QA verified, real data wired, pixel-perfect |
+| Security Scan Results | `/dashboard/:org/:repo/security` | `stitch/security_scan_results/code.html` | ✅ Done — QA verified, real data wired, pixel-perfect |
+| Build History | `/dashboard/:org/:repo/builds` | `stitch/build_history/code.html` | ✅ Done — QA verified, real data wired, pixel-perfect |
 
 ---
 
@@ -37,68 +37,48 @@
 | CORS on auth service | Proxy avoids CORS entirely in dev — no change needed on auth service for local dev | ✅ |
 | `VITE_TENANT_ID` env var | Created `frontend/.env.local` with `VITE_TENANT_ID=98dbe36b-ef28-4903-b25c-bff1b2921c9e` | ✅ |
 | Dev seed user | Add seed migration / script that creates a test user + tenant so there is something to log in with | ⬜ |
-| Post-login redirect | Verify `/dashboard` loads after `access_token` is stored and TanStack Router redirects | ⬜ |
-| Error states | Test 401 (bad creds), 403 (locked), 429 (rate limit) — confirm toast messages | ⬜ |
+| Post-login redirect | `/dashboard` loads after token stored in Zustand; TanStack Router `beforeLoad` guard verified | ✅ |
+| Error states | 401 (bad creds), 403 (locked), 429 (rate limit) show toast messages; generic "Invalid credentials" copy | ✅ |
 
 ---
 
 ## Dashboard Wiring
 
-The dashboard UI is complete with mock data. Wiring it to real data requires:
+All dashboard data wiring is complete. `services/management` REST API is live.
 
-### 1 — Backend: Management REST API (does not exist yet)
+### Backend: Management REST API ✅
 
-The existing backend only exposes OCI `/v2/` endpoints (Docker protocol) and internal gRPC.
-There are **no REST endpoints** for listing repositories, tags, or scan results in JSON format.
-These must be added before any frontend query hook can work.
-
-| Endpoint to build | Service | Returns |
+| Endpoint | Service | Status |
 |---|---|---|
-| `GET /api/v1/repositories` | `registry-core` or `registry-metadata` | Paginated list of repos with `name`, `is_public`, `storage_used`, `tag_count`, `pull_count`, `last_pushed_at`, `scan_status` |
-| `GET /api/v1/repositories/:org/:repo` | same | Single repo detail |
-| `GET /api/v1/stats` | `registry-core` | Tenant-level stats: `total_repos`, `daily_pulls`, `vulnerability_count`, `system_health_pct` |
-| `GET /api/v1/repositories/:org/:repo/tags` | `registry-core` | Tag list with manifest digest, size, pushed_at — beyond the bare OCI `/v2/<name>/tags/list` |
-| `GET /api/v1/repositories/:org/:repo/scan` | `registry-scanner` or `registry-metadata` | Latest scan result with severity counts |
+| `GET /api/v1/stats` | `services/management` | ✅ Live |
+| `GET /api/v1/repositories` | `services/management` | ✅ Live |
+| `GET /api/v1/repositories/:org/:repo` | `services/management` | ✅ Live |
+| `POST /api/v1/repositories` | `services/management` | ✅ Live |
+| `DELETE /api/v1/repositories/:org/:repo` | `services/management` | ✅ Live |
+| `GET /api/v1/repositories/:org/:repo/tags` | `services/management` | ✅ Live |
+| `DELETE /api/v1/repositories/:org/:repo/tags/:tag` | `services/management` | ✅ Live |
+| `GET /api/v1/repositories/:org/:repo/tags/:tag/scan` | `services/management` | ✅ Live |
+| `POST /api/v1/repositories/:org/:repo/tags/:tag/scan` | `services/management` | ✅ Live |
+| `GET /api/v1/repositories/:org/:repo/tags/:tag/builds` | `services/management` | ✅ Live |
+| RBAC: `GET/POST/DELETE /api/v1/orgs/:org/members` | `services/management` | ✅ Live |
+| RBAC: `GET/POST/DELETE /api/v1/repositories/:org/:repo/members` | `services/management` | ✅ Live |
 
-All endpoints must:
-- Require `Authorization: Bearer <jwt>` — validate via `registry-auth` gRPC
-- Filter by `tenant_id` from the JWT — never return cross-tenant data
-- Support `?visibility=public|private` and `?page=1&per_page=25` query params
+### Frontend: TanStack Query hooks ✅
 
-### 2 — Backend: CORS on management endpoints
-
-The management API will be called from the browser. Add CORS middleware to whatever service exposes these endpoints allowing `http://localhost:5173` in dev and the production domain in prod.
-
-### 3 — Frontend: React Query hooks
-
-| Hook | Calls | Used by |
+| Hook | Calls | Status |
 |---|---|---|
-| `useStats()` | `GET /api/v1/stats` | Stats cards (Total Repos, Daily Pulls, Vulnerabilities, System Health) |
-| `useRepositories(filter, page)` | `GET /api/v1/repositories?visibility=&page=` | Repository table rows |
-| `useRepository(org, repo)` | `GET /api/v1/repositories/:org/:repo` | Image Details screen |
-| `useTags(org, repo)` | `GET /api/v1/repositories/:org/:repo/tags` | Image Details tag list |
-| `useScanResult(org, repo)` | `GET /api/v1/repositories/:org/:repo/scan` | Security Scan Results screen |
+| `useStats()` | `GET /api/v1/stats` | ✅ Wired |
+| `useRepositories(filter, page)` | `GET /api/v1/repositories` | ✅ Wired |
+| `useRepository(org, repo)` | `GET /api/v1/repositories/:org/:repo` | ✅ Wired |
+| `useTags(org, repo)` | `GET /api/v1/repositories/:org/:repo/tags` | ✅ Wired |
+| `useScanResult(org, repo, tag)` | `GET /api/v1/repositories/:org/:repo/tags/:tag/scan` | ✅ Wired |
+| `useBuilds(org, repo, tag)` | `GET /api/v1/repositories/:org/:repo/tags/:tag/builds` | ✅ Wired |
 
-### 4 — Frontend: Replace mock data in dashboard
+### API shape notes
 
-| Component | Mock to replace | With |
-|---|---|---|
-| `StatsCards` | Hardcoded 124 / 842K / 12 / 99.9% | `useStats()` data with loading skeleton |
-| `RepositoryTable` | 4 hardcoded rows | `useRepositories(activeFilter, page)` with loading state |
-| Filter tabs (ALL / PUBLIC / PRIVATE) | No-op buttons | Pass `visibility` param to `useRepositories` |
-| Pagination | Static 1/2/3 buttons | Driven by total count from API response |
-| Row click | `console.log` only | Navigate to `/dashboard/:org/:repo` |
-| "New Repository" button | No-op | Open create-repo modal (future) |
-| "View Security Report" button | No-op | Navigate to `/dashboard/:org/:repo/security` for first vulnerable repo |
-
-### 5 — Frontend: Loading and empty states
-
-| State | Component | Behaviour |
-|---|---|---|
-| Loading | Stats cards | Skeleton pulse placeholders matching card dimensions |
-| Loading | Table rows | 4 skeleton rows with animated shimmer |
-| Empty | Table | "No repositories yet" message with "New Repository" CTA |
-| Error | Stats cards + table | Error banner with retry button |
+- Builds endpoint returns `ApiBuildRow` (snake_case: `build_id`, `commit_hash`, `triggered_by`, `duration`, `timestamp`); `mapBuildRow()` in `builds.tsx` converts to `BuildRow` with `BuildActor` union type.
+- Scan `findings` field is base64-encoded proto bytes; `decodeFindings()` in `scan.tsx` does `JSON.parse(atob(findingsJson))`.
+- Stats endpoint returns `total_repos`, `daily_pulls`, `vulnerability_count`, `system_health_pct`.
 
 ---
 
@@ -106,10 +86,12 @@ The management API will be called from the browser. Add CORS middleware to whate
 
 | Task | Detail | Status |
 |---|---|---|
-| Token expiry handling | JWT TTL is 5 min — axios interceptor detects 401, clears token, redirects to `/login` | ⬜ |
-| `useAuth` hook | Expand `src/lib/auth/useAuth.ts` to expose `logout()` and `tenantId` | ⬜ |
-| Axios 401 interceptor | `src/lib/api/client.ts` response interceptor for global 401 handling | ⬜ |
-| React Query provider | Wire `QueryClientProvider` in `src/main.tsx` | ⬜ |
+| Token expiry handling — 401 redirect | Axios interceptor detects 401, clears Zustand store, redirects to `/login?reason=session_expired` | ✅ |
+| Token auto-refresh (silent) | `_authenticated.tsx` schedules silent refresh 60s before expiry via `authRefreshClient` (bare axios instance, bypasses 401 interceptor). Backend: `POST /api/v1/token/refresh` on `services/auth`. | ✅ |
+| `useAuth` hook | Exposes `token`, `tenantId`, `setAuth()`, `clearAuth()` from Zustand store | ✅ |
+| Axios 401 interceptor | `src/lib/api/client.ts` response interceptor for global 401 handling | ✅ |
+| React Query provider | `QueryClientProvider` wired in `src/main.tsx` | ✅ |
+| Logout button | Clear Zustand store + `POST /api/v1/logout` + redirect to `/login` | ⬜ |
 
 ---
 
@@ -121,7 +103,7 @@ The management API will be called from the browser. Add CORS middleware to whate
 | Sidebar nav padding | `py-2.5` on each nav item | ✅ |
 | Active route highlight | Driven by `useRouterState` | ✅ |
 | Sidebar gap between items | `gap-[48px]` wordmark→links, `gap-[32px]` between links | ✅ |
-| Logout button | Clear `access_token` + redirect to `/login` | ⬜ |
+| Logout button | Clear Zustand auth store + redirect to `/login` (server-side revoke pending FE-SEC-007) | ⬜ |
 | Mobile sidebar | Collapse on narrow viewports (hamburger toggle) | ⬜ |
 
 ---
@@ -171,7 +153,7 @@ The management API will be called from the browser. Add CORS middleware to whate
 | FE-SEC-005 | Vague error messages on login | Login should never say "user not found" or "wrong password" — only "Invalid credentials". Current toast shows "Invalid username or password." which is correct, but the `root` form error must match. Confirm both paths use the same generic string. | ⬜ |
 | FE-SEC-006 | No tokens in URLs | Navigation (`router.navigate`) and API calls must never put the JWT in a query parameter or URL path segment. Audit all `navigate()` calls and axios requests — token must stay in `Authorization` header only. | ⬜ |
 | FE-SEC-007 | Logout clears auth state | Sidebar logout button (not yet wired) must: (1) call `POST /api/v1/logout` to revoke the JWT server-side, (2) clear the Zustand auth store, (3) redirect to `/login`. Clearing only the store without revoking leaves the token valid for its remaining 5-min TTL. | ⬜ |
-| FE-SEC-008 | Global 401 handling | Axios response interceptor must detect 401 on any API call, clear the Zustand auth store, and redirect to `/login`. Without this, expired or revoked tokens leave the user on a broken authenticated page. | ⬜ |
+| FE-SEC-008 | Global 401 handling | Axios response interceptor detects 401 on any API call, clears the Zustand auth store, and redirects to `/login?reason=session_expired`. `authRefreshClient` (bare axios instance) bypasses the interceptor to prevent infinite loop during token refresh. | ✅ |
 
 ### Medium — Before Production
 
@@ -200,8 +182,11 @@ The management API will be called from the browser. Add CORS middleware to whate
 
 ## Notes
 
-- All icons on authenticated screens use **Material Symbols Outlined** — no lucide-react.
-- Every screen must be QA-verified against its Stitch reference HTML before marking Done.
+- All icons on authenticated screens use **Material Symbols Outlined** — no lucide-react. Active nav icon uses `fontVariationSettings: "'FILL' 1"` for filled variant.
+- Every screen has been QA-verified against its Stitch reference HTML (pixel-perfect pass 2026-06-17).
 - `frontend/.env.local` is gitignored — all required vars documented in `frontend/.env.example`.
 - `VITE_TENANT_ID` is the dev tenant UUID seeded in metadata migration `00002`.
-- The management REST API (Dashboard Wiring §1) is the critical path blocker for all data-wiring tasks.
+- `services/management` REST API is live on `:8085`; Vite dev proxy forwards `/api` → `http://localhost:8085`.
+- JWT auto-refresh: `_authenticated.tsx` schedules a timer that fires 60s before expiry; uses `authRefreshClient` (bare `axios.create()`) — NOT the shared `apiClient` — to avoid the 401 interceptor triggering on a refresh 401.
+- Builds `ApiBuildRow` type: API returns snake_case (`build_id`, `commit_hash`, `triggered_by`); `mapBuildRow()` converts to camelCase `BuildRow` with `BuildActor` union `{ kind: 'user' | 'ci' }`.
+- Next work: logout button server-side revoke (FE-SEC-007), dev seed user migration, E2E Playwright tests, Docker nginx image with CSP headers (FE-SEC-003).

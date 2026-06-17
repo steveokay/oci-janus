@@ -17,10 +17,27 @@ import (
 	"github.com/steveokay/oci-janus/services/webhook/internal/repository"
 )
 
+// workerRepo is the database interface used by the Worker.
+// Extracted so unit tests can substitute a fake without a real PostgreSQL connection.
+type workerRepo interface {
+	FindEndpointsForEvent(ctx context.Context, tenantID uuid.UUID, eventType string) ([]*repository.EndpointRecord, error)
+	CreateDelivery(ctx context.Context, endpointID, tenantID uuid.UUID, eventType string, payload []byte) (*repository.DeliveryRecord, error)
+	PollDueDeliveries(ctx context.Context, limit int) ([]*repository.DeliveryRecord, error)
+	GetEndpoint(ctx context.Context, endpointID uuid.UUID) (*repository.EndpointRecord, error)
+	MarkDelivered(ctx context.Context, deliveryID uuid.UUID) error
+	MarkFailed(ctx context.Context, deliveryID uuid.UUID, lastError string, nextAttemptAt time.Time, dead bool) error
+}
+
+// workerDispatcher is the HTTP delivery interface used by the Worker.
+// Extracted so unit tests can substitute a fake without real network calls.
+type workerDispatcher interface {
+	Deliver(ctx context.Context, targetURL string, payload []byte, hmacKey []byte) error
+}
+
 // Worker drives RabbitMQ event ingestion and the HTTP delivery retry loop.
 type Worker struct {
-	repo             *repository.Repository
-	dispatcher       *delivery.Dispatcher
+	repo             workerRepo
+	dispatcher       workerDispatcher
 	credentialKey    []byte
 	pollInterval     time.Duration
 }
@@ -28,6 +45,11 @@ type Worker struct {
 // New creates a Worker. credentialKeyHex is the hex-encoded 32-byte AES key used
 // to decrypt per-endpoint HMAC secrets stored in the database.
 func New(repo *repository.Repository, dispatcher *delivery.Dispatcher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
+	return newWithDeps(repo, dispatcher, credentialKeyHex, pollIntervalSecs)
+}
+
+// newWithDeps is the internal constructor used by both New and tests.
+func newWithDeps(repo workerRepo, dispatcher workerDispatcher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
 	key, err := hex.DecodeString(credentialKeyHex)
 	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX must be a 64-character hex string (32 bytes)")
