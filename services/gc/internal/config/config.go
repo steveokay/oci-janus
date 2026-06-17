@@ -21,10 +21,11 @@ type Config struct {
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
 	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
+	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
+	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
+	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("HTTP_ADDR", ":8080")
 	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-gc")
+	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 	viper.SetDefault("GC_MODE", "full")
 	viper.SetDefault("GC_RUN_INTERVAL_HOURS", 24)
 	viper.SetDefault("GC_BLOB_MIN_AGE_HOURS", 1)

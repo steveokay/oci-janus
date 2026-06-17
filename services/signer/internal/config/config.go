@@ -20,10 +20,11 @@ type Config struct {
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
 	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
+	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
+	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
+	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 
 	// SIGNER_KEY_BACKEND selects the key source: env | vault | awskms | gcpkms | azurekms
 	SignerKeyBackend string `mapstructure:"SIGNER_KEY_BACKEND"`
@@ -66,6 +67,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-signer")
 	viper.SetDefault("SIGNER_KEY_BACKEND", "env")
+	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

@@ -21,10 +21,11 @@ type Config struct {
 	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
 	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
+	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
+	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
+	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -40,7 +41,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("GRPC_ADDR", ":50051")
 	viper.SetDefault("HTTP_ADDR", ":8080")
 	viper.SetDefault("METRICS_ADDR", ":9090")
-	viper.SetDefault("OTEL_SERVICE_NAME", "gateway")
+	viper.SetDefault("OTEL_SERVICE_NAME", "registry-gateway")
+	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

@@ -31,10 +31,11 @@ type Config struct {
 
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
+	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
+	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
+	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -51,6 +52,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("HTTP_ADDR", ":8081")
 	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-core")
+	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 	viper.SetDefault("REDIS_ADDR", "localhost:6379")
 	viper.SetDefault("AUTH_GRPC_ADDR", "registry-auth:50051")
 	viper.SetDefault("AUTH_REALM", "http://localhost:8080/auth/token")

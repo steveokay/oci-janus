@@ -20,10 +20,11 @@ type Config struct {
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
 	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
-	OTELExporter    string `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint    string `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName string `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment string `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
+	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
+	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
+	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
+	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 
 	DBDSN       string `mapstructure:"DB_DSN"`
 	DBMaxConns  int32  `mapstructure:"DB_MAX_CONNS"`
@@ -56,6 +57,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("DB_MAX_CONNS", 20)
 	viper.SetDefault("DELIVERY_POLL_INTERVAL_SECS", 5)
 	viper.SetDefault("DELIVERY_TIMEOUT_SECS", 30)
+	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
