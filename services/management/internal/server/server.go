@@ -64,7 +64,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	metaClient := metadatav1.NewMetadataServiceClient(metaConn)
 	auditClient := auditv1.NewAuditServiceClient(auditConn)
 
-	h := handler.New(authClient, metaClient, auditClient, pub,
+	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
 		healthpb.NewHealthClient(auditConn),

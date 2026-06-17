@@ -31,6 +31,13 @@ type Config struct {
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
 	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
+
+	// PlatformAdminTenantID identifies the single tenant whose admin/owner users
+	// can call cross-tenant platform operations (currently only the per-tenant
+	// storage quota route). Empty disables those routes entirely. In local dev
+	// this should be set to the seeded dev tenant id; in production it should be
+	// a dedicated "operator" tenant created out of band.
+	PlatformAdminTenantID string `mapstructure:"PLATFORM_ADMIN_TENANT_ID"`
 }
 
 // Load binds environment variables into Config and validates required fields.

@@ -38,6 +38,7 @@ const (
 	MetadataService_UnlinkBlob_FullMethodName                  = "/registry.metadata.v1.MetadataService/UnlinkBlob"
 	MetadataService_ListOrphanedBlobs_FullMethodName           = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
 	MetadataService_GetTenantQuotaUsage_FullMethodName         = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
+	MetadataService_UpdateTenantQuota_FullMethodName           = "/registry.metadata.v1.MetadataService/UpdateTenantQuota"
 	MetadataService_IncrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
 	MetadataService_DecrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
 	MetadataService_UpdateScanStatus_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
@@ -72,6 +73,7 @@ type MetadataServiceClient interface {
 	ListOrphanedBlobs(ctx context.Context, in *ListOrphanedBlobsRequest, opts ...grpc.CallOption) (MetadataService_ListOrphanedBlobsClient, error)
 	// Quota
 	GetTenantQuotaUsage(ctx context.Context, in *GetTenantQuotaUsageRequest, opts ...grpc.CallOption) (*QuotaUsage, error)
+	UpdateTenantQuota(ctx context.Context, in *UpdateTenantQuotaRequest, opts ...grpc.CallOption) (*QuotaUsage, error)
 	IncrementTenantStorage(ctx context.Context, in *IncrementTenantStorageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	DecrementTenantStorage(ctx context.Context, in *DecrementTenantStorageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Scan status
@@ -361,6 +363,16 @@ func (c *metadataServiceClient) GetTenantQuotaUsage(ctx context.Context, in *Get
 	return out, nil
 }
 
+func (c *metadataServiceClient) UpdateTenantQuota(ctx context.Context, in *UpdateTenantQuotaRequest, opts ...grpc.CallOption) (*QuotaUsage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QuotaUsage)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateTenantQuota_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) IncrementTenantStorage(ctx context.Context, in *IncrementTenantStorageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -438,6 +450,7 @@ type MetadataServiceServer interface {
 	ListOrphanedBlobs(*ListOrphanedBlobsRequest, MetadataService_ListOrphanedBlobsServer) error
 	// Quota
 	GetTenantQuotaUsage(context.Context, *GetTenantQuotaUsageRequest) (*QuotaUsage, error)
+	UpdateTenantQuota(context.Context, *UpdateTenantQuotaRequest) (*QuotaUsage, error)
 	IncrementTenantStorage(context.Context, *IncrementTenantStorageRequest) (*emptypb.Empty, error)
 	DecrementTenantStorage(context.Context, *DecrementTenantStorageRequest) (*emptypb.Empty, error)
 	// Scan status
@@ -504,6 +517,9 @@ func (UnimplementedMetadataServiceServer) ListOrphanedBlobs(*ListOrphanedBlobsRe
 }
 func (UnimplementedMetadataServiceServer) GetTenantQuotaUsage(context.Context, *GetTenantQuotaUsageRequest) (*QuotaUsage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantQuotaUsage not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateTenantQuota(context.Context, *UpdateTenantQuotaRequest) (*QuotaUsage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenantQuota not implemented")
 }
 func (UnimplementedMetadataServiceServer) IncrementTenantStorage(context.Context, *IncrementTenantStorageRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IncrementTenantStorage not implemented")
@@ -868,6 +884,24 @@ func _MetadataService_GetTenantQuotaUsage_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_UpdateTenantQuota_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTenantQuotaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateTenantQuota(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateTenantQuota_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateTenantQuota(ctx, req.(*UpdateTenantQuotaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_IncrementTenantStorage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(IncrementTenantStorageRequest)
 	if err := dec(in); err != nil {
@@ -1020,6 +1054,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantQuotaUsage",
 			Handler:    _MetadataService_GetTenantQuotaUsage_Handler,
+		},
+		{
+			MethodName: "UpdateTenantQuota",
+			Handler:    _MetadataService_UpdateTenantQuota_Handler,
 		},
 		{
 			MethodName: "IncrementTenantStorage",

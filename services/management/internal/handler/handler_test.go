@@ -260,6 +260,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		metadatav1.NewMetadataServiceClient(metaConn),
 		auditv1.NewAuditServiceClient(auditConn),
 		nil, // publisher — trigger-scan happy path not tested here
+		"",  // platformAdminTenantID — set to disable the cross-tenant quota route in tests
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
 		healthpb.NewHealthClient(auditConn),

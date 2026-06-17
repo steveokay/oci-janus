@@ -646,6 +646,11 @@ services:
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
       CORS_ALLOWED_ORIGIN: http://localhost:5173
+      # PLATFORM_ADMIN_TENANT_ID: tenant whose admin/owner users can call the
+      # cross-tenant quota route (PUT /api/v1/admin/tenants/<id>/quota). The dev
+      # tenant is the operator tenant locally; production should use a dedicated
+      # operator tenant created out of band.
+      PLATFORM_ADMIN_TENANT_ID: ${PLATFORM_ADMIN_TENANT_ID:-98dbe36b-ef28-4903-b25c-bff1b2921c9e}
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/management.crt
       MTLS_KEY_PATH: /certs/management.key

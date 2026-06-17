@@ -41,6 +41,10 @@ type Handler struct {
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
+	// platformAdminTenantID is the tenant whose admin/owner users can call cross-tenant
+	// platform operations (e.g. setting another tenant's storage quota). Empty disables
+	// the route entirely. Set via PLATFORM_ADMIN_TENANT_ID env var.
+	platformAdminTenantID string
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -50,9 +54,17 @@ func New(
 	meta metadatav1.MetadataServiceClient,
 	audit auditv1.AuditServiceClient,
 	pub *publisher.Publisher,
+	platformAdminTenantID string,
 	healthClients ...healthpb.HealthClient,
 ) *Handler {
-	return &Handler{auth: auth, meta: meta, audit: audit, pub: pub, healthClients: healthClients}
+	return &Handler{
+		auth:                  auth,
+		meta:                  meta,
+		audit:                 audit,
+		pub:                   pub,
+		platformAdminTenantID: platformAdminTenantID,
+		healthClients:         healthClients,
+	}
 }
 
 // checkServicesHealth calls the gRPC health check on each configured service and
@@ -112,6 +124,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
+
+	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
+	// AND must belong to the configured platform-admin tenant. This route is the
+	// canonical way to bump quotas for large customers.
+	mux.Handle("PUT /api/v1/admin/tenants/{tenantID}/quota", authMW(http.HandlerFunc(h.handleSetTenantQuota)))
 }
 
 // ---------------------------------------------------------------------------
@@ -825,4 +842,82 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // names, stack traces) — see CLAUDE.md §4.13 error response rules.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// ---------------------------------------------------------------------------
+// PUT /api/v1/admin/tenants/{tenantID}/quota
+// ---------------------------------------------------------------------------
+
+// setTenantQuotaRequest is the JSON body for the quota route.
+type setTenantQuotaRequest struct {
+	QuotaBytes int64 `json:"quota_bytes"`
+}
+
+// setTenantQuotaResponse mirrors the metadata QuotaUsage so the caller sees the
+// fresh quota + current used bytes after the update.
+type setTenantQuotaResponse struct {
+	TenantID   string `json:"tenant_id"`
+	UsedBytes  int64  `json:"used_bytes"`
+	QuotaBytes int64  `json:"quota_bytes"`
+}
+
+// handleSetTenantQuota bumps (or lowers) the tenant-level storage quota.
+//
+// Authorization model (defense in depth):
+//   1. PLATFORM_ADMIN_TENANT_ID must be configured (route disabled otherwise).
+//   2. The caller's JWT tenant must equal PLATFORM_ADMIN_TENANT_ID — preventing
+//      tenants from setting their own quotas (which would defeat the purpose).
+//   3. The caller must hold admin or owner role.
+//
+// The target tenant comes from the URL, not the JWT, so a platform operator can
+// adjust any tenant's quota. The endpoint never returns gRPC error detail to the
+// caller — only a generic message — to avoid leaking internal service state.
+func (h *Handler) handleSetTenantQuota(w http.ResponseWriter, r *http.Request) {
+	if h.platformAdminTenantID == "" {
+		writeError(w, http.StatusNotFound, "route disabled")
+		return
+	}
+
+	callerTenant := middleware.TenantIDFromContext(r.Context())
+	if callerTenant != h.platformAdminTenantID {
+		writeError(w, http.StatusForbidden, "platform admin tenant required")
+		return
+	}
+
+	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+
+	targetTenant := r.PathValue("tenantID")
+	if _, err := uuid.Parse(targetTenant); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+
+	var body setTenantQuotaRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.QuotaBytes < 0 {
+		writeError(w, http.StatusBadRequest, "quota_bytes must be non-negative")
+		return
+	}
+
+	usage, err := h.meta.UpdateTenantQuota(r.Context(), &metadatav1.UpdateTenantQuotaRequest{
+		TenantId:   targetTenant,
+		QuotaBytes: body.QuotaBytes,
+	})
+	if err != nil {
+		slog.Error("UpdateTenantQuota", "err", err, "target_tenant", targetTenant)
+		writeError(w, http.StatusInternalServerError, "failed to update quota")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, setTenantQuotaResponse{
+		TenantID:   usage.GetTenantId(),
+		UsedBytes:  usage.GetUsedBytes(),
+		QuotaBytes: usage.GetQuotaBytes(),
+	})
 }

@@ -467,12 +467,18 @@ func (r *Repository) ListOrphanedBlobs(ctx context.Context) ([]*metadatav1.BlobR
 
 // ── Quota ────────────────────────────────────────────────────────────────────
 
-// GetTenantQuotaUsage sums storage_used and storage_quota across all repos for a tenant.
+// GetTenantQuotaUsage returns the tenant's current used bytes (summed across its
+// repositories) and its tenant-level quota cap (tenants.storage_quota). Aggregating
+// quotas across repos was misleading because adding a new repo would inflate the
+// total cap without any admin action — tenant-level quota is the canonical model
+// and is bumped per customer via UpdateTenantQuota.
 func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (*metadatav1.QuotaUsage, error) {
 	const q = `
-		SELECT COALESCE(SUM(storage_used), 0), COALESCE(SUM(storage_quota), 0)
-		FROM   repositories
-		WHERE  tenant_id = $1`
+		SELECT
+		    COALESCE((SELECT SUM(storage_used) FROM repositories WHERE tenant_id = $1), 0) AS used_bytes,
+		    t.storage_quota                                                                AS quota_bytes
+		FROM   tenants t
+		WHERE  t.id = $1`
 
 	var usage metadatav1.QuotaUsage
 	usage.TenantId = tenantID
@@ -480,6 +486,20 @@ func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (
 		return nil, fmt.Errorf("get quota usage: %w", err)
 	}
 	return &usage, nil
+}
+
+// UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
+// API's super-admin quota route to bump quotas for large customers.
+func (r *Repository) UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error) {
+	const q = `UPDATE tenants SET storage_quota = $2 WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, q, tenantID, quotaBytes)
+	if err != nil {
+		return nil, fmt.Errorf("update tenant quota: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return r.GetTenantQuotaUsage(ctx, tenantID)
 }
 
 // IncrementTenantStorage adds bytes to storage_used for a specific repo (and by extension the tenant).

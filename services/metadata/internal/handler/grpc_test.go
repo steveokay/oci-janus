@@ -189,6 +189,10 @@ func (f *fakeRepo) GetTenantQuotaUsage(_ context.Context, _ string) (*metadatav1
 	return f.quotaUsageResult, f.quotaUsageErr
 }
 
+func (f *fakeRepo) UpdateTenantQuota(_ context.Context, _ string, _ int64) (*metadatav1.QuotaUsage, error) {
+	return f.quotaUsageResult, f.quotaUsageErr
+}
+
 func (f *fakeRepo) IncrementTenantStorage(_ context.Context, _ string, _ int64) error {
 	return f.incrStorageErr
 }

@@ -44,6 +44,7 @@ type metadataRepo interface {
 	ListOrphanedBlobs(ctx context.Context) ([]*metadatav1.BlobRef, error)
 	// Quota
 	GetTenantQuotaUsage(ctx context.Context, tenantID string) (*metadatav1.QuotaUsage, error)
+	UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error)
 	IncrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
 	DecrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
 	// Scan results
@@ -229,6 +230,17 @@ func (h *MetadataHandler) ListOrphanedBlobs(req *metadatav1.ListOrphanedBlobsReq
 
 func (h *MetadataHandler) GetTenantQuotaUsage(ctx context.Context, req *metadatav1.GetTenantQuotaUsageRequest) (*metadatav1.QuotaUsage, error) {
 	usage, err := h.repo.GetTenantQuotaUsage(ctx, req.TenantId)
+	return usage, mapErr(err)
+}
+
+// UpdateTenantQuota updates the tenant-level storage cap and returns the fresh
+// usage view. The management service is responsible for restricting this RPC to
+// platform admins; this handler does not gate by role.
+func (h *MetadataHandler) UpdateTenantQuota(ctx context.Context, req *metadatav1.UpdateTenantQuotaRequest) (*metadatav1.QuotaUsage, error) {
+	if req.GetQuotaBytes() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "quota_bytes must be non-negative")
+	}
+	usage, err := h.repo.UpdateTenantQuota(ctx, req.GetTenantId(), req.GetQuotaBytes())
 	return usage, mapErr(err)
 }
 
