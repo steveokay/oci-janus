@@ -275,7 +275,12 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 	}
 
 	tenantID := claims.TenantID
-	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
+	// Read path: never create. Return 404 if the repository does not exist.
+	repo, err := h.registry.GetRepository(r.Context(), tenantID, name)
+	if err == service.ErrNotFound {
+		ociError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "get repository", "err", err)
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
@@ -330,7 +335,12 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 	}
 
 	tenantID := claims.TenantID
-	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
+	// Read path: never create. Return 404 if the repository does not exist.
+	repo, err := h.registry.GetRepository(r.Context(), tenantID, name)
+	if err == service.ErrNotFound {
+		ociError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -370,7 +380,12 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 	}
 
 	tenantID := claims.TenantID
-	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
+	// Read path: never create. Return 404 if the repository does not exist.
+	repo, err := h.registry.GetRepository(r.Context(), tenantID, name)
+	if err == service.ErrNotFound {
+		ociError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -466,7 +481,12 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 	}
 
 	tenantID := claims.TenantID
-	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
+	// Delete path: never create. Return 404 if the repository does not exist.
+	repo, err := h.registry.GetRepository(r.Context(), tenantID, name)
+	if err == service.ErrNotFound {
+		ociError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -581,7 +601,12 @@ func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name,
 	}
 
 	tenantID := claims.TenantID
-	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
+	// Delete path: never create. Return 404 if the repository does not exist.
+	repo, err := h.registry.GetRepository(r.Context(), tenantID, name)
+	if err == service.ErrNotFound {
+		ociError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository not found")
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return

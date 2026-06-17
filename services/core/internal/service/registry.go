@@ -590,23 +590,42 @@ func (r *Registry) ListTags(ctx context.Context, tenantID, repoID string, n int3
 
 // --- Repository ---
 
+// GetRepository looks up a repository by tenant + "org/repo" name without creating it.
+// Returns ErrNotFound when the repository does not exist — read paths and delete paths
+// must use this so an unauthorized or speculative request cannot silently populate the
+// metadata table with empty repositories under arbitrary names.
+func (r *Registry) GetRepository(ctx context.Context, tenantID, repoName string) (*metadatav1.Repository, error) {
+	ctx5, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	repo, err := r.metadata.GetRepositoryByName(ctx5, &metadatav1.GetRepositoryByNameRequest{
+		TenantId: tenantID,
+		Name:     repoName,
+	})
+	if err != nil {
+		if isGRPCNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get repository by name rpc: %w", err)
+	}
+	return repo, nil
+}
+
 // GetOrCreateRepository returns the repo from metadata, creating it if it doesn't exist.
+// Only call this on the manifest PUT path — the act of pushing a manifest is what
+// brings a repository into existence. Read and delete paths must use GetRepository.
 func (r *Registry) GetOrCreateRepository(ctx context.Context, tenantID, repoName string) (*metadatav1.Repository, error) {
 	ctx5, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// try to get by name — the metadata service uses repo_id, so we create if absent
-	// In a full implementation we'd have GetRepositoryByName; for now we always create
-	// and rely on the metadata service's unique constraint to return the existing record.
+	// CreateRepository is idempotent in the metadata service — when the row already
+	// exists (per the (org_id, name) unique constraint) the existing record is returned.
 	repo, err := r.metadata.CreateRepository(ctx5, &metadatav1.CreateRepositoryRequest{
 		TenantId: tenantID,
 		Name:     repoName,
 		IsPublic: false,
 	})
 	if err != nil {
-		// if already exists, the metadata service should return the existing one;
-		// if it returns AlreadyExists we should fetch it — but we don't have GetByName.
-		// Treat any error here as internal for now.
 		return nil, fmt.Errorf("create repository rpc: %w", err)
 	}
 	return repo, nil

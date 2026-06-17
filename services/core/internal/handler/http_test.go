@@ -134,6 +134,19 @@ func (s *handlerFakeMetaServer) CreateRepository(_ context.Context, req *metadat
 	return repo, nil
 }
 
+// GetRepositoryByName mirrors the production metadata service: a direct lookup by
+// (tenant, "org/repo") name. Returns NotFound when the repo has not been created —
+// read-path handlers rely on this to 404 rather than silently creating the repo.
+func (s *handlerFakeMetaServer) GetRepositoryByName(_ context.Context, req *metadatav1.GetRepositoryByNameRequest) (*metadatav1.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.repos[req.GetTenantId()+":"+req.GetName()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "repository not found")
+	}
+	return r, nil
+}
+
 func (s *handlerFakeMetaServer) PutManifest(_ context.Context, req *metadatav1.PutManifestRequest) (*metadatav1.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,6 +302,22 @@ type handlerTestCtx struct {
 	srv     *httptest.Server
 	storage *handlerFakeStorageServer
 	meta    *handlerFakeMetaServer
+}
+
+// seedRepo pre-creates a repository in the fake metadata server so that read-path
+// and delete-path tests can exercise their assertion without first issuing a PUT
+// manifest request. Read paths intentionally do NOT create the repo (see
+// services/core/internal/service/registry.go GetRepository), so any test that
+// hits a read/delete handler against a not-yet-pushed name must seed it here.
+func (tc *handlerTestCtx) seedRepo(t *testing.T, tenantID, name string) {
+	t.Helper()
+	_, err := tc.meta.CreateRepository(context.Background(), &metadatav1.CreateRepositoryRequest{
+		TenantId: tenantID,
+		Name:     name,
+	})
+	if err != nil {
+		t.Fatalf("seedRepo: %v", err)
+	}
 }
 
 // buildHandlerServer builds a full in-process OCI HTTP server backed by fake
@@ -490,6 +519,8 @@ func TestTagsList_noAuth_returns401(t *testing.T) {
 func TestTagsList_validAuth_returns200(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Read paths no longer auto-create the repository — seed it explicitly.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	req := bearerReq(t, http.MethodGet, tc.srv.URL+"/v2/myorg/myrepo/tags/list", nil)
 	resp := do(t, req)
@@ -751,6 +782,8 @@ func TestGetBlob_existingBlob_returns200WithContent(t *testing.T) {
 func TestDeleteBlob_validDigest_returns202(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Delete paths no longer auto-create the repository — seed it explicitly.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	data := []byte("delete blob test")
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
@@ -1155,6 +1188,8 @@ func TestAuthenticate_basicAuthNoColon_returns401(t *testing.T) {
 func TestTagsList_withNParam_returns200(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Read paths no longer auto-create the repository — seed it explicitly.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	req := bearerReq(t, http.MethodGet,
 		tc.srv.URL+"/v2/myorg/myrepo/tags/list?n=5", nil)
@@ -1252,6 +1287,9 @@ func TestDeleteBlob_invalidDigest_returns400(t *testing.T) {
 func TestDeleteBlob_nonExistentBlob_returns202(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Delete paths no longer auto-create the repository — seed it explicitly so
+	// the not-found assertion targets the BLOB, not the repo.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	// Digest is valid format but blob doesn't exist. The service silently ignores
 	// storage not-found, so the handler returns 202 (idempotent delete).
@@ -1518,6 +1556,8 @@ func TestReferrers_withArtifactTypeFilter_returns200(t *testing.T) {
 func TestTagsList_withLastParam_returns200(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Read paths no longer auto-create the repository — seed it explicitly.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	req := bearerReq(t, http.MethodGet,
 		tc.srv.URL+"/v2/myorg/myrepo/tags/list?last=v1.0&n=10", nil)
@@ -1688,6 +1728,8 @@ func TestHeadBlob_pullOnlyTokenAllowed_returns404(t *testing.T) {
 func TestTagsList_pullOnlyToken_returns200(t *testing.T) {
 	tc, cleanup := buildHandlerServer(t)
 	defer cleanup()
+	// Read paths no longer auto-create the repository — seed it explicitly.
+	tc.seedRepo(t, "tenant-test", "myorg/myrepo")
 
 	req := pullOnlyReq(t, http.MethodGet,
 		tc.srv.URL+"/v2/myorg/myrepo/tags/list", nil)
