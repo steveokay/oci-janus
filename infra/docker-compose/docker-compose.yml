@@ -635,6 +635,8 @@ services:
       HTTP_ADDR: ":8085"
       AUTH_GRPC_ADDR: registry-auth:50051
       METADATA_GRPC_ADDR: registry-metadata:50051
+      AUDIT_GRPC_ADDR: registry-audit:50051
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
       CORS_ALLOWED_ORIGIN: http://localhost:5173
@@ -654,6 +656,10 @@ services:
       registry-auth:
         condition: service_healthy
       registry-metadata:
+        condition: service_healthy
+      registry-audit:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - registry
