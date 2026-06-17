@@ -24,6 +24,13 @@ type BaseConfig struct {
 	GRPCAddr string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr string `mapstructure:"HTTP_ADDR"`
 
+	// MetricsAddr is the listen address for the dedicated Prometheus scrape server
+	// (SEC-025). It runs on a separate port from the business HTTP server so that
+	// Kubernetes NetworkPolicy can restrict Prometheus access to port 9090 without
+	// affecting client-facing traffic. The metrics server is intentionally
+	// unauthenticated — access is restricted by NetworkPolicy in production.
+	MetricsAddr string `mapstructure:"METRICS_ADDR"`
+
 	// mTLS certificate paths — required by all gRPC servers and clients
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
@@ -154,6 +161,10 @@ func Load(serviceName string, cfg any) error {
 	v.SetDefault("LOG_FORMAT", "json")
 	v.SetDefault("GRPC_ADDR", ":50051")
 	v.SetDefault("HTTP_ADDR", ":8080")
+	// METRICS_ADDR is the dedicated Prometheus scrape port (SEC-025).
+	// Separated from HTTP_ADDR so NetworkPolicy can allow Prometheus on :9090
+	// without opening the business port to Prometheus pods.
+	v.SetDefault("METRICS_ADDR", ":9090")
 	v.SetDefault("OTEL_SERVICE_NAME", serviceName)
 	v.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 

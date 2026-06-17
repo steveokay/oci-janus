@@ -14,6 +14,7 @@ type Config struct {
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
 	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
@@ -47,6 +48,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-tenant")
 	viper.SetDefault("DB_MAX_CONNS", 20)
 	viper.SetDefault("REDIS_ADDR", "redis:6379")
+	viper.SetDefault("METRICS_ADDR", ":9090")
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

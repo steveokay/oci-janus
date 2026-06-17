@@ -14,6 +14,7 @@ type Config struct {
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
 	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
@@ -50,6 +51,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
 	viper.SetDefault("HTTP_ADDR", ":8080")
+	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-webhook")
 	viper.SetDefault("DB_MAX_CONNS", 20)
 	viper.SetDefault("DELIVERY_POLL_INTERVAL_SECS", 5)

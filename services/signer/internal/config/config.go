@@ -14,6 +14,7 @@ type Config struct {
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
 	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
@@ -42,6 +43,12 @@ type Config struct {
 	KMSResourceID   string `mapstructure:"SIGNER_KMS_RESOURCE_ID"`
 	KMSVaultURL     string `mapstructure:"SIGNER_KMS_VAULT_URL"`
 	KMSKeyName      string `mapstructure:"SIGNER_KMS_KEY_NAME"`
+
+	// Database — required in production for durable signature persistence (SEC-015).
+	// When empty the service falls back to an in-memory store with a startup warning;
+	// this is acceptable for local development but MUST NOT be used in production.
+	// Connection string format: postgres://user:pass@host:5432/registry_signer?sslmode=require
+	DBDSN string `mapstructure:"SIGNER_DB_DSN"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -56,6 +63,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
 	viper.SetDefault("HTTP_ADDR", ":8080")
+	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-signer")
 	viper.SetDefault("SIGNER_KEY_BACKEND", "env")
 

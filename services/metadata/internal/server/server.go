@@ -104,7 +104,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("GET /metrics", metricsHandler)
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.
 	// SecureHeaders is outermost so security headers appear on all responses.
@@ -116,8 +115,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		WriteTimeout:      60 * time.Second,
 	}
 
+	// SEC-025: /metrics on a dedicated port so NetworkPolicy can allow Prometheus
+	// to scrape :9090 without exposing the metadata gRPC port to the cluster.
+	metricsMux := http.NewServeMux()
+	metricsMux.HandleFunc("/metrics", metricsHandler)
+	metricsSrv := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+
 	// ── 7. Start & block ──────────────────────────────────────────────────────
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		slog.Info("gRPC server starting", "addr", cfg.GRPCAddr)
 		if err := grpcSrv.Serve(lis); err != nil {
@@ -130,12 +141,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 			errCh <- fmt.Errorf("HTTP serve: %w", err)
 		}
 	}()
+	go func() {
+		slog.Info("metrics server starting", "addr", cfg.MetricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("metrics serve: %w", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
 		slog.Info("shutting down")
 		grpcSrv.GracefulStop()
 		_ = httpSrv.Shutdown(context.Background())
+		_ = metricsSrv.Shutdown(context.Background())
 		return nil
 	case err := <-errCh:
 		return err

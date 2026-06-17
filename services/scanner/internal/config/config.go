@@ -12,6 +12,8 @@ type Config struct {
 	LogFormat   string `mapstructure:"LOG_FORMAT"`
 	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
 	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	// MetricsAddr is the dedicated Prometheus scrape port (SEC-025).
+	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
 	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
 	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
@@ -41,6 +43,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
 	viper.SetDefault("HTTP_ADDR", ":8080")
+	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SERVICE_NAME", "registry-scanner")
 	viper.SetDefault("SCANNER_WORKER_COUNT", 4)
 	viper.SetDefault("SCANNER_JOB_TIMEOUT_SECS", 600)

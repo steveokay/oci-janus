@@ -83,9 +83,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	h := handler.New(authClient, registry, cfg.AuthRealm)
 	mux := http.NewServeMux()
 	h.Register(mux)
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		metrics.Handler().ServeHTTP(w, r)
-	})
 
 	// SecureHeaders is the outermost wrapper so security response headers appear on
 	// every response, including error responses emitted by MaxBytesHandler.
@@ -99,6 +96,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second, // 60s to allow large blob layer transfers to complete
+	}
+
+	// SEC-025: /metrics on a dedicated port so NetworkPolicy can allow Prometheus
+	// to scrape :9090 without exposing the OCI business port to the cluster.
+	metricsMux := http.NewServeMux()
+	metricsMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
+	})
+	metricsSrv := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
 	}
 
 	// gRPC server (health check only for now; future: expose internal gRPC if needed).
@@ -116,7 +127,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("listen %s: %w", cfg.GRPCAddr, err)
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		slog.Info("HTTP server starting", "addr", cfg.HTTPAddr)
 		errCh <- httpSrv.ListenAndServe()
@@ -125,12 +136,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("gRPC server starting", "addr", cfg.GRPCAddr)
 		errCh <- grpcSrv.Serve(lis)
 	}()
+	go func() {
+		slog.Info("metrics server starting", "addr", cfg.MetricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("metrics serve: %w", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
 		slog.Info("shutting down")
 		grpcSrv.GracefulStop()
 		_ = httpSrv.Shutdown(context.Background())
+		_ = metricsSrv.Shutdown(context.Background())
 		return nil
 	case err := <-errCh:
 		return err
