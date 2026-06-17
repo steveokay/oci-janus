@@ -60,15 +60,18 @@ test-conformance:
 		        '$$argon2id$$v=19$$m=65536,t=3,p=2$$nzGi4w5n1X/PxLHwHdo/pQ$$UUz56fCariQ+Nfu+ga7xUAqIN/wcVOHchS3fBRQlCdE', \
 		        true) \
 		ON CONFLICT (tenant_id, username) DO NOTHING;"
-	@echo "--- [2b/5] Granting admin role on org 'conformance' to the conformance user..."
+	@echo "--- [2b/5] Granting global admin role to the conformance user..."
 	@# Without this assignment, checkAccess() in services/core returns 403 on every /v2/
-	@# request and the suite reports 0/76 PASS. Org-scoped admin grant resolves to the
-	@# 'conformance/*' wildcard pattern, which matches the suite's 'conformance/test' namespace.
+	@# request and the suite reports 0/76 PASS. We use scope_type='repo', scope_value='*'
+	@# so GetUserPermissions emits an entry with name='*' — a global wildcard. An
+	@# org-scoped grant on 'conformance' would only cover 'conformance/*' (slash), which
+	@# fails the cross-repo blob mount tests that create random single-segment names
+	@# like 'conformance-<uuid>' per test.
 	@# The user is looked up by (tenant_id, username) rather than a fixed UUID because
 	@# the users.id column is auto-generated (gen_random_uuid()).
 	docker exec $(COMPOSE_PROJECT)-postgres-1 psql -U registry -d registry_auth -c \
 		"INSERT INTO role_assignments (tenant_id, user_id, role_id, scope_type, scope_value) \
-		SELECT u.tenant_id, u.id, 'a0000001-0000-0000-0000-000000000002', 'org', 'conformance' \
+		SELECT u.tenant_id, u.id, 'a0000001-0000-0000-0000-000000000002', 'repo', '*' \
 		FROM users u \
 		WHERE u.username = 'conformance' \
 		  AND u.tenant_id = '98dbe36b-ef28-4903-b25c-bff1b2921c9e' \

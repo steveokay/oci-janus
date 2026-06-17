@@ -431,6 +431,14 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 	}
 
 	tenantID := claims.TenantID
+	// Quota enforcement: refuse the push if the manifest would push the tenant over
+	// its storage quota. Manifests are small (≤ 4 MiB) but still count, and rejecting
+	// here keeps storage_used in sync with what the metadata service tracks.
+	if quotaErr := h.registry.CheckQuota(r.Context(), tenantID, int64(len(body))); quotaErr == service.ErrQuotaExceeded {
+		ociError(w, http.StatusForbidden, "DENIED", "tenant storage quota exceeded")
+		return
+	}
+
 	repo, err := h.registry.GetOrCreateRepository(r.Context(), tenantID, name)
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
@@ -685,7 +693,8 @@ func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name
 }
 
 func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
-	if h.requireAccess(w, r, name, "push") == nil {
+	claims := h.requireAccess(w, r, name, "push")
+	if claims == nil {
 		return
 	}
 
@@ -693,6 +702,23 @@ func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, n
 	if expectedDigest != "" && !digestRE.MatchString(expectedDigest) {
 		ociError(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest parameter")
 		return
+	}
+
+	// Quota enforcement: refuse to commit if the tenant would exceed its storage
+	// quota. The final blob size is the bytes already accumulated by previous PATCH
+	// chunks (st.Offset) plus the bytes in the body of this final PUT. We must check
+	// before CompleteUpload streams the blob to storage — otherwise we pay the
+	// bandwidth + write cost just to reject at the end. CheckQuota fails open when
+	// the metadata RPC is unreachable, so a temporary outage cannot block pushes.
+	if st, getErr := h.registry.GetUpload(r.Context(), uploadUUID); getErr == nil && st != nil {
+		totalBytes := st.Offset
+		if r.ContentLength > 0 {
+			totalBytes += r.ContentLength
+		}
+		if quotaErr := h.registry.CheckQuota(r.Context(), claims.TenantID, totalBytes); quotaErr == service.ErrQuotaExceeded {
+			ociError(w, http.StatusForbidden, "DENIED", "tenant storage quota exceeded")
+			return
+		}
 	}
 
 	digest, _, err := h.registry.CompleteUpload(r.Context(), uploadUUID, expectedDigest, r.Body, r.ContentLength)
