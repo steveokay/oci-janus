@@ -572,12 +572,12 @@ npm run typecheck
 | Screen | Route | Status |
 |---|---|---|
 | Login | `/login` | ✅ Done |
-| Repository Dashboard | `/repos` | Not started |
-| Image Details & Tags | `/repos/:name` | Not started |
-| Security Scan Results | `/repos/:name/scan/:tag` | Not started |
-| Build History | `/repos/:name/builds` | Not started |
+| Repository Dashboard | `/dashboard` | ✅ Done |
+| Image Details & Tags | `/dashboard/:repoName` | ✅ Done |
+| Security Scan Results | `/dashboard/:repoName/scan` | ✅ Done |
+| Build History | `/dashboard/:repoName/builds` | ✅ Done |
 
-The login page POSTs to `POST /api/v1/login` and stores the Bearer token in `localStorage`. The `useAuth` hook (`src/lib/auth/useAuth.ts`) reads it back. The `index` route redirects to `/dashboard` or `/login` based on token presence.
+All five Stitch-verified screens are pixel-perfect and wired to the `services/management` REST API via TanStack Query. The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zustand memory only (never `localStorage` — FE-SEC-001/002) and is silently refreshed 60 seconds before expiry via `POST /api/v1/token/refresh`. The Axios 401 interceptor clears auth state and redirects to `/login?reason=session_expired`.
 
 ---
 

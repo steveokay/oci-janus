@@ -633,5 +633,7 @@ MTLS_CERT_PATH=                  # required in production
 MTLS_KEY_PATH=                   # required in production
 ```
 
-**Known limitations (TODO before GA):**
-- `POST .../scan` returns 202 stub — needs scanner RabbitMQ publisher wiring
+**Scan trigger flow (end to end):**
+- `POST /api/v1/repositories/:org/:repo/tags/:tag/scan` validates the repo + tag, then publishes a `scan.queued` event to RabbitMQ.
+- `registry-scanner` binds the `scanner.scan.queued` queue (in addition to its `push.completed` queue) and routes through `worker.Pool.HandleScanQueued`, which allocates a scan_id and enqueues the job.
+- See `services/management/internal/handler/handler.go` `handleTriggerScan` and `services/scanner/internal/worker/worker.go` `ScanQueuedConsumerConfig`.

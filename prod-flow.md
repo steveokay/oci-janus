@@ -636,15 +636,18 @@ DB_DSN_REPLICA=postgres://...?sslmode=require   # read replica; optional
 
 | Item | Status | Notes |
 |---|---|---|
-| Helm charts tested against real cluster | Not yet | Charts have correct structure; untested. Sprint 6. |
+| Helm charts tested against real cluster | Not yet | Charts have correct structure; untested. Sprint 6 backlog. |
 | Terraform for cloud infra | Not started | `infra/terraform/` is present but empty. Decision #10. |
-| OCI conformance suite in CI | ✅ Done | 75/75 pass. Runs in CI on every PR to `main`. |
+| OCI conformance suite in CI | ✅ Done | 75/75 PASS. Runs in CI on every PR to `main`. |
 | Integration tests (testcontainers) | ✅ Done | auth, core, metadata, storage covered. |
-| Prometheus metrics wired | ✅ Done | All services expose `/metrics` via `libs/observability/metrics`. |
+| Prometheus metrics wired | ✅ Done | All services expose `/metrics` on dedicated port `:9090` via `libs/observability/metrics` (SEC-025). |
 | `sslmode=require` for dev Postgres | Accepted risk | Dev compose uses `sslmode=prefer`. `libs/config/loader` warns at startup. Never use compose DSNs in prod. |
-| RBAC at org / repo / tag level | Scaffold only | Token scopes enforced; per-object ACL not implemented. Post Sprint 5. |
-| Frontend UI | In progress | Login page shipped (Sprint 5). Dashboard, Image Details, Security Scan, Build History remaining. |
-| SEC-015 signer volatile store | Deferred | In-memory sigstore lost on restart. Needs PostgreSQL persistence. Sprint 6. |
+| RBAC at org / repo level | ✅ Done | Full schema (owner/admin/writer/reader), `GetUserPermissions` gRPC, enforced in `registry-core` via `requireAccess()`, enforced in `registry-management` REST routes. Tag-level scope deferred — Sprint 6 backlog. |
+| Frontend UI | ✅ Done | All 5 Stitch screens shipped pixel-perfect (Login, Dashboard, Image Details & Tags, Security Scan, Build History) and wired to the management API via TanStack Query. JWT auto-refresh + Zustand memory-only token store. |
+| SEC-015 signer volatile store | ✅ Resolved | PostgreSQL persistence via `signatures` table with write-through cache. `SigB64` not stored in cleartext. Commit `0f95144`. |
+| Per-tenant storage quota | ✅ Done | Tenant-level `storage_quota` column; `PUT /api/v1/admin/tenants/<id>/quota` for platform admins; `CheckQuota` enforcement on push paths. Commit `bc88353`. |
+| Signer Vault / KMS backends | Not yet | Only `env` backend works; `vault` / `awskms` / `gcpkms` / `azurekms` return "not yet implemented". Sprint 6 backlog. |
+| Notary v2 | Not yet | TUF code unimplemented despite `infra/runbooks/notary-root-key-ceremony.md` documenting the ceremony. Only Cosign (ECDSA P-256) is shipped. Sprint 6 backlog. |
 
 ---
 

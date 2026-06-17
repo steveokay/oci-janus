@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-14 (SEC-005/007/009/010/011/012/013/016/017/018/019/020/021/022/023/024/026/027/028/029/030/031/032/033/034/035/036 resolved; SEC-006/015/025 deferred)
+> Last updated: 2026-06-18 (SEC-001 through SEC-036 all resolved — no open security items at platform level. Sprint 6 backend gaps tracked in `status.md` are feature work, not security findings.)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -27,53 +27,14 @@
 
 ---
 
-## Open Issues (Deferred)
+## Open Issues
 
-> These items require more invasive changes (new DB tables, multi-service topology refactors) and are tracked for the next sprint.
-
-### SEC-006 — Connection pool exhaustion not mapped to correct gRPC status code
-- **Severity:** LOW
-- **Status:** OPEN
-- **Service:** All services with PostgreSQL access (`registry-auth`, `registry-audit`, `registry-metadata`, `registry-tenant`)
-- **Raised:** 2026-06-09
-- **Description:** Default `pgxpool.Acquire` behaviour blocks until a connection is available or context times out. If the error is surfaced as `codes.Internal`, callers with a retry interceptor will retry on exhaustion, amplifying load.
-- **Remediation:**
-  1. Detect `context.DeadlineExceeded` from `pool.Acquire` and return `codes.ResourceExhausted`
-  2. Set `ConnectTimeout` on pool config (default 5s)
-  3. Add `MaxConnIdleTime` and `MaxConnLifetime` to prevent stale connections
-  4. Retry interceptor must explicitly NOT retry on `codes.ResourceExhausted`
-- **References:** `§13` in CLAUDE.md, `pgxpool` docs
+> No open security findings as of 2026-06-18.
+> Backend feature gaps (Vault/KMS signing backends, Notary v2, tag-level RBAC, etc.)
+> are tracked in `status.md` Sprint 6 — those are unimplemented features rather than
+> security regressions, so they live in the project tracker, not here.
 
 ---
-
-### SEC-015 — `registry-signer` in-memory sigstore is volatile
-- **Severity:** MEDIUM
-- **Status:** OPEN
-- **Service:** `registry-signer`
-- **Raised:** 2026-06-10
-- **Description:** `services/signer/internal/sigstore/store.go` holds all signature records in a `sync.RWMutex`-protected map. On process restart (pod crash, rolling deploy, OOM kill), all records are lost. `VerifyManifest` will return `Verified: false` for all previously signed images, breaking any policy that requires signature verification. Two signer replicas also have independent stores.
-- **Remediation:**
-  1. Persist signature records to PostgreSQL (add a `signatures` table to the signer's own DB, or reuse `registry-metadata`'s gRPC API)
-  2. Alternatively, follow Cosign's intended model: push the signature as an OCI artifact to `registry-core` and query it back
-  3. Do not persist `SigB64` in cleartext — store only the signature digest
-- **References:** `services/signer/internal/sigstore/store.go`, CLAUDE.md §4.8
-
----
-
-### SEC-025 — `/metrics` endpoints unauthenticated and exposed on public HTTP port
-- **Severity:** LOW
-- **Status:** OPEN
-- **Service:** All services
-- **Raised:** 2026-06-10
-- **Description:** Every service serves `/metrics` on the same port as business endpoints. Once Prometheus metrics are fully wired, they will expose per-tenant request rates and storage utilisation. In Kubernetes, metrics should be on a separate internal-only port.
-- **Remediation:**
-  1. Serve `/metrics` on a dedicated second HTTP port via `METRICS_ADDR` env var (default `:9090`)
-  2. Exclude the metrics port from `NetworkPolicy` egress rules — allow only Prometheus pods to reach it
-
----
-
-
-
 
 ## Resolved Issues
 
@@ -87,12 +48,14 @@
 | SEC-008 | gRPC clients use plaintext transport | `registry-core`, `registry-proxy` | 2026-06-10 / 2026-06-11 | Added `clientCreds()` helper in both `services/core/internal/server/server.go` and `services/proxy/internal/server/server.go`. Calls `libs/auth/mtls.ClientTLSConfig()` when cert paths are set; falls back to insecure with `slog.Warn` in dev. Proxy was the root cause of all-401s on pull-through cache — insecure gRPC to mTLS-enabled auth service silently failed TLS handshake. |
 | SEC-014 | New services gRPC servers had no interceptors or mTLS | `registry-signer`, `registry-gc`, `registry-tenant`, `registry-webhook`, `registry-audit` | 2026-06-10 | Applied `buildGRPCOptions()` pattern (from `registry-auth`) to all five services. Each now has recovery interceptor, OTEL tracing, structured logging, and optional mTLS when cert paths are configured. Commit `c4e08d7`. |
 | SEC-005 | JWT revocation TTL coupling undocumented | `registry-auth` | 2026-06-12 | `RevokeToken` now derives Redis TTL from `time.Until(claims.ExpiresAt.Time)` with a comment explaining the self-cleaning coupling. `ValidateToken` comment cross-references the contract. |
+| SEC-006 | Connection pool exhaustion not mapped to ResourceExhausted | All PostgreSQL-using services | 2026-06-17 | `libs/errors/codes.MapDBError` now detects `context.DeadlineExceeded` and `pgxpool` exhaustion paths and maps to `codes.ResourceExhausted`. `libs/config/loader.DBConfig.PoolConfig()` sets `ConnectTimeout: 5s`, `MaxConnLifetime: 30m`, `MaxConnIdleTime: 5m` so stale connections cannot accumulate. gRPC client retry interceptor was updated to skip `ResourceExhausted`. Commit `0f95144`. |
 | SEC-007 | Missing HTTP security response headers | `registry-auth`, `registry-core` | 2026-06-12 | Created `libs/middleware/http/secure_headers.go` with `SecureHeaders` middleware setting `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 0`. Applied to auth and core HTTP servers. |
 | SEC-009 | IP rate limiting targets gateway IP, not client IP | `registry-auth` | 2026-06-12 | `remoteIP()` now checks `X-Forwarded-For` only when TCP peer is in `TRUSTED_PROXY_CIDRS` (comma-separated env var). Falls back to `RemoteAddr` for direct connections. Startup warning when CIDR list is empty. |
 | SEC-010 | registry-core gRPC server has no interceptors or mTLS | `registry-core` | 2026-06-12 | Added `buildGRPCOptions()` to `services/core/internal/server/server.go` — same pattern as auth/storage/metadata (recovery + OTEL + logging + optional mTLS). |
 | SEC-011 | createUser leaks internal error strings | `registry-auth` | 2026-06-12 | Added `service.IsPasswordPolicyError(err)` helper. Policy errors (safe) get 400 with message; argon2 failures get 500 with generic message and are logged via `slog.ErrorContext`. |
 | SEC-012 | Proxy blob handler stores partial blob on client disconnect | `registry-proxy` | 2026-06-12 | `handleGetBlob` now calls `pw.CloseWithError(copyErr)` on client disconnect so the background goroutine receives a non-EOF error and aborts without calling `CloseAndRecv`. |
 | SEC-013 | Proxy blob requests missing digest format validation | `registry-proxy` | 2026-06-12 | Added `digestRE = regexp.MustCompile("^sha256:[a-f0-9]{64}$")` to proxy handler. Guards at top of `handleGetBlob` and `handleHeadBlob` return `DIGEST_INVALID` (400) on mismatch. |
+| SEC-015 | `registry-signer` in-memory sigstore was volatile | `registry-signer` | 2026-06-17 | Replaced the `sync.RWMutex`-protected map with PostgreSQL persistence. `services/signer/migrations/` adds a `signatures` table; `internal/sigstore/store.go` writes through to the DB and keeps an in-process LRU cache. `SigB64` is not persisted in cleartext — only the signature digest plus the verifiable Cosign payload reference. `VerifyManifest` now returns the correct result across restarts and across multiple signer replicas. Commit `0f95144`. |
 | SEC-016 | Tenant domain name not validated in RegisterDomain | `registry-tenant` | 2026-06-12 | Added RFC 1123 `domainRE` and IP-address rejection to both `RegisterDomain` and `ResolveDomain`. Returns `codes.InvalidArgument` for non-conforming domains. |
 | SEC-017 | Tenant name not validated against allowlist | `registry-tenant` | 2026-06-12 | Added `tenantNameRE` (`^[a-z0-9][a-z0-9-]{1,63}$`) to `CreateTenant`. pgx `23505` unique violation mapped to `codes.AlreadyExists` via `isDuplicateKeyError` helper. |
 | SEC-018 | Audit HTTP endpoints missing body size limit | `registry-audit` | 2026-06-12 | `WriteEvent` wraps `r.Body` with `http.MaxBytesReader(w, r.Body, 1<<20)` before JSON decode as defence-in-depth alongside the server-level `MaxBytesHandler`. |
@@ -102,6 +65,7 @@
 | SEC-022 | sslmode=prefer in docker-compose contradicts sslmode=require | All DB services | 2026-06-12 | `libs/config/loader/loader.go` now emits `slog.Warn` when DSN `sslmode` is not `"require"`. Dev compose continues to boot; warning makes the risk visible at startup. |
 | SEC-023 | Vault dev root token hardcoded in docker-compose | `vault` (dev) | 2026-06-12 | Vault service and vault-init now use `${VAULT_DEV_ROOT_TOKEN:-dev-root-token}`. Warning comment added above the vault block. `VAULT_DEV_ROOT_TOKEN=` added to `.env.example`. |
 | SEC-024 | Dev TLS private keys made world-readable | `cert-init` | 2026-06-12 | `scripts/gen-dev-certs.sh` now uses `chmod 644 *.crt` + `chown 65532:65532 *.key; chmod 600 *.key` instead of `chmod a+r *.key`. |
+| SEC-025 | `/metrics` endpoints exposed on the public HTTP port | All services | 2026-06-17 | Every service now spins up a dedicated metrics HTTP server on `cfg.MetricsAddr` (default `:9090`) separate from the business port. NetworkPolicy stencils in `infra/helm/` allow only the Prometheus pod to reach the metrics port. Verified in `services/auth/internal/server/server.go`, `services/audit/.../server.go`, `services/core/.../server.go` plus all other services. Commit `0f95144`. |
 | SEC-026 | OTEL exporter uses hardcoded insecure gRPC | All services | 2026-06-12 | Added `otelInsecure()` helper reading `OTEL_INSECURE` env var. `WithInsecure()` now only applied when `OTEL_INSECURE=true`. `docker-compose.yml` sets `OTEL_INSECURE: "true"` for local dev. |
 | SEC-027 | Default weak passwords in docker-compose not warned against | `postgres`, `rabbitmq`, `minio` | 2026-06-12 | Added `# WARNING:` comments above all three default-password lines in `docker-compose.yml`. |
 | SEC-028 | context.Background() in request handlers | `registry-core`, `registry-auth`, `registry-proxy` | 2026-06-12 | `PutManifest` in core now uses request ctx. Fire-and-forget goroutines (LastUsed update in auth, cache store in proxy, cleanup in core) use `context.Background()` with bounded timeouts and comments explaining the intentional detachment. |
@@ -135,7 +99,7 @@ Tracked per service. `?` = not yet assessed.
 | `X-Content-Type-Options: nosniff` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | CORS explicitly configured | N/A | ✗ (unassessed) | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Request body size limits | ✗ (SEC-019) | ✓ | ✓ | ✓ | ✓ | ✓ | N/A | N/A | N/A | ✓ | N/A | N/A |
-| Metrics on separate port | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) | ✗ (SEC-025) |
+| Metrics on separate port | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `govulncheck` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `gosec` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `gitleaks` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

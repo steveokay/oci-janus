@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-17 (Sprint 6 OPENED — pre-GA polish backlog seeded from code review: 4 backend correctness items, 2 frontend critical bugs, plus medium/low UX cleanup. Sprint 5 COMPLETE — all 5 Stitch screens pixel-perfect, management API fully wired, RBAC enforced end-to-end, JWT auto-refresh shipped, unit tests at 80%+ on auth/core/audit/management; SEC-006/015/025 closed; OTEL bootstrap added to all 11 service entrypoints — Jaeger SPM now receives traces from all services after fixing otel-collector metrics pipeline + Jaeger PROMETHEUS_QUERY_NAMESPACE.)
+> Last updated: 2026-06-18 (Sprint 6 progressing — 7 backend correctness items DONE (`df407f7`, `18d607a`, `15f0ce3`, `d400eb1`, `bc88353`): read paths no longer auto-create repos, delete verb mismatch fixed via `requireAccess` middleware, per-tenant storage quota wired and configurable via PUT /api/v1/admin/tenants/<id>/quota, OCI conformance back to 75/75 PASS, Jaeger SPM monitor working. Doc audit on 2026-06-18 surfaced 5 new feature gaps — Vault/KMS signer backends, Notary v2, tag-level RBAC, Helm cluster validation — now tracked in the new "Backend feature gaps" section. Stale docs (security.md, prod-flow.md, README.md, docs/SERVICES.md) refreshed in the same pass.)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -242,10 +242,19 @@ All decisions resolved. No blockers.
 | Enforce per-tenant storage quota on push | `services/core` | DONE ✅ | Commit pending. `handleCompleteUpload` and `handlePutManifest` both call `Registry.CheckQuota` before committing. Pre-check uses `upload_state.Offset + Content-Length` for blob completes. Returns OCI 403 DENIED on overflow. Fails open when metadata RPC is unreachable so transient outages don't block pushes. |
 | Fix HEAD-manifest-by-tag + cross-repo blob mount conformance failures | `services/core` | DONE ✅ | Commit `15f0ce3` + this commit. All 4 residuals fixed: HEAD-by-tag was transient (passed in the next run after wildcard grant), 3 cross-repo mount failures resolved by changing the conformance user's grant from `org/conformance` (covers `conformance/*`) to `repo/*` (covers any namespace including the random `conformance-<uuid>` namespaces the suite generates). Suite now at **75/75 PASS**. |
 | Extract `requireAccess(action)` middleware | `services/core` | DONE ✅ | Commit pending. 14 handlers now route auth/RBAC through one helper. File shrinks by 88 lines (200→112). Adds RBAC check to upload-state + referrers handlers that previously only checked JWT. |
-| Seed conformance user with admin role | `services/core` | DONE ✅ | Commit pending. Makefile now seeds an org-scoped admin grant for the conformance user. Also fixed the compose AUTH_REALM hardcode to read `${AUTH_REALM:-http://localhost:8080/auth/token}` so the Makefile env override propagates. Suite now passes 72/75 (was 0/76). 4 remaining failures are unrelated to auth: HEAD-manifest-by-tag (1) and cross-repo blob mount (3) — tracked separately. |
-| Fix HEAD manifest by tag + cross-repo blob mount conformance failures | `services/core` | NOT STARTED | 4 remaining conformance failures after the role seed fix. HEAD /v2/<name>/manifests/<tag> returns wrong status; cross-repo mount endpoint behavior differs from spec on the no-source-blob path. Not auth-related. |
+| Seed conformance user with admin role | `services/core` | DONE ✅ | Commit `15f0ce3`. Makefile now seeds an org-scoped admin grant for the conformance user. Also fixed the compose AUTH_REALM hardcode to read `${AUTH_REALM:-http://localhost:8080/auth/token}` so the Makefile env override propagates. Bumped the grant to `scope=repo,value=*` for cross-repo coverage in `d400eb1`. |
 
-#### Frontend correctness — CRITICAL
+#### Backend feature gaps — surfaced by 2026-06-18 doc audit
+
+> Items that CLAUDE.md / docs/ promise but no code implements. Different in nature from the Sprint 6 correctness items above — these are new feature work, not bugs.
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Implement signer Vault key backend | `services/signer` | NOT STARTED | `internal/server/server.go:215` returns `"SIGNER_KEY_BACKEND=%s is not yet implemented"` for `vault`. Decision Log #14 says Vault dev mode is locally available — but the signer can't use it. Use the existing Vault dev container in compose; load Cosign key material from `VAULT_COSIGN_PATH` via the Vault HTTP API. |
+| Implement signer KMS backends (AWS / GCP / Azure) | `services/signer` | NOT STARTED | Same `server.go:215` returns "not yet implemented" for `awskms`, `gcpkms`, `azurekms`. Use the respective cloud SDKs' KMS sign interfaces. Documented in CLAUDE.md §11 and `docs/SERVICES.md` §8 but never coded. |
+| Implement Notary v2 (TUF) signing path | `services/signer` | NOT STARTED | CLAUDE.md §11 + `infra/runbooks/notary-root-key-ceremony.md` (200 lines) document the model fully; zero code. Only Cosign (ECDSA P-256) is shipped. Per-tenant delegation keys + TUF metadata in `registry-storage`. Largest single item left for GA. |
+| Tag-level RBAC scope | `services/auth` | NOT STARTED | CLAUDE.md §1 Core Capabilities lists "RBAC at org / repo / tag level". The `role_assignments` CHECK constraint is `IN ('org', 'repo')` — tag scope was never enabled. Either extend the CHECK + add `scope_type='tag'` handling, or update CLAUDE.md to drop the tag claim. |
+| Validate Helm charts against a real cluster | `infra/helm` | NOT STARTED | All 12 service sub-charts have the right structure (probes, PDB, HPA, NetworkPolicy, SecretProviderClass) but have never been deployed. Per Decision #10 the target is Docker Desktop K8s; a one-time `helm install` + smoke test would surface any remaining issues. |
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
