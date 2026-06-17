@@ -237,10 +237,11 @@ All decisions resolved. No blockers.
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Read endpoints must not create repositories | `services/core` | NOT STARTED | `handleTagsList`, `handleGetManifest`, `handleHeadManifest`, `handleHeadBlob`, `handleGetBlob` all call `GetOrCreateRepository`. Unauthorized reads can pollute metadata. Read paths should return 404; only `handleInitiateUpload` / `handlePutManifest` create. |
-| Reconcile delete action verb between JWT and RBAC | `services/core` | NOT STARTED | `handleDeleteManifest`/`handleDeleteBlob` check `HasAction(name, "delete")` against the JWT but `checkAccess(name, "push")` against RBAC. Pick one verb and align both layers. Currently works by accident because writer/admin roles grant `push`. |
+| Read endpoints must not create repositories | `services/core` | DONE ✅ | Commit `df407f7`. Added read-only `GetRepository`; switched 5 read/delete handlers; only `handlePutManifest` still uses `GetOrCreateRepository`. |
+| Reconcile delete action verb between JWT and RBAC | `services/core` | DONE ✅ | Commit pending. Folded into the `requireAccess` middleware extraction so both layers ask for `"delete"`. |
 | Enforce per-tenant storage quota on push | `services/core` | NOT STARTED | CLAUDE.md §4.3 mandates quota check before accepting upload (403 on overflow). `repositories.storage_used` column exists but is not consulted in `handleInitiateUpload` or `handleCompleteUpload`. |
-| Extract `requireAccess(action)` middleware | `services/core` | NOT STARTED | The authenticate → HasAction → checkAccess pattern is duplicated across ~12 handlers. One forgotten step in a new endpoint = silent auth bypass. Cheap insurance. |
+| Extract `requireAccess(action)` middleware | `services/core` | DONE ✅ | Commit pending. 14 handlers now route auth/RBAC through one helper. File shrinks by 88 lines (200→112). Adds RBAC check to upload-state + referrers handlers that previously only checked JWT. |
+| Seed conformance user with admin role | `services/core` | NOT STARTED | OCI conformance regressed to 0/76 after Sprint 5's RBAC checkAccess landed (2026-06-14). The conformance user is seeded as a user but has no role_assignments row, so every /v2/ request 403s. Verified pre-existing by running conformance against parent commit `df407f7`. Fix: extend `services/core/Makefile`'s seed step to also INSERT a role assignment. |
 
 #### Frontend correctness — CRITICAL
 

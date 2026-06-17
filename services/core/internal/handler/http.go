@@ -198,6 +198,37 @@ func (h *Handler) checkAccess(r *http.Request, claims *service.TokenClaims, repo
 	return service.ErrForbidden
 }
 
+// requireAccess runs the OCI auth prelude common to every /v2/ handler:
+//  1. authenticate the Bearer / Basic credential
+//  2. confirm the JWT carries the requested action on this repository
+//  3. confirm the user's RBAC role grants the requested action
+//
+// Returns the validated claims when access is allowed. On any denial it writes
+// the appropriate response (401 with a Bearer challenge, or 403 OCI DENIED)
+// and returns nil — callers must check for nil and return immediately.
+//
+// This helper exists so the JWT scope check and the RBAC check cannot drift on
+// which verb they expect: historically delete handlers asked the JWT for
+// "delete" but asked RBAC for "push", which silently let writer-role users
+// delete content they should not have been able to touch. Routing every
+// handler through one call site collapses that whole class of bug.
+func (h *Handler) requireAccess(w http.ResponseWriter, r *http.Request, name, action string) *service.TokenClaims {
+	claims, err := h.authenticate(r)
+	if err != nil {
+		h.challengeAuth(w, "repository:"+name+":"+action)
+		return nil
+	}
+	if !claims.HasAction(name, action) {
+		h.challengeAuth(w, "repository:"+name+":"+action)
+		return nil
+	}
+	if err := h.checkAccess(r, claims, name, action); err != nil {
+		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+		return nil
+	}
+	return claims
+}
+
 func (h *Handler) authenticate(r *http.Request) (*service.TokenClaims, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -255,22 +286,12 @@ func (h *Handler) challengeAuth(w http.ResponseWriter, scope string) {
 // --- Tags ---
 
 func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
 		ociError(w, http.StatusBadRequest, "NAME_INVALID", "invalid repository name")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least reader access for pull operations.
-	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 
@@ -319,18 +340,8 @@ func (h *Handler) handleTagsList(w http.ResponseWriter, r *http.Request, name st
 // --- Manifests ---
 
 func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least reader access for pull operations.
-	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 
@@ -364,18 +375,8 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 }
 
 func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least reader access for pull operations.
-	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 
@@ -408,22 +409,12 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 }
 
 func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
+	claims := h.requireAccess(w, r, name, "push")
+	if claims == nil {
 		return
 	}
 	if err := service.ValidateName(name); err != nil {
 		ociError(w, http.StatusBadRequest, "NAME_INVALID", "invalid repository name")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least writer access for push operations.
-	if err := h.checkAccess(r, claims, name, "push"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
 		return
 	}
 
@@ -465,18 +456,8 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 }
 
 func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":delete")
-		return
-	}
-	if !claims.HasAction(name, "delete") {
-		h.challengeAuth(w, "repository:"+name+":delete")
-		return
-	}
-	// Enforce RBAC: delete is a write operation; require at least writer role.
-	if err := h.checkAccess(r, claims, name, "push"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "delete")
+	if claims == nil {
 		return
 	}
 
@@ -506,18 +487,8 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 // --- Blobs ---
 
 func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least reader access for pull operations.
-	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -541,18 +512,8 @@ func (h *Handler) handleHeadBlob(w http.ResponseWriter, r *http.Request, name, d
 }
 
 func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least reader access for pull operations.
-	if err := h.checkAccess(r, claims, name, "pull"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -581,18 +542,8 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request, name, di
 }
 
 func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name, digest string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":delete")
-		return
-	}
-	if !claims.HasAction(name, "delete") {
-		h.challengeAuth(w, "repository:"+name+":delete")
-		return
-	}
-	// Enforce RBAC: delete is a write operation; require at least writer role.
-	if err := h.checkAccess(r, claims, name, "push"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "delete")
+	if claims == nil {
 		return
 	}
 	if !digestRE.MatchString(digest) {
@@ -626,18 +577,8 @@ func (h *Handler) handleDeleteBlob(w http.ResponseWriter, r *http.Request, name,
 // --- Uploads ---
 
 func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, name string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	// Enforce RBAC: verify the user holds at least writer access before starting an upload.
-	if err := h.checkAccess(r, claims, name, "push"); err != nil {
-		ociError(w, http.StatusForbidden, "DENIED", "access denied")
+	claims := h.requireAccess(w, r, name, "push")
+	if claims == nil {
 		return
 	}
 
@@ -669,13 +610,7 @@ func (h *Handler) handleInitiateUpload(w http.ResponseWriter, r *http.Request, n
 }
 
 func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
+	if h.requireAccess(w, r, name, "push") == nil {
 		return
 	}
 
@@ -700,13 +635,7 @@ func (h *Handler) handleGetUpload(w http.ResponseWriter, r *http.Request, name, 
 }
 
 func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
+	if h.requireAccess(w, r, name, "push") == nil {
 		return
 	}
 
@@ -732,7 +661,7 @@ func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name
 		}
 	}
 
-	_, err = h.registry.AppendChunk(r.Context(), uploadUUID, r.Body, r.ContentLength)
+	_, err := h.registry.AppendChunk(r.Context(), uploadUUID, r.Body, r.ContentLength)
 	if err == service.ErrUploadNotFound {
 		ociError(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
 		return
@@ -756,13 +685,7 @@ func (h *Handler) handlePatchUpload(w http.ResponseWriter, r *http.Request, name
 }
 
 func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
+	if h.requireAccess(w, r, name, "push") == nil {
 		return
 	}
 
@@ -793,13 +716,7 @@ func (h *Handler) handleCompleteUpload(w http.ResponseWriter, r *http.Request, n
 }
 
 func (h *Handler) handleCancelUpload(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":push")
-		return
-	}
-	if !claims.HasAction(name, "push") {
-		h.challengeAuth(w, "repository:"+name+":push")
+	if h.requireAccess(w, r, name, "push") == nil {
 		return
 	}
 
@@ -837,13 +754,8 @@ func writeErrors(w http.ResponseWriter, errs ...ociErr) {
 // An optional ?artifactType= query parameter filters the results; when filtering is applied,
 // OCI-Filters-Applied: artifactType is set in the response.
 func (h *Handler) handleReferrers(w http.ResponseWriter, r *http.Request, name, digest string) {
-	claims, err := h.authenticate(r)
-	if err != nil {
-		h.challengeAuth(w, "repository:"+name+":pull")
-		return
-	}
-	if !claims.HasAction(name, "pull") {
-		h.challengeAuth(w, "repository:"+name+":pull")
+	claims := h.requireAccess(w, r, name, "pull")
+	if claims == nil {
 		return
 	}
 	if !digestRE.MatchString(digest) {
