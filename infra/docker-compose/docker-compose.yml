@@ -152,8 +152,13 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
       METRICS_STORAGE_TYPE: prometheus
       PROMETHEUS_SERVER_URL: http://prometheus:9090
+      # Must match the `namespace` in otel-collector.yml's prometheus exporter so Jaeger
+      # SPM queries registry_calls_total / registry_duration_* instead of bare names.
+      PROMETHEUS_QUERY_NAMESPACE: registry
       PROMETHEUS_QUERY_NORMALIZE_CALLS: "true"
       PROMETHEUS_QUERY_NORMALIZE_DURATION: "true"
+      # Required for Jaeger 1.55+ to interpret spanmetrics connector output correctly.
+      PROMETHEUS_QUERY_SUPPORT_SPANMETRICS_CONNECTOR: "true"
     ports:
       - "16686:16686"  # Jaeger UI (SPM tab enabled)
     networks:

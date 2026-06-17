@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
@@ -84,15 +86,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
-	// SecureHeaders is the outermost wrapper so security response headers appear on
-	// every response, including error responses emitted by MaxBytesHandler.
-	// ReadTimeout and WriteTimeout are both generous to accommodate blob streaming:
-	// clients may take tens of seconds to receive a large image layer over a slow link.
-	// ReadHeaderTimeout is short to prevent Slowloris attacks (attacker keeps connection
-	// open by sending headers one byte at a time).
+	// otelhttp wraps the handler tree to create a root span for every HTTP request.
+	// SecureHeaders is inside so security headers appear on all responses including errors.
+	// ReadTimeout and WriteTimeout are generous to accommodate blob streaming.
+	// ReadHeaderTimeout is short to prevent Slowloris attacks.
 	httpSrv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           httpmiddleware.SecureHeaders(http.MaxBytesHandler(mux, 1<<30)), // 1 GiB total (individual endpoints impose stricter limits)
+		Addr: cfg.HTTPAddr,
+		Handler: otelhttp.NewHandler(
+			httpmiddleware.SecureHeaders(http.MaxBytesHandler(mux, 1<<30)),
+			"registry-core",
+		),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second, // 60s to allow large blob layer transfers to complete

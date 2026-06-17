@@ -174,11 +174,19 @@ func (h *Handler) checkAccess(r *http.Request, claims *service.TokenClaims, repo
 		return service.ErrForbidden
 	}
 	// Walk the returned access list; accept if any entry matches the repo and action.
-	// A wildcard name ("*") or wildcard action ("*") is also accepted so that org-level
-	// admin grants can cover all repos under an org without listing each one explicitly.
+	// Three name patterns are accepted:
+	//   "*"        — global wildcard, matches any repo
+	//   "org/*"    — org-level wildcard (from org-scoped role assignments), matches any repo in that org
+	//   "org/repo" — exact repo match
 	for _, a := range perms {
 		name := a.GetName()
-		if name != repoName && name != "*" {
+		matched := name == "*" || name == repoName
+		if !matched && strings.HasSuffix(name, "/*") {
+			// "org/*" covers all repos whose name starts with "org/"
+			orgPrefix := strings.TrimSuffix(name, "*")
+			matched = strings.HasPrefix(repoName, orgPrefix)
+		}
+		if !matched {
 			continue
 		}
 		for _, act := range a.GetActions() {

@@ -47,6 +47,12 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlp/jaeger, spanmetrics]
+    # Accepts OTLP metrics pushed by service SDKs and exposes them via Prometheus.
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    # Internal pipeline: spanmetrics connector produces RED metrics from traces.
     metrics/spanmetrics:
       receivers: [spanmetrics]
       exporters: [prometheus]
