@@ -1,0 +1,637 @@
+# Service Catalogue — Detailed Reference
+
+> Authoritative reference for every service: purpose, endpoints, gRPC interfaces, environment variables, and non-obvious implementation rules.
+> CLAUDE.md §4 holds the one-paragraph summary table; this file holds the detail.
+> When code disagrees with this file, prefer the proto files (`proto/<service>/v1/*.proto`) and migration files (`services/<service>/migrations/`) — they are the canonical contracts.
+
+---
+
+## Table of Contents
+
+1. [registry-gateway](#1-registry-gateway)
+2. [registry-auth](#2-registry-auth)
+3. [registry-core](#3-registry-core)
+4. [registry-storage](#4-registry-storage)
+5. [registry-metadata](#5-registry-metadata)
+6. [registry-proxy](#6-registry-proxy)
+7. [registry-scanner](#7-registry-scanner)
+8. [registry-signer](#8-registry-signer)
+9. [registry-webhook](#9-registry-webhook)
+10. [registry-audit](#10-registry-audit)
+11. [registry-gc](#11-registry-gc)
+12. [registry-tenant](#12-registry-tenant)
+13. [registry-management](#13-registry-management)
+
+---
+
+## 1. registry-gateway
+
+**Purpose:** Single ingress point. TLS termination. Routes by `Host` header to resolve tenant. Injects `X-Tenant-ID` header downstream. Rate limiting. DDoS protection.
+
+**Tech:** Traefik v3 (preferred for dynamic config + Let's Encrypt) or Nginx with Lua.
+
+**Responsibilities:**
+- Terminate TLS (Let's Encrypt via ACME for custom domains, wildcard cert for platform domain)
+- Resolve tenant from `Host` header via lookup in `registry-tenant` (cached in Redis, TTL 60s)
+- Inject `X-Tenant-ID` and `X-Request-ID` headers on all downstream requests
+- Rate limit by tenant + IP (Redis-backed sliding window)
+- Block requests with missing or malformed `Host` headers
+- Forward `/v2/` prefix to `registry-core`
+- Forward `/auth/` prefix to `registry-auth`
+- Forward `/api/v1/` to relevant internal services
+
+**Security:**
+- TLS 1.2 minimum, TLS 1.3 preferred
+- HSTS header on all responses
+- Reject HTTP (no redirect to HTTPS — hard fail)
+- Strip all `X-Forwarded-*` headers from clients before re-setting them internally
+- Log all requests with tenant ID, method, path, status, latency (no auth tokens in logs)
+
+---
+
+## 2. registry-auth
+
+**Purpose:** Docker token auth service. Issues JWT access tokens. Manages API keys. Validates credentials.
+
+**Endpoints (HTTP, called by Docker clients and gateway):**
+
+```
+POST /auth/token          # Docker token endpoint (RFC 7235 flow)
+POST /api/v1/users        # Create user
+POST /api/v1/login        # Issue long-lived session token
+POST /api/v1/apikeys      # Create API key (robot accounts)
+DELETE /api/v1/apikeys/:id
+GET  /api/v1/apikeys      # List API keys for current user
+POST /api/v1/logout
+GET  /.well-known/jwks.json  # Public key set for JWT verification
+```
+
+**JWT Structure:**
+```json
+{
+  "iss": "registry-auth",
+  "sub": "<user_id>",
+  "aud": "registry-core",
+  "exp": "<now + 300s>",
+  "iat": "<now>",
+  "jti": "<uuid>",
+  "tenant_id": "<tenant_id>",
+  "access": [
+    {
+      "type": "repository",
+      "name": "myorg/myimage",
+      "actions": ["push", "pull"]
+    }
+  ]
+}
+```
+
+**Rules:**
+- Sign with RS256. Private key loaded from environment (PEM, base64-encoded). Never hardcoded.
+- Token TTL: 300 seconds (5 minutes). Non-configurable — Docker clients re-request automatically.
+- API keys: stored as `argon2id` hash in PostgreSQL. Never stored in plaintext. Return raw key only once at creation.
+- Enforce account lockout: 5 failed login attempts → lock for 15 minutes. Log lockout event to audit.
+- `jti` (JWT ID) stored in Redis for token revocation. Check on every validation.
+- Rotate signing key pair without downtime: support multiple public keys in JWKS, tag active key with `kid`.
+- Password policy: minimum 12 characters, 1 uppercase, 1 lowercase, 1 number, 1 symbol. Enforce server-side — never rely on client.
+- Rate limit: 10 failed auth attempts per IP per minute before returning 429.
+
+**gRPC (internal, mTLS):**
+
+```protobuf
+service AuthService {
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ValidateAPIKey(ValidateAPIKeyRequest) returns (ValidateAPIKeyResponse);
+  rpc GetUserPermissions(GetUserPermissionsRequest) returns (GetUserPermissionsResponse);
+  // RBAC management — called by registry-management and registry-core
+  rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
+  rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+}
+```
+
+**RBAC role model (implemented in `services/auth/migrations/20260614000001_create_rbac.sql`):**
+
+| Role | Actions granted | Scope types |
+|---|---|---|
+| `owner` | push, pull, delete + can grant/revoke roles | `org` or `repo` |
+| `admin` | push, pull, delete + can grant/revoke roles | `org` or `repo` |
+| `writer` | push, pull | `org` or `repo` |
+| `reader` | pull only | `org` or `repo` |
+
+Roles are stored in a seeded `roles` table (fixed UUIDs). Assignments live in `role_assignments(user_id, role_id, scope_type, scope_value, tenant_id)`. `scope_type` is `"org"` or `"repo"`; `scope_value` is the org name or `"org/repo"` string. An org-scoped assignment covers all repos within that org (resolved as `"org/*"` wildcard during permission checks).
+
+`GetUserPermissions` maps assignments to `RepositoryAccess` entries using the hierarchy above. It is called by `registry-core` on every push/pull handler to enforce access at the OCI protocol layer, and by `registry-management` to gate destructive REST operations. Fails closed on error — a gRPC failure from auth denies the request.
+
+On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / `rbac.role_revoked` to RabbitMQ so `registry-audit` can record membership changes without a direct gRPC coupling. A publish failure is logged but does not roll back the DB write.
+
+---
+
+## 3. registry-core
+
+**Purpose:** OCI Distribution Spec v1.1 implementation. The primary interface for Docker/OCI clients.
+
+**Endpoints (all under `/v2/`):**
+
+```
+GET  /v2/                                           # Version check → 200 or 401
+GET  /v2/<name>/tags/list                           # List tags
+GET  /v2/<name>/manifests/<reference>               # Pull manifest (tag or digest)
+PUT  /v2/<name>/manifests/<reference>               # Push manifest
+DELETE /v2/<name>/manifests/<reference>             # Delete manifest
+HEAD /v2/<name>/manifests/<reference>               # Manifest exists check
+GET  /v2/<name>/blobs/<digest>                      # Pull blob
+HEAD /v2/<name>/blobs/<digest>                      # Blob exists check
+DELETE /v2/<name>/blobs/<digest>                    # Delete blob
+POST /v2/<name>/blobs/uploads/                      # Initiate blob upload
+GET  /v2/<name>/blobs/uploads/<uuid>                # Get upload status
+PATCH /v2/<name>/blobs/uploads/<uuid>               # Chunked upload
+PUT  /v2/<name>/blobs/uploads/<uuid>                # Complete upload
+DELETE /v2/<name>/blobs/uploads/<uuid>              # Cancel upload
+GET  /v2/<name>/referrers/<digest>                  # OCI referrers API (§4.5)
+```
+
+**Rules:**
+- Every request must carry a valid Bearer token. Extract `tenant_id` from JWT. Validate via `registry-auth` gRPC.
+- Enforce `X-Tenant-ID` from gateway matches `tenant_id` in JWT — reject mismatches with 403.
+- Content-addressable blobs: SHA256 digest is the canonical key. Reject uploads where computed digest ≠ declared digest.
+- Support both `Docker-Content-Digest` and OCI digest headers.
+- Support manifest media types: `application/vnd.docker.distribution.manifest.v2+json`, `application/vnd.oci.image.manifest.v1+json`, `application/vnd.oci.image.index.v1+json` (multi-arch).
+- Chunked uploads: store upload state (UUID, offset, tenant, repo) in Redis with 1-hour TTL.
+- Never buffer a full blob in memory. Stream blobs directly to `registry-storage` via gRPC streaming.
+- On successful manifest push: publish `push.completed` event to RabbitMQ (see `docs/EVENTS.md`).
+- Enforce per-tenant storage quota (check before accepting upload, fail fast with 403 if exceeded).
+- Return `Link` header for paginated tag lists (`?n=` and `?last=` params per spec).
+- `name` in all routes = `<org>/<repo>`. Reject single-component names.
+
+**gRPC calls made by this service:**
+- `registry-auth`: ValidateToken, ValidateAPIKey, GetUserPermissions (RBAC enforcement on every push/pull)
+- `registry-metadata`: CreateTag, GetManifest, ListTags, DeleteTag
+- `registry-storage`: PutBlob, GetBlob, StatBlob, DeleteBlob, InitiateUpload, AppendChunk, CompleteUpload
+
+**RBAC enforcement in registry-core:**
+- `checkAccess(r, claims, repoName, action)` is called after JWT validation on every handler.
+- Write handlers (InitiateUpload, PutManifest, DeleteManifest, DeleteBlob) require action `"push"`.
+- Read handlers (GetManifest, HeadManifest, GetBlob, HeadBlob, ListTags) require action `"pull"`.
+- Access is denied with HTTP 403 + OCI `{"errors":[{"code":"DENIED","message":"access denied"}]}` if the user lacks the required action.
+- Wildcard names (`*`) and wildcard actions (`*`) in the permission list are accepted (covers org-level grants).
+- `org/*` patterns match any repo whose name begins with `org/` (org-scoped role assignment expansion).
+- `GET /v2/` version check is intentionally exempt — OCI spec requires it to be reachable unauthenticated.
+
+---
+
+## 4. registry-storage
+
+**Purpose:** Storage abstraction. All blob I/O goes through this service. Clients never touch storage directly.
+
+**Storage backends (configured per deployment, not per tenant):**
+
+| Backend | Driver name | Notes |
+|---|---|---|
+| MinIO | `minio` | Self-hosted S3-compatible |
+| AWS S3 | `s3` | Native SDK, supports IMDSv2 |
+| GCP Cloud Storage | `gcs` | ADC or service account JSON |
+| Azure Blob Storage | `azure` | Managed identity or connection string |
+| Local filesystem | `filesystem` | Dev/testing only — never production |
+
+**Backend selection:** `STORAGE_DRIVER` environment variable. Must be explicitly set — no default.
+
+**Driver interface:** Defined in `libs/storage/driver/`. All drivers implement `PutBlob`, `GetBlob`, `StatBlob`, `DeleteBlob`, `BlobExists`, `ListBlobs`, multipart operations, and `Ping` for health.
+
+**Storage key layout:**
+```
+blobs/<tenant_id>/sha256/<first2>/<digest>
+manifests/<tenant_id>/<repo_encoded>/<reference>
+uploads/<tenant_id>/<upload_uuid>/parts/<part_num>
+```
+
+**Security:**
+- Credentials for cloud backends loaded from environment only. Never from config files committed to Git.
+- For S3/GCS/Azure: use IAM roles / Workload Identity / Managed Identity where available. Avoid static credentials in production.
+- Enable bucket versioning on S3/GCS (protects against accidental GC bugs).
+- Server-side encryption: enforce SSE-S3 (S3), CMEK (GCS), SSE (Azure) — flag if backend does not support it.
+- No presigned URLs exposed to end clients — all blob traffic proxied through `registry-core`.
+
+**gRPC service:** `StorageService` in `proto/storage/v1/storage.proto`. Streaming PutBlob/GetBlob plus multipart.
+
+**Configuration per driver:**
+
+```
+# MinIO
+STORAGE_MINIO_ENDPOINT=          # e.g. minio:9000
+STORAGE_MINIO_ACCESS_KEY=        # required
+STORAGE_MINIO_SECRET_KEY=        # required
+STORAGE_MINIO_BUCKET=            # required
+STORAGE_MINIO_USE_SSL=true       # default true
+STORAGE_MINIO_REGION=us-east-1   # optional
+
+# AWS S3
+STORAGE_S3_BUCKET=               # required
+STORAGE_S3_REGION=               # required
+STORAGE_S3_ROLE_ARN=             # optional, for cross-account assume-role
+# Credentials: prefer IMDSv2 (no static keys). Static fallback:
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+
+# GCP Cloud Storage
+STORAGE_GCS_BUCKET=              # required
+STORAGE_GCS_PROJECT=             # required
+GOOGLE_APPLICATION_CREDENTIALS=  # path to service account JSON, or use Workload Identity
+
+# Azure Blob
+STORAGE_AZURE_CONTAINER=         # required
+STORAGE_AZURE_ACCOUNT=           # required
+# Auth: prefer managed identity. Static fallback:
+STORAGE_AZURE_ACCOUNT_KEY=
+
+# Filesystem (dev only)
+STORAGE_FILESYSTEM_ROOT=/data    # required, absolute path
+```
+
+---
+
+## 5. registry-metadata
+
+**Purpose:** Source of truth for all registry metadata: repositories, tags, manifests, blob references, scan status, quota usage.
+
+**This service owns the PostgreSQL database.** All other services that need metadata go through this service's gRPC API — they do not connect to PostgreSQL directly.
+
+**gRPC service:** `MetadataService` in `proto/metadata/v1/metadata.proto`. Covers repositories, tags, manifests, blobs, quota, and scan status. Notable RPCs:
+- `GetRepositoryByName(tenant_id, "org/repo")` — direct lookup, used by registry-management to avoid O(n) stream scans.
+- `ListRepositories`, `ListTags`, `ListOrphanedBlobs` — route to read replica when `DB_DSN_REPLICA` is set.
+
+**Database schema:** Canonical source is `services/metadata/migrations/`. Core tables:
+- `tenants(id, name, created_at)`
+- `organizations(id, tenant_id, name)`
+- `repositories(id, org_id, tenant_id, name, is_public, storage_quota, storage_used)`
+- `manifests(id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes)`
+- `tags(id, repo_id, tenant_id, name, manifest_digest, updated_at)`
+- `blobs(digest PRIMARY KEY, size_bytes, storage_key)`
+- `blob_links(repo_id, blob_digest)` — deduplication
+- `scan_results(id, manifest_digest, repo_id, tenant_id, scanner_name, status, severity_counts, findings)`
+
+All tables have `tenant_id UUID NOT NULL` and matching RLS policies (see CLAUDE.md §9).
+
+---
+
+## 6. registry-proxy
+
+**Purpose:** Pull-through proxy cache. Routes `docker pull <registry>/cache/<upstream-prefix>/<image>:<tag>` through to upstream registries, caching locally.
+
+**Upstream registry config (stored in DB, per tenant):**
+
+```go
+type UpstreamRegistry struct {
+    Name        string        // e.g. "dockerhub", "quay", "gcr"
+    URL         string        // e.g. "https://registry-1.docker.io"
+    AuthType    string        // "none" | "basic" | "token"
+    Username    string        // stored encrypted in DB
+    Password    string        // stored encrypted in DB (AES-256-GCM, key from KMS/env)
+    TTL         time.Duration // how long to cache manifests
+    Enabled     bool
+}
+```
+
+**Cache flow:**
+1. Check `registry-metadata` for cached manifest by digest/tag
+2. Cache hit and not expired → serve from `registry-storage`
+3. Cache miss or expired → fetch from upstream, stream to client, store in background goroutine
+4. Background store: save manifest to `registry-metadata`, blobs to `registry-storage`
+5. Never block client response on background store completion
+6. On background store failure: publish `store.queued` event to RabbitMQ; consumer retries (3 attempts, dead-letter after).
+
+**Security:**
+- Upstream credentials encrypted at rest (AES-256-GCM). Key from environment variable.
+- Sanitise upstream responses: validate Content-Type, reject unexpected media types.
+- Cap upstream response size (configurable, default 20GB per layer).
+- Honour upstream `Content-Digest` — verify before caching.
+- Do not expose upstream auth credentials in any log or error message.
+
+---
+
+## 7. registry-scanner
+
+**Purpose:** Orchestrates vulnerability scanning. Hosts the scanner plugin interface. Does not implement scanning itself.
+
+**Plugin interface:** Defined in `libs/scanner/plugin/`. Plugins implement `Scanner` with `Name()`, `Version()`, and `Scan(ctx, ScanRequest) (*ScanResult, error)`. Plugins are loaded as **external processes only** (Go `.so` plugin path was rejected — see CLAUDE.md Decision Log #1).
+
+**Plugin loading:**
+- `SCANNER_PLUGIN_PATH` env var points to the external plugin binary
+- Validate plugin binary checksum (SHA256) against `SCANNER_PLUGIN_CHECKSUM` env var before loading
+- If checksum mismatch: log critical, refuse to start
+- Plugin binary path must be absolute; sanitised with `filepath.Clean` before use
+- Communicate over stdin/stdout with newline-delimited JSON. Never shell-exec with user-supplied input.
+- `io.LimitedReader` caps plugin stdout at 10MB.
+- Subprocess receives a minimal env allowlist (PATH, HOME, TMPDIR, TRIVY_*, GRYPE_*).
+
+**JSON-RPC protocol:**
+
+Request (to stdin):
+```json
+{
+  "id": "uuid",
+  "method": "scan",
+  "params": {
+    "tenant_id": "...",
+    "manifest_digest": "sha256:...",
+    "layers": [{"digest": "sha256:...", "media_type": "..."}]
+  }
+}
+```
+
+Response (from stdout):
+```json
+{
+  "id": "uuid",
+  "result": {
+    "scanner_name": "trivy",
+    "scanner_version": "0.50.0",
+    "findings": [...],
+    "severity_counts": {"CRITICAL": 2, "HIGH": 5}
+  },
+  "error": null
+}
+```
+
+- Process must exit 0 on success, non-zero on failure
+- Do not use stderr for structured data — only for human-readable diagnostics
+
+**Scan job flow:**
+1. Consume `push.completed` from RabbitMQ
+2. Create scan record in `registry-metadata` (status: `pending`)
+3. Fetch manifest from `registry-metadata`, extract layer digests
+4. Invoke scanner plugin with layer refs
+5. Plugin fetches blobs via `registry-storage` gRPC (authenticated)
+6. Update scan result in `registry-metadata`
+7. Publish `scan.completed` event to RabbitMQ
+8. If findings contain CRITICAL/HIGH and tenant policy requires blocking: update tag status to `blocked`
+
+**Concurrency:**
+- Worker pool, size configurable via `SCANNER_WORKER_COUNT` (default: 4)
+- Each job has a timeout (`SCANNER_JOB_TIMEOUT_SECONDS`, default: 600)
+- Dead-letter queue for failed jobs after 3 retries
+
+**Scan policy (per tenant, stored in `registry-tenant`):**
+
+```go
+type ScanPolicy struct {
+    ScanOnPush          bool
+    BlockOnSeverity     string // "CRITICAL" | "HIGH" | "MEDIUM" | "" (disabled)
+    AllowUnscanned      bool   // if false, block pull of unscanned images
+    ExemptRepositories  []string
+}
+```
+
+---
+
+## 8. registry-signer
+
+**Purpose:** Image signing and verification using Cosign (Sigstore) and Notary v2.
+
+**Cosign integration:**
+- Signatures stored as OCI artifacts in `registry-core` (standard Cosign behaviour)
+- `registry-signer` exposes a signing API for CI/CD pipelines that don't have key material
+- Key material stored in: env var (dev), HashiCorp Vault (production), or cloud KMS (AWS KMS / GCP KMS / Azure Key Vault)
+- Key backend configured via `SIGNER_KEY_BACKEND` env var: `env` | `vault` | `awskms` | `gcpkms` | `azurekms`
+- Never log, print, or include key material in error messages
+
+**Notary v2 integration:**
+- TUF (The Update Framework) metadata stored in `registry-storage`
+- Delegation keys per tenant
+- Root key ceremony documented in `infra/runbooks/notary-root-key-ceremony.md`
+
+**Key backend config:**
+
+| Backend | Config env vars |
+|---|---|
+| `env` | `SIGNER_COSIGN_PRIVATE_KEY` (PEM, base64), `SIGNER_COSIGN_PUBLIC_KEY` |
+| `vault` | `VAULT_ADDR`, `VAULT_TOKEN` (or K8s SA auth), `VAULT_COSIGN_PATH` |
+| `awskms` | `SIGNER_KMS_ARN`, standard AWS credential chain |
+| `gcpkms` | `SIGNER_KMS_RESOURCE_ID`, standard GCP credential chain |
+| `azurekms` | `SIGNER_KMS_VAULT_URL`, `SIGNER_KMS_KEY_NAME`, standard Azure credential chain |
+
+**Rules:**
+- Key material never leaves the signing service
+- Signing operations are audit-logged
+- Public keys are discoverable via `GET /api/v1/signers/cosign/public-key` (per tenant)
+- Verification does not require the signing service — clients can verify with the public key directly
+
+**gRPC service:** `SignerService` in `proto/signer/v1/signer.proto`. Provides `SignManifest`, `VerifyManifest`, `ListSignatures`.
+
+Signatures are persisted in PostgreSQL (`signatures` table) with a write-through cache. `SigB64` is computed at retrieval, not stored — see SEC-015.
+
+---
+
+## 9. registry-webhook
+
+**Purpose:** Reliable webhook delivery with retries, dead-lettering, and HMAC signing.
+
+**Events delivered:**
+- `image.pushed` — new tag/manifest pushed
+- `image.deleted` — tag or manifest deleted
+- `scan.completed` — vulnerability scan finished
+- `scan.policy_blocked` — image blocked by policy
+- `image.signed` — signature added
+
+**Delivery guarantees:**
+- At-least-once delivery
+- Retry with exponential backoff: 5s, 30s, 5m, 30m, 2h (5 attempts total)
+- After 5 failures: move to dead-letter queue, notify tenant admin
+- Timeout per delivery attempt: 30 seconds
+
+**Security:**
+- HMAC-SHA256 signature on payload, key set per webhook endpoint
+- Signature in `X-Registry-Signature: sha256=<hex>` header
+- Validate destination URL is not a private IP range (SSRF protection): block 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1, metadata endpoints (169.254.169.254)
+- Enforce HTTPS-only webhook endpoints (reject HTTP)
+- Never include auth tokens or credentials in webhook payload
+
+---
+
+## 10. registry-audit
+
+**Purpose:** Immutable audit log for all significant actions.
+
+**Events logged (minimum):**
+- User login / logout / lockout
+- Token issued / revoked
+- API key created / deleted
+- Image pushed / pulled / deleted
+- Repository created / deleted
+- Webhook created / triggered
+- Scan started / completed
+- Policy violation
+- Tenant config changed
+- RBAC changes (consumed from `rbac.role_granted` / `rbac.role_revoked` events)
+
+**Audit record structure:**
+```go
+type AuditEvent struct {
+    ID         uuid.UUID  `json:"id"`
+    TenantID   uuid.UUID  `json:"tenant_id"`
+    ActorID    string     `json:"actor_id"`    // user ID or "system"
+    ActorType  string     `json:"actor_type"`  // "user" | "robot" | "system"
+    ActorIP    string     `json:"actor_ip"`    // IPv4/IPv6, never logged raw from header (use trusted proxy IP)
+    Action     string     `json:"action"`      // verb.resource: "push.image"
+    Resource   string     `json:"resource"`    // e.g. "myorg/myimage:v1.2.3"
+    Outcome    string     `json:"outcome"`     // "success" | "failure"
+    Metadata   JSONB      `json:"metadata"`    // additional context, no secrets
+    OccurredAt time.Time  `json:"occurred_at"`
+}
+```
+
+**Rules:**
+- Audit records are append-only. No UPDATE or DELETE on audit table — enforced via PostgreSQL `FORCE ROW LEVEL SECURITY` and a separate low-privilege `registry_audit_app` role (INSERT + SELECT only; DELETE permitted on `audit_events_default` partition for retention rollovers).
+- Pool `AfterConnect` does `SET ROLE registry_audit_app` on every connection.
+- `checkRole()` startup check refuses to start if effective role ≠ `registry_audit_app`.
+- Actor IP extracted from `X-Forwarded-For` only if request came through trusted gateway IP. Otherwise use direct TCP peer.
+- Never log passwords, tokens, API keys, or secret values in `metadata`.
+- Retain audit logs for minimum 90 days (configurable, default 365 days).
+
+---
+
+## 11. registry-gc
+
+**Purpose:** Garbage collection worker. Identifies and deletes orphaned blobs and untagged manifests.
+
+**GC modes:**
+- `dry-run` — report what would be deleted, no deletions
+- `manifests` — delete untagged manifests only
+- `blobs` — delete orphaned blobs only (no manifest references)
+- `full` — manifests then blobs
+
+**GC algorithm:**
+```
+Phase 1 — Mark (read-only):
+  1. Lock repository in registry-metadata (advisory lock, not table lock)
+  2. Walk all tags → collect all referenced manifest digests
+  3. Walk all manifests → collect all referenced blob digests
+  4. Set of "live blobs" = union of all referenced digests
+
+Phase 2 — Sweep:
+  1. List all blobs in registry-storage for tenant
+  2. For each blob not in live set AND older than GC_BLOB_MIN_AGE (default 1h):
+     - Delete from registry-storage
+     - Delete from blobs table in registry-metadata
+     - Emit gc.blob_deleted event
+  3. For each untagged manifest older than GC_MANIFEST_MIN_AGE (default 24h):
+     - Delete manifest
+     - Emit gc.manifest_deleted event
+
+Phase 3 — Update quota:
+  1. Recompute storage_used per repository
+  2. Update registry-metadata
+```
+
+**Advisory locking:**
+- `pg_try_advisory_lock` (non-blocking) keyed by FNV-64a hash of tenant UUID
+- Single pinned connection via `pgxpool.Acquire()`; explicit `pg_advisory_unlock` + `Release()` in deferred unlock func
+- `GC_ADVISORY_LOCK_DB_DSN` env var; graceful no-op when unset (single-worker mode)
+- Tenants where lock cannot be acquired are skipped (counted in `Result.TenantsSkipped`)
+
+**Safety rules:**
+- Always run dry-run first in CI before scheduling
+- Never delete blobs younger than `GC_BLOB_MIN_AGE` — in-flight pushes write blobs before manifests
+- Emit audit event for every deletion
+- GC is scheduled, not triggered by push events — run nightly by default (configurable cron)
+- GC must be idempotent: safe to run multiple times
+
+---
+
+## 12. registry-tenant
+
+**Purpose:** Tenant lifecycle management, custom domain provisioning, per-tenant configuration.
+
+**Responsibilities:**
+- CRUD for tenants (super-admin API, not exposed to end users)
+- Custom domain registration and verification (DNS TXT record or HTTP challenge)
+- Per-tenant quota configuration
+- Per-tenant feature flags (proxy cache enabled, signing required, scan policy)
+- Provision tenant isolation: create org in `registry-metadata`, create S3 prefix/bucket policy
+
+**Custom domain flow:**
+1. Tenant submits domain `registry.acme.com`
+2. System generates DNS TXT verification record
+3. Tenant adds `_registry-verify.<domain>` TXT record
+4. Background worker polls DNS until verified (max 48h)
+5. On verification: trigger Let's Encrypt certificate issuance via gateway ACME
+6. Store cert in Redis (Traefik reads it) or notify Nginx via API
+7. Update `registry-gateway` routing table (Redis-backed, TTL-less)
+
+**Notifications + backoff (REM-004):**
+- `Notified24h`, `Notified48h` flags on `DomainRecord` for idempotent notifications
+- 24h notification logged when age ≥ 24h; 48h failure notification at age ≥ 47h
+- Exponential poll backoff: <1h → 5min, 1h–12h → 10min, >12h → 20min
+- `next_poll_after` column + index; `ListUnverifiedDomains` filters `next_poll_after <= now()`
+
+---
+
+## 13. registry-management
+
+**Purpose:** Management REST API — BFF (Backend For Frontend) serving the React dashboard and any CI/CD tooling, CLIs, or Terraform providers that need programmatic access to registry metadata. Translates HTTP REST calls into gRPC calls against `registry-auth` and `registry-metadata`. No gRPC server of its own.
+
+**Endpoints (HTTP, default port `:8085`):**
+
+```
+GET  /healthz                             # Health check (no auth required)
+
+# Stats & overview
+GET  /api/v1/stats                        # Tenant-scoped aggregated stats
+
+# Repository management
+GET  /api/v1/repositories                 # List repositories for tenant
+POST /api/v1/repositories                 # Create repository
+GET  /api/v1/repositories/:org/:repo      # Get single repository
+DELETE /api/v1/repositories/:org/:repo    # Delete repository
+
+# Tag management
+GET  /api/v1/repositories/:org/:repo/tags          # List tags
+DELETE /api/v1/repositories/:org/:repo/tags/:tag   # Delete tag
+
+# Vulnerability scanning
+GET  /api/v1/repositories/:org/:repo/tags/:tag/scan  # Get scan result for a tag
+POST /api/v1/repositories/:org/:repo/tags/:tag/scan  # Trigger a scan
+
+# Build / audit history
+GET  /api/v1/repositories/:org/:repo/tags/:tag/builds  # List build history
+
+# RBAC member management
+GET    /api/v1/orgs/:org/members                               # List org members (all roles)
+POST   /api/v1/orgs/:org/members                               # Grant role to user in org (admin+ only)
+DELETE /api/v1/orgs/:org/members/:assignmentID                 # Revoke org role assignment (admin+ only)
+GET    /api/v1/repositories/:org/:repo/members                 # List repo members (all roles)
+POST   /api/v1/repositories/:org/:repo/members                 # Grant role to user in repo (admin+ only)
+DELETE /api/v1/repositories/:org/:repo/members/:assignmentID   # Revoke repo role assignment (admin+ only)
+
+# Future — webhooks, API keys, tenant settings, audit queries (added as needed)
+```
+
+**Rules:**
+- Every route except `/healthz` is wrapped with `RequireAuth` middleware (validates JWT against `registry-auth` gRPC)
+- `TenantIDFromContext` used for every metadata gRPC call — never a user-supplied header or body value
+- Error responses: `{"error":"<generic message>"}` only — no gRPC status codes, stack traces, or internal service names
+- `CORS_ALLOWED_ORIGIN` env var controls allowed origin; dev default `http://localhost:5173`
+- mTLS configured for gRPC connections in production (`MTLS_CA_CERT_PATH`, `MTLS_CERT_PATH`, `MTLS_KEY_PATH`)
+- HTTP server timeouts: `ReadTimeout: 10s`, `WriteTimeout: 30s`, `IdleTimeout: 120s`
+- RBAC DELETE routes (delete repo, delete tag) require caller to hold at least `writer` role. Member grant/revoke endpoints require `admin` or `owner`. Checked via `GetUserPermissions` before the operation proceeds.
+
+**gRPC calls made by this service:**
+- `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`
+- `registry-metadata`: `ListRepositories`, `GetRepository`, `GetRepositoryByName`, `CreateRepository`, `DeleteRepository`, `ListTags`, `DeleteTag`, `GetScanResult`, `GetTenantQuotaUsage`
+- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`
+
+**Environment variables:**
+```
+HTTP_ADDR=:8085
+AUTH_GRPC_ADDR=                  # required
+METADATA_GRPC_ADDR=              # required
+AUDIT_GRPC_ADDR=                 # required
+RABBITMQ_URL=                    # required (for scan.queued events)
+CORS_ALLOWED_ORIGIN=             # required in production; default http://localhost:5173 in dev
+MTLS_CA_CERT_PATH=               # required in production
+MTLS_CERT_PATH=                  # required in production
+MTLS_KEY_PATH=                   # required in production
+```
+
+**Known limitations (TODO before GA):**
+- `POST .../scan` returns 202 stub — needs scanner RabbitMQ publisher wiring

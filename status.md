@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-17 (Sprint 5 COMPLETE — all 5 Stitch screens pixel-perfect, management API fully wired, RBAC enforced end-to-end, JWT auto-refresh shipped, unit tests at 80%+ on auth/core/audit/management; SEC-006/015/025 closed; OTEL bootstrap added to all 11 service entrypoints — Jaeger SPM now receives traces from all services)
+> Last updated: 2026-06-17 (Sprint 6 OPENED — pre-GA polish backlog seeded from code review: 4 backend correctness items, 2 frontend critical bugs, plus medium/low UX cleanup. Sprint 5 COMPLETE — all 5 Stitch screens pixel-perfect, management API fully wired, RBAC enforced end-to-end, JWT auto-refresh shipped, unit tests at 80%+ on auth/core/audit/management; SEC-006/015/025 closed; OTEL bootstrap added to all 11 service entrypoints — Jaeger SPM now receives traces from all services after fixing otel-collector metrics pipeline + Jaeger PROMETHEUS_QUERY_NAMESPACE.)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -230,7 +230,62 @@ All decisions resolved. No blockers.
 
 ## Current Sprint
 
-No active sprint. Sprint 5 complete — see Completed Sprints below.
+### Sprint 6 — Pre-GA Polish
+> Goal: Close the correctness, security, and UX gaps surfaced by the 2026-06-17 code review before declaring GA. None of these are "throw it away" issues — they are polish items that prevent surprises in production.
+
+#### Backend correctness — HIGH
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Read endpoints must not create repositories | `services/core` | NOT STARTED | `handleTagsList`, `handleGetManifest`, `handleHeadManifest`, `handleHeadBlob`, `handleGetBlob` all call `GetOrCreateRepository`. Unauthorized reads can pollute metadata. Read paths should return 404; only `handleInitiateUpload` / `handlePutManifest` create. |
+| Reconcile delete action verb between JWT and RBAC | `services/core` | NOT STARTED | `handleDeleteManifest`/`handleDeleteBlob` check `HasAction(name, "delete")` against the JWT but `checkAccess(name, "push")` against RBAC. Pick one verb and align both layers. Currently works by accident because writer/admin roles grant `push`. |
+| Enforce per-tenant storage quota on push | `services/core` | NOT STARTED | CLAUDE.md §4.3 mandates quota check before accepting upload (403 on overflow). `repositories.storage_used` column exists but is not consulted in `handleInitiateUpload` or `handleCompleteUpload`. |
+| Extract `requireAccess(action)` middleware | `services/core` | NOT STARTED | The authenticate → HasAction → checkAccess pattern is duplicated across ~12 handlers. One forgotten step in a new endpoint = silent auth bypass. Cheap insurance. |
+
+#### Frontend correctness — CRITICAL
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Fix `useUserIsAdmin` localStorage read — token is memory-only | `frontend/` | NOT STARTED | `dashboard/index.tsx:22` reads `localStorage.getItem('auth_token')` which is never written anywhere. Function always returns `false`, so admins never see delete buttons. Read from `useAuthStore` instead. |
+| Add `roles` claim to JWT (or expose `/api/v1/me` permissions endpoint) | `services/auth`, `frontend/` | NOT STARTED | JWT schema in CLAUDE.md §4.2 emits `access` but not `roles`. Frontend admin check reads `payload.roles` which doesn't exist. Either add `roles` to claims or cache `/me` via TanStack Query. |
+
+#### Backend polish — MEDIUM
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Hoist `MetricsInterceptor` histogram out of the hot path | `libs/middleware/grpc` | NOT STARTED | `meter.Float64Histogram(...)` is called on every RPC. OTEL caches by name so it's correct, but the lookup + discarded error per request is wasted work. Init once at startup. |
+| Close TODO: replace O(n) repo count drain with `CountRepositories` RPC | `services/management`, `services/metadata` | NOT STARTED | `handler.go:154` — add a `CountRepositories` RPC on metadata, call it from `handleStats`. |
+| Close TODO: wire mTLS creds in scanner gRPC client | `services/scanner` | NOT STARTED | `server.go:41` — use `libs/auth/mtls.ClientTLSConfig()` like the other services. |
+
+#### Frontend UX — MEDIUM
+
+> The dashboard contains several pieces of mock content that look real and will mislead reviewers. Either wire to real data or mark as "demo" / remove until ready.
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Wire `SystemHealth` card to `/api/v1/stats.system_health_pct` | `frontend/` | NOT STARTED | Currently hardcoded "NOMINAL / 99.98% / BUSY". The stats endpoint already returns `system_health_pct`. |
+| Replace hard-coded "Recent CI/CD Builds" rows with real audit data — or hide the table | `frontend/`, `services/management` | NOT STARTED | `RecentBuilds` takes a `repositories` prop and ignores it (`_repositories`). Builds API is stubbed in management. Until wired, render an empty-state. |
+| Replace hard-coded "Registry Activity" feed with audit events — or hide | `frontend/` | NOT STARTED | "Sarah J pushed 12 minutes ago", "Julian Barker joined" are fake. `registry-audit` has the real data. |
+| Fix `StatsCards` "Active Images" tile wiring | `frontend/` | NOT STARTED | `index.tsx:205` displays `data.vulnerability_count` under an "Active Images" label, with literal-string fallback `'8,432'`. Either remove the tile or wire to a real active-images metric. |
+| Rename "PULLS" column or stop showing `storage_used_bytes` under it | `frontend/` | NOT STARTED | `FeaturedRepositories` table column says PULLS but renders `formatBytes(storage_used_bytes)`. Misleading. |
+| Replace hardcoded "Registry Admin / Production Cluster" sidebar header with tenant name from JWT | `frontend/` | NOT STARTED | Currently the same label regardless of logged-in tenant. |
+| Remove or implement the top-nav search input | `frontend/` | NOT STARTED | Wired to local state but never queries anything. |
+| Remove "Live Updates" pill or implement actual SSE/polling | `frontend/` | NOT STARTED | Animated dot suggests live data; nothing is live. |
+| Replace external Google Fonts avatar URL with initials/Avatar component | `frontend/` | NOT STARTED | `_authenticated.tsx:299` fetches an external image on every page render. |
+
+#### Frontend structure — LOW
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Consolidate or relabel "Repositories" vs "Images" sidebar items | `frontend/` | NOT STARTED | In an OCI registry these are nearly synonymous; users get confused. Suggest "Repositories" + "Tags" pairing. |
+| Add tenant switcher to top nav | `frontend/` | NOT STARTED | Required if a single user belongs to multiple orgs. |
+| Add dark mode (MD3 tokens already support it) | `frontend/` | NOT STARTED | Cheap given the existing palette system. |
+| Fix skeleton tile height parity to remove layout shift | `frontend/` | NOT STARTED | `h-24` skeleton then real card expands taller. |
+| Unify error UX — toast + inline rather than mixed "Failed to load" / "—" patterns | `frontend/` | NOT STARTED | Currently inconsistent across StatsCards / FeaturedRepositories / etc. |
+
+---
+
+## Completed Sprints (sprint 5 below)
 
 ---
 
