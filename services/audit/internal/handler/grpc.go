@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 
@@ -57,7 +58,7 @@ func (h *GRPCHandler) GetBuildHistory(ctx context.Context, req *auditv1.GetBuild
 			"repo_id", req.GetRepoId(),
 			"error", err,
 		)
-		return nil, status.Error(codes.Internal, "failed to query build history")
+		return nil, errcodes.MapDBError(err, "failed to query build history")
 	}
 
 	builds := make([]*auditv1.BuildRecord, 0, len(rows))
@@ -84,7 +85,7 @@ func (h *GRPCHandler) GetDailyPullCount(ctx context.Context, req *auditv1.GetDai
 			"tenant_id", req.GetTenantId(),
 			"error", err,
 		)
-		return nil, status.Error(codes.Internal, "failed to count pull events")
+		return nil, errcodes.MapDBError(err, "failed to count pull events")
 	}
 	return &auditv1.GetDailyPullCountResponse{Count: count}, nil
 }

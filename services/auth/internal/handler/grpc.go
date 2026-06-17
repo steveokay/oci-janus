@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -75,7 +76,7 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrKeyExpired) {
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	return &authv1.ValidateAPIKeyResponse{
@@ -104,12 +105,12 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Error(codes.NotFound, "user not found")
 		}
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	assignments, err := h.svc.GetUserRoles(ctx, userID, tenantID)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	// Map each role assignment to a RepositoryAccess entry.
@@ -198,7 +199,7 @@ func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleReques
 		GrantedBy:  grantedBy,
 	})
 	if err != nil {
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	// Publish audit event after the DB write succeeds. A publish failure is logged
@@ -262,7 +263,7 @@ func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequ
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Error(codes.NotFound, "assignment not found")
 		}
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	// Publish audit event after the DB delete succeeds.
@@ -313,7 +314,7 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 
 	assignments, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
 	if err != nil {
-		return nil, status.Error(codes.Internal, "internal error")
+		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
 	members := make([]*authv1.RoleAssignment, len(assignments))

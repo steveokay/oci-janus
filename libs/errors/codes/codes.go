@@ -3,10 +3,24 @@
 package codes
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+// MapDBError maps a repository/database error to a gRPC status error.
+// context.DeadlineExceeded from pgxpool.Acquire (pool exhaustion) is mapped
+// to ResourceExhausted so callers back off rather than retrying immediately.
+// All other errors become Internal with the supplied fallback message.
+func MapDBError(err error, fallbackMsg string) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.ResourceExhausted, "database connection pool exhausted")
+	}
+	return status.Error(codes.Internal, fallbackMsg)
+}
 
 // GRPCToHTTP maps a gRPC status code to an HTTP status code.
 func GRPCToHTTP(c codes.Code) int {

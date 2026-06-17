@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
 
@@ -65,7 +66,7 @@ func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTena
 		if isDuplicateKeyError(err) {
 			return nil, status.Errorf(codes.AlreadyExists, "tenant name %q is already in use", req.Name)
 		}
-		return nil, status.Errorf(codes.Internal, "create tenant: %v", err)
+		return nil, errcodes.MapDBError(err, "create tenant")
 	}
 	return tenantToProto(rec), nil
 }
@@ -78,7 +79,7 @@ func (h *GRPCHandler) GetTenant(ctx context.Context, req *tenantv1.GetTenantRequ
 	}
 	rec, err := h.repo.GetTenant(ctx, tenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get tenant: %v", err)
+		return nil, errcodes.MapDBError(err, "get tenant")
 	}
 	if rec == nil {
 		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
@@ -93,7 +94,7 @@ func (h *GRPCHandler) DeleteTenant(ctx context.Context, req *tenantv1.DeleteTena
 		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
 	}
 	if err := h.repo.DeleteTenant(ctx, tenantID); err != nil {
-		return nil, status.Errorf(codes.Internal, "delete tenant: %v", err)
+		return nil, errcodes.MapDBError(err, "delete tenant")
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -117,7 +118,7 @@ func (h *GRPCHandler) ResolveDomain(ctx context.Context, req *tenantv1.ResolveDo
 
 	tenantID, found, err := h.repo.ResolveDomain(ctx, req.Domain)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "resolve domain: %v", err)
+		return nil, errcodes.MapDBError(err, "resolve domain")
 	}
 	resp := &tenantv1.ResolveDomainResponse{Found: found}
 	if found {
@@ -153,7 +154,7 @@ func (h *GRPCHandler) RegisterDomain(ctx context.Context, req *tenantv1.Register
 	}
 
 	if _, err := h.repo.RegisterDomain(ctx, tenantID, req.Domain, token); err != nil {
-		return nil, status.Errorf(codes.Internal, "register domain: %v", err)
+		return nil, errcodes.MapDBError(err, "register domain")
 	}
 
 	return &tenantv1.RegisterDomainResponse{VerificationToken: token}, nil
@@ -167,7 +168,7 @@ func (h *GRPCHandler) GetTenantPolicy(ctx context.Context, req *tenantv1.GetTena
 	}
 	p, err := h.repo.GetPolicy(ctx, tenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get policy: %v", err)
+		return nil, errcodes.MapDBError(err, "get policy")
 	}
 	return policyToProto(p), nil
 }
@@ -190,7 +191,7 @@ func (h *GRPCHandler) UpdateTenantPolicy(ctx context.Context, req *tenantv1.Upda
 		StorageQuotaBytes:  req.StorageQuotaBytes,
 	}
 	if err := h.repo.UpdatePolicy(ctx, p); err != nil {
-		return nil, status.Errorf(codes.Internal, "update policy: %v", err)
+		return nil, errcodes.MapDBError(err, "update policy")
 	}
 	return policyToProto(p), nil
 }

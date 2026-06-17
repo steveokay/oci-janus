@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
@@ -73,7 +74,7 @@ func mapErr(err error) error {
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return status.Error(codes.AlreadyExists, "already exists")
 	}
-	return status.Error(codes.Internal, err.Error())
+	return errcodes.MapDBError(err, "internal error")
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────────
