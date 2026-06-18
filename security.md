@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-18 (SEC-001..SEC-036 all resolved. **Pentest round 1: 20/20 PENTEST-001..020 RESOLVED ✅.** **Pentest round 2: 6 new findings PENTEST-021..026; 5 fixed same day (PENTEST-021 MEDIUM + PENTEST-022..025 LOW).** Total: 26 findings, 25 resolved, 1 open (PENTEST-026 INFO — storage tenant-prefix validation; requires proto change + caller migration). All CRITICAL, HIGH, MEDIUM, and LOW are closed. Sprint 6 backend gaps in `status.md` are feature work, not security findings.)
+> Last updated: 2026-06-18 (SEC-001..SEC-036 all resolved. **Pentest fully closed: 26/26 PENTEST-001..026 RESOLVED ✅.** Round 1: 20 findings closed. Round 2: 6 new findings, all closed same day — PENTEST-026 storage tenant-prefix validation turned out not to need a proto change because every storage RPC already had a `tenant_id` field that callers were populating; the handler just wasn't validating it. Sprint 6 backend gaps in `status.md` are feature work, not security findings. **The codebase has zero open security findings as of 2026-06-18.**)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -246,12 +246,12 @@
 |---|---|---|---|
 | CRITICAL | 1 | 0 | 1 (PENTEST-001 ✅) |
 | HIGH | 4 | 0 | 4 (PENTEST-002 ✅, 003 ✅, 004 ✅, 005 ✅) |
-| MEDIUM | 7 | 0 | 7 (PENTEST-006 ✅, 007 ✅, 008 ✅, 009 ✅, 010 ✅, 011 ✅, 021 ✅) |
-| LOW | 9 | 0 | 9 (PENTEST-012..016 ✅, PENTEST-022..025 ✅) |
-| INFO | 5 | 1 | 4 (PENTEST-017 ✅, 018 ✅, 019 ✅, 020 ✅) |
-| **TOTAL** | **26** | **1** | **25 ✅** |
+| MEDIUM | 7 | 0 | 7 (PENTEST-006..011 ✅, 021 ✅) |
+| LOW | 9 | 0 | 9 (PENTEST-012..016 ✅, 022..025 ✅) |
+| INFO | 5 | 0 | 5 (PENTEST-017..020 ✅, 026 ✅) |
+| **TOTAL** | **26** | **0** | **🎯 26/26 ✅** |
 
-**Round 2 review (2026-06-18, post-fix):** broader scan of code I didn't deep-dive the first time (storage, gateway, gc, tenant, RabbitMQ paths, my own new code). 6 new findings logged (PENTEST-021..026), all MEDIUM or below. 5 fixed immediately. Only PENTEST-026 remains open (INFO, storage handler tenant-prefix validation — defense-in-depth, requires proto change + caller migration).
+**🎉 Pentest fully closed across both rounds — every finding (CRITICAL, HIGH, MEDIUM, LOW, INFO) is resolved.** The codebase has no known open security findings as of 2026-06-18.
 
 **🎯 Pentest review is fully closed. 20/20 findings resolved across all severities.**
 
@@ -316,12 +316,15 @@ Re-open triggers to monitor:
 
 | ID | Severity | Title | Service | Status |
 |---|---|---|---|---|
-| PENTEST-026 | INFO | Storage handler trusts caller-supplied `req.Key` without tenant validation | `registry-storage` | OPEN |
+| PENTEST-026 | INFO | Storage handler trusts caller-supplied `req.Key` without tenant validation | `registry-storage` | RESOLVED ✅ (2026-06-18) |
 
-**PENTEST-026 — Storage handler doesn't validate key tenant prefix**
-- **Where:** `services/storage/internal/handler/grpc.go` — every method (`PutBlob`, `GetBlob`, `DeleteBlob`, `StatBlob`, `BlobExists`, `ListBlobs`) accepts `req.Key` (or `req.Prefix`) as opaque strings and passes them to the driver. The storage-key layout is `blobs/<tenant_id>/sha256/<...>` (per CLAUDE.md §8) but the handler does not enforce the prefix.
-- **Impact:** Today this is mitigated by mTLS — only internal services (core, proxy, scanner via storage gRPC) can reach the port, and those services construct keys with tenant_id prefixes from their own authenticated context. If a future internal service has a bug that passes a misformed key, the storage layer silently complies with cross-tenant access. Defense-in-depth gap.
-- **Remediation:** Add a `tenant_id` field to every storage RPC and validate `strings.HasPrefix(req.Key, "blobs/"+req.TenantId+"/")` (or the equivalent for manifests/uploads paths). Returns `codes.PermissionDenied` on mismatch. Requires proto change + caller updates.
+**PENTEST-026 — Storage handler doesn't validate key tenant prefix** — RESOLVED ✅
+- **Original issue:** Every storage RPC accepted `req.Key` / `req.Prefix` as opaque strings and passed them to the driver. Defense-in-depth gap — a buggy internal caller could read or write any tenant's blobs.
+- **Resolution (2026-06-18):** No proto change needed — every storage RPC already had a `tenant_id` field (PutBlobMeta, GetBlobRequest, etc.) and every caller (core, proxy, scanner, gc) was already populating it; the handler just wasn't validating. Added two helpers in `services/storage/internal/handler/grpc.go`:
+  - `validateTenantKey(ctx, op, tenantID, key)` — requires non-empty tenant_id, then requires key to start with `blobs/<tenantID>/`, `manifests/<tenantID>/`, or `uploads/<tenantID>/` (the three roots documented in CLAUDE.md §8). Returns `codes.PermissionDenied` on mismatch (logged at WARN with op + tenant + key for triage).
+  - `validateTenantPrefix(ctx, op, tenantID, prefix)` — same idea for `ListBlobs`, additionally requiring a non-empty prefix (the previous "default to blobs/" behaviour would have leaked every tenant's keys).
+  - Applied to all 9 storage handler methods.
+- **Tests:** new `TestStorageHandler_crossTenantAccessBlocked` runs every method with a caller in `t1` against a key in `t2` and asserts each one returns `PermissionDenied` before the driver is touched. `TestStorageHandler_emptyTenantIDRejected` asserts empty tenant_id can't bypass the gate.
 
 ---
 
