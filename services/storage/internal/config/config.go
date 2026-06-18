@@ -47,5 +47,11 @@ func validate(cfg *Config) error {
 	if !valid[cfg.StorageDriver] {
 		return fmt.Errorf("STORAGE_DRIVER %q is not valid; must be one of minio|s3|gcs|azure|filesystem", cfg.StorageDriver)
 	}
+	// PENTEST-017: refuse to ship the well-known dev MinIO secret to production.
+	if err := loader.CheckDevDefaults(cfg.OTELEnvironment, map[string]string{
+		"STORAGE_MINIO_SECRET_KEY": cfg.StorageMinIOSecretKey,
+	}); err != nil {
+		return err
+	}
 	return nil
 }

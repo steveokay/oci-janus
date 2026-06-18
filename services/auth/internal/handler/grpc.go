@@ -61,6 +61,7 @@ func (h *GRPCHandler) ValidateToken(ctx context.Context, req *authv1.ValidateTok
 		Jti:       claims.ID,
 		Access:    protoAccess,
 		ExpiresAt: timestamppb.New(claims.ExpiresAt.Time),
+		Roles:     claims.Roles,
 	}, nil
 }
 
@@ -113,10 +114,14 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
-	// Map each role assignment to a RepositoryAccess entry.
-	// Scope "repo" assignments target "org/repo"; scope "org" assignments use "*" within the org.
+	// Map each role assignment to a RepositoryAccess entry and to a full
+	// RoleAssignment proto. The `access` list drives OCI push/pull authorization
+	// in registry-core; the `role_assignments` list is what callers must use for
+	// scope-aware authorization decisions (PENTEST-002) — `roles` alone loses
+	// the scope and cannot prevent cross-scope privilege escalation.
 	var protoAccess []*authv1.RepositoryAccess
 	var roleNames []string
+	var protoAssignments []*authv1.RoleAssignment
 
 	for _, a := range assignments {
 		actions := actionsForRole(a.RoleName)
@@ -131,6 +136,14 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 			Actions: actions,
 		})
 		roleNames = append(roleNames, a.RoleName)
+		protoAssignments = append(protoAssignments, &authv1.RoleAssignment{
+			Id:         a.ID.String(),
+			UserId:     a.UserID.String(),
+			Role:       a.RoleName,
+			ScopeType:  a.ScopeType,
+			ScopeValue: a.ScopeValue,
+			GrantedBy:  a.GrantedBy.String(),
+		})
 	}
 
 	if protoAccess == nil {
@@ -139,10 +152,14 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 	if roleNames == nil {
 		roleNames = []string{}
 	}
+	if protoAssignments == nil {
+		protoAssignments = []*authv1.RoleAssignment{}
+	}
 
 	return &authv1.GetUserPermissionsResponse{
-		Access: protoAccess,
-		Roles:  roleNames,
+		Access:          protoAccess,
+		Roles:           roleNames,
+		RoleAssignments: protoAssignments,
 	}, nil
 }
 
@@ -244,6 +261,11 @@ func (h *GRPCHandler) publishRoleGranted(ctx context.Context, tenantID, userID, 
 
 // RevokeRole deletes the role assignment with the given ID within the tenant.
 // On success it publishes an rbac.role_revoked event to RabbitMQ.
+//
+// PENTEST-011: when the caller passes expected_scope_type and expected_scope_value,
+// the deletion only proceeds if the assignment actually matches that scope. This
+// defends against scope-confusion where an admin-of-org-A submits an assignment ID
+// belonging to org-B and the URL path "/orgs/org-A/members/{id}".
 func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequest) (*emptypb.Empty, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -258,9 +280,11 @@ func (h *GRPCHandler) RevokeRole(ctx context.Context, req *authv1.RevokeRoleRequ
 	// to the zero UUID (system) since the current RevokeRoleRequest has no actor field.
 	revokedBy := uuid.Nil.String()
 
-	err = h.svc.RevokeRole(ctx, assignmentID, tenantID)
+	err = h.svc.RevokeRoleScoped(ctx, assignmentID, tenantID, req.GetExpectedScopeType(), req.GetExpectedScopeValue())
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
+			// Return NotFound regardless of whether the row didn't exist or the
+			// scope mismatched — don't leak which condition failed.
 			return nil, status.Error(codes.NotFound, "assignment not found")
 		}
 		return nil, errcodes.MapDBError(err, "internal error")

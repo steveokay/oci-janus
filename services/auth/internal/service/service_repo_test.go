@@ -106,6 +106,9 @@ func (f *fakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]reposi
 }
 func (f *fakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error { return nil }
 func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }
+func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
+	return nil
+}
 func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
 	return nil, nil
 }

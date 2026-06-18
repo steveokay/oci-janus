@@ -205,14 +205,16 @@ func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
 	return opts, nil
 }
 
-// loadSigner constructs the Signer from config.
-// Only the "env" backend is fully implemented; others fail with a clear error.
-func loadSigner(cfg *config.Config) (*signing.Signer, error) {
+// loadSigner constructs a Signer from config. Each backend is independently
+// instantiable so a deployment can switch backends by changing one env var.
+func loadSigner(cfg *config.Config) (signing.Signer, error) {
 	switch cfg.SignerKeyBackend {
 	case "env":
 		return signing.NewEnv(cfg.CosignPrivateKeyB64, cfg.CosignPublicKeyB64)
-	case "vault", "awskms", "gcpkms", "azurekms":
-		return nil, fmt.Errorf("SIGNER_KEY_BACKEND=%s is not yet implemented; use env backend", cfg.SignerKeyBackend)
+	case "vault":
+		return signing.NewVault(cfg.VaultAddr, cfg.VaultToken, cfg.VaultCosignPath)
+	case "awskms", "gcpkms", "azurekms":
+		return nil, fmt.Errorf("SIGNER_KEY_BACKEND=%s is not yet implemented; use env or vault backend", cfg.SignerKeyBackend)
 	default:
 		return nil, fmt.Errorf("unknown SIGNER_KEY_BACKEND: %s", cfg.SignerKeyBackend)
 	}

@@ -44,6 +44,7 @@ const (
 	MetadataService_UpdateScanStatus_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
 	MetadataService_GetScanResult_FullMethodName               = "/registry.metadata.v1.MetadataService/GetScanResult"
 	MetadataService_GetTenantVulnerabilityCount_FullMethodName = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
+	MetadataService_CountRepositories_FullMethodName           = "/registry.metadata.v1.MetadataService/CountRepositories"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -81,6 +82,8 @@ type MetadataServiceClient interface {
 	GetScanResult(ctx context.Context, in *GetScanResultRequest, opts ...grpc.CallOption) (*ScanResult, error)
 	// Vulnerability aggregate
 	GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error)
+	// Repository count — efficient alternative to draining ListRepositories for stats.
+	CountRepositories(ctx context.Context, in *CountRepositoriesRequest, opts ...grpc.CallOption) (*CountRepositoriesResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -423,6 +426,16 @@ func (c *metadataServiceClient) GetTenantVulnerabilityCount(ctx context.Context,
 	return out, nil
 }
 
+func (c *metadataServiceClient) CountRepositories(ctx context.Context, in *CountRepositoriesRequest, opts ...grpc.CallOption) (*CountRepositoriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CountRepositoriesResponse)
+	err := c.cc.Invoke(ctx, MetadataService_CountRepositories_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -458,6 +471,8 @@ type MetadataServiceServer interface {
 	GetScanResult(context.Context, *GetScanResultRequest) (*ScanResult, error)
 	// Vulnerability aggregate
 	GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error)
+	// Repository count — efficient alternative to draining ListRepositories for stats.
+	CountRepositories(context.Context, *CountRepositoriesRequest) (*CountRepositoriesResponse, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -535,6 +550,9 @@ func (UnimplementedMetadataServiceServer) GetScanResult(context.Context, *GetSca
 }
 func (UnimplementedMetadataServiceServer) GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantVulnerabilityCount not implemented")
+}
+func (UnimplementedMetadataServiceServer) CountRepositories(context.Context, *CountRepositoriesRequest) (*CountRepositoriesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CountRepositories not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -992,6 +1010,24 @@ func _MetadataService_GetTenantVulnerabilityCount_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_CountRepositories_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CountRepositoriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).CountRepositories(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_CountRepositories_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).CountRepositories(ctx, req.(*CountRepositoriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1078,6 +1114,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantVulnerabilityCount",
 			Handler:    _MetadataService_GetTenantVulnerabilityCount_Handler,
+		},
+		{
+			MethodName: "CountRepositories",
+			Handler:    _MetadataService_CountRepositories_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

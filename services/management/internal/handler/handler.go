@@ -45,6 +45,10 @@ type Handler struct {
 	// platform operations (e.g. setting another tenant's storage quota). Empty disables
 	// the route entirely. Set via PLATFORM_ADMIN_TENANT_ID env var.
 	platformAdminTenantID string
+	// rateLimiter applies PENTEST-014 per-user rate limiting after RequireAuth.
+	// Optional — when nil, every authenticated request passes through unthrottled
+	// (useful for tests that want deterministic timing).
+	rateLimiter *middleware.PerUserRateLimiter
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -65,6 +69,14 @@ func New(
 		platformAdminTenantID: platformAdminTenantID,
 		healthClients:         healthClients,
 	}
+}
+
+// WithRateLimiter attaches a per-user rate limiter that runs after RequireAuth
+// for every authenticated route (PENTEST-014). Returns the handler for chained
+// initialization. Call before Register.
+func (h *Handler) WithRateLimiter(l *middleware.PerUserRateLimiter) *Handler {
+	h.rateLimiter = l
+	return h
 }
 
 // checkServicesHealth calls the gRPC health check on each configured service and
@@ -90,12 +102,23 @@ func (h *Handler) checkServicesHealth(ctx context.Context) float64 {
 //
 // /healthz is open (no auth). Every other route is wrapped with RequireAuth,
 // which validates the Bearer token via registry-auth gRPC and stores the
-// tenant_id in the request context.
+// tenant_id in the request context. The PerUserRateLimiter (PENTEST-014)
+// runs immediately after RequireAuth, so user_id is available for keying.
 //
 // Route patterns use Go 1.22+ net/http syntax: {param} captures a single
 // path segment, {param...} captures the remainder.
 func (h *Handler) Register(mux *http.ServeMux) {
-	authMW := middleware.RequireAuth(h.auth)
+	rawAuthMW := middleware.RequireAuth(h.auth)
+	// PENTEST-014: per-user rate limit. Default 20 rps with a burst of 40 is
+	// generous for an interactive dashboard but blocks a runaway script. With
+	// multiple management replicas the cluster-wide cap is N×, which is fine
+	// for a defence-in-depth gate; the limiter is in-process by design.
+	authMW := rawAuthMW
+	if h.rateLimiter != nil {
+		authMW = func(next http.Handler) http.Handler {
+			return rawAuthMW(h.rateLimiter.Middleware(next))
+		}
+	}
 
 	// Health — unauthenticated, used by docker-compose and K8s probes.
 	mux.Handle("GET /healthz", http.HandlerFunc(handleHealthz))
@@ -167,30 +190,13 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Count repos by draining ListRepositories stream.
-	// TODO: replace with a dedicated CountRepositories RPC to avoid O(n) drain.
-	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
+	countResp, err := h.meta.CountRepositories(r.Context(), &metadatav1.CountRepositoriesRequest{
 		TenantId: tenantID,
-		PageSize: 1000,
 	})
 	if err != nil {
-		slog.Error("ListRepositories for stats", "err", err)
+		slog.Error("CountRepositories", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to count repositories")
 		return
-	}
-
-	var totalRepos int
-	for {
-		_, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			slog.Error("ListRepositories stream for stats", "err", recvErr)
-			writeError(w, http.StatusInternalServerError, "failed to count repositories")
-			return
-		}
-		totalRepos++
 	}
 
 	vulns, err := h.meta.GetTenantVulnerabilityCount(r.Context(), &metadatav1.GetTenantVulnerabilityCountRequest{
@@ -212,7 +218,7 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, StatsResponse{
-		TotalRepos:         totalRepos,
+		TotalRepos:         int(countResp.GetCount()),
 		StorageUsedBytes:   quota.GetUsedBytes(),
 		StorageQuotaBytes:  quota.GetQuotaBytes(),
 		DailyPulls:         dailyPulls,
@@ -318,12 +324,6 @@ type createRepositoryBody struct {
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
-	// Enforce: only admin or owner may create repositories.
-	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
-		return
-	}
-
 	// Cap body size to prevent large-payload attacks before decoding.
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
@@ -340,6 +340,14 @@ func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request)
 	}
 	if err := validateRepoName(body.Name); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// PENTEST-002: admin/owner OF THIS ORG (not anywhere in the tenant) may create.
+	// Authz happens after name validation so we don't leak whether an org exists
+	// via a 403-vs-400 distinction.
+	if !hasScopedRole(h.getUserAssignments(r), "org", body.Org, "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
@@ -393,12 +401,6 @@ func (h *Handler) handleGetRepository(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request) {
-	// Enforce: only admin or owner may delete repositories.
-	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
-		return
-	}
-
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName := r.PathValue("org"), r.PathValue("repo")
 
@@ -408,6 +410,12 @@ func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request)
 	}
 	if err := validateRepoName(repoName); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// PENTEST-002: admin/owner on THIS REPO (or its parent org) may delete.
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
@@ -501,12 +509,6 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
-	// Enforce: writer or above may delete tags.
-	if roles := h.getUserRoles(r); !hasRole(roles, "writer") {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
-		return
-	}
-
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
 
@@ -520,6 +522,12 @@ func (h *Handler) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateTagName(tagName); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	// PENTEST-002: writer or above on THIS REPO (or parent org) may delete tags.
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "writer") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
@@ -643,6 +651,14 @@ func (h *Handler) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateTagName(tagName); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	// PENTEST-002: writer or above on THIS REPO may trigger scans. Scans cost
+	// real CPU + bandwidth on the scanner pool, so let only push-capable users
+	// queue them, not readers.
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "writer") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 

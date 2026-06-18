@@ -35,7 +35,8 @@ import (
 func Run(ctx context.Context, cfg *config.Config) error {
 	// Use loader.DBConfig.PoolConfig() so that sslmode=disable is rejected at startup
 	// (SEC-031) and pool tuning defaults are applied consistently with other services.
-	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns}
+	// Environment plumbing engages PENTEST-017's dev-default credential rejection.
+	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns, Environment: cfg.OTELEnvironment}
 	poolCfg, err := tmpDB.PoolConfig()
 	if err != nil {
 		return fmt.Errorf("build pool config: %w", err)

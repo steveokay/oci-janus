@@ -10,15 +10,17 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/scanner/internal/config"
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
@@ -37,15 +39,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("load scanner plugin: %w", err)
 	}
 
-	// gRPC connections to upstream services.
-	// TODO: replace insecure.NewCredentials() with mTLS creds from libs/auth/mtls once certs are wired.
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds, err := clientCreds(cfg)
+	if err != nil {
+		return fmt.Errorf("build mTLS creds: %w", err)
+	}
+
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, creds)
 	if err != nil {
 		return fmt.Errorf("dial metadata %s: %w", cfg.MetadataGRPCAddr, err)
 	}
 	defer metaConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, creds)
 	if err != nil {
 		return fmt.Errorf("dial storage %s: %w", cfg.StorageGRPCAddr, err)
 	}
@@ -170,3 +175,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 }
+
+// clientCreds returns mTLS dial credentials when all three cert paths are set,
+// falling back to plaintext for local dev without certs.
+func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
+		if err != nil {
+			return nil, err
+		}
+		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+	}
+	slog.Warn("mTLS not configured — scanner gRPC clients running without TLS (development mode only)")
+	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
+}
+

@@ -6,6 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/steveokay/oci-janus/libs v0.0.0
 	github.com/steveokay/oci-janus/proto/gen/go v0.0.0
+	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )

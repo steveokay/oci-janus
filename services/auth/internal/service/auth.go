@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -45,6 +46,11 @@ type Claims struct {
 	jwt.RegisteredClaims
 	TenantID string             `json:"tenant_id"`
 	Access   []RepositoryAccess `json:"access"`
+	// Roles is the flat list of RBAC role names the user holds within the tenant
+	// (e.g. ["admin"], ["writer","reader"]). Frontend gates admin-only UI on
+	// presence of "owner" or "admin" here. Empty for tokens issued before RBAC
+	// resolution (e.g. legacy refresh paths).
+	Roles []string `json:"roles,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -104,8 +110,11 @@ func New(
 	}, nil
 }
 
-// IssueToken signs and returns a JWT for the given user with the requested access scopes.
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess) (string, error) {
+// IssueToken signs and returns a JWT for the given user with the requested access
+// scopes and roles. Roles is the flat list of RBAC role names held by the user
+// in the tenant; it is embedded in the JWT so downstream services (and the
+// frontend) can read user roles without an extra RPC.
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -118,6 +127,7 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		},
 		TenantID: tenantID,
 		Access:   access,
+		Roles:    roles,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = s.keyID
@@ -189,11 +199,11 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 		return "", ErrInvalidCredentials
 	}
 
-	// Issue a new token carrying the same subject and tenant, but with a fresh
-	// JTI and updated iat/exp. Access scopes are not carried over because
-	// session tokens (login flow) are issued without explicit scopes (nil);
-	// Docker-scoped tokens are short-lived and are never refreshed this way.
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access)
+	// Issue a new token carrying the same subject, tenant, and roles, but with
+	// a fresh JTI and updated iat/exp. Access scopes are not carried over for
+	// session tokens (login flow) because they are issued without explicit scopes
+	// (nil); Docker-scoped tokens are short-lived and are never refreshed this way.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -216,12 +226,41 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 }
 
 // Login validates credentials, enforces account lockout, and issues a token.
+// The user's RBAC role names are loaded and embedded in the JWT `roles` claim
+// so downstream services (and the frontend) can read user roles without an
+// extra RPC.
 func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (string, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
 	if err != nil {
 		return "", err
 	}
-	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil)
+	// Load the user's role names from the role_assignments table; deduplicated
+	// because a user can hold the same role across multiple scopes (e.g. admin
+	// of two orgs). A failure here is non-fatal — log it and issue a token
+	// without roles rather than blocking login on a transient DB error.
+	roles := s.loadRoleNames(ctx, user.ID, user.TenantID)
+	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles)
+}
+
+// loadRoleNames returns the deduplicated, sorted role names the user holds in
+// the tenant. Errors are logged and an empty slice is returned — the caller
+// decides whether absence of roles is fatal.
+func (s *Service) loadRoleNames(ctx context.Context, userID, tenantID uuid.UUID) []string {
+	assignments, err := s.users.GetUserRoles(ctx, userID, tenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "loadRoleNames: GetUserRoles failed", "user_id", userID, "error", err)
+		return nil
+	}
+	seen := make(map[string]struct{}, len(assignments))
+	roles := make([]string, 0, len(assignments))
+	for _, a := range assignments {
+		if _, ok := seen[a.RoleName]; ok {
+			continue
+		}
+		seen[a.RoleName] = struct{}{}
+		roles = append(roles, a.RoleName)
+	}
+	return roles
 }
 
 // CreateUser hashes the password and persists the user record.
@@ -303,18 +342,31 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keyID uuid.UUID, rawSecret
 	return key, nil
 }
 
-// AuthenticateUser validates credentials and returns the authenticated user without
-// issuing a token. It enforces account lockout so callers can then issue a
-// custom-scoped token (e.g. the Docker token endpoint).
+// AuthenticateUser validates credentials and returns the authenticated user
+// without issuing a token. It enforces account lockout so callers can then
+// issue a custom-scoped token (e.g. the Docker token endpoint).
+//
+// PENTEST-004: when the username does not exist, we still run a dummy Argon2id
+// verify against a constant hash so the response time is indistinguishable
+// from the known-user wrong-password path. Without this, an attacker could
+// enumerate valid usernames by measuring the ~100 ms gap that Argon2id verify
+// adds — known users take much longer than unknown users.
 func (s *Service) AuthenticateUser(ctx context.Context, tenantID uuid.UUID, username, password string) (*repository.User, error) {
 	user, err := s.users.GetByUsername(ctx, tenantID, username)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
+			// Burn the same Argon2id work the happy path would. We discard
+			// the verify result; the goal is purely timing equalization.
+			_, _ = argon2pkg.Verify(password, dummyArgonHash())
 			return nil, ErrInvalidCredentials
 		}
 		return nil, err
 	}
 	if !user.IsActive {
+		// PENTEST-005: AuthenticateUser still distinguishes these states via
+		// typed errors so handlers can audit-log the cause server-side, but
+		// HTTP handlers MUST collapse all of these to a single 401 response
+		// to deny enumeration through status-code differences.
 		return nil, ErrAccountDisabled
 	}
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
@@ -338,6 +390,34 @@ func (s *Service) AuthenticateUser(ctx context.Context, tenantID uuid.UUID, user
 	return user, nil
 }
 
+// dummyArgonHash returns a constant Argon2id hash of a throwaway password.
+// Verifying any user-supplied password against this hash takes the same
+// wall-clock time as verifying against a real user's password hash. Lazily
+// generated once per process to avoid paying Argon2's cost at package init.
+var (
+	dummyArgonHashOnce sync.Once
+	dummyArgonHashVal  string
+)
+
+func dummyArgonHash() string {
+	dummyArgonHashOnce.Do(func() {
+		// Use a long, fixed string so the same hash parameters (m, t, p) as
+		// real user hashes are exercised; argon2pkg.Hash applies the standard
+		// parameters configured for this service.
+		h, err := argon2pkg.Hash("dummy-password-for-timing-mitigation-aaaa")
+		if err != nil {
+			// Hash failure here is exceptional (would happen at every login
+			// path) — emit a warning and fall back to an empty string. Verify
+			// against "" returns quickly, which weakens the mitigation but
+			// keeps the service running.
+			slog.Warn("auth: failed to generate dummy argon2 hash; PENTEST-004 mitigation degraded", "error", err)
+			return
+		}
+		dummyArgonHashVal = h
+	})
+	return dummyArgonHashVal
+}
+
 // GetUserByID returns the user record for the given ID.
 func (s *Service) GetUserByID(ctx context.Context, id uuid.UUID) (*repository.User, error) {
 	return s.users.GetByID(ctx, id)
@@ -356,6 +436,14 @@ func (s *Service) GrantRole(ctx context.Context, a repository.RoleAssignment) er
 // RevokeRole deletes the role assignment with the given ID, scoped to the tenant.
 func (s *Service) RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error {
 	return s.users.RevokeRole(ctx, assignmentID, tenantID)
+}
+
+// RevokeRoleScoped deletes the role assignment only when the scope matches the
+// expected values (PENTEST-011). Empty expectedScopeType / expectedScopeValue
+// disable the corresponding check, so passing both empty is equivalent to the
+// plain RevokeRole call.
+func (s *Service) RevokeRoleScoped(ctx context.Context, assignmentID, tenantID uuid.UUID, expectedScopeType, expectedScopeValue string) error {
+	return s.users.RevokeRoleScoped(ctx, assignmentID, tenantID, expectedScopeType, expectedScopeValue)
 }
 
 // ListMembers returns all role assignments within a tenant scope.

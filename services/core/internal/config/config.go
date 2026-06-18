@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
@@ -78,5 +80,38 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("%s is required", k)
 		}
 	}
+	// PENTEST-010: AUTH_REALM must be HTTPS in any non-development environment.
+	// Docker clients send Basic-auth credentials to this realm, so an http://
+	// realm in production would leak credentials over the network.
+	if err := validateAuthRealm(cfg.AuthRealm, cfg.OTELEnvironment); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAuthRealm enforces the PENTEST-010 contract: if the realm is HTTP,
+// either OTEL_ENVIRONMENT is "development" (silently allowed) or we refuse to
+// start. A startup warning is also emitted in dev so misconfigurations are
+// visible in the logs.
+func validateAuthRealm(realm, environment string) error {
+	if realm == "" {
+		return nil
+	}
+	u, err := url.Parse(realm)
+	if err != nil {
+		return fmt.Errorf("AUTH_REALM is not a valid URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "https" {
+		return nil
+	}
+	if scheme != "http" {
+		return fmt.Errorf("AUTH_REALM scheme %q is not supported (use https://, or http:// only in development)", u.Scheme)
+	}
+	env := strings.ToLower(environment)
+	if env == "production" || env == "staging" {
+		return fmt.Errorf("AUTH_REALM must use HTTPS in %s (got %q) — Basic auth would be sent over plaintext", env, realm)
+	}
+	slog.Warn("AUTH_REALM uses HTTP — acceptable only for local development", "realm", realm, "environment", environment)
 	return nil
 }

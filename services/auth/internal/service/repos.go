@@ -25,6 +25,7 @@ type userRepo interface {
 	GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error)
 	GrantRole(ctx context.Context, a repository.RoleAssignment) error
 	RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error
+	RevokeRoleScoped(ctx context.Context, assignmentID, tenantID uuid.UUID, expectedScopeType, expectedScopeValue string) error
 	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error)
 }
 

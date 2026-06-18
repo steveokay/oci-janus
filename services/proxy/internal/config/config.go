@@ -3,6 +3,9 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"net/url"
+	"strings"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
 )
@@ -61,6 +64,11 @@ func Load() (*Config, error) {
 	if cfg.AuthRealm == "" {
 		cfg.AuthRealm = "http://localhost:8080/auth/token"
 	}
+	// PENTEST-010: AUTH_REALM must be HTTPS outside development. See
+	// services/core/internal/config for the rationale.
+	if err := validateAuthRealm(cfg.AuthRealm, cfg.OTELEnvironment); err != nil {
+		return nil, err
+	}
 	if cfg.UpstreamHTTPTimeoutSecs == 0 {
 		cfg.UpstreamHTTPTimeoutSecs = 30
 	}
@@ -68,4 +76,29 @@ func Load() (*Config, error) {
 		cfg.UpstreamMaxResponseBytes = 20 << 30 // 20 GiB per CLAUDE.md §4.6
 	}
 	return cfg, nil
+}
+
+// validateAuthRealm refuses an http:// realm in production/staging and warns
+// in development. Mirrors the rule in services/core/internal/config.
+func validateAuthRealm(realm, environment string) error {
+	if realm == "" {
+		return nil
+	}
+	u, err := url.Parse(realm)
+	if err != nil {
+		return fmt.Errorf("AUTH_REALM is not a valid URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "https" {
+		return nil
+	}
+	if scheme != "http" {
+		return fmt.Errorf("AUTH_REALM scheme %q is not supported (use https://, or http:// only in development)", u.Scheme)
+	}
+	env := strings.ToLower(environment)
+	if env == "production" || env == "staging" {
+		return fmt.Errorf("AUTH_REALM must use HTTPS in %s (got %q) — Basic auth would be sent over plaintext", env, realm)
+	}
+	slog.Warn("AUTH_REALM uses HTTP — acceptable only for local development", "realm", realm, "environment", environment)
+	return nil
 }

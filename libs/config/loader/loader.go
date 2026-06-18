@@ -60,6 +60,12 @@ type DBConfig struct {
 	DBConnectTimeout  time.Duration `mapstructure:"DB_CONNECT_TIMEOUT"`
 	DBMaxConnLifetime time.Duration `mapstructure:"DB_MAX_CONN_LIFETIME"`
 	DBMaxConnIdleTime time.Duration `mapstructure:"DB_MAX_CONN_IDLE_TIME"`
+
+	// Environment is consulted by PoolConfig to gate PENTEST-017's dev-default
+	// credential check: in production/staging, a DSN that embeds a known dev
+	// password ("registry", "postgres") refuses to start. Wire from
+	// BaseConfig.OTELEnvironment in the service's Load function.
+	Environment string `mapstructure:"OTEL_ENVIRONMENT"`
 }
 
 // PoolConfig constructs a pgxpool.Config from DBConfig ready for pgxpool.NewWithConfig.
@@ -88,6 +94,13 @@ func (c *DBConfig) PoolConfig() (*pgxpool.Config, error) {
 		slog.Warn("DB DSN uses non-enforcing SSL mode — connections may be unencrypted",
 			"ssl_mode", sslMode,
 			"recommendation", "use sslmode=require in production")
+	}
+
+	// PENTEST-017: refuse to start if the DSN carries a known dev-default
+	// password in production/staging. Warns in development. No-op when the
+	// DSN does not embed credentials (e.g. trust auth or IAM auth).
+	if err := CheckDevDefaultsFromDSN(c.Environment, "POSTGRES_PASSWORD", c.DBDSN); err != nil {
+		return nil, err
 	}
 
 	cfg, err := pgxpool.ParseConfig(c.DBDSN)

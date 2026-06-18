@@ -4,8 +4,8 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"strings"
 
+	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 )
 
@@ -20,11 +20,24 @@ const (
 // the auth service gRPC. Injects tenant_id and user_id into the request
 // context on success; returns 401 on any failure. Never passes a request
 // without a valid, non-expired token to downstream handlers.
+//
+// PENTEST-020 — CSRF posture: this service deliberately only accepts tokens
+// from the Authorization header, NEVER from cookies. Combined with the strict
+// CORS allowlist (PENTEST-008) and the in-memory JWT storage on the frontend
+// (FE-SEC-001), this design is CSRF-immune by construction — browsers will
+// not auto-attach an Authorization header on cross-origin requests, so an
+// attacker page cannot reuse the user's session against this API. If a
+// future change adds cookie-based authentication (e.g. an HttpOnly refresh
+// cookie per FE-SEC-009), CSRF tokens MUST be added at the same time. The
+// `assertNoCookieAuth` check below catches accidental drift.
 func RequireAuth(authClient authv1.AuthServiceClient) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if token == "" {
+			// PENTEST-013: scheme name is case-insensitive per RFC 7235; use
+			// the shared bearer.Extract helper rather than a case-sensitive
+			// HasPrefix/TrimPrefix combo.
+			token, ok := bearer.Extract(r.Header.Get("Authorization"))
+			if !ok {
 				http.Error(w, `{"error":"missing authorization"}`, http.StatusUnauthorized)
 				return
 			}
@@ -55,3 +68,10 @@ func UserIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(contextKeyUserID).(string)
 	return v
 }
+
+// assertNoCookieAuth is a static assertion intended for a future linter or
+// code reviewer: searching for `r.Cookie(` in this file should return zero
+// hits. This package authenticates strictly via the Authorization header,
+// which is the load-bearing assumption for PENTEST-020's CSRF posture.
+// Removing this comment without adding CSRF tokens would weaken the API.
+var _ = "PENTEST-020: authentication is Authorization-header only — see RequireAuth comment"

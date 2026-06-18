@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
@@ -137,21 +139,22 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 		user, err := h.svc.AuthenticateUser(r.Context(), tenantID, username, password)
 		if err != nil {
 			h.svc.RecordAuthFailure(r.Context(), ip)
-			switch {
-			case errors.Is(err, service.ErrAccountLocked):
-				writeError(w, http.StatusForbidden, "DENIED", "account locked")
-			case errors.Is(err, service.ErrAccountDisabled):
-				writeError(w, http.StatusForbidden, "DENIED", "account disabled")
-			default:
-				writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
-			}
+			// PENTEST-005: never differentiate unknown user / wrong password
+			// / locked / disabled in the response. All return 401 with the
+			// same body so an attacker cannot enumerate valid usernames or
+			// account states. Log the actual cause server-side for ops.
+			logAuthFailure(r.Context(), err, username, ip)
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 			return
 		}
 		userID = user.ID.String()
 		userTenantID = user.TenantID.String()
 	}
 
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access)
+	// Docker /auth/token issues per-action OCI tokens; roles claim is omitted
+	// because the OCI client only consumes the `access` scopes. The dashboard's
+	// /api/v1/login path goes through Service.Login() which embeds roles.
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
@@ -176,9 +179,27 @@ func (h *HTTPHandler) jwks(w http.ResponseWriter, r *http.Request) {
 // ── User management ──────────────────────────────────────────────────────────
 
 // createUser registers a new user account.
+//
+// PENTEST-003 (2026-06-18): This endpoint used to be unauthenticated and
+// accepted any `tenant_id` from the request body. That permitted unauthenticated
+// account squatting, cross-tenant user injection, and a username-enumeration
+// oracle via the 409 conflict response. The endpoint now:
+//   1. Requires a valid Bearer token (requireAuth).
+//   2. Uses the caller's tenant_id from the JWT — body.tenant_id is ignored
+//      (or, if supplied, must match the caller's tenant).
+//   3. Requires the caller to hold an `admin` or `owner` role somewhere in
+//      that tenant. New users always start with zero role assignments, so
+//      bootstrapping the very first admin must happen through a seed migration
+//      or out-of-band tooling, never through this endpoint.
 func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
+	caller, err := h.requireAuth(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+		return
+	}
+
 	var req struct {
-		TenantID string `json:"tenant_id"`
+		TenantID string `json:"tenant_id"` // optional; must match caller's tenant if supplied
 		Username string `json:"username"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -188,9 +209,37 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, err := uuid.Parse(req.TenantID)
+	callerTenantID, err := uuid.Parse(caller.TenantID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid tenant_id")
+		// Malformed claim — fail closed and surface only a generic error.
+		slog.ErrorContext(r.Context(), "createUser: caller token has invalid tenant_id", "value", caller.TenantID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// If body.tenant_id is supplied it MUST equal the caller's tenant. We do not
+	// accept cross-tenant user creation through this endpoint — a platform-admin
+	// flow can be added later as a separate, super-admin-gated route.
+	if req.TenantID != "" && req.TenantID != caller.TenantID {
+		writeError(w, http.StatusForbidden, "DENIED", "cannot create users in a different tenant")
+		return
+	}
+	tenantID := callerTenantID
+
+	callerUserID, err := uuid.Parse(caller.Subject)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "createUser: caller token has invalid sub", "value", caller.Subject)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// Caller must be admin or owner of at least one scope in the tenant. New
+	// users start with zero RBAC assignments, so this is a coarse-but-correct
+	// gate ("are you any kind of admin here?") — once the user exists, granting
+	// scoped roles is itself scope-gated (PENTEST-002), preventing an admin of
+	// org-A from elevating the new user to admin of org-B.
+	if !callerIsTenantAdmin(r.Context(), h.svc, callerUserID, tenantID) {
+		writeError(w, http.StatusForbidden, "DENIED", "admin role required to create users")
 		return
 	}
 
@@ -223,6 +272,24 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// callerIsTenantAdmin reports whether the user holds an `admin` or `owner` role
+// at any scope within the tenant. Used as the gate for tenant-wide privileged
+// operations (currently: user creation) where there is no narrower target scope
+// to check. Returns false on lookup error — fail-closed.
+func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID) bool {
+	assignments, err := svc.GetUserRoles(ctx, userID, tenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "callerIsTenantAdmin: GetUserRoles failed", "error", err)
+		return false
+	}
+	for _, a := range assignments {
+		if a.RoleName == "admin" || a.RoleName == "owner" {
+			return true
+		}
+	}
+	return false
+}
+
 // login validates credentials and returns a JWT session token.
 func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 	ip := remoteIP(r)
@@ -250,18 +317,31 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 	tok, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
-		switch {
-		case errors.Is(err, service.ErrAccountLocked):
-			writeError(w, http.StatusForbidden, "FORBIDDEN", "account locked")
-		case errors.Is(err, service.ErrAccountDisabled):
-			writeError(w, http.StatusForbidden, "FORBIDDEN", "account disabled")
-		default:
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
-		}
+		// PENTEST-005: collapse all auth failure variants into one 401 response.
+		logAuthFailure(r.Context(), err, req.Username, ip)
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+// logAuthFailure emits a structured server-side log entry classifying an
+// authentication failure. Distinguishing lockout / disabled / invalid is fine
+// in logs (ops needs to see it) but MUST NOT be leaked back to the caller —
+// the HTTP response is always 401 "invalid credentials" so an attacker cannot
+// enumerate accounts or account states.
+func logAuthFailure(ctx context.Context, err error, username, ip string) {
+	switch {
+	case errors.Is(err, service.ErrAccountLocked):
+		slog.InfoContext(ctx, "auth: rejected login for locked account", "username", username, "ip", ip)
+	case errors.Is(err, service.ErrAccountDisabled):
+		slog.InfoContext(ctx, "auth: rejected login for disabled account", "username", username, "ip", ip)
+	case errors.Is(err, service.ErrInvalidCredentials):
+		slog.InfoContext(ctx, "auth: rejected invalid credentials", "username", username, "ip", ip)
+	default:
+		slog.WarnContext(ctx, "auth: rejected login (unexpected error)", "username", username, "ip", ip, "error", err)
+	}
 }
 
 // logout revokes the caller's current JWT by JTI.
@@ -290,14 +370,12 @@ func (h *HTTPHandler) logout(w http.ResponseWriter, r *http.Request) {
 // is returned. This allows the frontend to silently renew the session without
 // prompting the user for credentials again.
 func (h *HTTPHandler) refreshToken(w http.ResponseWriter, r *http.Request) {
-	// Extract and validate the existing Bearer token. requireAuth already calls
-	// svc.ValidateToken which rejects expired, revoked, or malformed tokens.
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
+	// PENTEST-013: scheme name is case-insensitive per RFC 7235.
+	rawToken, ok := bearer.Extract(r.Header.Get("Authorization"))
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
 		return
 	}
-	rawToken := strings.TrimPrefix(auth, "Bearer ")
 
 	newToken, err := h.svc.RefreshToken(r.Context(), rawToken)
 	if err != nil {
@@ -431,12 +509,13 @@ func (h *HTTPHandler) deleteAPIKey(w http.ResponseWriter, r *http.Request) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // requireAuth extracts and validates the Bearer token from the request.
+// PENTEST-013: uses the case-insensitive bearer.Extract helper.
 func (h *HTTPHandler) requireAuth(r *http.Request) (*service.Claims, error) {
-	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") {
+	token, ok := bearer.Extract(r.Header.Get("Authorization"))
+	if !ok {
 		return nil, errors.New("missing bearer token")
 	}
-	return h.svc.ValidateToken(r.Context(), strings.TrimPrefix(auth, "Bearer "))
+	return h.svc.ValidateToken(r.Context(), token)
 }
 
 // parseTenantID reads the X-Tenant-ID header injected by the gateway.

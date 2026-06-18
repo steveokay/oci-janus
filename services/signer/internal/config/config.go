@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
 // Config holds all runtime configuration for the signer service.
@@ -104,6 +106,23 @@ func validate(cfg *Config) error {
 		}
 		if cfg.CosignPublicKeyB64 == "" {
 			return fmt.Errorf("SIGNER_COSIGN_PUBLIC_KEY is required for env backend")
+		}
+	}
+	if cfg.SignerKeyBackend == "vault" {
+		if cfg.VaultAddr == "" {
+			return fmt.Errorf("VAULT_ADDR is required for vault backend")
+		}
+		if cfg.VaultToken == "" {
+			return fmt.Errorf("VAULT_TOKEN is required for vault backend")
+		}
+		if cfg.VaultCosignPath == "" {
+			return fmt.Errorf("VAULT_COSIGN_PATH is required for vault backend (e.g. transit/sign/registry-signer)")
+		}
+		// PENTEST-017: reject the dev-mode Vault token in production.
+		if err := loader.CheckDevDefaults(cfg.OTELEnvironment, map[string]string{
+			"VAULT_TOKEN": cfg.VaultToken,
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

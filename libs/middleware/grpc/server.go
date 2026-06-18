@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,29 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
+
+// grpcDurationHist is initialized once — on the first RPC after OTEL bootstrap —
+// to avoid a meter lookup + error allocation on every call.
+var (
+	grpcDurationHistOnce sync.Once
+	grpcDurationHist     metric.Float64Histogram
+)
+
+func initGRPCDurationHist() metric.Float64Histogram {
+	grpcDurationHistOnce.Do(func() {
+		h, err := otel.GetMeterProvider().Meter("registry").Float64Histogram(
+			"registry_grpc_request_duration_seconds",
+			metric.WithDescription("Duration of gRPC requests in seconds"),
+			metric.WithUnit("s"),
+		)
+		if err != nil {
+			slog.Warn("grpc metrics: histogram init failed", "error", err)
+			return
+		}
+		grpcDurationHist = h
+	})
+	return grpcDurationHist
+}
 
 // OTELServerHandler returns a grpc.ServerOption that installs the OpenTelemetry
 // stats handler. Attach this alongside ChainUnaryInterceptor — the stats handler
@@ -150,26 +174,20 @@ func LoggingStreamInterceptor(
 }
 
 // MetricsInterceptor records the standard registry_grpc_request_duration_seconds
-// histogram for every unary RPC using the global OTEL meter.
+// histogram for every unary RPC. The histogram is initialized once on first call
+// (after OTEL bootstrap) via initGRPCDurationHist to avoid a meter lookup and
+// error allocation on every RPC.
 func MetricsInterceptor(
 	ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 ) (any, error) {
 	start := time.Now()
 	resp, err := handler(ctx, req)
-	code := status.Code(err).String()
-
-	meter := otel.GetMeterProvider().Meter("registry")
-	hist, herr := meter.Float64Histogram(
-		"registry_grpc_request_duration_seconds",
-		metric.WithDescription("Duration of gRPC requests in seconds"),
-		metric.WithUnit("s"),
-	)
-	if herr == nil {
+	if hist := initGRPCDurationHist(); hist != nil {
 		hist.Record(ctx,
 			time.Since(start).Seconds(),
 			metric.WithAttributes(
 				attribute.String("method", info.FullMethod),
-				attribute.String("code", code),
+				attribute.String("code", status.Code(err).String()),
 			),
 		)
 	}

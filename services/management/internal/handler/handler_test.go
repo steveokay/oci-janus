@@ -57,13 +57,31 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 }
 
 func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUserPermissionsRequest) (*authv1.GetUserPermissionsResponse, error) {
+	// Existing tests use "myorg" as the only org and "myorg/myrepo" as the only
+	// repo. Issue org-scoped grants so scope-aware checks (PENTEST-002) succeed
+	// for both org and repo URL paths within that org.
 	switch req.GetUserId() {
 	case testUserID:
-		return &authv1.GetUserPermissionsResponse{Roles: []string{"admin"}}, nil
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"admin"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "assign-admin", UserId: testUserID, Role: "admin", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
 	case "writer-user":
-		return &authv1.GetUserPermissionsResponse{Roles: []string{"writer"}}, nil
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"writer"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "assign-writer", UserId: "writer-user", Role: "writer", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
 	default:
-		return &authv1.GetUserPermissionsResponse{Roles: []string{"reader"}}, nil
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"reader"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "assign-reader", UserId: "reader-user", Role: "reader", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
 	}
 }
 
@@ -94,6 +112,10 @@ func (s *fakeMetaServer) GetTenantQuotaUsage(_ context.Context, _ *metadatav1.Ge
 
 func (s *fakeMetaServer) GetTenantVulnerabilityCount(_ context.Context, _ *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
 	return &metadatav1.VulnerabilityCountResponse{Total: 3}, nil
+}
+
+func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.CountRepositoriesRequest) (*metadatav1.CountRepositoriesResponse, error) {
+	return &metadatav1.CountRepositoriesResponse{Count: 1}, nil
 }
 
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {

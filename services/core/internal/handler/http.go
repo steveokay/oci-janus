@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	"github.com/steveokay/oci-janus/services/core/internal/service"
 )
 
@@ -234,12 +235,13 @@ func (h *Handler) authenticate(r *http.Request) (*service.TokenClaims, error) {
 	if authHeader == "" {
 		return nil, service.ErrUnauthorized
 	}
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+	// PENTEST-013: scheme name is case-insensitive per RFC 7235. Bearer.Extract
+	// handles `Bearer`/`bearer`/`BEARER`/etc. uniformly.
+	if token, ok := bearer.Extract(authHeader); ok {
 		return h.auth.ValidateBearer(r.Context(), token)
 	}
-	if strings.HasPrefix(authHeader, "Basic ") {
-		encoded := strings.TrimPrefix(authHeader, "Basic ")
+	if len(authHeader) > 6 && strings.EqualFold(authHeader[:6], "Basic ") {
+		encoded := authHeader[6:]
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			// try without padding
