@@ -69,6 +69,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		healthpb.NewHealthClient(metaConn),
 		healthpb.NewHealthClient(auditConn),
 	)
+	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
+	// interactive dashboard while blocking a runaway script.
+	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))
 
 	mux := http.NewServeMux()
 	h.Register(mux)

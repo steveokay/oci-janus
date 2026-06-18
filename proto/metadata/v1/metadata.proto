@@ -45,6 +45,9 @@ service MetadataService {
 
   // Vulnerability aggregate
   rpc GetTenantVulnerabilityCount(GetTenantVulnerabilityCountRequest) returns (VulnerabilityCountResponse);
+
+  // Repository count — efficient alternative to draining ListRepositories for stats.
+  rpc CountRepositories(CountRepositoriesRequest) returns (CountRepositoriesResponse);
 }
 
 message Repository {
@@ -156,3 +159,7 @@ message VulnerabilityCountResponse {
   int64 critical_count = 2;
   int64 high_count     = 3;
 }
+
+// Repository count requests
+message CountRepositoriesRequest { string tenant_id = 1; }
+message CountRepositoriesResponse { int64 count = 1; }

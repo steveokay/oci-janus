@@ -76,6 +76,13 @@ func NewDispatcher(timeoutSecs int) *Dispatcher {
 	}
 }
 
+// maxResponseBytes caps the response body we read from a webhook endpoint.
+// Webhook receivers are expected to ACK with a small JSON document or empty
+// body; an unbounded read would let a hostile (or merely buggy) endpoint
+// stream arbitrary bytes back at us until our request timeout fires, burning
+// CPU and bandwidth on every worker (PENTEST-007).
+const maxResponseBytes = 8 * 1024
+
 // Deliver sends a single webhook delivery attempt. Returns an error if the
 // endpoint is unreachable, returns a non-2xx status, or the context is cancelled.
 func (d *Dispatcher) Deliver(ctx context.Context, targetURL string, payload []byte, hmacKey []byte) error {
@@ -93,7 +100,13 @@ func (d *Dispatcher) Deliver(ctx context.Context, targetURL string, payload []by
 	if err != nil {
 		return fmt.Errorf("HTTP POST to %s: %w", targetURL, err)
 	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); resp.Body.Close() }()
+	// PENTEST-007: cap the body we drain. A malicious or broken endpoint
+	// streaming unbounded bytes back would otherwise tie up this worker
+	// goroutine for the full request timeout while we discard data.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
+		resp.Body.Close()
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("endpoint returned status %d", resp.StatusCode)

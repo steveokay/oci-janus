@@ -29,6 +29,9 @@ message ValidateTokenResponse {
   string jti        = 4;
   repeated RepositoryAccess access = 5;
   google.protobuf.Timestamp expires_at = 6;
+  // roles is the flat list of role names held by the user in the tenant
+  // (e.g. ["admin", "reader"]). Mirrors the `roles` claim embedded in the JWT.
+  repeated string roles = 7;
 }
 
 message ValidateAPIKeyRequest {
@@ -50,7 +53,14 @@ message GetUserPermissionsRequest {
 
 message GetUserPermissionsResponse {
   repeated RepositoryAccess access = 1;
+  // roles is a flat list of role names the user holds anywhere in the tenant.
+  // DEPRECATED for authorization decisions — use role_assignments which includes
+  // the scope. Retained for backwards compatibility and for embedding in the
+  // JWT `roles` claim (where the frontend uses it only for UX-level gating).
   repeated string roles = 2;
+  // role_assignments is the full per-scope assignment list, the only safe
+  // source of truth for scope-aware authorization checks (PENTEST-002).
+  repeated RoleAssignment role_assignments = 3;
 }
 
 message RepositoryAccess {
@@ -80,9 +90,15 @@ message GrantRoleRequest {
 }
 
 // RevokeRoleRequest removes a specific role assignment by its ID.
+// expected_scope_type and expected_scope_value defend against scope-confusion
+// attacks (PENTEST-011) — when provided, the auth service refuses to delete
+// an assignment whose scope does not match. Pass them whenever the caller
+// derived the scope from a URL path (e.g. DELETE /orgs/{org}/members/{id}).
 message RevokeRoleRequest {
-  string tenant_id    = 1;
-  string assignment_id = 2;
+  string tenant_id            = 1;
+  string assignment_id        = 2;
+  string expected_scope_type  = 3; // "org" | "repo" | "" for no check
+  string expected_scope_value = 4; // org name or "org/repo"; "" for no check
 }
 
 // ListMembersRequest queries all role assignments within a tenant scope.

@@ -44,7 +44,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// Use loader.DBConfig.PoolConfig() so that sslmode=disable is rejected at startup
 	// (SEC-031) and pool tuning defaults are applied consistently with other services.
-	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns}
+	// Environment plumbing engages PENTEST-017's dev-default credential rejection.
+	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns, Environment: cfg.OTELEnvironment}
 	poolCfg, err := tmpDB.PoolConfig()
 	if err != nil {
 		return fmt.Errorf("build pool config: %w", err)
@@ -91,14 +92,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Retention cleanup goroutine.
 	go runRetentionLoop(ctx, repo, cfg.RetentionDays)
 
-	// HTTP server: audit write endpoint + query endpoint + health.
-	httpHdl := handler.New(repo)
+	// HTTP server: liveness probe only.
+	//
+	// PENTEST-001 (2026-06-18): the unauthenticated POST/GET /audit/events
+	// endpoints have been removed. Writes are now performed exclusively via the
+	// RabbitMQ `eventconsumer` (durable + DLQ), and reads via the mTLS-gated
+	// `AuditService` gRPC API consumed by `registry-management`. Re-introducing
+	// an HTTP write/query API would require mTLS + CN allowlist on this port.
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	httpMux.HandleFunc("POST /audit/events", httpHdl.WriteEvent)
-	httpMux.HandleFunc("GET /audit/events", httpHdl.QueryEvents)
 
 	// ReadHeaderTimeout prevents Slowloris attacks.
 	// ReadTimeout and WriteTimeout bound the full request/response cycle.

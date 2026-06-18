@@ -17,12 +17,12 @@ import (
 // GRPCHandler implements signerv1.SignerServiceServer.
 type GRPCHandler struct {
 	signerv1.UnimplementedSignerServiceServer
-	signer *signing.Signer
+	signer signing.Signer
 	store  *sigstore.Store
 }
 
 // New creates a GRPCHandler.
-func New(s *signing.Signer, store *sigstore.Store) *GRPCHandler {
+func New(s signing.Signer, store *sigstore.Store) *GRPCHandler {
 	return &GRPCHandler{signer: s, store: store}
 }
 

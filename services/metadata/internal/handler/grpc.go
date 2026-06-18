@@ -51,6 +51,8 @@ type metadataRepo interface {
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
 	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error)
+	// Repository count
+	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.
@@ -276,4 +278,16 @@ func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *
 		CriticalCount: critical,
 		HighCount:     high,
 	}, nil
+}
+
+// CountRepositories returns the number of repositories owned by the tenant.
+func (h *MetadataHandler) CountRepositories(ctx context.Context, req *metadatav1.CountRepositoriesRequest) (*metadatav1.CountRepositoriesResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	n, err := h.repo.CountRepositories(ctx, req.TenantId)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.CountRepositoriesResponse{Count: n}, nil
 }

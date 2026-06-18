@@ -292,19 +292,83 @@ func (c *Client) FetchBlob(ctx context.Context, upstreamURL, image, digest strin
 	return io.NopCloser(body), size, ct, nil
 }
 
-// parseBearerChallenge parses the key=value pairs from a Bearer WWW-Authenticate header value.
+// parseBearerChallenge parses the comma-separated key=value pairs from a
+// Bearer WWW-Authenticate header value.
+//
+// PENTEST-009: the previous implementation split on every `,` which broke for
+// quoted values that legitimately contain commas (e.g. `scope="repository:foo,bar:pull"`).
+// This parser walks the header tracking quote state so commas inside `"..."`
+// do not separate pairs. It is intentionally permissive (does not error on
+// malformed input) — unparseable segments are silently skipped, matching the
+// behaviour of common Docker client implementations.
 func parseBearerChallenge(header string) map[string]string {
 	header = strings.TrimPrefix(header, "Bearer ")
 	params := make(map[string]string)
-	for _, part := range strings.Split(header, ",") {
-		part = strings.TrimSpace(part)
-		idx := strings.IndexByte(part, '=')
+	for _, segment := range splitCommaRespectingQuotes(header) {
+		segment = strings.TrimSpace(segment)
+		idx := strings.IndexByte(segment, '=')
 		if idx < 0 {
 			continue
 		}
-		key := strings.TrimSpace(part[:idx])
-		val := strings.Trim(strings.TrimSpace(part[idx+1:]), `"`)
-		params[key] = val
+		key := strings.TrimSpace(segment[:idx])
+		val := strings.TrimSpace(segment[idx+1:])
+		// Strip a single layer of surrounding quotes, then unescape \" and \\.
+		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = unescapeQuoted(val[1 : len(val)-1])
+		}
+		if key != "" {
+			params[key] = val
+		}
 	}
 	return params
+}
+
+// splitCommaRespectingQuotes splits s on top-level commas, treating any comma
+// inside a double-quoted run as literal. Backslash-escapes inside the quoted
+// run (\" and \\) are honoured so the closing quote is detected correctly.
+func splitCommaRespectingQuotes(s string) []string {
+	var out []string
+	var buf strings.Builder
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inQuote && c == '\\' && i+1 < len(s):
+			// Keep the escape sequence verbatim; unescapeQuoted handles it later.
+			buf.WriteByte(c)
+			buf.WriteByte(s[i+1])
+			i++
+		case c == '"':
+			inQuote = !inQuote
+			buf.WriteByte(c)
+		case c == ',' && !inQuote:
+			out = append(out, buf.String())
+			buf.Reset()
+		default:
+			buf.WriteByte(c)
+		}
+	}
+	if buf.Len() > 0 {
+		out = append(out, buf.String())
+	}
+	return out
+}
+
+// unescapeQuoted resolves the backslash-escapes permitted inside an
+// RFC 7230 quoted-string: \" → " and \\ → \. Any other \X is left as X.
+func unescapeQuoted(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }

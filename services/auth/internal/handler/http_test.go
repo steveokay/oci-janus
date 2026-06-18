@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,13 +35,23 @@ import (
 type handlerFakeUserRepo struct {
 	users        map[string]*repository.User
 	failedLogins map[uuid.UUID]int
+	// adminUsers controls which users return an admin role assignment from
+	// GetUserRoles. Tests promote a user to admin by calling makeAdmin(uuid).
+	adminUsers map[uuid.UUID]bool
 }
 
 func newHandlerFakeUserRepo() *handlerFakeUserRepo {
 	return &handlerFakeUserRepo{
 		users:        make(map[string]*repository.User),
 		failedLogins: make(map[uuid.UUID]int),
+		adminUsers:   make(map[uuid.UUID]bool),
 	}
+}
+
+// makeAdmin marks a user as holding an "admin" role in the tenant, so the
+// PENTEST-003 gate in createUser (and similar tenant-admin checks) passes.
+func (f *handlerFakeUserRepo) makeAdmin(userID uuid.UUID) {
+	f.adminUsers[userID] = true
 }
 
 func (f *handlerFakeUserRepo) Create(_ context.Context, req repository.CreateUserRequest) (*repository.User, error) {
@@ -96,13 +107,26 @@ func (f *handlerFakeUserRepo) ResetFailedLogins(_ context.Context, id uuid.UUID)
 	return nil
 }
 
-func (f *handlerFakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]repository.RoleAssignment, error) {
-	return nil, nil
+func (f *handlerFakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
+	if !f.adminUsers[userID] {
+		return nil, nil
+	}
+	return []repository.RoleAssignment{{
+		ID:         uuid.New(),
+		TenantID:   tenantID,
+		UserID:     userID,
+		RoleName:   "admin",
+		ScopeType:  "org",
+		ScopeValue: "test-org",
+	}}, nil
 }
 func (f *handlerFakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error {
 	return nil
 }
 func (f *handlerFakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *handlerFakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
+	return nil
+}
 func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
 	return nil, nil
 }
@@ -242,7 +266,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testCtx) {
 // issueTestToken issues a JWT from the service and returns it.
 func issueTestToken(t *testing.T, svc *service.Service, userID, tenantID string, access []service.RepositoryAccess) string {
 	t.Helper()
-	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access)
+	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -390,8 +414,10 @@ func TestLogin_validCredentials_returns200(t *testing.T) {
 	}
 }
 
-// TestLogin_accountLocked verifies that a locked account returns 403.
-func TestLogin_accountLocked_returns403(t *testing.T) {
+// TestLogin_accountLocked_returns401_noLeakage — PENTEST-005: locked accounts
+// must produce the same 401 invalid-credentials response as wrong-password
+// failures so an attacker cannot enumerate which accounts are locked.
+func TestLogin_accountLocked_returns401_noLeakage(t *testing.T) {
 	srv, tc := newTestServer(t)
 	tenantID := uuid.New()
 	const password = "Str0ng!Password123"
@@ -414,8 +440,8 @@ func TestLogin_accountLocked_returns403(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401 (locked account must not leak via 403 — PENTEST-005)", resp.StatusCode)
 	}
 }
 
@@ -482,39 +508,112 @@ func TestLogout_invalidToken_returns401(t *testing.T) {
 }
 
 // ── Create User ───────────────────────────────────────────────────────────────
+//
+// PENTEST-003 (2026-06-18): POST /api/v1/users now requires a Bearer token
+// from an admin/owner in the target tenant. The helper newAdminAuthedRequest
+// seeds an admin user, issues a token for it, and returns a request with the
+// Authorization header set, so tests focus on the validation/business logic
+// being tested rather than re-creating the auth setup each time.
 
-// TestCreateUser_invalidBody verifies that POST /api/v1/users with invalid JSON
-// returns 400.
-func TestCreateUser_invalidBody_returns400(t *testing.T) {
-	srv, _ := newTestServer(t)
+// newAdminAuthedRequest builds a POST /api/v1/users request that carries a
+// valid admin token. The returned tenantID matches the JWT's tenant claim.
+func newAdminAuthedRequest(t *testing.T, srv *httptest.Server, tc *testCtx, body []byte) (*http.Request, string) {
+	t.Helper()
+	adminID := uuid.New()
+	tenantID := uuid.New()
+	tc.users.makeAdmin(adminID)
+	tok := issueTestToken(t, tc.svc, adminID.String(), tenantID.String(), nil)
 
-	resp, err := http.Post(srv.URL+"/api/v1/users", "application/json", strings.NewReader("{bad json"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("POST /users: %v", err)
+		t.Fatalf("NewRequest: %v", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusBadRequest)
-	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return req, tenantID.String()
 }
 
-// TestCreateUser_invalidTenantID verifies that a non-UUID tenant_id returns 400.
-func TestCreateUser_invalidTenantID_returns400(t *testing.T) {
+// TestCreateUser_noAuth_returns401 — PENTEST-003: anonymous user creation must
+// be rejected. This is the *defining* security fix.
+func TestCreateUser_noAuth_returns401(t *testing.T) {
 	srv, _ := newTestServer(t)
 
 	body, _ := json.Marshal(map[string]string{
-		"tenant_id": "bad-uuid",
-		"username":  "alice",
-		"email":     "alice@example.com",
-		"password":  "Str0ng!Password123",
+		"username": "x",
+		"email":    "x@example.com",
+		"password": "Str0ng!Password123",
 	})
 	resp, err := http.Post(srv.URL+"/api/v1/users", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /users: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401 (unauthenticated creation must be blocked)", resp.StatusCode)
+	}
+}
 
+// TestCreateUser_callerNotAdmin_returns403 — PENTEST-003: an authenticated but
+// non-admin user must be unable to create new accounts.
+func TestCreateUser_callerNotAdmin_returns403(t *testing.T) {
+	srv, tc := newTestServer(t)
+
+	nonAdminID := uuid.New()
+	tenantID := uuid.New()
+	tok := issueTestToken(t, tc.svc, nonAdminID.String(), tenantID.String(), nil)
+
+	body, _ := json.Marshal(map[string]string{
+		"username": "newuser",
+		"email":    "n@example.com",
+		"password": "Str0ng!Password123",
+	})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d, want 403 (non-admin must be blocked)", resp.StatusCode)
+	}
+}
+
+// TestCreateUser_crossTenant_returns403 — PENTEST-003: an admin of tenant-A
+// must NOT be able to create users in tenant-B by supplying its UUID in the body.
+func TestCreateUser_crossTenant_returns403(t *testing.T) {
+	srv, tc := newTestServer(t)
+
+	body, _ := json.Marshal(map[string]string{
+		"tenant_id": uuid.New().String(), // some OTHER tenant
+		"username":  "evil",
+		"email":     "evil@example.com",
+		"password":  "Str0ng!Password123",
+	})
+	req, _ := newAdminAuthedRequest(t, srv, tc, body)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d, want 403 (cross-tenant creation must be blocked)", resp.StatusCode)
+	}
+}
+
+// TestCreateUser_invalidBody verifies that POST /api/v1/users with invalid JSON
+// returns 400 — but only AFTER auth passes (auth comes first).
+func TestCreateUser_invalidBody_returns400(t *testing.T) {
+	srv, tc := newTestServer(t)
+	req, _ := newAdminAuthedRequest(t, srv, tc, []byte("{bad json"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
@@ -523,20 +622,18 @@ func TestCreateUser_invalidTenantID_returns400(t *testing.T) {
 // TestCreateUser_weakPassword verifies that a weak password returns 400 with
 // a descriptive error message (policy errors are safe to surface to callers).
 func TestCreateUser_weakPassword_returns400WithMessage(t *testing.T) {
-	srv, _ := newTestServer(t)
-
+	srv, tc := newTestServer(t)
 	body, _ := json.Marshal(map[string]string{
-		"tenant_id": uuid.New().String(),
-		"username":  "alice",
-		"email":     "alice@example.com",
-		"password":  "weak", // violates policy before any DB call
+		"username": "alice",
+		"email":    "alice@example.com",
+		"password": "weak",
 	})
-	resp, err := http.Post(srv.URL+"/api/v1/users", "application/json", bytes.NewReader(body))
+	req, _ := newAdminAuthedRequest(t, srv, tc, body)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /users: %v", err)
+		t.Fatalf("Do: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
@@ -555,22 +652,22 @@ func TestCreateUser_weakPassword_returns400WithMessage(t *testing.T) {
 	}
 }
 
-// TestCreateUser_validInput verifies that a valid request returns 201 with user details.
+// TestCreateUser_validInput verifies that an admin in the target tenant can
+// create a new user and gets 201 back with the created details.
 func TestCreateUser_validInput_returns201(t *testing.T) {
-	srv, _ := newTestServer(t)
-
+	srv, tc := newTestServer(t)
 	body, _ := json.Marshal(map[string]string{
-		"tenant_id": uuid.New().String(),
-		"username":  "newuser",
-		"email":     "newuser@example.com",
-		"password":  "Str0ng!Password123",
+		"username": "newuser",
+		"email":    "newuser@example.com",
+		"password": "Str0ng!Password123",
 	})
-	resp, err := http.Post(srv.URL+"/api/v1/users", "application/json", bytes.NewReader(body))
+	req, tenantID := newAdminAuthedRequest(t, srv, tc, body)
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /users: %v", err)
+		t.Fatalf("Do: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusCreated {
 		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
@@ -581,38 +678,47 @@ func TestCreateUser_validInput_returns201(t *testing.T) {
 	if result["username"] != "newuser" {
 		t.Errorf("username: got %v, want newuser", result["username"])
 	}
+	if result["tenant_id"] != tenantID {
+		t.Errorf("tenant_id: got %v, want %v (must match caller's tenant)", result["tenant_id"], tenantID)
+	}
 }
 
 // TestCreateUser_duplicateUsername verifies that creating a user with an
 // already-used username returns 409.
 func TestCreateUser_duplicateUsername_returns409(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, tc := newTestServer(t)
+	// Promote a fixed admin and use the same token for both creates so they
+	// share a tenant_id (otherwise the username-uniqueness check would only
+	// trigger when the user lookup is also tenant-aware in the fake).
+	adminID := uuid.New()
+	tenantID := uuid.New()
+	tc.users.makeAdmin(adminID)
+	tok := issueTestToken(t, tc.svc, adminID.String(), tenantID.String(), nil)
 
-	tenantID := uuid.New().String()
 	body, _ := json.Marshal(map[string]string{
-		"tenant_id": tenantID,
-		"username":  "duplicate",
-		"email":     "dup@example.com",
-		"password":  "Str0ng!Password123",
+		"username": "duplicate",
+		"email":    "dup@example.com",
+		"password": "Str0ng!Password123",
 	})
-
-	// First creation succeeds.
-	resp1, _ := http.Post(srv.URL+"/api/v1/users", "application/json", bytes.NewReader(body))
+	req1, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body))
+	req1.Header.Set("Authorization", "Bearer "+tok)
+	req1.Header.Set("Content-Type", "application/json")
+	resp1, _ := http.DefaultClient.Do(req1)
 	resp1.Body.Close()
 
-	// Second creation with same username should fail with 409.
 	body2, _ := json.Marshal(map[string]string{
-		"tenant_id": tenantID,
-		"username":  "duplicate",
-		"email":     "dup2@example.com",
-		"password":  "Str0ng!Password123",
+		"username": "duplicate",
+		"email":    "dup2@example.com",
+		"password": "Str0ng!Password123",
 	})
-	resp2, err := http.Post(srv.URL+"/api/v1/users", "application/json", bytes.NewReader(body2))
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body2))
+	req2.Header.Set("Authorization", "Bearer "+tok)
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("POST /users (2nd): %v", err)
 	}
 	defer resp2.Body.Close()
-
 	if resp2.StatusCode != http.StatusConflict {
 		t.Errorf("status: got %d, want %d", resp2.StatusCode, http.StatusConflict)
 	}
@@ -1043,8 +1149,10 @@ func TestToken_apiKeyWrongSecret_returns401(t *testing.T) {
 	}
 }
 
-// TestToken_accountDisabled verifies that a disabled account returns 403.
-func TestToken_accountDisabled_returns403(t *testing.T) {
+// TestToken_accountDisabled_returns401_noLeakage — PENTEST-005: a disabled
+// account must respond identically to "wrong password" (401 invalid credentials)
+// so an attacker can't enumerate which usernames have been disabled.
+func TestToken_accountDisabled_returns401_noLeakage(t *testing.T) {
 	srv, tc := newTestServer(t)
 
 	tenantID := uuid.New()
@@ -1068,14 +1176,14 @@ func TestToken_accountDisabled_returns403(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401 (disabled account must not leak via 403 — PENTEST-005)", resp.StatusCode)
 	}
 }
 
-// TestToken_accountLocked_returns403 verifies that a locked account is rejected
-// at the token endpoint with 403.
-func TestToken_accountLocked_returns403(t *testing.T) {
+// TestToken_accountLocked_returns401_noLeakage — PENTEST-005: locked accounts
+// must respond identically to wrong-password failures.
+func TestToken_accountLocked_returns401_noLeakage(t *testing.T) {
 	srv, tc := newTestServer(t)
 
 	tenantID := uuid.New()
@@ -1098,8 +1206,8 @@ func TestToken_accountLocked_returns403(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401 (locked account must not leak via 403 — PENTEST-005)", resp.StatusCode)
 	}
 }
 
@@ -1196,8 +1304,9 @@ func TestListAPIKeys_withKeys_returnsArray(t *testing.T) {
 
 // ── Login: account disabled ───────────────────────────────────────────────────
 
-// TestLogin_accountDisabled_returns403 verifies that a disabled account returns 403.
-func TestLogin_accountDisabled_returns403(t *testing.T) {
+// TestLogin_accountDisabled_returns401_noLeakage — PENTEST-005: disabled
+// accounts must respond identically to wrong-password failures.
+func TestLogin_accountDisabled_returns401_noLeakage(t *testing.T) {
 	srv, tc := newTestServer(t)
 
 	tenantID := uuid.New()
@@ -1222,8 +1331,88 @@ func TestLogin_accountDisabled_returns403(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401 (disabled account must not leak via 403 — PENTEST-005)", resp.StatusCode)
+	}
+}
+
+// TestAuthenticateUser_unknownUsername_runsDummyVerify — PENTEST-004: when the
+// username does not exist, AuthenticateUser must still run an Argon2id verify
+// (against a dummy hash) so the response time is comparable to the known-user
+// wrong-password path. We assert the timing gap is bounded; a real attacker
+// would need many samples to exploit a small difference but a large, obvious
+// difference (Argon2 ≈ 100 ms) would be enumeration-grade. A 4× ratio is the
+// conservative threshold — generous enough to avoid CI flakiness, tight
+// enough to catch a regression that bypasses the dummy verify entirely.
+func TestAuthenticateUser_unknownUsername_runsDummyVerify(t *testing.T) {
+	tc, cleanup := buildTestService(t)
+	defer cleanup()
+
+	tenantID := uuid.New()
+	registerTestUser(t, tc.svc, tenantID, "known-user", "Str0ng!Password123")
+
+	// Warm-up call so the dummy hash is generated (sync.Once cost is amortized).
+	tc.svc.AuthenticateUser(context.Background(), tenantID, "warm-up-not-real", "x") //nolint:errcheck
+
+	known := timeCall(func() {
+		tc.svc.AuthenticateUser(context.Background(), tenantID, "known-user", "Wr0ng!Password") //nolint:errcheck
+	})
+	unknown := timeCall(func() {
+		tc.svc.AuthenticateUser(context.Background(), tenantID, "definitely-not-real", "Wr0ng!Password") //nolint:errcheck
+	})
+
+	// `unknown` should be in the same order of magnitude as `known`. If the
+	// dummy verify is bypassed, unknown is typically <5 ms vs known >50 ms.
+	if known < time.Millisecond {
+		t.Fatalf("known-user verify suspiciously fast (%v) — argon2 not running?", known)
+	}
+	ratio := float64(known) / float64(unknown)
+	if ratio > 4 || ratio < 0.25 {
+		t.Errorf("timing gap too large: known=%v unknown=%v ratio=%.2f (PENTEST-004 dummy verify likely bypassed)",
+			known, unknown, ratio)
+	}
+}
+
+func timeCall(fn func()) time.Duration {
+	start := time.Now()
+	fn()
+	return time.Since(start)
+}
+
+// TestLogin_unknownVsKnown_returnsSameStatusAndBody — PENTEST-005: probing an
+// unknown username and a known username with the wrong password must yield
+// IDENTICAL responses (same status, same body). This is the explicit oracle
+// test: if a regression ever re-introduces a difference, this test catches it.
+func TestLogin_unknownVsKnown_returnsSameStatusAndBody(t *testing.T) {
+	srv, tc := newTestServer(t)
+
+	tenantID := uuid.New()
+	const password = "Str0ng!Password123"
+	registerTestUser(t, tc.svc, tenantID, "known-user", password)
+
+	probe := func(username string) (int, string) {
+		body, _ := json.Marshal(map[string]string{
+			"tenant_id": tenantID.String(),
+			"username":  username,
+			"password":  "Wr0ng!Password",
+		})
+		resp, err := http.Post(srv.URL+"/api/v1/login", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST /login: %v", err)
+		}
+		defer resp.Body.Close()
+		buf, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(buf)
+	}
+
+	unknownStatus, unknownBody := probe("nonexistent-user-xyz")
+	knownStatus, knownBody := probe("known-user")
+
+	if unknownStatus != knownStatus {
+		t.Errorf("status differs: unknown=%d known=%d (PENTEST-005 enumeration oracle)", unknownStatus, knownStatus)
+	}
+	if unknownBody != knownBody {
+		t.Errorf("body differs:\n  unknown: %q\n  known:   %q\n(PENTEST-005 enumeration oracle)", unknownBody, knownBody)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	aescrypto "github.com/steveokay/oci-janus/libs/crypto/aes"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -621,12 +622,12 @@ func (h *HTTPHandler) authenticate(r *http.Request) (*tokenClaims, error) {
 	if authHeader == "" {
 		return nil, errUnauthorized
 	}
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+	// PENTEST-013: case-insensitive scheme matching per RFC 7235.
+	if token, ok := bearer.Extract(authHeader); ok {
 		return h.auth.validateBearer(r.Context(), token)
 	}
-	if strings.HasPrefix(authHeader, "Basic ") {
-		encoded := strings.TrimPrefix(authHeader, "Basic ")
+	if len(authHeader) > 6 && strings.EqualFold(authHeader[:6], "Basic ") {
+		encoded := authHeader[6:]
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			decoded, err = base64.RawStdEncoding.DecodeString(encoded)

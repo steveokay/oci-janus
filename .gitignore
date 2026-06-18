@@ -53,3 +53,6 @@ certs/
 
 # Proto generated — committed intentionally, but exclude local overrides
 # proto/gen/go — DO NOT add to gitignore, generated stubs are committed
+
+# Personal notes / scratchpad — never committed
+understand.md

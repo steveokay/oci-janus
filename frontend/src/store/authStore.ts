@@ -20,6 +20,11 @@ export interface AuthUser {
   sub: string        // user ID
   tenant_id: string
   exp: number        // Unix timestamp (seconds)
+  // PENTEST-015 + backend roles claim: flat list of RBAC role names the user
+  // holds anywhere in the tenant (e.g. ["admin"], ["writer","reader"]). Used
+  // by useUserIsAdmin / role-gating UI. May be undefined for tokens issued
+  // before the roles claim was added (Docker-scoped /auth/token tokens).
+  roles?: string[]
 }
 
 interface AuthState {

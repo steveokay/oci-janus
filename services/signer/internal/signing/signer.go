@@ -1,6 +1,6 @@
 // Package signing implements Cosign-compatible ECDSA P-256 image signing.
-// Key material is loaded from environment variables (base64-encoded PEM).
-// Vault and KMS backends are defined as stubs and return Unimplemented.
+// Multiple backends are supported via the Signer interface: env (local PEM
+// keys), vault (HashiCorp Vault Transit), and cloud KMS (AWS / GCP / Azure).
 package signing
 
 import (
@@ -15,8 +15,23 @@ import (
 	"fmt"
 )
 
-// Signer holds a loaded ECDSA key pair and performs sign/verify operations.
-type Signer struct {
+// Signer is the abstraction over all signing backends. Implementations may
+// hold key material locally (envSigner) or delegate to an external service
+// such as Vault Transit or a cloud KMS.
+type Signer interface {
+	// KeyID returns a short, stable identifier for the active signing key.
+	KeyID() string
+	// SignPayload signs a Cosign-compatible JSON payload for the given manifest
+	// digest and repository reference. Returns the base64-encoded DER signature.
+	SignPayload(tenantID, repositoryName, manifestDigest string) (string, error)
+	// VerifyPayload verifies a base64-encoded DER signature against the payload.
+	VerifyPayload(repositoryName, manifestDigest, sigB64 string) (bool, error)
+}
+
+// envSigner holds a loaded ECDSA key pair in memory and performs sign/verify
+// operations locally. Suitable for development; production deployments should
+// use the vault or KMS backends so the private key never leaves the KMS.
+type envSigner struct {
 	privateKey *ecdsa.PrivateKey
 	publicKey  *ecdsa.PublicKey
 	keyID      string // short ID derived from public key fingerprint
@@ -24,7 +39,7 @@ type Signer struct {
 
 // NewEnv loads a Signer from base64-encoded PEM strings.
 // privateKeyB64 and publicKeyB64 must be base64 encodings of PEM-encoded ECDSA keys.
-func NewEnv(privateKeyB64, publicKeyB64 string) (*Signer, error) {
+func NewEnv(privateKeyB64, publicKeyB64 string) (Signer, error) {
 	privPEM, err := base64.StdEncoding.DecodeString(privateKeyB64)
 	if err != nil {
 		return nil, fmt.Errorf("decode private key base64: %w", err)
@@ -48,15 +63,15 @@ func NewEnv(privateKeyB64, publicKeyB64 string) (*Signer, error) {
 		return nil, fmt.Errorf("fingerprint public key: %w", err)
 	}
 
-	return &Signer{privateKey: privKey, publicKey: pubKey, keyID: keyID}, nil
+	return &envSigner{privateKey: privKey, publicKey: pubKey, keyID: keyID}, nil
 }
 
 // KeyID returns the short identifier for the active signing key.
-func (s *Signer) KeyID() string { return s.keyID }
+func (s *envSigner) KeyID() string { return s.keyID }
 
 // SignPayload signs a Cosign-compatible JSON payload for the given manifest digest and
 // repository reference. Returns the base64-encoded DER signature.
-func (s *Signer) SignPayload(tenantID, repositoryName, manifestDigest string) (string, error) {
+func (s *envSigner) SignPayload(tenantID, repositoryName, manifestDigest string) (string, error) {
 	payload, err := buildSigningPayload(repositoryName, manifestDigest)
 	if err != nil {
 		return "", fmt.Errorf("build payload: %w", err)
@@ -71,7 +86,7 @@ func (s *Signer) SignPayload(tenantID, repositoryName, manifestDigest string) (s
 }
 
 // VerifyPayload verifies a base64-encoded DER signature against the signing payload.
-func (s *Signer) VerifyPayload(repositoryName, manifestDigest, sigB64 string) (bool, error) {
+func (s *envSigner) VerifyPayload(repositoryName, manifestDigest, sigB64 string) (bool, error) {
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
 		return false, fmt.Errorf("decode signature: %w", err)

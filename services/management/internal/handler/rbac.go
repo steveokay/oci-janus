@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -31,7 +32,11 @@ func roleIndex(role string) int {
 }
 
 // hasRole returns true if any entry in roles meets or exceeds the minimum role level.
-// Used for UX-layer enforcement; the gRPC layer enforces independently.
+//
+// DEPRECATED for authorization decisions — kept only for the UX gate on
+// "does this user have ANY role at all?" checks where scope does not matter.
+// All scope-sensitive decisions MUST use hasScopedRole (PENTEST-002): a flat
+// role list allows admin-of-org-A to act as admin-of-org-B by losing scope.
 func hasRole(roles []string, minimum string) bool {
 	minIdx := roleIndex(minimum)
 	if minIdx < 0 {
@@ -45,10 +50,59 @@ func hasRole(roles []string, minimum string) bool {
 	return false
 }
 
-// getUserRoles calls GetUserPermissions on the auth gRPC client and returns the
-// caller's role names for the current tenant. Returns an empty slice on error
-// rather than propagating — callers that need enforcement must check the returned
-// bool from hasRole rather than trusting an empty list.
+// hasScopedRole returns true when at least one assignment grants the user a
+// role at or above `minimum` for the specified target scope (PENTEST-002).
+//
+// Containment rule: an org-scoped grant implicitly covers every repo within
+// that org. So an admin of "myorg" can manage "myorg/myimage". A repo-scoped
+// grant does NOT cover the parent org or sibling repos.
+//
+// Target scope:
+//   - scopeType="org",  scopeValue="myorg"           — matches org-scoped grants on "myorg"
+//   - scopeType="repo", scopeValue="myorg/myimage"   — matches that repo OR an org grant on "myorg"
+func hasScopedRole(assignments []*authv1.RoleAssignment, scopeType, scopeValue, minimum string) bool {
+	minIdx := roleIndex(minimum)
+	if minIdx < 0 {
+		return false
+	}
+	for _, a := range assignments {
+		if roleIndex(a.GetRole()) < minIdx {
+			continue
+		}
+		if a.GetScopeType() == scopeType && a.GetScopeValue() == scopeValue {
+			return true
+		}
+		// Org grant covers all repos within that org.
+		if scopeType == "repo" && a.GetScopeType() == "org" {
+			if strings.HasPrefix(scopeValue, a.GetScopeValue()+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getUserAssignments fetches the caller's full role-assignment list for the
+// current tenant. Returns nil on error so the fail-closed behaviour in
+// hasScopedRole (returns false on empty list) holds.
+func (h *Handler) getUserAssignments(r *http.Request) []*authv1.RoleAssignment {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	userID := middleware.UserIDFromContext(r.Context())
+
+	resp, err := h.auth.GetUserPermissions(r.Context(), &authv1.GetUserPermissionsRequest{
+		UserId:   userID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.Warn("GetUserPermissions failed", "err", err)
+		return nil
+	}
+	return resp.GetRoleAssignments()
+}
+
+// getUserRoles returns the flat role-name list. Retained for backwards
+// compatibility with non-scope-sensitive callers; new code should prefer
+// getUserAssignments + hasScopedRole.
 func (h *Handler) getUserRoles(r *http.Request) []string {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	userID := middleware.UserIDFromContext(r.Context())
@@ -103,12 +157,20 @@ type MemberResponse struct {
 }
 
 // handleListOrgMembers returns all role assignments for the given org scope.
+// PENTEST-006: requires at least reader on the org so non-members cannot
+// enumerate the membership list.
 func (h *Handler) handleListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	org := r.PathValue("org")
 
 	if err := validateOrgName(org); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+
+	if !hasScopedRole(h.getUserAssignments(r), "org", org, "reader") {
+		// 404 (not 403) so non-members cannot confirm the org exists.
+		writeError(w, http.StatusNotFound, "org not found")
 		return
 	}
 
@@ -144,9 +206,8 @@ func (h *Handler) handleGrantOrgMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin or owner may grant roles.
-	roles := h.getUserRoles(r)
-	if !hasRole(roles, "admin") {
+	// PENTEST-002: only admin/owner OF THIS ORG (not anywhere in the tenant) may grant.
+	if !hasScopedRole(h.getUserAssignments(r), "org", org, "admin") {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
@@ -188,16 +249,20 @@ func (h *Handler) handleRevokeOrgMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Only admin or owner may revoke roles.
-	roles := h.getUserRoles(r)
-	if !hasRole(roles, "admin") {
+	// PENTEST-002: only admin/owner OF THIS ORG may revoke.
+	if !hasScopedRole(h.getUserAssignments(r), "org", org, "admin") {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
+	// PENTEST-011: pass the expected scope so the auth service refuses to
+	// delete an assignment whose scope mismatches this URL — defends against
+	// "admin of org-A passes a different org's assignment ID".
 	if _, err := h.auth.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
-		TenantId:     tenantID,
-		AssignmentId: assignmentID,
+		TenantId:           tenantID,
+		AssignmentId:       assignmentID,
+		ExpectedScopeType:  "org",
+		ExpectedScopeValue: org,
 	}); err != nil {
 		slog.Error("RevokeRole", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke role")
@@ -221,6 +286,12 @@ func (h *Handler) handleListRepoMembers(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := validateRepoName(repoName); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// PENTEST-006: require at least reader on this repo (or its parent org).
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "reader") {
+		writeError(w, http.StatusNotFound, "repository not found")
 		return
 	}
 
@@ -254,9 +325,9 @@ func (h *Handler) handleGrantRepoMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Admin or owner may grant repo-level roles.
-	roles := h.getUserRoles(r)
-	if !hasRole(roles, "admin") {
+	// PENTEST-002: admin on this repo OR admin on the parent org may grant.
+	scopeValue := org + "/" + repoName
+	if !hasScopedRole(h.getUserAssignments(r), "repo", scopeValue, "admin") {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
@@ -277,7 +348,7 @@ func (h *Handler) handleGrantRepoMember(w http.ResponseWriter, r *http.Request) 
 		UserId:     body.UserID,
 		Role:       body.Role,
 		ScopeType:  "repo",
-		ScopeValue: org + "/" + repoName,
+		ScopeValue: scopeValue,
 		GrantedBy:  callerID,
 	}); err != nil {
 		slog.Error("GrantRole (repo)", "err", err)
@@ -302,16 +373,20 @@ func (h *Handler) handleRevokeRepoMember(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Admin or above may revoke repo-level roles.
-	roles := h.getUserRoles(r)
-	if !hasRole(roles, "admin") {
+	// PENTEST-002: admin on this repo OR admin on the parent org may revoke.
+	scopeValue := org + "/" + repoName
+	if !hasScopedRole(h.getUserAssignments(r), "repo", scopeValue, "admin") {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
+	// PENTEST-011: scope-verification fields force the auth service to refuse
+	// an assignment whose scope mismatches this URL.
 	if _, err := h.auth.RevokeRole(r.Context(), &authv1.RevokeRoleRequest{
-		TenantId:     tenantID,
-		AssignmentId: assignmentID,
+		TenantId:           tenantID,
+		AssignmentId:       assignmentID,
+		ExpectedScopeType:  "repo",
+		ExpectedScopeValue: scopeValue,
 	}); err != nil {
 		slog.Error("RevokeRole (repo)", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke role")

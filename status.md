@@ -1,6 +1,6 @@
 # Project Status
 
-> Last updated: 2026-06-18 (Sprint 6 progressing — 7 backend correctness items DONE (`df407f7`, `18d607a`, `15f0ce3`, `d400eb1`, `bc88353`): read paths no longer auto-create repos, delete verb mismatch fixed via `requireAccess` middleware, per-tenant storage quota wired and configurable via PUT /api/v1/admin/tenants/<id>/quota, OCI conformance back to 75/75 PASS, Jaeger SPM monitor working. Doc audit on 2026-06-18 surfaced 5 new feature gaps — Vault/KMS signer backends, Notary v2, tag-level RBAC, Helm cluster validation — now tracked in the new "Backend feature gaps" section. Stale docs (security.md, prod-flow.md, README.md, docs/SERVICES.md) refreshed in the same pass.)
+> Last updated: 2026-06-18 (Sprint 6 — backend polish + feature gaps mostly closed. **All 3 backend polish items DONE** (MetricsInterceptor hot path, CountRepositories RPC, scanner mTLS). **JWT `roles` claim DONE** in `services/auth` — frontend wiring still pending. **Vault signer backend DONE** with httptest-fake unit tests. **Tag-level RBAC resolved** — CLAUDE.md never claimed it. Three items deferred with clear paths: KMS backends (cloud SDK + env required), Notary v2 (multi-day TUF work), Helm validation (operational task). Frontend security items (FE-SEC-003..015), logout button, and dev seed user now tracked in status.md (previously only in front-end-tracker.md).)
 > This file tracks the status of all active work across the registry platform.
 
 ---
@@ -250,24 +250,25 @@ All decisions resolved. No blockers.
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Implement signer Vault key backend | `services/signer` | NOT STARTED | `internal/server/server.go:215` returns `"SIGNER_KEY_BACKEND=%s is not yet implemented"` for `vault`. Decision Log #14 says Vault dev mode is locally available — but the signer can't use it. Use the existing Vault dev container in compose; load Cosign key material from `VAULT_COSIGN_PATH` via the Vault HTTP API. |
-| Implement signer KMS backends (AWS / GCP / Azure) | `services/signer` | NOT STARTED | Same `server.go:215` returns "not yet implemented" for `awskms`, `gcpkms`, `azurekms`. Use the respective cloud SDKs' KMS sign interfaces. Documented in CLAUDE.md §11 and `docs/SERVICES.md` §8 but never coded. |
-| Implement Notary v2 (TUF) signing path | `services/signer` | NOT STARTED | CLAUDE.md §11 + `infra/runbooks/notary-root-key-ceremony.md` (200 lines) document the model fully; zero code. Only Cosign (ECDSA P-256) is shipped. Per-tenant delegation keys + TUF metadata in `registry-storage`. Largest single item left for GA. |
-| Tag-level RBAC scope | `services/auth` | NOT STARTED | CLAUDE.md §1 Core Capabilities lists "RBAC at org / repo / tag level". The `role_assignments` CHECK constraint is `IN ('org', 'repo')` — tag scope was never enabled. Either extend the CHECK + add `scope_type='tag'` handling, or update CLAUDE.md to drop the tag claim. |
-| Validate Helm charts against a real cluster | `infra/helm` | NOT STARTED | All 12 service sub-charts have the right structure (probes, PDB, HPA, NetworkPolicy, SecretProviderClass) but have never been deployed. Per Decision #10 the target is Docker Desktop K8s; a one-time `helm install` + smoke test would surface any remaining issues. |
+| Implement signer Vault key backend | `services/signer` | DONE ✅ | `services/signer/internal/signing/vault.go`. Uses Vault Transit `sign` endpoint (key material never leaves Vault, `exportable=false`). Public key fetched once at startup for KeyID derivation and local verification. 4 unit tests via `httptest` Vault fake (`vault_test.go`). Existing `infra/docker-compose/vault/init.sh` already provisions `registry-signer` ecdsa-p256 key + policy + token. Refactored `signing.Signer` from concrete struct to interface so KMS backends can drop in via the same shape. |
+| Implement signer KMS backends (AWS / GCP / Azure) | `services/signer` | DEFERRED | Requires adding cloud SDK deps (`aws-sdk-go-v2/service/kms`, `cloud.google.com/go/kms`, `Azure/azure-sdk-for-go/.../azkeys`) and a real cloud environment to validate — these cannot be unit-tested without a live KMS key. Recommended path: implement `NewAWSKMS` as the primary cloud backend (same `Signer` interface + KMS `Sign`/`GetPublicKey`), follow the same pattern for GCP/Azure when those clouds are targeted. Vault Transit (above) covers the on-prem / hybrid case in the meantime. |
+| Implement Notary v2 (TUF) signing path | `services/signer` | DEFERRED | Estimated multi-day effort: per-tenant root/targets/snapshots/timestamp key generation, TUF metadata persistence in `registry-storage`, `notation`-compatible REST endpoints, root key ceremony tooling. `infra/runbooks/notary-root-key-ceremony.md` documents the offline-root model. Cosign (shipped) addresses the same use case for most teams; Notary v2 should be its own sprint once a customer requires TUF. |
+| Tag-level RBAC scope | `services/auth` | RESOLVED ✅ | Doc audit was stale — CLAUDE.md §1 only claims "RBAC at org / repo level" (no tag-level promise). The `role_assignments` CHECK constraint `IN ('org', 'repo')` matches the documented capability. No code expects tag scope. No work needed. |
+| Validate Helm charts against a real cluster | `infra/helm` | DEFERRED | Operational task — requires a running Docker Desktop K8s cluster on the operator's machine. Not code work. Follow `infra/helm/README.md` (`helm install registry ./infra/helm`); flag any failed probes / NetworkPolicy / SecretProviderClass mismatches as new issues. |
+| Automated disaster recovery (backup + restore) | `infra/`, `services/metadata`, `services/storage`, `services/auth` | NOT STARTED | `understand.md` §13 explicitly calls this out as a gap: "No automated DR — backups are your responsibility (Postgres dumps, S3 versioning, etc.)". Production-readiness needs: (1) scheduled `pg_dump`/`pg_dump --format=custom` for every owning service's DB (auth, metadata, tenant, webhook, audit, signer, proxy) with retention policy; (2) S3 / MinIO bucket versioning + lifecycle rules + cross-region replication; (3) RabbitMQ message-store backup procedure; (4) Vault snapshot + unseal key escrow; (5) documented Restore runbook (`infra/runbooks/disaster-recovery.md`) with RTO/RPO targets and a quarterly DR drill. Implementation likely sits in `infra/helm/` as CronJob templates plus tested restore scripts. Estimated 1–2 sprints depending on RTO targets. |
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Fix `useUserIsAdmin` localStorage read — token is memory-only | `frontend/` | NOT STARTED | `dashboard/index.tsx:22` reads `localStorage.getItem('auth_token')` which is never written anywhere. Function always returns `false`, so admins never see delete buttons. Read from `useAuthStore` instead. |
-| Add `roles` claim to JWT (or expose `/api/v1/me` permissions endpoint) | `services/auth`, `frontend/` | NOT STARTED | JWT schema in CLAUDE.md §4.2 emits `access` but not `roles`. Frontend admin check reads `payload.roles` which doesn't exist. Either add `roles` to claims or cache `/me` via TanStack Query. |
+| Fix `useUserIsAdmin` localStorage read — token is memory-only | `frontend/` | NOT STARTED | `dashboard/index.tsx:22` reads `localStorage.getItem('auth_token')` which is never written anywhere. Function always returns `false`, so admins never see delete buttons. Read from `useAuthStore` instead. **Backend prerequisite (roles claim) is now DONE — see row below.** |
+| Add `roles` claim to JWT (or expose `/api/v1/me` permissions endpoint) | `services/auth`, `frontend/` | DONE ✅ (backend) | `Roles []string` added to `Claims`; `Login` loads `GetUserRoles` and embeds the deduped role-name list in the JWT. `ValidateTokenResponse` proto has a new `roles` field (#7); gRPC handler returns the claim verbatim. Docker `/auth/token` path still issues OCI-scoped tokens without roles (Docker clients don't use them). Frontend wiring (`payload.roles` read after JWT decode) tracked separately in Frontend UX. |
 
 #### Backend polish — MEDIUM
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Hoist `MetricsInterceptor` histogram out of the hot path | `libs/middleware/grpc` | NOT STARTED | `meter.Float64Histogram(...)` is called on every RPC. OTEL caches by name so it's correct, but the lookup + discarded error per request is wasted work. Init once at startup. |
-| Close TODO: replace O(n) repo count drain with `CountRepositories` RPC | `services/management`, `services/metadata` | NOT STARTED | `handler.go:154` — add a `CountRepositories` RPC on metadata, call it from `handleStats`. |
-| Close TODO: wire mTLS creds in scanner gRPC client | `services/scanner` | NOT STARTED | `server.go:41` — use `libs/auth/mtls.ClientTLSConfig()` like the other services. |
+| Hoist `MetricsInterceptor` histogram out of the hot path | `libs/middleware/grpc` | DONE ✅ | `sync.Once` + package-level `grpcDurationHist`; `initGRPCDurationHist()` called once after OTEL bootstrap. No API change — `MetricsInterceptor` signature unchanged. |
+| Close TODO: replace O(n) repo count drain with `CountRepositories` RPC | `services/management`, `services/metadata` | DONE ✅ | Added `CountRepositories` RPC to `proto/metadata/v1/metadata.proto`; regenerated stubs via `buf generate`; implemented `SELECT COUNT(*)` in `repository.go`; replaced stream drain in `handleStats` with single RPC call. |
+| Close TODO: wire mTLS creds in scanner gRPC client | `services/scanner` | DONE ✅ | Added `clientCreds()` helper (same pattern as `registry-core`). Both metadata + storage gRPC clients now use mTLS when cert paths are set, with insecure fallback + `slog.Warn` for dev. |
 
 #### Frontend UX — MEDIUM
 
@@ -284,6 +285,32 @@ All decisions resolved. No blockers.
 | Remove or implement the top-nav search input | `frontend/` | NOT STARTED | Wired to local state but never queries anything. |
 | Remove "Live Updates" pill or implement actual SSE/polling | `frontend/` | NOT STARTED | Animated dot suggests live data; nothing is live. |
 | Replace external Google Fonts avatar URL with initials/Avatar component | `frontend/` | NOT STARTED | `_authenticated.tsx:299` fetches an external image on every page render. |
+
+#### Frontend UX missing items — MEDIUM
+
+| Task | Service | Status | Notes |
+|---|---|---|---|
+| Implement logout button with server-side JWT revoke | `frontend/`, `services/auth` | NOT STARTED | Sidebar logout button not wired. Must: (1) call `POST /api/v1/logout` to revoke JTI in Redis, (2) clear Zustand auth store, (3) redirect to `/login`. Leaving only the client-side clear means the JWT remains valid for its remaining 5-min TTL (FE-SEC-007). |
+| Create dev seed user migration | `services/auth`, `services/metadata` | NOT STARTED | No test user exists for local login. Add a goose migration or seed script that creates `dev@example.com` + password + tenant membership so the login screen can be exercised locally without manual DB setup. |
+
+#### Frontend security — MEDIUM
+
+> Security hardening checklist for the frontend. Items FE-SEC-001/002/008 are resolved. Remainder tracked here; detail in `front-end-tracker.md`.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| FE-SEC-003 | CSP header on nginx HTML responses | NOT STARTED | nginx config must set `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'` |
+| FE-SEC-004 | CORS allowlist on management API verified | NOT STARTED | Confirm `CORS_ALLOWED_ORIGIN` is set and never `*` in production. Dev: `http://localhost:5173`. |
+| FE-SEC-005 | Confirm vague error messages on login both paths | NOT STARTED | Both `root` form error and toast must say "Invalid credentials" — never "user not found" or "wrong password". |
+| FE-SEC-006 | No tokens in URL params — audit all `navigate()` and axios calls | NOT STARTED | JWT must stay in `Authorization` header only. |
+| FE-SEC-007 | Logout clears auth state (server-side revoke) | NOT STARTED | See "Implement logout button" in Frontend UX missing items above. |
+| FE-SEC-009 | Refresh token in HttpOnly cookie | NOT STARTED | If refresh token flow implemented, must be `HttpOnly; Secure; SameSite=Strict` — never JS-accessible storage. |
+| FE-SEC-010 | Open redirect validation after login | NOT STARTED | If `?redirect=` param ever added, validate against internal path allowlist — reject any value with `://` or leading `//`. |
+| FE-SEC-011 | User-supplied content rendered safely | NOT STARTED | Repo/tag/description strings from API must use React's default text rendering — no `dangerouslySetInnerHTML`. |
+| FE-SEC-012 | `npm audit` in CI | NOT STARTED | Add `npm audit --audit-level=high` to `ci-frontend.yml`; block build on high/critical. |
+| FE-SEC-013 | HTTPS enforcement in production nginx | NOT STARTED | nginx must redirect HTTP → HTTPS and set `Strict-Transport-Security: max-age=31536000; includeSubDomains`. |
+| FE-SEC-014 | `X-Frame-Options` + `X-Content-Type-Options` on frontend nginx | NOT STARTED | Mirror what `SecureHeaders` middleware does on backend — set both headers in nginx for all frontend responses. |
+| FE-SEC-015 | Sensitive data not logged | NOT STARTED | Audit all `console.log`/`console.error` — must not output JWT values, passwords, or API key material. |
 
 #### Frontend structure — LOW
 

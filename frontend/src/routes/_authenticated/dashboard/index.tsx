@@ -13,20 +13,24 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { apiClient } from '@/lib/api/client'
+import { useAuthStore } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
 // RBAC hook — role-gating (UX layer only; server enforces authoritatively)
 // ---------------------------------------------------------------------------
+//
+// PENTEST-015 (2026-06-18): the previous implementation read the JWT from
+// `localStorage.getItem('auth_token')` — a key that's never written anywhere
+// (the token lives only in Zustand memory per FE-SEC-001). The hook always
+// returned false, so admin UI was permanently hidden. Read from the store.
+// The `roles` claim is populated by `services/auth/Login` and decoded into
+// `AuthUser.roles` on setAuth.
 
 function useUserIsAdmin(_org?: string): boolean {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
-  if (!token) return false
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return Array.isArray(payload.roles) && (payload.roles.includes('admin') || payload.roles.includes('owner'))
-  } catch {
-    return false
-  }
+  const user = useAuthStore((s) => s.user)
+  const roles = user?.roles
+  if (!Array.isArray(roles)) return false
+  return roles.includes('admin') || roles.includes('owner')
 }
 
 export const Route = createFileRoute('/_authenticated/dashboard/')({

@@ -105,6 +105,9 @@ type fakeRepo struct {
 	vulnCritical    int64
 	vulnHigh        int64
 	vulnErr         error
+	// Repository count
+	repoCount    int64
+	repoCountErr error
 }
 
 // ── metadataRepo implementation on fakeRepo ───────────────────────────────────
@@ -211,6 +214,10 @@ func (f *fakeRepo) GetScanResult(_ context.Context, _, _ string) (*metadatav1.Sc
 
 func (f *fakeRepo) GetTenantVulnerabilityCount(_ context.Context, _ string) (int64, int64, int64, error) {
 	return f.vulnTotal, f.vulnCritical, f.vulnHigh, f.vulnErr
+}
+
+func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
+	return f.repoCount, f.repoCountErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────

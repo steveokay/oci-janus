@@ -81,8 +81,22 @@ func (r *UserRepository) GrantRole(ctx context.Context, a RoleAssignment) error 
 // RevokeRole deletes the role assignment with the given ID, scoped to the tenant
 // to prevent cross-tenant revocation.
 func (r *UserRepository) RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error {
-	const q = `DELETE FROM role_assignments WHERE id = $1 AND tenant_id = $2`
-	tag, err := r.pool.Exec(ctx, q, assignmentID, tenantID)
+	return r.RevokeRoleScoped(ctx, assignmentID, tenantID, "", "")
+}
+
+// RevokeRoleScoped deletes the role assignment with the given ID only when the
+// scope matches the supplied expected values (PENTEST-011). Empty expected
+// values disable the corresponding check; passing both empty is equivalent to
+// the plain RevokeRole call. A mismatch returns ErrNotFound so callers cannot
+// distinguish "missing row" from "wrong scope" — preventing scope enumeration.
+func (r *UserRepository) RevokeRoleScoped(ctx context.Context, assignmentID, tenantID uuid.UUID, expectedScopeType, expectedScopeValue string) error {
+	const q = `
+		DELETE FROM role_assignments
+		WHERE id        = $1
+		  AND tenant_id = $2
+		  AND ($3 = '' OR scope_type  = $3)
+		  AND ($4 = '' OR scope_value = $4)`
+	tag, err := r.pool.Exec(ctx, q, assignmentID, tenantID, expectedScopeType, expectedScopeValue)
 	if err != nil {
 		return fmt.Errorf("revoke role: %w", err)
 	}

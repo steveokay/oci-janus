@@ -33,6 +33,17 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 
 # Trivy vulnerability DB cache — mount as a volume in production
 # so the DB persists across container restarts and doesn't re-download on every start.
+#
+# PENTEST-019: this cache is writable by the scanner process. A subverted
+# Trivy binary could write malicious DB files here. Mitigations in place:
+#   1. The Trivy binary itself is SHA256-checksum-verified at scanner startup
+#      (SCANNER_PLUGIN_CHECKSUM env var — SEC-003).
+#   2. The scanner runs as non-root (USER 65532:65532 below).
+#   3. Container filesystem is read-only outside /trivy-cache and /tmp.
+# Operators wanting hard cache integrity should mount /trivy-cache as a
+# tmpfs-backed overlay so each pod sees a fresh cache, OR mount the upstream
+# Trivy DB read-only and disable in-place DB updates via TRIVY_NO_PROGRESS +
+# pre-baked cache layers. See infra/runbooks/scanner-cache-hardening.md.
 RUN mkdir -p /trivy-cache \
  && groupadd -g 65532 nonroot \
  && useradd -u 65532 -g nonroot -s /sbin/nologin -M nonroot \
