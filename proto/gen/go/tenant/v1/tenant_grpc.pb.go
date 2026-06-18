@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion8
 const (
 	TenantService_CreateTenant_FullMethodName       = "/registry.tenant.v1.TenantService/CreateTenant"
 	TenantService_GetTenant_FullMethodName          = "/registry.tenant.v1.TenantService/GetTenant"
+	TenantService_ListTenants_FullMethodName        = "/registry.tenant.v1.TenantService/ListTenants"
 	TenantService_DeleteTenant_FullMethodName       = "/registry.tenant.v1.TenantService/DeleteTenant"
 	TenantService_ResolveDomain_FullMethodName      = "/registry.tenant.v1.TenantService/ResolveDomain"
 	TenantService_RegisterDomain_FullMethodName     = "/registry.tenant.v1.TenantService/RegisterDomain"
@@ -35,6 +36,7 @@ const (
 type TenantServiceClient interface {
 	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
 	GetTenant(ctx context.Context, in *GetTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
+	ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error)
 	DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ResolveDomain(ctx context.Context, in *ResolveDomainRequest, opts ...grpc.CallOption) (*ResolveDomainResponse, error)
 	RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error)
@@ -64,6 +66,16 @@ func (c *tenantServiceClient) GetTenant(ctx context.Context, in *GetTenantReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tenant)
 	err := c.cc.Invoke(ctx, TenantService_GetTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantsResponse)
+	err := c.cc.Invoke(ctx, TenantService_ListTenants_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +138,7 @@ func (c *tenantServiceClient) UpdateTenantPolicy(ctx context.Context, in *Update
 type TenantServiceServer interface {
 	CreateTenant(context.Context, *CreateTenantRequest) (*Tenant, error)
 	GetTenant(context.Context, *GetTenantRequest) (*Tenant, error)
+	ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error)
 	DeleteTenant(context.Context, *DeleteTenantRequest) (*emptypb.Empty, error)
 	ResolveDomain(context.Context, *ResolveDomainRequest) (*ResolveDomainResponse, error)
 	RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error)
@@ -142,6 +155,9 @@ func (UnimplementedTenantServiceServer) CreateTenant(context.Context, *CreateTen
 }
 func (UnimplementedTenantServiceServer) GetTenant(context.Context, *GetTenantRequest) (*Tenant, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenants not implemented")
 }
 func (UnimplementedTenantServiceServer) DeleteTenant(context.Context, *DeleteTenantRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteTenant not implemented")
@@ -202,6 +218,24 @@ func _TenantService_GetTenant_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantServiceServer).GetTenant(ctx, req.(*GetTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_ListTenants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).ListTenants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_ListTenants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).ListTenants(ctx, req.(*ListTenantsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -310,6 +344,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenant",
 			Handler:    _TenantService_GetTenant_Handler,
+		},
+		{
+			MethodName: "ListTenants",
+			Handler:    _TenantService_ListTenants_Handler,
 		},
 		{
 			MethodName: "DeleteTenant",

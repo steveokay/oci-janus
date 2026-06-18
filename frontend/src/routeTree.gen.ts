@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedDashboardRepoNameRouteImport } from './routes/_authenticated/dashboard/$repoName'
+import { Route as AuthenticatedAdminTenantsRouteImport } from './routes/_authenticated/admin/tenants'
 import { Route as AuthenticatedDashboardRepoNameIndexRouteImport } from './routes/_authenticated/dashboard/$repoName/index'
 import { Route as AuthenticatedDashboardRepoNameScanRouteImport } from './routes/_authenticated/dashboard/$repoName/scan'
 import { Route as AuthenticatedDashboardRepoNameBuildsRouteImport } from './routes/_authenticated/dashboard/$repoName/builds'
@@ -50,6 +51,12 @@ const AuthenticatedDashboardRepoNameRoute =
     path: '/$repoName',
     getParentRoute: () => AuthenticatedDashboardRoute,
   } as any)
+const AuthenticatedAdminTenantsRoute =
+  AuthenticatedAdminTenantsRouteImport.update({
+    id: '/admin/tenants',
+    path: '/admin/tenants',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedDashboardRepoNameIndexRoute =
   AuthenticatedDashboardRepoNameIndexRouteImport.update({
     id: '/',
@@ -73,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRouteWithChildren
+  '/admin/tenants': typeof AuthenticatedAdminTenantsRoute
   '/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
@@ -82,6 +90,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/admin/tenants': typeof AuthenticatedAdminTenantsRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
   '/dashboard/$repoName/scan': typeof AuthenticatedDashboardRepoNameScanRoute
@@ -93,6 +102,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRouteWithChildren
+  '/_authenticated/admin/tenants': typeof AuthenticatedAdminTenantsRoute
   '/_authenticated/dashboard/$repoName': typeof AuthenticatedDashboardRepoNameRouteWithChildren
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/dashboard/$repoName/builds': typeof AuthenticatedDashboardRepoNameBuildsRoute
@@ -105,6 +115,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/admin/tenants'
     | '/dashboard/$repoName'
     | '/dashboard/'
     | '/dashboard/$repoName/builds'
@@ -114,6 +125,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/admin/tenants'
     | '/dashboard'
     | '/dashboard/$repoName/builds'
     | '/dashboard/$repoName/scan'
@@ -124,6 +136,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/admin/tenants'
     | '/_authenticated/dashboard/$repoName'
     | '/_authenticated/dashboard/'
     | '/_authenticated/dashboard/$repoName/builds'
@@ -180,6 +193,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/dashboard/$repoName'
       preLoaderRoute: typeof AuthenticatedDashboardRepoNameRouteImport
       parentRoute: typeof AuthenticatedDashboardRoute
+    }
+    '/_authenticated/admin/tenants': {
+      id: '/_authenticated/admin/tenants'
+      path: '/admin/tenants'
+      fullPath: '/admin/tenants'
+      preLoaderRoute: typeof AuthenticatedAdminTenantsRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/dashboard/$repoName/': {
       id: '/_authenticated/dashboard/$repoName/'
@@ -245,10 +265,12 @@ const AuthenticatedDashboardRouteWithChildren =
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRouteWithChildren
+  AuthenticatedAdminTenantsRoute: typeof AuthenticatedAdminTenantsRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRouteWithChildren,
+  AuthenticatedAdminTenantsRoute: AuthenticatedAdminTenantsRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

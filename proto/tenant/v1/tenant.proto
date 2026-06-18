@@ -10,6 +10,7 @@ import "google/protobuf/timestamp.proto";
 service TenantService {
   rpc CreateTenant(CreateTenantRequest) returns (Tenant);
   rpc GetTenant(GetTenantRequest) returns (Tenant);
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
   rpc DeleteTenant(DeleteTenantRequest) returns (google.protobuf.Empty);
   rpc ResolveDomain(ResolveDomainRequest) returns (ResolveDomainResponse);
   rpc RegisterDomain(RegisterDomainRequest) returns (RegisterDomainResponse);
@@ -41,6 +42,17 @@ message CreateTenantRequest {
 }
 message GetTenantRequest    { string tenant_id = 1; }
 message DeleteTenantRequest { string tenant_id = 1; }
+
+// ListTenants pagination — page_size clamped to [1, 200] (default 50);
+// page_token is opaque to clients (created_at|id cursor in the implementation).
+message ListTenantsRequest {
+  int32  page_size  = 1;
+  string page_token = 2;
+}
+message ListTenantsResponse {
+  repeated Tenant tenants = 1;
+  string next_page_token  = 2;
+}
 
 message ResolveDomainRequest  { string domain = 1; }
 message ResolveDomainResponse { string tenant_id = 1; bool found = 2; }

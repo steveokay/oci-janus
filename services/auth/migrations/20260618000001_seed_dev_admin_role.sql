@@ -33,10 +33,32 @@ FROM roles
 WHERE name = 'admin'
 ON CONFLICT (user_id, role_id, scope_type, scope_value) DO NOTHING;
 
+-- Platform-admin marker grant — required to access /api/v1/admin/* routes
+-- (super-admin tenant CRUD + per-tenant quota). The literal "*" scope_value
+-- is reserved for platform-admin and can never collide with a real org name
+-- because validateOrgName rejects "*" (PENTEST-024). Production deployments
+-- should replace this seed with an operator-supplied bootstrap script that
+-- creates the first super-admin from credentials supplied at deploy time.
+INSERT INTO role_assignments (id, tenant_id, user_id, role_id, scope_type, scope_value, granted_by)
+SELECT
+    '00000000-0000-0000-0000-000000000021'::uuid,
+    '98dbe36b-ef28-4903-b25c-bff1b2921c9e'::uuid,
+    '00000000-0000-0000-0000-000000000002'::uuid,
+    id,
+    'org',
+    '*',
+    NULL
+FROM roles
+WHERE name = 'admin'
+ON CONFLICT (user_id, role_id, scope_type, scope_value) DO NOTHING;
+
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 DELETE FROM role_assignments
-WHERE id = '00000000-0000-0000-0000-000000000020';
+WHERE id IN (
+    '00000000-0000-0000-0000-000000000020',
+    '00000000-0000-0000-0000-000000000021'
+);
 -- +goose StatementEnd

@@ -24,6 +24,7 @@ const (
 	RoutingGCRunCompleted       = "gc.run.completed"
 	RoutingImageSigned          = "image.signed"
 	RoutingTenantCreated        = "tenant.created"
+	RoutingTenantDeleted        = "tenant.deleted"
 	RoutingTenantDomainVerified = "tenant.domain.verified"
 	RoutingStoreQueued          = "store.queued" // proxy background store
 	// RBAC audit events — consumed by registry-audit to record membership changes.

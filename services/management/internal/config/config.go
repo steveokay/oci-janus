@@ -19,6 +19,11 @@ type Config struct {
 	AuthGRPCAddr     string `mapstructure:"AUTH_GRPC_ADDR"`
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	AuditGRPCAddr    string `mapstructure:"AUDIT_GRPC_ADDR"`
+	// TenantGRPCAddr is optional — only required when the super-admin tenant
+	// CRUD API (`/api/v1/admin/tenants`) is enabled. Empty disables those
+	// routes (they return 404 "route disabled") in the same pattern as
+	// PLATFORM_ADMIN_TENANT_ID.
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
 
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`

@@ -642,6 +642,10 @@ services:
       AUTH_GRPC_ADDR: registry-auth:50051
       METADATA_GRPC_ADDR: registry-metadata:50051
       AUDIT_GRPC_ADDR: registry-audit:50051
+      # TENANT_GRPC_ADDR enables the super-admin /api/v1/admin/tenants routes
+      # (create/list/delete tenants). Empty disables them with 404. Callers
+      # additionally need the platform-admin marker role (admin / org / *).
+      TENANT_GRPC_ADDR: registry-tenant:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
@@ -669,6 +673,8 @@ services:
       registry-metadata:
         condition: service_healthy
       registry-audit:
+        condition: service_healthy
+      registry-tenant:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy

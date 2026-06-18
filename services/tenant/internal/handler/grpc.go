@@ -4,11 +4,14 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -85,6 +88,46 @@ func (h *GRPCHandler) GetTenant(ctx context.Context, req *tenantv1.GetTenantRequ
 		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
 	}
 	return tenantToProto(rec), nil
+}
+
+// ListTenants returns a page of tenants ordered by created_at DESC.
+// The page_token is an opaque base64-url-encoded cursor — clients must not
+// inspect or construct it; the server decodes it back to (created_at, id).
+func (h *GRPCHandler) ListTenants(ctx context.Context, req *tenantv1.ListTenantsRequest) (*tenantv1.ListTenantsResponse, error) {
+	afterCreated, afterID, err := decodePageToken(req.GetPageToken())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid page_token: %v", err)
+	}
+
+	recs, err := h.repo.ListTenants(ctx, req.GetPageSize(), afterCreated, afterID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list tenants")
+	}
+
+	tenants := make([]*tenantv1.Tenant, 0, len(recs))
+	for i := range recs {
+		tenants = append(tenants, tenantToProto(&recs[i]))
+	}
+
+	// Only emit next_page_token when this page is full — a short page implies
+	// the caller has read every row, so no further pagination is needed.
+	var nextToken string
+	pageSize := req.GetPageSize()
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	if int32(len(recs)) == pageSize {
+		last := recs[len(recs)-1]
+		nextToken = encodePageToken(last.CreatedAt, last.ID)
+	}
+
+	return &tenantv1.ListTenantsResponse{
+		Tenants:       tenants,
+		NextPageToken: nextToken,
+	}, nil
 }
 
 // DeleteTenant removes a tenant.
@@ -235,4 +278,36 @@ func generateToken() (string, error) {
 		return "", fmt.Errorf("rand.Read: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// encodePageToken returns an opaque cursor encoding (created_at, id) so clients
+// cannot construct one by hand. Format: base64url("<RFC3339Nano>|<uuid>").
+func encodePageToken(createdAt time.Time, id uuid.UUID) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id.String()
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodePageToken reverses encodePageToken. An empty input returns a zero
+// time + zero UUID so the repository emits the first page.
+func decodePageToken(token string) (time.Time, uuid.UUID, error) {
+	if token == "" {
+		return time.Time{}, uuid.Nil, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return time.Time{}, uuid.Nil, fmt.Errorf("base64: %w", err)
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, uuid.Nil, fmt.Errorf("malformed cursor")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, uuid.Nil, fmt.Errorf("time: %w", err)
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil {
+		return time.Time{}, uuid.Nil, fmt.Errorf("uuid: %w", err)
+	}
+	return createdAt, id, nil
 }
