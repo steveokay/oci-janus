@@ -163,7 +163,7 @@ func TestStatBlob_found_returnsInfo(t *testing.T) {
 	}
 	h := newStorageHandler(&fakeDriver{statInfo: info})
 
-	resp, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: info.Key})
+	resp, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: info.Key, TenantId: "t1"})
 	requireNoErr(t, err)
 	if resp.Key != info.Key {
 		t.Errorf("Key: got %q, want %q", resp.Key, info.Key)
@@ -188,7 +188,7 @@ func TestStatBlob_found_returnsInfo(t *testing.T) {
 func TestStatBlob_notFound_returnsNotFound(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{statErr: os.ErrNotExist})
 
-	_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/missing"})
+	_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/t1/missing", TenantId: "t1"})
 	requireCode(t, err, codes.NotFound)
 }
 
@@ -197,7 +197,7 @@ func TestStatBlob_notFound_returnsNotFound(t *testing.T) {
 func TestStatBlob_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{statErr: errors.New("backend unavailable")})
 
-	_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/somekey"})
+	_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/t1/somekey", TenantId: "t1"})
 	requireCode(t, err, codes.Internal)
 }
 
@@ -207,7 +207,7 @@ func TestStatBlob_zeroBytesBlob_returnsZeroSize(t *testing.T) {
 	info := driver.BlobInfo{Key: "blobs/empty", Size: 0, ContentType: "application/octet-stream", LastModified: time.Now()}
 	h := newStorageHandler(&fakeDriver{statInfo: info})
 
-	resp, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/empty"})
+	resp, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/t1/empty", TenantId: "t1"})
 	requireNoErr(t, err)
 	if resp.Size != 0 {
 		t.Errorf("Size: got %d, want 0", resp.Size)
@@ -220,7 +220,7 @@ func TestStatBlob_zeroBytesBlob_returnsZeroSize(t *testing.T) {
 func TestDeleteBlob_success_returnsEmptyResponse(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{})
 
-	resp, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/t1/sha256/ab/abc"})
+	resp, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/t1/sha256/ab/abc", TenantId: "t1"})
 	requireNoErr(t, err)
 	if resp == nil {
 		t.Error("expected non-nil response")
@@ -232,7 +232,7 @@ func TestDeleteBlob_success_returnsEmptyResponse(t *testing.T) {
 func TestDeleteBlob_notFound_returnsNotFound(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{deleteErr: os.ErrNotExist})
 
-	_, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/gone"})
+	_, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/t1/gone", TenantId: "t1"})
 	requireCode(t, err, codes.NotFound)
 }
 
@@ -241,7 +241,7 @@ func TestDeleteBlob_notFound_returnsNotFound(t *testing.T) {
 func TestDeleteBlob_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{deleteErr: errors.New("s3 error")})
 
-	_, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/some"})
+	_, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/t1/some", TenantId: "t1"})
 	requireCode(t, err, codes.Internal)
 }
 
@@ -251,7 +251,7 @@ func TestDeleteBlob_driverError_returnsInternal(t *testing.T) {
 func TestBlobExists_exists_returnsTrue(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{existsResult: true})
 
-	resp, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/present"})
+	resp, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/t1/present", TenantId: "t1"})
 	requireNoErr(t, err)
 	if !resp.Exists {
 		t.Error("expected Exists=true")
@@ -263,7 +263,7 @@ func TestBlobExists_exists_returnsTrue(t *testing.T) {
 func TestBlobExists_missing_returnsFalse(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{existsResult: false})
 
-	resp, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/absent"})
+	resp, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/t1/absent", TenantId: "t1"})
 	requireNoErr(t, err)
 	if resp.Exists {
 		t.Error("expected Exists=false")
@@ -275,7 +275,7 @@ func TestBlobExists_missing_returnsFalse(t *testing.T) {
 func TestBlobExists_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{existsErr: errors.New("network error")})
 
-	_, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/key"})
+	_, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/t1/key", TenantId: "t1"})
 	requireCode(t, err, codes.Internal)
 }
 
@@ -286,7 +286,7 @@ func TestBlobExists_driverError_returnsInternal(t *testing.T) {
 func TestInitiateMultipart_success_returnsUploadID(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{uploadID: "upload-xyz"})
 
-	resp, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/large"})
+	resp, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/t1/large", TenantId: "t1"})
 	requireNoErr(t, err)
 	if resp.UploadId != "upload-xyz" {
 		t.Errorf("UploadId: got %q, want upload-xyz", resp.UploadId)
@@ -298,7 +298,7 @@ func TestInitiateMultipart_success_returnsUploadID(t *testing.T) {
 func TestInitiateMultipart_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{initiateErr: errors.New("s3 create multipart failed")})
 
-	_, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/large"})
+	_, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/t1/large", TenantId: "t1"})
 	requireCode(t, err, codes.Internal)
 }
 
@@ -307,7 +307,7 @@ func TestInitiateMultipart_driverError_returnsInternal(t *testing.T) {
 func TestInitiateMultipart_notFound_returnsNotFound(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{initiateErr: os.ErrNotExist})
 
-	_, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/large"})
+	_, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/t1/large", TenantId: "t1"})
 	requireCode(t, err, codes.NotFound)
 }
 
@@ -319,7 +319,8 @@ func TestCompleteMultipart_success_returnsKey(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{})
 
 	resp, err := h.CompleteMultipart(context.Background(), &storagev1.CompleteMultipartRequest{
-		Key:      "blobs/large",
+		Key:      "blobs/t1/large",
+		TenantId: "t1",
 		UploadId: "upload-xyz",
 		Parts: []*storagev1.CompletedPart{
 			{PartNum: 1, Etag: "etag-1"},
@@ -327,8 +328,8 @@ func TestCompleteMultipart_success_returnsKey(t *testing.T) {
 		},
 	})
 	requireNoErr(t, err)
-	if resp.Key != "blobs/large" {
-		t.Errorf("Key: got %q, want blobs/large", resp.Key)
+	if resp.Key != "blobs/t1/large" {
+		t.Errorf("Key: got %q, want blobs/t1/large", resp.Key)
 	}
 }
 
@@ -338,7 +339,8 @@ func TestCompleteMultipart_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{completeErr: errors.New("parts mismatch")})
 
 	_, err := h.CompleteMultipart(context.Background(), &storagev1.CompleteMultipartRequest{
-		Key:      "blobs/large",
+		Key:      "blobs/t1/large",
+		TenantId: "t1",
 		UploadId: "upload-xyz",
 	})
 	requireCode(t, err, codes.Internal)
@@ -351,13 +353,14 @@ func TestCompleteMultipart_noParts_stillSucceeds(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{})
 
 	resp, err := h.CompleteMultipart(context.Background(), &storagev1.CompleteMultipartRequest{
-		Key:      "blobs/empty-parts",
+		Key:      "blobs/t1/empty-parts",
+		TenantId: "t1",
 		UploadId: "upload-abc",
 		Parts:    nil,
 	})
 	requireNoErr(t, err)
-	if resp.Key != "blobs/empty-parts" {
-		t.Errorf("Key: got %q, want blobs/empty-parts", resp.Key)
+	if resp.Key != "blobs/t1/empty-parts" {
+		t.Errorf("Key: got %q, want blobs/t1/empty-parts", resp.Key)
 	}
 }
 
@@ -370,7 +373,8 @@ func TestCompleteMultipart_partsConvertedCorrectly(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{})
 
 	_, err := h.CompleteMultipart(context.Background(), &storagev1.CompleteMultipartRequest{
-		Key:      "blobs/multi",
+		Key:      "blobs/t1/multi",
+		TenantId: "t1",
 		UploadId: "upload-multi",
 		Parts: []*storagev1.CompletedPart{
 			{PartNum: 1, Etag: "e1"},
@@ -388,7 +392,8 @@ func TestAbortMultipart_success_returnsEmpty(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{})
 
 	resp, err := h.AbortMultipart(context.Background(), &storagev1.AbortMultipartRequest{
-		Key:      "blobs/large",
+		Key:      "blobs/t1/large",
+		TenantId: "t1",
 		UploadId: "upload-xyz",
 	})
 	requireNoErr(t, err)
@@ -403,7 +408,8 @@ func TestAbortMultipart_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{abortErr: errors.New("already completed")})
 
 	_, err := h.AbortMultipart(context.Background(), &storagev1.AbortMultipartRequest{
-		Key:      "blobs/large",
+		Key:      "blobs/t1/large",
+		TenantId: "t1",
 		UploadId: "upload-xyz",
 	})
 	requireCode(t, err, codes.Internal)
@@ -415,7 +421,8 @@ func TestAbortMultipart_notFound_returnsNotFound(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{abortErr: os.ErrNotExist})
 
 	_, err := h.AbortMultipart(context.Background(), &storagev1.AbortMultipartRequest{
-		Key:      "blobs/large",
+		Key:      "blobs/t1/large",
+		TenantId: "t1",
 		UploadId: "upload-gone",
 	})
 	requireCode(t, err, codes.NotFound)
@@ -441,6 +448,60 @@ func TestMapErrCtx_osErrNotExist_returnsNotFoundCode(t *testing.T) {
 func TestMapErrCtx_wrappedOsErrNotExist_returnsNotFoundCode(t *testing.T) {
 	wrapped := &os.PathError{Op: "open", Path: "blobs/missing", Err: os.ErrNotExist}
 	requireCode(t, mapErrCtx(context.Background(), "op", wrapped), codes.NotFound)
+}
+
+// TestStorageHandler_crossTenantAccessBlocked — PENTEST-026: a caller in
+// tenant "t1" must NOT be able to read/write/delete keys under tenant "t2".
+// The handler rejects with PermissionDenied before the driver is touched.
+// This is the defining test for the cross-tenant containment guarantee that
+// SEC §9 (multi-tenant isolation) relies on at the storage layer.
+func TestStorageHandler_crossTenantAccessBlocked(t *testing.T) {
+	h := newStorageHandler(&fakeDriver{statInfo: driver.BlobInfo{Size: 1}})
+
+	// Caller claims t1, but the key is under t2.
+	cases := []struct {
+		name string
+		exec func() error
+	}{
+		{"StatBlob", func() error {
+			_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/t2/sha256/aa/aaa", TenantId: "t1"})
+			return err
+		}},
+		{"DeleteBlob", func() error {
+			_, err := h.DeleteBlob(context.Background(), &storagev1.DeleteBlobRequest{Key: "blobs/t2/sha256/aa/aaa", TenantId: "t1"})
+			return err
+		}},
+		{"BlobExists", func() error {
+			_, err := h.BlobExists(context.Background(), &storagev1.BlobExistsRequest{Key: "blobs/t2/sha256/aa/aaa", TenantId: "t1"})
+			return err
+		}},
+		{"InitiateMultipart", func() error {
+			_, err := h.InitiateMultipart(context.Background(), &storagev1.InitiateMultipartRequest{Key: "blobs/t2/upload-x", TenantId: "t1"})
+			return err
+		}},
+		{"CompleteMultipart", func() error {
+			_, err := h.CompleteMultipart(context.Background(), &storagev1.CompleteMultipartRequest{Key: "blobs/t2/upload-x", TenantId: "t1", UploadId: "u"})
+			return err
+		}},
+		{"AbortMultipart", func() error {
+			_, err := h.AbortMultipart(context.Background(), &storagev1.AbortMultipartRequest{Key: "blobs/t2/upload-x", TenantId: "t1", UploadId: "u"})
+			return err
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.exec()
+			requireCode(t, err, codes.PermissionDenied)
+		})
+	}
+}
+
+// TestStorageHandler_emptyTenantIDRejected — PENTEST-026: the tenant_id field
+// is mandatory; an empty value must not bypass the prefix check by accident.
+func TestStorageHandler_emptyTenantIDRejected(t *testing.T) {
+	h := newStorageHandler(&fakeDriver{})
+	_, err := h.StatBlob(context.Background(), &storagev1.StatBlobRequest{Key: "blobs/t1/sha256/aa/aaa", TenantId: ""})
+	requireCode(t, err, codes.InvalidArgument)
 }
 
 // TestMapErrCtx_unknownError_returnsGenericInternalMessage — PENTEST-021:
@@ -586,6 +647,7 @@ func TestPutBlob_success_closesWithResponse(t *testing.T) {
 				Data: &storagev1.PutBlobRequest_Meta{
 					Meta: &storagev1.PutBlobMeta{
 						Key:         "blobs/t1/sha256/ab/abc",
+						TenantId:    "t1",
 						Size:        5,
 						ContentType: "application/octet-stream",
 					},
@@ -640,7 +702,7 @@ func TestPutBlob_driverError_returnsInternal(t *testing.T) {
 		messages: []*storagev1.PutBlobRequest{
 			{
 				Data: &storagev1.PutBlobRequest_Meta{
-					Meta: &storagev1.PutBlobMeta{Key: "blobs/key", Size: 3},
+					Meta: &storagev1.PutBlobMeta{Key: "blobs/t1/key", TenantId: "t1", Size: 3},
 				},
 			},
 			{Data: &storagev1.PutBlobRequest_Chunk{Chunk: []byte("bye")}},
@@ -672,7 +734,7 @@ func TestGetBlob_success_sendsChunks(t *testing.T) {
 	})
 	stream := &fakeGetBlobStream{}
 
-	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/some"}, stream)
+	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/t1/some", TenantId: "t1"}, stream)
 	requireNoErr(t, err)
 	if len(stream.sent) == 0 {
 		t.Error("expected at least one chunk sent")
@@ -693,7 +755,7 @@ func TestGetBlob_notFound_returnsNotFound(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{getErr: os.ErrNotExist})
 	stream := &fakeGetBlobStream{}
 
-	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/missing"}, stream)
+	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/t1/missing", TenantId: "t1"}, stream)
 	requireCode(t, err, codes.NotFound)
 }
 
@@ -703,7 +765,7 @@ func TestGetBlob_driverError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{getErr: errors.New("s3 error")})
 	stream := &fakeGetBlobStream{}
 
-	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/some"}, stream)
+	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/t1/some", TenantId: "t1"}, stream)
 	requireCode(t, err, codes.Internal)
 }
 
@@ -716,7 +778,7 @@ func TestGetBlob_sendError_propagates(t *testing.T) {
 	})
 	stream := &fakeGetBlobStream{sendErr: errors.New("client gone")}
 
-	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/some"}, stream)
+	err := h.GetBlob(&storagev1.GetBlobRequest{Key: "blobs/t1/some", TenantId: "t1"}, stream)
 	if err == nil {
 		t.Fatal("expected error from send failure, got nil")
 	}
@@ -734,26 +796,27 @@ func TestListBlobs_success_sendsAllKeys(t *testing.T) {
 	})
 	stream := &fakeListBlobsStream{}
 
-	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/t1/"}, stream)
+	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/t1/", TenantId: "t1"}, stream)
 	requireNoErr(t, err)
 	if len(stream.sent) != 2 {
 		t.Errorf("sent %d blobs, want 2", len(stream.sent))
 	}
 }
 
-// TestListBlobs_defaultPrefix_usedWhenEmpty verifies that an empty prefix is
-// replaced with "blobs/" before forwarding to the driver.
-func TestListBlobs_defaultPrefix_usedWhenEmpty(t *testing.T) {
+// TestListBlobs_emptyPrefix_rejected — PENTEST-026: an empty prefix used to
+// default to "blobs/" which would have leaked every tenant's keys. Empty
+// prefix now returns InvalidArgument.
+func TestListBlobs_emptyPrefix_rejected(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{
 		listKeys: []string{"blobs/t1/sha256/cc/ccc"},
 		statInfo: driver.BlobInfo{Size: 1024, LastModified: time.Now()},
 	})
 	stream := &fakeListBlobsStream{}
 
-	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: ""}, stream)
-	requireNoErr(t, err)
-	if len(stream.sent) != 1 {
-		t.Errorf("sent %d blobs, want 1", len(stream.sent))
+	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "", TenantId: "t1"}, stream)
+	requireCode(t, err, codes.InvalidArgument)
+	if len(stream.sent) != 0 {
+		t.Errorf("sent %d blobs, want 0 (request must be rejected before listing)", len(stream.sent))
 	}
 }
 
@@ -763,7 +826,7 @@ func TestListBlobs_listError_returnsInternal(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{listErr: errors.New("listing failed")})
 	stream := &fakeListBlobsStream{}
 
-	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/"}, stream)
+	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/t1/", TenantId: "t1"}, stream)
 	requireCode(t, err, codes.Internal)
 }
 
@@ -773,7 +836,7 @@ func TestListBlobs_empty_sendsNothing(t *testing.T) {
 	h := newStorageHandler(&fakeDriver{listKeys: nil})
 	stream := &fakeListBlobsStream{}
 
-	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/"}, stream)
+	err := h.ListBlobs(&storagev1.ListBlobsRequest{Prefix: "blobs/t1/", TenantId: "t1"}, stream)
 	requireNoErr(t, err)
 	if len(stream.sent) != 0 {
 		t.Errorf("expected 0 sent, got %d", len(stream.sent))
@@ -792,7 +855,8 @@ func TestUploadPart_success_closesWithEtag(t *testing.T) {
 			{
 				Data: &storagev1.UploadPartRequest_Meta{
 					Meta: &storagev1.UploadPartMeta{
-						Key:      "blobs/large",
+						Key:      "blobs/t1/large",
+						TenantId: "t1",
 						UploadId: "upload-xyz",
 						PartNum:  1,
 						Size:     5,
@@ -846,7 +910,7 @@ func TestUploadPart_driverError_returnsInternal(t *testing.T) {
 		messages: []*storagev1.UploadPartRequest{
 			{
 				Data: &storagev1.UploadPartRequest_Meta{
-					Meta: &storagev1.UploadPartMeta{Key: "blobs/large", UploadId: "upload-xyz", PartNum: 1, Size: 3},
+					Meta: &storagev1.UploadPartMeta{Key: "blobs/t1/large", TenantId: "t1", UploadId: "upload-xyz", PartNum: 1, Size: 3},
 				},
 			},
 			{Data: &storagev1.UploadPartRequest_Chunk{Chunk: []byte("bye")}},
