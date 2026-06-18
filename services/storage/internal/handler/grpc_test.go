@@ -421,32 +421,40 @@ func TestAbortMultipart_notFound_returnsNotFound(t *testing.T) {
 	requireCode(t, err, codes.NotFound)
 }
 
-// ── mapErr (internal helper) ──────────────────────────────────────────────────
+// ── mapErrCtx (internal helper) ───────────────────────────────────────────────
 
-// TestMapErr_nil_returnsNil verifies that mapErr passes through nil unchanged.
-func TestMapErr_nil_returnsNil(t *testing.T) {
-	if mapErr(nil) != nil {
-		t.Error("expected mapErr(nil) == nil")
+// TestMapErrCtx_nil_returnsNil verifies that mapErrCtx passes through nil unchanged.
+func TestMapErrCtx_nil_returnsNil(t *testing.T) {
+	if mapErrCtx(context.Background(), "op", nil) != nil {
+		t.Error("expected mapErrCtx(nil) == nil")
 	}
 }
 
-// TestMapErr_osErrNotExist_returnsNotFoundCode verifies that os.ErrNotExist
+// TestMapErrCtx_osErrNotExist_returnsNotFoundCode verifies that os.ErrNotExist
 // maps to codes.NotFound.
-func TestMapErr_osErrNotExist_returnsNotFoundCode(t *testing.T) {
-	requireCode(t, mapErr(os.ErrNotExist), codes.NotFound)
+func TestMapErrCtx_osErrNotExist_returnsNotFoundCode(t *testing.T) {
+	requireCode(t, mapErrCtx(context.Background(), "op", os.ErrNotExist), codes.NotFound)
 }
 
-// TestMapErr_wrappedOsErrNotExist_returnsNotFoundCode verifies that wrapped
+// TestMapErrCtx_wrappedOsErrNotExist_returnsNotFoundCode verifies that wrapped
 // os.ErrNotExist (as returned by stdlib functions) also maps to codes.NotFound.
-func TestMapErr_wrappedOsErrNotExist_returnsNotFoundCode(t *testing.T) {
+func TestMapErrCtx_wrappedOsErrNotExist_returnsNotFoundCode(t *testing.T) {
 	wrapped := &os.PathError{Op: "open", Path: "blobs/missing", Err: os.ErrNotExist}
-	requireCode(t, mapErr(wrapped), codes.NotFound)
+	requireCode(t, mapErrCtx(context.Background(), "op", wrapped), codes.NotFound)
 }
 
-// TestMapErr_unknownError_returnsInternalCode verifies that any non-not-found
-// error maps to codes.Internal.
-func TestMapErr_unknownError_returnsInternalCode(t *testing.T) {
-	requireCode(t, mapErr(errors.New("random")), codes.Internal)
+// TestMapErrCtx_unknownError_returnsGenericInternalMessage — PENTEST-021:
+// arbitrary driver errors must produce the generic "internal error" message,
+// not the raw driver text. The full error is still logged server-side.
+func TestMapErrCtx_unknownError_returnsGenericInternalMessage(t *testing.T) {
+	leaky := errors.New("AccessDenied: arn:aws:s3:::secret-bucket/path/key")
+	got := mapErrCtx(context.Background(), "op", leaky)
+	requireCode(t, got, codes.Internal)
+	if st, _ := status.FromError(got); st != nil {
+		if st.Message() != "internal error" {
+			t.Errorf("leaked driver message on wire: got %q, want %q (PENTEST-021)", st.Message(), "internal error")
+		}
+	}
 }
 
 // ── Streaming stream fakes ────────────────────────────────────────────────────

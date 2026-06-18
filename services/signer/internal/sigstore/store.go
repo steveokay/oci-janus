@@ -75,22 +75,28 @@ func NewWithDB(repo sigstoreRepo) *Store {
 // Add persists a signature record.
 //
 // The record is always written to the in-memory cache so that the same process
-// can find it immediately without a DB round-trip. When a repo is configured the
-// record is also upserted to PostgreSQL (excluding SigB64 — SEC-015). A DB
+// can find it immediately without a DB round-trip. When a repo is configured
+// the record is also upserted to PostgreSQL (excluding SigB64 — SEC-015). A DB
 // write failure is logged but does not fail the sign operation: the record
 // remains in-memory for the lifetime of the process so the caller can still
 // verify it.
+//
+// PENTEST-022: the DB write runs with a bounded `context.Background()` rather
+// than the caller's request context — this is intentional because the gRPC
+// response has already returned by the time we get here in the typical "fast
+// path" usage, so propagating a cancelled context would always fail. We do
+// cap with a 5-second deadline so a stalled DB cannot pile up unbounded
+// blocked goroutines under burst load.
 func (s *Store) Add(rec *Record) {
 	s.mu.Lock()
 	s.data[rec.ManifestDigest] = append(s.data[rec.ManifestDigest], rec)
 	s.mu.Unlock()
 
 	if s.repo != nil {
-		// Use a background context so a slow DB doesn't block the gRPC response.
-		// Failures are surfaced via logs and metrics rather than propagated to the
-		// caller, matching the at-least-once-per-process guarantee.
-		if err := s.repo.Store(context.Background(), rec); err != nil {
-			slog.Error("failed to persist signature record to database",
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.Store(ctx, rec); err != nil {
+			slog.ErrorContext(ctx, "failed to persist signature record to database",
 				"manifest_digest", rec.ManifestDigest,
 				"signer_id", rec.SignerID,
 				"error", err,
@@ -104,7 +110,10 @@ func (s *Store) Add(rec *Record) {
 // The in-memory cache is checked first. On a miss the DB is queried (when
 // configured) so that records from other replicas or previous process
 // incarnations are found. Results from a DB hit are merged back into the cache.
-func (s *Store) List(manifestDigest string) []*Record {
+//
+// PENTEST-022: takes the caller's ctx so a cancelled gRPC request stops
+// waiting on the DB rather than pinning a connection until the query returns.
+func (s *Store) List(ctx context.Context, manifestDigest string) []*Record {
 	s.mu.RLock()
 	cached := s.data[manifestDigest]
 	s.mu.RUnlock()
@@ -121,9 +130,9 @@ func (s *Store) List(manifestDigest string) []*Record {
 	}
 
 	// Cache miss — query DB and warm the local cache.
-	recs, err := s.repo.List(context.Background(), manifestDigest)
+	recs, err := s.repo.List(ctx, manifestDigest)
 	if err != nil {
-		slog.Error("failed to list signatures from database",
+		slog.ErrorContext(ctx, "failed to list signatures from database",
 			"manifest_digest", manifestDigest,
 			"error", err,
 		)
@@ -146,7 +155,10 @@ func (s *Store) List(manifestDigest string) []*Record {
 //
 // Lookup order: in-memory cache → DB (when configured). A DB hit warms the
 // cache entry so subsequent lookups from this replica are served from memory.
-func (s *Store) FindRec(manifestDigest, signerID string) *Record {
+//
+// PENTEST-022: takes the caller's ctx so a cancelled gRPC request releases
+// the DB connection promptly.
+func (s *Store) FindRec(ctx context.Context, manifestDigest, signerID string) *Record {
 	s.mu.RLock()
 	for _, r := range s.data[manifestDigest] {
 		if r.SignerID == signerID {
@@ -161,9 +173,9 @@ func (s *Store) FindRec(manifestDigest, signerID string) *Record {
 	}
 
 	// Cache miss — consult the database.
-	rec, err := s.repo.FindRec(context.Background(), manifestDigest, signerID)
+	rec, err := s.repo.FindRec(ctx, manifestDigest, signerID)
 	if err != nil {
-		slog.Error("failed to find signature in database",
+		slog.ErrorContext(ctx, "failed to find signature in database",
 			"manifest_digest", manifestDigest,
 			"signer_id", signerID,
 			"error", err,

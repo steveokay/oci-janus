@@ -12,10 +12,11 @@
  * renders — avoiding a flash of protected content.
  */
 
-import { createFileRoute, Outlet, redirect, Link, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, Link, useRouterState, useNavigate } from '@tanstack/react-router'
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { toast } from 'sonner'
+import { apiClient } from '@/lib/api/client'
 import { useAuthStore, AuthUser } from '@/store/authStore'
 
 // ---------------------------------------------------------------------------
@@ -337,6 +338,30 @@ function SideNavBar() {
    */
   const routerState = useRouterState()
   const currentPath = routerState.location.pathname
+  const navigate = useNavigate()
+  const clearAuth = useAuthStore((s) => s.clearAuth)
+
+  // PENTEST-001-frontend-pair / FE-SEC-007: handleLogout calls the server's
+  // /api/v1/logout to revoke the current JTI in Redis, then clears the
+  // in-memory Zustand store, then navigates to /login. Steps run in this
+  // order so that even if the server call fails (network drop, server down)
+  // we still clear the local session — leaving the token in memory after a
+  // user-initiated logout would be a worse UX than a token that lingers
+  // server-side for the remainder of its 5-minute TTL.
+  async function handleLogout() {
+    try {
+      await apiClient.post('/logout', null)
+    } catch {
+      // Non-fatal: the server-side revoke is best-effort. The browser tab is
+      // about to forget the token anyway (clearAuth); the worst case is a
+      // 5-minute window where the JTI remains valid if someone exfiltrated
+      // the token earlier. The 401 interceptor in apiClient would normally
+      // redirect to /login on a 401, but we don't want that race here — we
+      // catch + swallow and continue the logout flow ourselves.
+    }
+    clearAuth()
+    navigate({ to: '/login', replace: true })
+  }
 
   const mainNavItems: NavItem[] = [
     { icon: 'inventory_2',  label: 'Repositories',  to: '/dashboard',      active: currentPath === '/dashboard' },
@@ -405,11 +430,25 @@ function SideNavBar() {
       {/*
        * mt-auto would push too far if the button is already handling spacing.
        * border-t visually separates bottom utility links from the main nav.
+       * Logout sits below the utility links with its own divider so it can't
+       * be mistaken for a navigation item.
        */}
       <div className="border-t border-outline-variant pt-md flex flex-col gap-1 px-sm">
         {bottomNavItems.map((item) => (
           <SideNavLink key={item.to} item={item} compact />
         ))}
+      </div>
+
+      <div className="border-t border-outline-variant mt-md pt-md px-sm">
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          className="w-full flex items-center gap-md px-md py-sm rounded-lg text-on-surface-variant hover:bg-surface-variant transition-all"
+        >
+          <span className="material-symbols-outlined text-[18px]">logout</span>
+          <span className="font-label-caps text-label-caps">Log out</span>
+        </button>
       </div>
     </aside>
   )

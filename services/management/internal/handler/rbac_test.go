@@ -118,3 +118,32 @@ func TestHasScopedRole_orgPrefixIsNotSubstring(t *testing.T) {
 		t.Fatal("org name 'my' must match repos under 'my/'")
 	}
 }
+
+// TestHasScopedRole_platformAdminMarker — PENTEST-024: the literal "*" scope
+// value is reserved for platform-admin grants. handleSetTenantQuota checks
+// hasScopedRole(assignments, "org", "*", "admin"). An admin of a regular org
+// must NOT be allowed through that gate just because they happen to be in the
+// platform-admin tenant.
+func TestHasScopedRole_platformAdminMarker(t *testing.T) {
+	// Regular org admin — must NOT satisfy the platform-admin gate.
+	regularAdmin := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "org", ScopeValue: "engineering"},
+	}
+	if hasScopedRole(regularAdmin, "org", "*", "admin") {
+		t.Fatal("admin of a regular org must not satisfy the platform-admin '*' gate (PENTEST-024)")
+	}
+
+	// Explicit platform admin — must pass the gate.
+	platformAdmin := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "org", ScopeValue: "*"},
+	}
+	if !hasScopedRole(platformAdmin, "org", "*", "admin") {
+		t.Fatal("explicit platform-admin grant (org=*, admin) must pass the gate")
+	}
+
+	// Platform admin must NOT bleed into a specific org check — the literal
+	// "*" string is its own scope, not a wildcard the matcher expands.
+	if hasScopedRole(platformAdmin, "org", "engineering", "admin") {
+		t.Fatal("'*' marker must not match a specific org name (it is a literal, not a wildcard)")
+	}
+}

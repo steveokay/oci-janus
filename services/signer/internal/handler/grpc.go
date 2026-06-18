@@ -81,7 +81,7 @@ func (h *GRPCHandler) VerifyManifest(ctx context.Context, req *signerv1.VerifyMa
 		signerID = h.signer.KeyID()
 	}
 
-	rec := h.store.FindRec(req.ManifestDigest, signerID)
+	rec := h.store.FindRec(ctx, req.ManifestDigest, signerID)
 	if rec == nil {
 		return &signerv1.VerifyManifestResponse{Verified: false, FailureReason: "no signature found"}, nil
 	}
@@ -112,7 +112,7 @@ func (h *GRPCHandler) ListSignatures(ctx context.Context, req *signerv1.ListSign
 		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
 	}
 
-	recs := h.store.List(req.ManifestDigest)
+	recs := h.store.List(ctx, req.ManifestDigest)
 	out := make([]*signerv1.Signature, 0, len(recs))
 	for _, r := range recs {
 		out = append(out, &signerv1.Signature{
