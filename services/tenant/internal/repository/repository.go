@@ -85,6 +85,40 @@ func (r *Repository) CreateTenant(ctx context.Context, name, plan string) (*Tena
 	return &rec, tx.Commit(ctx)
 }
 
+// ListTenants returns up to `pageSize` tenants ordered by created_at DESC.
+// When `afterCreated`+`afterID` are non-zero, only rows strictly older
+// (created_at < afterCreated OR (created_at == afterCreated AND id < afterID))
+// are returned — the (created_at, id) tuple is a stable cursor under inserts.
+func (r *Repository) ListTenants(ctx context.Context, pageSize int32, afterCreated time.Time, afterID uuid.UUID) ([]TenantRecord, error) {
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	const q = `
+		SELECT id, name, plan, created_at
+		FROM tenants
+		WHERE ($1 = '0001-01-01T00:00:00Z'::timestamptz
+		       OR (created_at, id) < ($1, $2))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $3`
+	rows, err := r.pool.Query(ctx, q, afterCreated, afterID, pageSize)
+	if err != nil {
+		return nil, fmt.Errorf("ListTenants: %w", err)
+	}
+	defer rows.Close()
+	var out []TenantRecord
+	for rows.Next() {
+		var rec TenantRecord
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.Plan, &rec.CreatedAt); err != nil {
+			return nil, fmt.Errorf("ListTenants scan: %w", err)
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 // GetTenant returns a tenant by id.
 func (r *Repository) GetTenant(ctx context.Context, tenantID uuid.UUID) (*TenantRecord, error) {
 	var rec TenantRecord

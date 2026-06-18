@@ -18,6 +18,7 @@ import axios from 'axios'
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api/client'
 import { useAuthStore, AuthUser } from '@/store/authStore'
+import { useUserIsPlatformAdmin } from '@/lib/auth/usePlatformAdmin'
 
 // ---------------------------------------------------------------------------
 // Session expiry threshold
@@ -363,12 +364,24 @@ function SideNavBar() {
     navigate({ to: '/login', replace: true })
   }
 
+  const isPlatformAdmin = useUserIsPlatformAdmin()
   const mainNavItems: NavItem[] = [
     { icon: 'inventory_2',  label: 'Repositories',  to: '/dashboard',      active: currentPath === '/dashboard' },
     { icon: 'corporate_fare', label: 'Organizations', to: '/organizations', active: currentPath === '/organizations' },
     { icon: 'layers',       label: 'Images',         to: '/images',         active: currentPath === '/images' },
     { icon: 'shield_lock',  label: 'Security',       to: '/security',       active: currentPath === '/security' },
   ]
+  // Platform admin gets the super-admin tenant CRUD UI in the sidebar.
+  // The route itself has a redirect guard so non-admins never see the page
+  // even by direct URL; this just removes the entry from the nav.
+  if (isPlatformAdmin) {
+    mainNavItems.push({
+      icon: 'admin_panel_settings',
+      label: 'Tenants',
+      to: '/admin/tenants',
+      active: currentPath === '/admin/tenants',
+    })
+  }
 
   const bottomNavItems: NavItem[] = [
     { icon: 'help', label: 'Support',  to: '/support' },

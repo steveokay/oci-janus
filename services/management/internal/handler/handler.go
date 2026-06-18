@@ -24,6 +24,7 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -38,6 +39,9 @@ type Handler struct {
 	auth  authv1.AuthServiceClient
 	meta  metadatav1.MetadataServiceClient
 	audit auditv1.AuditServiceClient
+	// tenant is optional — wired only when TENANT_GRPC_ADDR is set. nil disables
+	// the super-admin `/api/v1/admin/tenants` routes (they return 404).
+	tenant tenantv1.TenantServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
@@ -76,6 +80,15 @@ func New(
 // initialization. Call before Register.
 func (h *Handler) WithRateLimiter(l *middleware.PerUserRateLimiter) *Handler {
 	h.rateLimiter = l
+	return h
+}
+
+// WithTenantClient enables the super-admin `/api/v1/admin/tenants` routes
+// (create/list/delete tenants). When the client is nil, those routes return
+// 404 "route disabled" — the same opt-in pattern used by `handleSetTenantQuota`
+// when PLATFORM_ADMIN_TENANT_ID is unset.
+func (h *Handler) WithTenantClient(c tenantv1.TenantServiceClient) *Handler {
+	h.tenant = c
 	return h
 }
 
@@ -152,6 +165,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
 	mux.Handle("PUT /api/v1/admin/tenants/{tenantID}/quota", authMW(http.HandlerFunc(h.handleSetTenantQuota)))
+
+	// Platform-admin: tenant CRUD. Gated by the platform-admin marker scope
+	// (admin / org / *) — see services/management/internal/handler/admin_tenants.go.
+	// Routes return 404 "route disabled" when TENANT_GRPC_ADDR is unset.
+	mux.Handle("GET /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminListTenants)))
+	mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
+	mux.Handle("GET /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminGetTenant)))
+	mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
 }
 
 // ---------------------------------------------------------------------------
