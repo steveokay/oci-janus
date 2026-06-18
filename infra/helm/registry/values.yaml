@@ -61,3 +61,10 @@ gc:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 500m, memory: 256Mi }
+
+# Automated DR. Disabled by default so review / dev environments don't
+# require a backup bucket. Production overlays (values.prod.yaml) must set
+# `enabled: true` and provision the secrets referenced by the subchart.
+# See infra/runbooks/disaster-recovery.md for the full operator checklist.
+backup:
+  enabled: false

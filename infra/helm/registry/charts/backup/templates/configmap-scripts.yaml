@@ -1,0 +1,187 @@
+{{- if .Values.enabled -}}
+#
+# Backup scripts mounted at /scripts in every backup CronJob. Source-controlled
+# here (rather than baked into the image) so a fix can ship as a chart upgrade
+# without rebuilding/repulling images during an incident.
+#
+# All scripts:
+#   * set -Eeuo pipefail so a failure anywhere aborts the job (CronJob will
+#     surface as failedJobsHistoryLimit + Prometheus alert via
+#     kube_cronjob_status_last_schedule_time)
+#   * write only to /tmp (read-only root FS)
+#   * upload with --sse so the at-rest encryption is policy-enforced
+#   * NEVER echo the secret env vars (kubectl logs is operator-visible)
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "backup.fullname" . }}-scripts
+  labels:
+    {{- include "backup.labels" . | nindent 4 }}
+data:
+  postgres-backup.sh: |
+    #!/usr/bin/env bash
+    set -Eeuo pipefail
+
+    # Required env: PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE BACKUP_NAME
+    # Optional env: BACKUP_BUCKET BACKUP_ENV BACKUP_SSE AWS_ENDPOINT_URL
+    : "${PGHOST:?PGHOST required}"
+    : "${PGUSER:?PGUSER required}"
+    : "${PGPASSWORD:?PGPASSWORD required}"
+    : "${PGDATABASE:?PGDATABASE required}"
+    : "${BACKUP_BUCKET:?BACKUP_BUCKET required}"
+    : "${BACKUP_NAME:?BACKUP_NAME required}"
+    PGPORT="${PGPORT:-5432}"
+    BACKUP_ENV="${BACKUP_ENV:-production}"
+    BACKUP_SSE="${BACKUP_SSE:-AES256}"
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    daypath="$(date -u +%Y/%m/%d)"
+    key="${BACKUP_ENV}/postgres/${BACKUP_NAME}/${daypath}/dump-${timestamp}.pgcustom"
+    tmpfile="/tmp/dump-${BACKUP_NAME}-${timestamp}.pgcustom"
+
+    # Why dump to a file first (rather than stream `pg_dump | aws s3 cp -`):
+    # streaming hides pg_dump's exit code behind aws-cli's. A corrupt dump
+    # would still upload "successfully". Dumping to disk lets us check
+    # pg_dump's exit code before we ever talk to S3.
+    echo "[postgres-backup] dumping ${PGDATABASE} from ${PGHOST}:${PGPORT}"
+    pg_dump \
+        --host="${PGHOST}" \
+        --port="${PGPORT}" \
+        --username="${PGUSER}" \
+        --dbname="${PGDATABASE}" \
+        --format=custom \
+        --compress=9 \
+        --no-owner \
+        --no-privileges \
+        --file="${tmpfile}"
+
+    bytes="$(stat -c %s "${tmpfile}" 2>/dev/null || wc -c < "${tmpfile}")"
+    echo "[postgres-backup] dump complete: ${bytes} bytes"
+
+    # Sanity check: pg_dump custom format starts with the magic header "PGDMP".
+    # If the file doesn't, something is very wrong — don't pollute the bucket.
+    head -c 5 "${tmpfile}" | grep -q '^PGDMP' \
+        || { echo "[postgres-backup] FATAL: dump does not look like a pg_dump custom file"; exit 2; }
+
+    echo "[postgres-backup] uploading to s3://${BACKUP_BUCKET}/${key}"
+    aws s3 cp \
+        "${tmpfile}" \
+        "s3://${BACKUP_BUCKET}/${key}" \
+        --sse "${BACKUP_SSE}" \
+        --only-show-errors
+
+    # Also write a "latest" pointer so restore-postgres.sh can resolve
+    # `latest` without listing the prefix.
+    latest_key="${BACKUP_ENV}/postgres/${BACKUP_NAME}/latest.txt"
+    echo "${key}" | aws s3 cp - "s3://${BACKUP_BUCKET}/${latest_key}" --sse "${BACKUP_SSE}" --only-show-errors
+
+    # Best-effort cleanup — emptyDir gets torn down anyway, but we'd rather
+    # not leave a dump file readable in case of a sidecar/shared scenario.
+    shred -u "${tmpfile}" 2>/dev/null || rm -f "${tmpfile}"
+
+    echo "[postgres-backup] DONE ${PGDATABASE} -> s3://${BACKUP_BUCKET}/${key}"
+
+  vault-snapshot.sh: |
+    #!/usr/bin/env bash
+    set -Eeuo pipefail
+
+    # Required env: VAULT_ADDR VAULT_TOKEN BACKUP_BUCKET
+    : "${VAULT_ADDR:?VAULT_ADDR required}"
+    : "${VAULT_TOKEN:?VAULT_TOKEN required}"
+    : "${BACKUP_BUCKET:?BACKUP_BUCKET required}"
+    BACKUP_ENV="${BACKUP_ENV:-production}"
+    BACKUP_SSE="${BACKUP_SSE:-AES256}"
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    daypath="$(date -u +%Y/%m/%d)"
+    key="${BACKUP_ENV}/vault/${daypath}/raft-snapshot-${timestamp}.snap"
+    tmpfile="/tmp/vault-snapshot-${timestamp}.snap"
+
+    echo "[vault-snapshot] requesting raft snapshot from ${VAULT_ADDR}"
+    # Why curl rather than the vault CLI: avoids pinning a vault binary
+    # version in the image. The HTTP API is the documented contract and
+    # has been stable for years.
+    http_code=$(curl --silent --show-error \
+        --output "${tmpfile}" \
+        --write-out '%{http_code}' \
+        --header "X-Vault-Token: ${VAULT_TOKEN}" \
+        --request GET \
+        "${VAULT_ADDR%/}/v1/sys/storage/raft/snapshot")
+
+    if [[ "${http_code}" != "200" ]]; then
+        echo "[vault-snapshot] FATAL: vault returned HTTP ${http_code}"
+        # Show the body — it's an error JSON, not snapshot bytes, so it
+        # won't leak token material.
+        cat "${tmpfile}" >&2 || true
+        exit 2
+    fi
+
+    bytes="$(stat -c %s "${tmpfile}" 2>/dev/null || wc -c < "${tmpfile}")"
+    if [[ "${bytes}" -lt 100 ]]; then
+        echo "[vault-snapshot] FATAL: snapshot is suspiciously small (${bytes} bytes)"
+        exit 2
+    fi
+    echo "[vault-snapshot] snapshot ${bytes} bytes — uploading"
+
+    aws s3 cp \
+        "${tmpfile}" \
+        "s3://${BACKUP_BUCKET}/${key}" \
+        --sse "${BACKUP_SSE}" \
+        --only-show-errors
+
+    echo "${key}" | aws s3 cp - "s3://${BACKUP_BUCKET}/${BACKUP_ENV}/vault/latest.txt" \
+        --sse "${BACKUP_SSE}" --only-show-errors
+
+    shred -u "${tmpfile}" 2>/dev/null || rm -f "${tmpfile}"
+    echo "[vault-snapshot] DONE -> s3://${BACKUP_BUCKET}/${key}"
+
+  rabbitmq-export.sh: |
+    #!/usr/bin/env bash
+    set -Eeuo pipefail
+
+    # Required env: RABBITMQ_MGMT_URL RABBITMQ_USER RABBITMQ_PASSWORD BACKUP_BUCKET
+    : "${RABBITMQ_MGMT_URL:?RABBITMQ_MGMT_URL required}"
+    : "${RABBITMQ_USER:?RABBITMQ_USER required}"
+    : "${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD required}"
+    : "${BACKUP_BUCKET:?BACKUP_BUCKET required}"
+    BACKUP_ENV="${BACKUP_ENV:-production}"
+    BACKUP_SSE="${BACKUP_SSE:-AES256}"
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    daypath="$(date -u +%Y/%m/%d)"
+    key="${BACKUP_ENV}/rabbitmq/${daypath}/definitions-${timestamp}.json"
+    tmpfile="/tmp/rabbitmq-definitions-${timestamp}.json"
+
+    echo "[rabbitmq-export] fetching definitions from ${RABBITMQ_MGMT_URL}"
+    # --user PASSWORD shows in `ps` on the local host, but the only host is
+    # the job pod which goes away after the job; acceptable trade.
+    http_code=$(curl --silent --show-error \
+        --output "${tmpfile}" \
+        --write-out '%{http_code}' \
+        --user "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" \
+        "${RABBITMQ_MGMT_URL%/}/api/definitions")
+
+    if [[ "${http_code}" != "200" ]]; then
+        echo "[rabbitmq-export] FATAL: management API returned HTTP ${http_code}"
+        exit 2
+    fi
+
+    # Defence-in-depth: confirm it's actually JSON with the expected shape
+    # before uploading garbage.
+    jq -e '.queues and .exchanges' "${tmpfile}" >/dev/null \
+        || { echo "[rabbitmq-export] FATAL: response missing queues/exchanges"; exit 2; }
+
+    aws s3 cp \
+        "${tmpfile}" \
+        "s3://${BACKUP_BUCKET}/${key}" \
+        --sse "${BACKUP_SSE}" \
+        --content-type application/json \
+        --only-show-errors
+
+    echo "${key}" | aws s3 cp - "s3://${BACKUP_BUCKET}/${BACKUP_ENV}/rabbitmq/latest.txt" \
+        --sse "${BACKUP_SSE}" --only-show-errors
+
+    shred -u "${tmpfile}" 2>/dev/null || rm -f "${tmpfile}"
+    echo "[rabbitmq-export] DONE -> s3://${BACKUP_BUCKET}/${key}"
+{{- end }}

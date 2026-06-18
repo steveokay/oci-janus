@@ -1,0 +1,135 @@
+# Default values for the backup subchart.
+# All values can be overridden in the umbrella values.yaml / values.prod.yaml.
+
+# Master switch — set to false to disable all CronJobs (useful for ephemeral
+# review environments where DR is irrelevant).
+enabled: true
+
+image:
+  repository: ghcr.io/steveokay/backup-tools
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Object-store target for all dumps. The same bucket holds every backup type
+# under separate prefixes — keeps lifecycle rules + CRR config in one place.
+#
+# In production:
+#   * Use a SEPARATE cloud account from the data buckets so a compromised
+#     platform account cannot wipe backups (see disaster-recovery.md §5).
+#   * Enable bucket versioning + a 90d MFA-delete window.
+#   * Configure cross-region replication on the bucket itself, not in the job.
+target:
+  # S3 / S3-compatible. For MinIO set endpointURL to the in-cluster MinIO
+  # service (http://minio:9000). For real AWS leave endpointURL empty.
+  bucket: registry-backups
+  region: us-east-1
+  endpointURL: ""        # MinIO: "http://minio:9000"; AWS: leave empty
+  # Server-side-encryption header. AES256 is the bare minimum; use aws:kms
+  # with a CMK alias if you want envelope encryption + audit trail.
+  sseAlgorithm: AES256
+  # Path-style addressing is required for MinIO and most non-AWS S3 impls.
+  forcePathStyle: true
+  # Environment label baked into the S3 key so prod/staging backups never
+  # collide if pointed at the same bucket.
+  environment: production
+
+# Secret containing AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY for the backup
+# target. Populated by External Secrets Operator from Vault. Distinct from
+# the data-plane storage credentials so the blast radius of a leak is small.
+targetCredentialsSecret: registry-backup-target-credentials
+
+# Per-database list. The Postgres CronJob template ranges over this list so
+# adding a new owning-service DB is a one-line change here.
+#
+# Fields:
+#   name           — friendly name used in CronJob names + S3 keys
+#   dbName         — actual database name to pg_dump
+#   credentialsSecret — K8s secret with PGHOST/PGPORT/PGUSER/PGPASSWORD keys
+#                       (NOT a DSN — we want to pass each value separately so
+#                        the password never appears in process listings)
+#   schedule       — cron expression (UTC). Stagger so they don't all hit
+#                    PG at the same minute.
+#   retentionDays  — informational; actual retention is enforced by the
+#                    bucket lifecycle rule (which the job cannot set).
+databases:
+  - name: auth
+    dbName: registry_auth
+    credentialsSecret: registry-backup-creds-auth
+    schedule: "5 2 * * *"     # 02:05 UTC
+    retentionDays: 90
+  - name: metadata
+    dbName: registry_metadata
+    credentialsSecret: registry-backup-creds-metadata
+    schedule: "15 2 * * *"
+    retentionDays: 90
+  - name: tenant
+    dbName: registry_tenant
+    credentialsSecret: registry-backup-creds-tenant
+    schedule: "25 2 * * *"
+    retentionDays: 365
+  - name: proxy
+    dbName: registry_proxy
+    credentialsSecret: registry-backup-creds-proxy
+    schedule: "35 2 * * *"
+    retentionDays: 90
+  - name: webhook
+    dbName: registry_webhook
+    credentialsSecret: registry-backup-creds-webhook
+    schedule: "45 2 * * *"
+    retentionDays: 90
+  - name: audit
+    dbName: registry_audit
+    credentialsSecret: registry-backup-creds-audit
+    schedule: "55 2 * * *"
+    retentionDays: 2555    # 7y — compliance retention; verify against your jurisdiction.
+  - name: signer
+    dbName: registry_signer
+    credentialsSecret: registry-backup-creds-signer
+    schedule: "5 3 * * *"
+    retentionDays: 365
+
+# Vault Raft snapshot. Daily is sufficient because the signer keys are the
+# only fast-changing state — root tokens and policies rarely move.
+vault:
+  enabled: true
+  schedule: "30 3 * * *"
+  address: "http://vault:8200"
+  # Token secret must hold a Vault token bound to the snapshot policy. See
+  # infra/runbooks/disaster-recovery.md §3 for how to provision it.
+  tokenSecret: registry-backup-vault-token
+  retentionDays: 365
+
+# RabbitMQ definitions export. Messages themselves are NOT backed up — the
+# platform's durability model assumes consumers can re-derive state from
+# Postgres after a broker loss.
+rabbitmq:
+  enabled: true
+  schedule: "0 4 * * *"
+  managementURL: "http://rabbitmq:15672"
+  credentialsSecret: registry-backup-rabbitmq-creds   # holds RABBITMQ_USER/RABBITMQ_PASSWORD
+  retentionDays: 90
+
+# Resources are tight on purpose — pg_dump is single-threaded and streams to
+# stdout, so memory stays flat. Bump cpu for very large DBs.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: ""   # auto-generated when empty
+  # If your cluster uses IRSA / Workload Identity, set annotations here so
+  # the SA assumes a role with PutObject on the backup bucket.
+  annotations: {}
+
+# Shared CronJob hygiene.
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 3
+# Job-level timeout. A 6h ceiling catches a stuck pg_dump without sitting
+# forever; tune up for very large DBs.
+activeDeadlineSeconds: 21600
