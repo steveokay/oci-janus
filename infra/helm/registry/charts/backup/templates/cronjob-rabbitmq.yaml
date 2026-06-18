@@ -1,0 +1,88 @@
+{{- if and .Values.enabled .Values.rabbitmq.enabled -}}
+#
+# RabbitMQ definitions export — exchanges, queues, bindings, policies, users.
+#
+# What this DOES back up: the broker topology. After a total broker loss
+# you can re-import the JSON via `rabbitmqctl import_definitions` (or the
+# HTTP API POST /api/definitions) and consumers will reconnect to the same
+# queue names.
+#
+# What this does NOT back up: in-flight messages. The platform's durability
+# model (per CLAUDE.md §6) is "consumers re-derive state from Postgres".
+# A scan result lost from the broker means scanner re-runs the scan; an
+# audit event lost means the producer still wrote it to Postgres truth.
+# If a customer requires message-level durability they need a different
+# broker tier (RabbitMQ Streams + S3 archiver, or Kafka with tiered storage).
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "backup.fullname" . }}-rabbitmq
+  labels:
+    {{- include "backup.labels" . | nindent 4 }}
+    backup.registry.io/kind: rabbitmq
+spec:
+  schedule: {{ .Values.rabbitmq.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "backup.selectorLabels" . | nindent 12 }}
+            backup.registry.io/kind: rabbitmq
+        spec:
+          serviceAccountName: {{ include "backup.serviceAccountName" . }}
+          restartPolicy: Never
+          securityContext:
+            {{- include "backup.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: rabbitmq-export
+              image: {{ include "backup.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["/bin/bash", "/scripts/rabbitmq-export.sh"]
+              env:
+                - name: RABBITMQ_MGMT_URL
+                  value: {{ .Values.rabbitmq.managementURL | quote }}
+                - name: RABBITMQ_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.rabbitmq.credentialsSecret }}
+                      key: RABBITMQ_USER
+                - name: RABBITMQ_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.rabbitmq.credentialsSecret }}
+                      key: RABBITMQ_PASSWORD
+                {{- include "backup.targetEnv" . | nindent 16 }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.targetCredentialsSecret }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: home
+                  mountPath: /work
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                {{- include "backup.containerSecurityContext" . | nindent 16 }}
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ include "backup.fullname" . }}-scripts
+                defaultMode: 0555
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+            - name: home
+              emptyDir:
+                sizeLimit: 16Mi
+{{- end }}

@@ -42,3 +42,11 @@ dependencies:
   - name: tenant
     version: "0.1.0"
     repository: "file://charts/tenant"
+  - name: backup
+    version: "0.1.0"
+    repository: "file://charts/backup"
+    # Backup subchart is gated by .Values.backup.enabled so review / dev
+    # deployments can install the umbrella chart without provisioning a
+    # backup target bucket or credentials. Production values.prod.yaml
+    # must set backup.enabled: true.
+    condition: backup.enabled

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: backup
+description: |
+  Automated disaster-recovery backups for the registry platform.
+  Runs CronJobs that dump every owning service's Postgres database to an
+  object-store bucket, snapshots Vault Raft, and exports RabbitMQ
+  definitions. Designed to be deployed alongside the registry umbrella
+  chart but in its own subchart so DR scheduling can be tuned (or
+  disabled) without touching the data-plane services.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -70,3 +70,23 @@ gc:
 
 tenant:
   replicaCount: 2
+
+# Automated DR. See infra/runbooks/disaster-recovery.md for the operator
+# prerequisites (separate-account backup bucket, ESO secrets, Vault snapshot
+# policy + token, RabbitMQ admin user). The schedules below are sane defaults
+# for a single-region production deployment; multi-region deployments should
+# stagger across regions so dump traffic doesn't all converge on PG primary.
+backup:
+  enabled: true
+  image:
+    tag: "0.1.0"
+  target:
+    # Update these to match your production backup bucket. The bucket MUST
+    # live in a different cloud account from the data buckets — see §5 of
+    # the DR runbook for why.
+    bucket: registry-backups-prod
+    region: us-east-1
+    endpointURL: ""          # blank = real AWS S3
+    sseAlgorithm: AES256
+    forcePathStyle: false
+    environment: production

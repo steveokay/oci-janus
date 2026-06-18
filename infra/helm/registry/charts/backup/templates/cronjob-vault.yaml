@@ -1,0 +1,80 @@
+{{- if and .Values.enabled .Values.vault.enabled -}}
+#
+# Vault Raft snapshot — the highest-priority backup. Losing Vault means
+# losing the signer transit key, which means every Cosign signature ever
+# produced becomes unverifiable. The snapshot is enough to restore the
+# entire Vault state (policies, tokens, transit keys) onto a fresh node.
+#
+# Operational dependency: the Vault token referenced here must be bound to
+# a policy that allows `sys/storage/raft/snapshot` read. See
+# infra/runbooks/disaster-recovery.md §3 for the policy + token issuance.
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "backup.fullname" . }}-vault
+  labels:
+    {{- include "backup.labels" . | nindent 4 }}
+    backup.registry.io/kind: vault
+spec:
+  schedule: {{ .Values.vault.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "backup.selectorLabels" . | nindent 12 }}
+            backup.registry.io/kind: vault
+        spec:
+          serviceAccountName: {{ include "backup.serviceAccountName" . }}
+          restartPolicy: Never
+          securityContext:
+            {{- include "backup.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: vault-snapshot
+              image: {{ include "backup.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["/bin/bash", "/scripts/vault-snapshot.sh"]
+              env:
+                - name: VAULT_ADDR
+                  value: {{ .Values.vault.address | quote }}
+                - name: VAULT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.vault.tokenSecret }}
+                      key: VAULT_TOKEN
+                {{- include "backup.targetEnv" . | nindent 16 }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.targetCredentialsSecret }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: home
+                  mountPath: /work
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                {{- include "backup.containerSecurityContext" . | nindent 16 }}
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ include "backup.fullname" . }}-scripts
+                defaultMode: 0555
+            - name: tmp
+              emptyDir:
+                # Vault snapshots are small (low MB) for a fresh cluster but
+                # can grow with KV usage. 4Gi is comfortable headroom.
+                sizeLimit: 4Gi
+            - name: home
+              emptyDir:
+                sizeLimit: 16Mi
+{{- end }}

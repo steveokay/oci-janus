@@ -1,0 +1,110 @@
+{{- if .Values.enabled -}}
+{{- range $db := .Values.databases }}
+---
+#
+# Postgres backup for {{ $db.name }} ({{ $db.dbName }}).
+# Generated from .Values.databases — to add a new DB, edit values.yaml only.
+#
+# Why one CronJob per DB rather than one job that loops:
+#   * Failure isolation — a hung pg_dump on one DB doesn't suppress the rest.
+#   * Per-DB schedule staggering avoids slamming PG at the same minute.
+#   * `kubectl get cronjob -n registry` reads as "what's our backup status?"
+#     instead of a single line that hides per-DB state.
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "backup.fullname" $ }}-pg-{{ $db.name }}
+  labels:
+    {{- include "backup.labels" $ | nindent 4 }}
+    backup.registry.io/kind: postgres
+    backup.registry.io/database: {{ $db.name }}
+spec:
+  schedule: {{ $db.schedule | quote }}
+  concurrencyPolicy: {{ $.Values.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ $.Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $.Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ $.Values.activeDeadlineSeconds }}
+      # backoffLimit: 1 — pg_dump failures are usually persistent (auth issue,
+      # PG down). Retrying spams alerts; let the next scheduled run try again.
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "backup.selectorLabels" $ | nindent 12 }}
+            backup.registry.io/kind: postgres
+            backup.registry.io/database: {{ $db.name }}
+        spec:
+          serviceAccountName: {{ include "backup.serviceAccountName" $ }}
+          restartPolicy: Never
+          securityContext:
+            {{- include "backup.podSecurityContext" $ | nindent 12 }}
+          containers:
+            - name: pg-backup
+              image: {{ include "backup.image" $ }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["/bin/bash", "/scripts/postgres-backup.sh"]
+              env:
+                - name: BACKUP_NAME
+                  value: {{ $db.name | quote }}
+                - name: PGDATABASE
+                  value: {{ $db.dbName | quote }}
+                # Pull PG* env vars from a per-DB secret. Each key must exist
+                # in the secret: PGHOST, PGPORT, PGUSER, PGPASSWORD.
+                - name: PGHOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $db.credentialsSecret }}
+                      key: PGHOST
+                - name: PGPORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $db.credentialsSecret }}
+                      key: PGPORT
+                      optional: true
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $db.credentialsSecret }}
+                      key: PGUSER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $db.credentialsSecret }}
+                      key: PGPASSWORD
+                # S3 plumbing (region, bucket, sse, optional endpoint).
+                {{- include "backup.targetEnv" $ | nindent 16 }}
+              # AWS credentials live in a separate secret from the PG creds.
+              envFrom:
+                - secretRef:
+                    name: {{ $.Values.targetCredentialsSecret }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+                - name: home
+                  mountPath: /work
+              resources:
+                {{- toYaml $.Values.resources | nindent 16 }}
+              securityContext:
+                {{- include "backup.containerSecurityContext" $ | nindent 16 }}
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ include "backup.fullname" $ }}-scripts
+                defaultMode: 0555
+            # emptyDir for /tmp because readOnlyRootFilesystem blocks writes
+            # anywhere else. SizeLimit caps the dump-on-disk footprint —
+            # bump for very large DBs.
+            - name: tmp
+              emptyDir:
+                sizeLimit: 50Gi
+            - name: home
+              emptyDir:
+                sizeLimit: 16Mi
+{{- end }}
+{{- end }}
