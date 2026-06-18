@@ -31,25 +31,6 @@ func roleIndex(role string) int {
 	return -1
 }
 
-// hasRole returns true if any entry in roles meets or exceeds the minimum role level.
-//
-// DEPRECATED for authorization decisions — kept only for the UX gate on
-// "does this user have ANY role at all?" checks where scope does not matter.
-// All scope-sensitive decisions MUST use hasScopedRole (PENTEST-002): a flat
-// role list allows admin-of-org-A to act as admin-of-org-B by losing scope.
-func hasRole(roles []string, minimum string) bool {
-	minIdx := roleIndex(minimum)
-	if minIdx < 0 {
-		return false
-	}
-	for _, r := range roles {
-		if roleIndex(r) >= minIdx {
-			return true
-		}
-	}
-	return false
-}
-
 // hasScopedRole returns true when at least one assignment grants the user a
 // role at or above `minimum` for the specified target scope (PENTEST-002).
 //
@@ -100,23 +81,11 @@ func (h *Handler) getUserAssignments(r *http.Request) []*authv1.RoleAssignment {
 	return resp.GetRoleAssignments()
 }
 
-// getUserRoles returns the flat role-name list. Retained for backwards
-// compatibility with non-scope-sensitive callers; new code should prefer
-// getUserAssignments + hasScopedRole.
-func (h *Handler) getUserRoles(r *http.Request) []string {
-	tenantID := middleware.TenantIDFromContext(r.Context())
-	userID := middleware.UserIDFromContext(r.Context())
-
-	resp, err := h.auth.GetUserPermissions(r.Context(), &authv1.GetUserPermissionsRequest{
-		UserId:   userID,
-		TenantId: tenantID,
-	})
-	if err != nil {
-		slog.Warn("GetUserPermissions failed", "err", err)
-		return nil
-	}
-	return resp.GetRoles()
-}
+// (PENTEST-024 cleanup) — getUserRoles and the flat-role hasRole helper used
+// to live here. They were removed once the last unsafe caller in
+// handleSetTenantQuota was migrated to hasScopedRole with the platform-admin
+// marker scope. Re-introducing a flat-role check would re-open the PENTEST-002
+// privilege-escalation class.
 
 // ---------------------------------------------------------------------------
 // Route registration for RBAC endpoints (called from Register)

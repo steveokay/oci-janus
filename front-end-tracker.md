@@ -36,7 +36,7 @@
 | Vite dev proxy | Add `server.proxy` in `vite.config.ts` — forward `/api` → `http://localhost:8080` so the browser avoids CORS in dev | ✅ |
 | CORS on auth service | Proxy avoids CORS entirely in dev — no change needed on auth service for local dev | ✅ |
 | `VITE_TENANT_ID` env var | Created `frontend/.env.local` with `VITE_TENANT_ID=98dbe36b-ef28-4903-b25c-bff1b2921c9e` | ✅ |
-| Dev seed user | Add seed migration / script that creates a test user + tenant so there is something to log in with | ⬜ |
+| Dev seed user | `admin` / `Admin1234!dev` was already in `20260610000001_seed_dev_tenant.sql`. New `20260618000001_seed_dev_admin_role.sql` adds the org=dev admin role so the user passes PENTEST-002 / PENTEST-003 RBAC gates. | ✅ |
 | Post-login redirect | `/dashboard` loads after token stored in Zustand; TanStack Router `beforeLoad` guard verified | ✅ |
 | Error states | 401 (bad creds), 403 (locked), 429 (rate limit) show toast messages; generic "Invalid credentials" copy | ✅ |
 
@@ -91,7 +91,7 @@ All dashboard data wiring is complete. `services/management` REST API is live.
 | `useAuth` hook | Exposes `token`, `tenantId`, `setAuth()`, `clearAuth()` from Zustand store | ✅ |
 | Axios 401 interceptor | `src/lib/api/client.ts` response interceptor for global 401 handling | ✅ |
 | React Query provider | `QueryClientProvider` wired in `src/main.tsx` | ✅ |
-| Logout button | Clear Zustand store + `POST /api/v1/logout` + redirect to `/login` | ⬜ |
+| Logout button | `handleLogout` in `_authenticated.tsx` `SideNavBar`: calls `apiClient.post('/logout')` (server revokes JTI), then `clearAuth()`, then `navigate('/login', { replace: true })`. Local clear runs even if the server call fails so the user can't be stuck half-logged-out. | ✅ |
 
 ---
 
@@ -103,7 +103,7 @@ All dashboard data wiring is complete. `services/management` REST API is live.
 | Sidebar nav padding | `py-2.5` on each nav item | ✅ |
 | Active route highlight | Driven by `useRouterState` | ✅ |
 | Sidebar gap between items | `gap-[48px]` wordmark→links, `gap-[32px]` between links | ✅ |
-| Logout button | Clear Zustand auth store + redirect to `/login` (server-side revoke pending FE-SEC-007) | ⬜ |
+| Logout button | DONE — see Auth & API Layer table above. Sidebar button at the bottom of `SideNavBar` with `logout` icon, calls `handleLogout`. | ✅ |
 | Mobile sidebar | Collapse on narrow viewports (hamburger toggle) | ⬜ |
 
 ---
@@ -152,7 +152,7 @@ All dashboard data wiring is complete. `services/management` REST API is live.
 | FE-SEC-004 | CORS allowlist on management API | When the management REST API is built (see Dashboard Wiring §1) the handler must set an explicit `Access-Control-Allow-Origin: <production-domain>` — never `*`. Dev allowlist: `http://localhost:5173`. | ⬜ |
 | FE-SEC-005 | Vague error messages on login | Login should never say "user not found" or "wrong password" — only "Invalid credentials". Current toast shows "Invalid username or password." which is correct, but the `root` form error must match. Confirm both paths use the same generic string. | ⬜ |
 | FE-SEC-006 | No tokens in URLs | Navigation (`router.navigate`) and API calls must never put the JWT in a query parameter or URL path segment. Audit all `navigate()` calls and axios requests — token must stay in `Authorization` header only. | ⬜ |
-| FE-SEC-007 | Logout clears auth state | Sidebar logout button (not yet wired) must: (1) call `POST /api/v1/logout` to revoke the JWT server-side, (2) clear the Zustand auth store, (3) redirect to `/login`. Clearing only the store without revoking leaves the token valid for its remaining 5-min TTL. | ⬜ |
+| FE-SEC-007 | Logout clears auth state | DONE 2026-06-18. Sidebar logout button in `_authenticated.tsx` `SideNavBar` calls `apiClient.post('/logout')` (server revokes JTI in Redis), then `clearAuth()`, then `navigate('/login', { replace: true })`. Order is intentional so the local session always clears even on server-side failure. | ✅ |
 | FE-SEC-008 | Global 401 handling | Axios response interceptor detects 401 on any API call, clears the Zustand auth store, and redirects to `/login?reason=session_expired`. `authRefreshClient` (bare axios instance) bypasses the interceptor to prevent infinite loop during token refresh. | ✅ |
 
 ### Medium — Before Production
@@ -189,4 +189,4 @@ All dashboard data wiring is complete. `services/management` REST API is live.
 - `services/management` REST API is live on `:8085`; Vite dev proxy forwards `/api` → `http://localhost:8085`.
 - JWT auto-refresh: `_authenticated.tsx` schedules a timer that fires 60s before expiry; uses `authRefreshClient` (bare `axios.create()`) — NOT the shared `apiClient` — to avoid the 401 interceptor triggering on a refresh 401.
 - Builds `ApiBuildRow` type: API returns snake_case (`build_id`, `commit_hash`, `triggered_by`); `mapBuildRow()` converts to camelCase `BuildRow` with `BuildActor` union `{ kind: 'user' | 'ci' }`.
-- Next work: logout button server-side revoke (FE-SEC-007), dev seed user migration, E2E Playwright tests, Docker nginx image with CSP headers (FE-SEC-003).
+- Next work: E2E Playwright tests, Docker nginx image with CSP headers (FE-SEC-003), npm audit in CI (FE-SEC-012), remaining frontend mock-content cleanup in status.md.

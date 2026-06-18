@@ -900,8 +900,14 @@ func (h *Handler) handleSetTenantQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if roles := h.getUserRoles(r); !hasRole(roles, "admin") {
-		writeError(w, http.StatusForbidden, "admin role required")
+	// PENTEST-024: require the platform-admin marker grant — not just any admin
+	// role in the platform-admin tenant. The marker is a role_assignment with
+	// scope_type="org" and the literal scope_value="*"; org names can't contain
+	// "*" (validateOrgName rejects it), so this string is unambiguous and never
+	// collides with a real org grant. Operators must explicitly grant
+	// ("admin", "org", "*") to platform admins.
+	if !hasScopedRole(h.getUserAssignments(r), "org", "*", "admin") {
+		writeError(w, http.StatusForbidden, "platform-admin role required (org=*, admin)")
 		return
 	}
 

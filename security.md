@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-18 (SEC-001..SEC-036 all resolved. **Pentest review fully closed: 20/20 PENTEST-001..020 RESOLVED ✅.** Coverage: 1 CRITICAL (audit HTTP API removed), 4 HIGH (RBAC scope, user-creation lock, timing-attack mitigation, no-leak login), 6 MEDIUM (member-list authz, webhook body cap, CORS allowlist with Vary, RFC 7235 challenge parser, HTTPS-only AUTH_REALM, revoke scope verification), 5 LOW (TLS 1.3 minimum, case-insensitive Bearer, per-user rate limit, useUserIsAdmin frontend fix, audit limit moot by removal), 4 INFO (dev-default credential rejection in production, sslmode triple-mitigation, scanner cache documented, CSRF posture code-asserted). Sprint 6 backend gaps in `status.md` are feature work, not security findings.)
+> Last updated: 2026-06-18 (SEC-001..SEC-036 all resolved. **Pentest round 1: 20/20 PENTEST-001..020 RESOLVED ✅.** **Pentest round 2: 6 new findings PENTEST-021..026; 5 fixed same day (PENTEST-021 MEDIUM + PENTEST-022..025 LOW).** Total: 26 findings, 25 resolved, 1 open (PENTEST-026 INFO — storage tenant-prefix validation; requires proto change + caller migration). All CRITICAL, HIGH, MEDIUM, and LOW are closed. Sprint 6 backend gaps in `status.md` are feature work, not security findings.)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -246,10 +246,12 @@
 |---|---|---|---|
 | CRITICAL | 1 | 0 | 1 (PENTEST-001 ✅) |
 | HIGH | 4 | 0 | 4 (PENTEST-002 ✅, 003 ✅, 004 ✅, 005 ✅) |
-| MEDIUM | 6 | 0 | 6 (PENTEST-006 ✅, 007 ✅, 008 ✅, 009 ✅, 010 ✅, 011 ✅) |
-| LOW | 5 | 0 | 5 (PENTEST-012 ✅, 013 ✅, 014 ✅, 015 ✅, 016 ✅) |
-| INFO | 4 | 0 | 4 (PENTEST-017 ✅, 018 ✅, 019 ✅, 020 ✅) |
-| **TOTAL** | **20** | **0** | **20 ✅** |
+| MEDIUM | 7 | 0 | 7 (PENTEST-006 ✅, 007 ✅, 008 ✅, 009 ✅, 010 ✅, 011 ✅, 021 ✅) |
+| LOW | 9 | 0 | 9 (PENTEST-012..016 ✅, PENTEST-022..025 ✅) |
+| INFO | 5 | 1 | 4 (PENTEST-017 ✅, 018 ✅, 019 ✅, 020 ✅) |
+| **TOTAL** | **26** | **1** | **25 ✅** |
+
+**Round 2 review (2026-06-18, post-fix):** broader scan of code I didn't deep-dive the first time (storage, gateway, gc, tenant, RabbitMQ paths, my own new code). 6 new findings logged (PENTEST-021..026), all MEDIUM or below. 5 fixed immediately. Only PENTEST-026 remains open (INFO, storage handler tenant-prefix validation — defense-in-depth, requires proto change + caller migration).
 
 **🎯 Pentest review is fully closed. 20/20 findings resolved across all severities.**
 
@@ -265,6 +267,76 @@ Fix order completed:
 Re-open triggers to monitor:
 - **PENTEST-020** must reopen alongside any cookie-based refresh-token work (FE-SEC-009).
 - **PENTEST-019** should be revisited if Trivy ever ships a CVE in its DB-load path; the runbook lists the tmpfs-overlay mitigation.
+
+---
+
+## Pentest Round 2 — 2026-06-18 (post-fix broader scan)
+
+> Round-2 review after the original 20-finding fix landed. Goal: catch any
+> regression introduced by my own fixes, plus scan services not deep-dived
+> the first time (storage, gateway, gc, RabbitMQ paths). 6 new findings;
+> none CRITICAL or HIGH.
+
+### MEDIUM
+
+| ID | Severity | Title | Service | Status |
+|---|---|---|---|---|
+| PENTEST-021 | MEDIUM | Storage gRPC handler leaks raw error messages | `registry-storage` | RESOLVED ✅ (2026-06-18) |
+
+**PENTEST-021 — Storage handler leaks internal error detail** — RESOLVED ✅
+- **Original issue:** `mapErr` in `services/storage/internal/handler/grpc.go` returned `status.Error(codes.Internal, err.Error())`, exposing driver text (MinIO/S3/GCS/Azure paths, IAM principals, signed-URL fragments) on the wire.
+- **Resolution (2026-06-18):** Replaced `mapErr` with `mapErrCtx(ctx, op, err)` that logs the full error via `slog.ErrorContext` (preserving trace_id + tenant_id through the slog handler) and returns a generic `status.Error(codes.Internal, "internal error")` to callers. Updated every call site (12 in `grpc.go`) to pass its request context plus an op name. Test `TestMapErrCtx_unknownError_returnsGenericInternalMessage` uses a deliberately-leaky driver error (`AccessDenied: arn:aws:s3:::secret-bucket/...`) and asserts the wire message is exactly `"internal error"` — fails if a future change re-introduces the leak.
+
+### LOW
+
+| ID | Severity | Title | Service | Status |
+|---|---|---|---|---|
+| PENTEST-022 | LOW | sigstore DB calls use `context.Background()` | `registry-signer` | RESOLVED ✅ (2026-06-18) |
+| PENTEST-023 | LOW | Scanner Enqueue spawns unbounded goroutines on queue full | `registry-scanner` | RESOLVED ✅ (2026-06-18) |
+| PENTEST-024 | LOW | `handleSetTenantQuota` uses unscoped `hasRole()` | `registry-management` | RESOLVED ✅ (2026-06-18) |
+| PENTEST-025 | LOW | `PerUserRateLimiter.gcLoop` has no stop signal | `registry-management` | RESOLVED ✅ (2026-06-18) |
+
+**PENTEST-022 — `sigstore.Store` uses Background context** — RESOLVED ✅
+- **Original issue:** `Add`, `List`, `FindRec` all swapped the caller's request context for `context.Background()`, so cancelled gRPC requests left DB connections pinned.
+- **Resolution (2026-06-18):** Added `ctx context.Context` as the first parameter on `Store.List(ctx, ...)` and `Store.FindRec(ctx, ...)` so the caller's request context propagates and cancellation reaches the DB. `Store.Add` keeps its decoupled-context pattern but now wraps with `context.WithTimeout(context.Background(), 5*time.Second)` to hard-cap pool use. Handler callers updated; `slog.Error` upgraded to `slog.ErrorContext` so trace_id flows into logs.
+
+**PENTEST-023 — Scanner Enqueue unbounded goroutine spawn** — RESOLVED ✅
+- **Original issue:** Queue-full fallback at `worker.go:103` did `go p.runJob(context.Background(), job)`, so a flood of `push.completed` events could spawn unbounded goroutines.
+- **Resolution (2026-06-18):** Rewrote `Enqueue` to return an `error`. A short blocking attempt (50 ms) absorbs micro-bursts; if the queue is still full, `ErrQueueFull` is returned. `HandlePushCompleted` and `HandleScanQueued` propagate that as an error to the RabbitMQ consumer, which NACKs — the broker re-delivers after backoff (the correct backpressure signal). Total goroutine concurrency is now bounded by the configured worker count, not by event arrival rate.
+
+**PENTEST-024 — `handleSetTenantQuota` uses unscoped `hasRole`** — RESOLVED ✅
+- **Original issue:** Inside the platform-admin tenant, any user with `admin` role at any scope was treated as a platform admin.
+- **Resolution (2026-06-18):** Replaced with `hasScopedRole(assignments, "org", "*", "admin")` — the literal `"*"` is a reserved marker scope that `validateOrgName` rejects, so it can never collide with a real org name. Operators must explicitly grant `("admin", "org", "*")` to platform admins. Bonus cleanup: deleted the now-unused `hasRole` helper and `Handler.getUserRoles` method so a future change can't accidentally re-introduce the unscoped pattern. Test `TestHasScopedRole_platformAdminMarker` asserts both directions: a regular org admin fails the platform gate, and the `"*"` marker doesn't bleed into specific-org checks.
+
+**PENTEST-025 — Rate-limiter GC goroutine has no stop signal** — RESOLVED ✅
+- **Original issue:** `NewPerUserRateLimiter` spawned `gcLoop` with no way to stop it; goroutine leaked one per limiter for the test scenarios that re-create the limiter.
+- **Resolution (2026-06-18):** Added a `stop chan struct{}` field initialized in `NewPerUserRateLimiter`, plus a public `Stop()` method that closes it (idempotent — safe to double-call). `gcLoop` now selects between `<-l.stop` and `<-ticker.C`, returning cleanly on stop. Production callers can ignore `Stop()` (limiter lives for process lifetime); tests `defer limiter.Stop()` to keep goroutine counts flat.
+
+### INFO
+
+| ID | Severity | Title | Service | Status |
+|---|---|---|---|---|
+| PENTEST-026 | INFO | Storage handler trusts caller-supplied `req.Key` without tenant validation | `registry-storage` | OPEN |
+
+**PENTEST-026 — Storage handler doesn't validate key tenant prefix**
+- **Where:** `services/storage/internal/handler/grpc.go` — every method (`PutBlob`, `GetBlob`, `DeleteBlob`, `StatBlob`, `BlobExists`, `ListBlobs`) accepts `req.Key` (or `req.Prefix`) as opaque strings and passes them to the driver. The storage-key layout is `blobs/<tenant_id>/sha256/<...>` (per CLAUDE.md §8) but the handler does not enforce the prefix.
+- **Impact:** Today this is mitigated by mTLS — only internal services (core, proxy, scanner via storage gRPC) can reach the port, and those services construct keys with tenant_id prefixes from their own authenticated context. If a future internal service has a bug that passes a misformed key, the storage layer silently complies with cross-tenant access. Defense-in-depth gap.
+- **Remediation:** Add a `tenant_id` field to every storage RPC and validate `strings.HasPrefix(req.Key, "blobs/"+req.TenantId+"/")` (or the equivalent for manifests/uploads paths). Returns `codes.PermissionDenied` on mismatch. Requires proto change + caller updates.
+
+---
+
+## Round 2 Verification
+
+- **No regressions** introduced by the round-1 fixes: all 30+ backend test suites still pass uncached.
+- **No new CRITICAL or HIGH** findings in the post-fix codebase.
+- 6 new findings (1 MEDIUM, 4 LOW, 1 INFO) — all in pre-existing code I hadn't deep-dived; **none introduced by recent changes**.
+- 5 of the 6 round-2 findings fixed the same day (PENTEST-021 MEDIUM + PENTEST-022..025 LOW). Only PENTEST-026 INFO remains, deferred because it requires a proto change + caller migration.
+- Round-2 fix verification:
+  - **PENTEST-021:** new `TestMapErrCtx_unknownError_returnsGenericInternalMessage` asserts the wire message is the generic `"internal error"` even when the driver throws a leaky `AccessDenied: arn:aws:s3:::secret-bucket/...`.
+  - **PENTEST-022:** caller-context propagation verified by existing signer handler tests passing uncached.
+  - **PENTEST-023:** backpressure path covered by existing worker tests; manual review confirms `ErrQueueFull` propagates as a NACK to the broker via `consumer.Handler` error semantics.
+  - **PENTEST-024:** new `TestHasScopedRole_platformAdminMarker` asserts the `"*"` marker scope behaves as expected in both directions (regular admin can't impersonate platform admin, marker doesn't bleed into specific-org checks). Dead-code removal of `hasRole`/`getUserRoles` confirmed by clean build with no callers.
+  - **PENTEST-025:** new `Stop()` method exits the GC loop cleanly; safe to call multiple times. Existing rate-limit tests still pass.
 
 ---
 

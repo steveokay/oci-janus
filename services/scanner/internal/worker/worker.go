@@ -93,14 +93,30 @@ func (p *Pool) Start(ctx context.Context, workerCount int) {
 	<-ctx.Done()
 }
 
-// Enqueue adds a scan job to the pool without blocking. If the queue is full
-// it falls back to running the job synchronously (acts as back-pressure).
-func (p *Pool) Enqueue(job scanJob) {
+// ErrQueueFull is returned by Enqueue when the worker pool's job channel is
+// full and the caller should apply backpressure (typically: NACK the broker
+// message so it's re-delivered after the in-flight jobs drain).
+var ErrQueueFull = fmt.Errorf("scanner worker queue full")
+
+// Enqueue adds a scan job to the pool without blocking.
+//
+// PENTEST-023: when the queue is full this returns ErrQueueFull instead of
+// spawning an unbounded goroutine. RabbitMQ consumers translate the error
+// into a NACK; the broker re-delivers after a short backoff, which is the
+// correct backpressure signal. A short blocking wait first absorbs micro
+// bursts without immediately bouncing every message.
+func (p *Pool) Enqueue(job scanJob) error {
 	select {
 	case p.jobs <- job:
+		return nil
 	default:
-		// queue full — run inline to avoid dropping the job
-		go p.runJob(context.Background(), job)
+	}
+	// Short blocking attempt to absorb micro-bursts before NACKing.
+	select {
+	case p.jobs <- job:
+		return nil
+	case <-time.After(50 * time.Millisecond):
+		return ErrQueueFull
 	}
 }
 
@@ -115,14 +131,19 @@ func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) erro
 	scanID := uuid.New().String()
 	p.scanStore.Create(scanID, event.TenantID, payload.ManifestDigest, payload.RepositoryName)
 
-	p.Enqueue(scanJob{
+	if err := p.Enqueue(scanJob{
 		tenantID:       event.TenantID,
 		repoID:         payload.RepoID,
 		repositoryName: payload.RepositoryName,
 		manifestDigest: payload.ManifestDigest,
 		pushedBy:       payload.PushedBy,
 		scanID:         scanID,
-	})
+	}); err != nil {
+		// Return the error so the RabbitMQ consumer NACKs and the broker
+		// re-delivers after backoff (PENTEST-023: prefer backpressure over
+		// spawning unbounded goroutines).
+		return fmt.Errorf("enqueue scan job: %w", err)
+	}
 
 	slog.InfoContext(ctx, "scan job enqueued",
 		"scan_id", scanID,
@@ -309,13 +330,15 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 	scanID := uuid.New().String()
 	p.scanStore.Create(scanID, event.TenantID, payload.ManifestDigest, payload.RepositoryName)
 
-	p.Enqueue(scanJob{
+	if err := p.Enqueue(scanJob{
 		tenantID:       event.TenantID,
 		repoID:         payload.RepoID,
 		repositoryName: payload.RepositoryName,
 		manifestDigest: payload.ManifestDigest,
 		scanID:         scanID,
-	})
+	}); err != nil {
+		return fmt.Errorf("enqueue scan job: %w", err)
+	}
 
 	slog.InfoContext(ctx, "scan job enqueued via scan.queued event",
 		"scan_id", scanID,

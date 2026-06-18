@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 
 	"google.golang.org/grpc/codes"
@@ -29,14 +30,24 @@ func New(drv driver.Driver) *StorageHandler {
 }
 
 // mapErr converts known errors to gRPC status errors.
-func mapErr(err error) error {
+//
+// PENTEST-021: never put raw driver errors on the wire. Storage drivers
+// (MinIO, S3, GCS, Azure, filesystem) often include bucket names, full
+// paths, IAM principals, or signed-URL fragments in their error messages.
+// Surfacing that to a caller — even an mTLS-restricted internal one —
+// gives an attacker who reaches the service a lateral-movement aid.
+// We log the full error server-side (with the context so trace_id and
+// tenant_id are preserved by the slog handler) and return a generic
+// message.
+func mapErrCtx(ctx context.Context, op string, err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return status.Error(codes.NotFound, "blob not found")
 	}
-	return status.Error(codes.Internal, err.Error())
+	slog.ErrorContext(ctx, "storage op failed", "op", op, "error", err)
+	return status.Error(codes.Internal, "internal error")
 }
 
 // PutBlob receives a client-streaming upload: first message is meta, subsequent are chunks.
@@ -83,7 +94,7 @@ func (h *StorageHandler) PutBlob(stream storagev1.StorageService_PutBlobServer) 
 		putErr = recvErr
 	}
 	if putErr != nil {
-		return mapErr(putErr)
+		return mapErrCtx(stream.Context(), "PutBlob", putErr)
 	}
 
 	return stream.SendAndClose(&storagev1.PutBlobResponse{
@@ -96,7 +107,7 @@ func (h *StorageHandler) PutBlob(stream storagev1.StorageService_PutBlobServer) 
 func (h *StorageHandler) GetBlob(req *storagev1.GetBlobRequest, stream storagev1.StorageService_GetBlobServer) error {
 	rc, _, err := h.drv.GetBlob(stream.Context(), req.Key)
 	if err != nil {
-		return mapErr(err)
+		return mapErrCtx(stream.Context(), "GetBlob", err)
 	}
 	defer rc.Close()
 
@@ -112,7 +123,7 @@ func (h *StorageHandler) GetBlob(req *storagev1.GetBlobRequest, stream storagev1
 			return nil
 		}
 		if readErr != nil {
-			return mapErr(readErr)
+			return mapErrCtx(stream.Context(), "GetBlob", readErr)
 		}
 	}
 }
@@ -121,7 +132,7 @@ func (h *StorageHandler) GetBlob(req *storagev1.GetBlobRequest, stream storagev1
 func (h *StorageHandler) StatBlob(ctx context.Context, req *storagev1.StatBlobRequest) (*storagev1.StatBlobResponse, error) {
 	info, err := h.drv.StatBlob(ctx, req.Key)
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "StatBlob", err)
 	}
 	return &storagev1.StatBlobResponse{
 		Key:          info.Key,
@@ -134,7 +145,7 @@ func (h *StorageHandler) StatBlob(ctx context.Context, req *storagev1.StatBlobRe
 // DeleteBlob removes a blob from the backend.
 func (h *StorageHandler) DeleteBlob(ctx context.Context, req *storagev1.DeleteBlobRequest) (*storagev1.DeleteBlobResponse, error) {
 	if err := h.drv.DeleteBlob(ctx, req.Key); err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "DeleteBlob", err)
 	}
 	return &storagev1.DeleteBlobResponse{}, nil
 }
@@ -143,7 +154,7 @@ func (h *StorageHandler) DeleteBlob(ctx context.Context, req *storagev1.DeleteBl
 func (h *StorageHandler) BlobExists(ctx context.Context, req *storagev1.BlobExistsRequest) (*storagev1.BlobExistsResponse, error) {
 	exists, err := h.drv.BlobExists(ctx, req.Key)
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "BlobExists", err)
 	}
 	return &storagev1.BlobExistsResponse{Exists: exists}, nil
 }
@@ -156,7 +167,7 @@ func (h *StorageHandler) ListBlobs(req *storagev1.ListBlobsRequest, stream stora
 	}
 	keys, err := h.drv.ListBlobs(stream.Context(), prefix)
 	if err != nil {
-		return mapErr(err)
+		return mapErrCtx(stream.Context(), "ListBlobs", err)
 	}
 	for _, key := range keys {
 		info, err := h.drv.StatBlob(stream.Context(), key)
@@ -174,7 +185,7 @@ func (h *StorageHandler) ListBlobs(req *storagev1.ListBlobsRequest, stream stora
 func (h *StorageHandler) InitiateMultipart(ctx context.Context, req *storagev1.InitiateMultipartRequest) (*storagev1.InitiateMultipartResponse, error) {
 	uploadID, err := h.drv.InitiateMultipart(ctx, req.Key)
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "InitiateMultipart", err)
 	}
 	return &storagev1.InitiateMultipartResponse{UploadId: uploadID}, nil
 }
@@ -222,7 +233,7 @@ func (h *StorageHandler) UploadPart(stream storagev1.StorageService_UploadPartSe
 		putErr = recvErr
 	}
 	if putErr != nil {
-		return mapErr(putErr)
+		return mapErrCtx(stream.Context(), "UploadPart", putErr)
 	}
 
 	return stream.SendAndClose(&storagev1.UploadPartResponse{Etag: etag, PartNum: meta.PartNum})
@@ -235,7 +246,7 @@ func (h *StorageHandler) CompleteMultipart(ctx context.Context, req *storagev1.C
 		parts[i] = driver.CompletedPart{PartNum: p.PartNum, ETag: p.Etag}
 	}
 	if err := h.drv.CompleteMultipart(ctx, req.Key, req.UploadId, parts); err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "CompleteMultipart", err)
 	}
 	return &storagev1.CompleteMultipartResponse{Key: req.Key}, nil
 }
@@ -243,7 +254,7 @@ func (h *StorageHandler) CompleteMultipart(ctx context.Context, req *storagev1.C
 // AbortMultipart cancels an in-progress multipart upload.
 func (h *StorageHandler) AbortMultipart(ctx context.Context, req *storagev1.AbortMultipartRequest) (*storagev1.AbortMultipartResponse, error) {
 	if err := h.drv.AbortMultipart(ctx, req.Key, req.UploadId); err != nil {
-		return nil, mapErr(err)
+		return nil, mapErrCtx(ctx, "AbortMultipart", err)
 	}
 	return &storagev1.AbortMultipartResponse{}, nil
 }

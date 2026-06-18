@@ -119,7 +119,7 @@ func (h *testableSignerHandler) VerifyManifest(ctx context.Context, req *signerv
 		signerID = h.signer.KeyID()
 	}
 
-	rec := h.store.FindRec(req.ManifestDigest, signerID)
+	rec := h.store.FindRec(ctx, req.ManifestDigest, signerID)
 	if rec == nil {
 		return &signerv1.VerifyManifestResponse{Verified: false, FailureReason: "no signature found"}, nil
 	}
@@ -149,7 +149,7 @@ func (h *testableSignerHandler) ListSignatures(ctx context.Context, req *signerv
 		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
 	}
 
-	recs := h.store.List(req.ManifestDigest)
+	recs := h.store.List(ctx, req.ManifestDigest)
 	out := make([]*signerv1.Signature, 0, len(recs))
 	for _, r := range recs {
 		out = append(out, &signerv1.Signature{
@@ -309,7 +309,7 @@ func TestSignManifest_StoresRecordInStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	recs := store.List(testDigest)
+	recs := store.List(context.Background(), testDigest)
 	if len(recs) != 1 {
 		t.Errorf("store.List returned %d records, want 1", len(recs))
 	}

@@ -291,8 +291,8 @@ All decisions resolved. No blockers.
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Implement logout button with server-side JWT revoke | `frontend/`, `services/auth` | NOT STARTED | Sidebar logout button not wired. Must: (1) call `POST /api/v1/logout` to revoke JTI in Redis, (2) clear Zustand auth store, (3) redirect to `/login`. Leaving only the client-side clear means the JWT remains valid for its remaining 5-min TTL (FE-SEC-007). |
-| Create dev seed user migration | `services/auth`, `services/metadata` | NOT STARTED | No test user exists for local login. Add a goose migration or seed script that creates `dev@example.com` + password + tenant membership so the login screen can be exercised locally without manual DB setup. |
+| Implement logout button with server-side JWT revoke | `frontend/`, `services/auth` | DONE ✅ (2026-06-18) | Sidebar logout button wired in `frontend/src/routes/_authenticated.tsx` `SideNavBar`. `handleLogout` calls `apiClient.post('/logout')` (backend revokes JTI in Redis), then `clearAuth()`, then `navigate('/login', { replace: true })`. Order is intentional: clear local state even if the server call fails so the user can't be stuck in a half-logged-out state. Backend `POST /api/v1/logout` was already implemented. Closes FE-SEC-007. |
+| Create dev seed user migration | `services/auth`, `services/metadata` | DONE ✅ (2026-06-18) | The user `admin` / password `Admin1234!dev` was already created by `services/auth/migrations/20260610000001_seed_dev_tenant.sql`, but had no RBAC role so PENTEST-002/003 gates blocked them from doing anything useful. New migration `20260618000001_seed_dev_admin_role.sql` grants admin scope=org/value=dev to the dev admin user. Goose `*.sql` glob picks it up automatically. Bootstrap chicken-and-egg note documented in the migration: production should replace this with an operator-supplied bootstrap script. |
 
 #### Frontend security — MEDIUM
 
