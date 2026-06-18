@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+.tanstack/
+*.tsbuildinfo
+
+# Local env overrides (VITE_TENANT_ID etc.) — never commit; .env.example
+# in the repo root documents the shape.
+.env.local
+.env.*.local
+
+# Editor scratch / coverage / playwright
+coverage/
+playwright-report/
+test-results/

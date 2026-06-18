@@ -15,15 +15,24 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Management service (port 8091) — more specific paths listed first so
-      // they take priority over the catch-all /api rule below.
-      '/api/v1/stats': { target: 'http://localhost:8091', changeOrigin: true },
+      // Specificity matters — Vite matches the longest prefix.
+      // Management service (port 8091) — owns all /api/v1/* application paths
+      // EXCEPT the auth surface listed below.
+      '/api/v1/admin':        { target: 'http://localhost:8091', changeOrigin: true },
+      '/api/v1/stats':        { target: 'http://localhost:8091', changeOrigin: true },
       '/api/v1/repositories': { target: 'http://localhost:8091', changeOrigin: true },
+      '/api/v1/orgs':         { target: 'http://localhost:8091', changeOrigin: true },
 
-      // Auth service (port 8080) — /api/v1/login, /api/v1/apikeys, /api/v1/logout, etc.
-      '/api': { target: 'http://localhost:8080', changeOrigin: true },
-      '/auth': { target: 'http://localhost:8080', changeOrigin: true },
-      '/.well-known': { target: 'http://localhost:8080', changeOrigin: true },
+      // Auth service (port 8080) — login, apikeys, logout, password reset.
+      '/api/v1/login':    { target: 'http://localhost:8080', changeOrigin: true },
+      '/api/v1/logout':   { target: 'http://localhost:8080', changeOrigin: true },
+      '/api/v1/me':       { target: 'http://localhost:8080', changeOrigin: true },
+      '/api/v1/apikeys':  { target: 'http://localhost:8080', changeOrigin: true },
+      '/api/v1/users':    { target: 'http://localhost:8080', changeOrigin: true },
+
+      // OIDC / discovery surface lives on auth.
+      '/.well-known':     { target: 'http://localhost:8080', changeOrigin: true },
+      '/auth':            { target: 'http://localhost:8080', changeOrigin: true },
     },
   },
   build: {

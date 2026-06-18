@@ -1,58 +1,69 @@
 /**
- * authStore — in-memory authentication state via Zustand.
+ * authStore — JWT + user-claims state, kept in MEMORY ONLY.
  *
- * The JWT access token lives only in this store and is wiped on page reload
- * (by design — see CLAUDE-frontend.md §10 and §13). This prevents XSS from
- * reading the token out of localStorage/sessionStorage.
+ * FE-SEC-001 / FE-SEC-002 (security.md):
+ *   We deliberately do NOT persist the token. Putting a JWT in localStorage
+ *   or sessionStorage gives any XSS payload free reign — the whole point of
+ *   the React + CSP setup is to make that impossible. On refresh the user
+ *   logs in again. When we add refresh-token flow it must be HttpOnly
+ *   cookie only (FE-SEC-009).
  *
- * Consumers:
- *   - login.tsx         → calls setAuth() after a successful POST /auth/token
- *   - client.ts         → reads token for the Authorization header
- *   - _authenticated.tsx → calls isAuthenticated() in beforeLoad guard
- *   - index.tsx         → calls isAuthenticated() for the root redirect
- *   - useAuth.ts        → re-exports the store selectors for components
+ * Why Zustand: tiny, no boilerplate, no Provider, plays well with
+ * TanStack Router's beforeLoad sync reads via .getState().
  */
-
 import { create } from 'zustand'
 
-/** Decoded JWT payload fields we care about. */
 export interface AuthUser {
-  sub: string        // user ID
-  tenant_id: string
-  exp: number        // Unix timestamp (seconds)
-  // PENTEST-015 + backend roles claim: flat list of RBAC role names the user
-  // holds anywhere in the tenant (e.g. ["admin"], ["writer","reader"]). Used
-  // by useUserIsAdmin / role-gating UI. May be undefined for tokens issued
-  // before the roles claim was added (Docker-scoped /auth/token tokens).
-  roles?: string[]
+  sub: string        // user id (UUID)
+  tenantId: string
+  username: string
+  roles: string[]    // flat role names — see services/auth Claims.Roles
+  exp: number        // unix seconds
 }
 
 interface AuthState {
-  /** Raw JWT access token — null when logged out or after page reload. */
   token: string | null
-  /** Decoded claims from the token — null when no token is present. */
   user: AuthUser | null
-  /** Convenience: current tenant ID extracted from the token claims. */
-  tenantId: string | null
-
-  /** Store token + decoded claims after a successful login. */
-  setAuth: (token: string, user: AuthUser) => void
-  /** Clear all auth state — called on logout, 401 response, or token expiry. */
-  clearAuth: () => void
-  /** Returns true when a token is present in memory. */
-  isAuthenticated: () => boolean
+  setSession: (token: string) => void
+  clearSession: () => void
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
+export const useAuthStore = create<AuthState>((set) => ({
   token: null,
   user: null,
-  tenantId: null,
-
-  setAuth: (token, user) =>
-    set({ token, user, tenantId: user.tenant_id }),
-
-  clearAuth: () =>
-    set({ token: null, user: null, tenantId: null }),
-
-  isAuthenticated: () => get().token !== null,
+  setSession: (token) => set({ token, user: decodeJwt(token) }),
+  clearSession: () => set({ token: null, user: null }),
 }))
+
+/**
+ * Decode JWT payload WITHOUT verifying signature. The server already
+ * validated the token (that's how we got it) and re-verifies it on every
+ * request. The client only needs the payload to know the user's tenant +
+ * roles for UI gating. Verification on the client is pointless — anyone
+ * who can substitute a token in memory can also substitute the
+ * verification result.
+ */
+function decodeJwt(token: string): AuthUser | null {
+  try {
+    const payload = token.split('.')[1]
+    // base64url -> base64
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const json = atob(padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), '='))
+    const claims = JSON.parse(json) as {
+      sub: string
+      tenant_id: string
+      username?: string
+      roles?: string[]
+      exp: number
+    }
+    return {
+      sub: claims.sub,
+      tenantId: claims.tenant_id,
+      username: claims.username ?? '',
+      roles: Array.isArray(claims.roles) ? claims.roles : [],
+      exp: claims.exp,
+    }
+  } catch {
+    return null
+  }
+}

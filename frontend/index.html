@@ -2,36 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Registry</title>
-
+    <meta name="theme-color" content="#6366f1" />
+    <meta name="description" content="Janus Registry — secure container registry for your team." />
+    <title>Janus Registry</title>
     <!--
-      Google Fonts preconnect hints tell the browser to open TCP/TLS connections
-      early, before the <link> elements below are parsed — shaves ~150ms on cold load.
+      All fonts self-hosted via @fontsource (see src/styles/globals.css).
+      No Google Fonts request — closes FE-SEC-001 external-network-on-render.
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-
-    <!--
-      Material Symbols Outlined — variable font loaded with full axis ranges so
-      we can adjust FILL, weight, GRAD, and optical size via font-variation-settings
-      without extra requests. The globals.css utility sets sane defaults.
-    -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-      rel="stylesheet"
-    />
-
-    <!--
-      JetBrains Mono from Google Fonts — supplements the @fontsource package which
-      only has weight 400 loaded in main.tsx. Weight 500 is needed for text-code-sm
-      (e.g. digest badges, version strings in the repo table).
-    -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
   </head>
   <body>
     <div id="root"></div>

@@ -1,256 +1,267 @@
 @import "tailwindcss";
 
+/*
+ * Self-hosted typefaces. Two faces only — UI sans + code mono — picked to feel
+ * approachable to non-developers while keeping monospace where it actually
+ * helps (digests, image refs, JSON snippets).
+ *
+ *   UI sans  : Geist Sans         — Vercel's typeface; modern, slightly
+ *                                   characterful, excellent at every size
+ *   Code mono: JetBrains Mono     — distinctive ligatures + clear digits
+ */
+@import "@fontsource/geist/400.css";
+@import "@fontsource/geist/500.css";
+@import "@fontsource/geist/600.css";
+@import "@fontsource/geist/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/* Dark-mode triggers when .dark is on <html> — Tailwind v4 variant. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* -------------------------------------------------------------------------
+ * Design tokens (Tailwind v4 @theme — all become utilities automatically)
+ *
+ * Naming follows MD3's semantic-token idea (surface / on-surface / outline)
+ * because it scales to dark mode for free: each semantic token gets a
+ * light value here and a dark override in the .dark block below.
+ *
+ * The accent is INDIGO (Tailwind's indigo-500/600 family) — chosen for
+ * being calm, trustworthy, modern, and friendly to non-dev users.
+ * ------------------------------------------------------------------------- */
 @theme {
-  /* Background scale */
-  --color-bg-base:    #0d1117;
-  --color-bg-surface: #161b22;
-  --color-bg-elevated:#1c2128;
-  --color-bg-overlay: #21262d;
+  /* Typography — explicit families keep us off the OS default cascade. */
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Border */
-  --color-border:       #30363d;
-  --color-border-muted: #21262d;
+  /* Type scale — looser than Material because non-dev users prefer breathing room. */
+  --text-display-2xl: 3.75rem;     /* 60px — page title on landing-style screens */
+  --text-display-xl:  3rem;        /* 48px — onboarding / empty-state heroes */
+  --text-display-lg:  2.25rem;     /* 36px — primary page title */
+  --text-heading-lg:  1.875rem;    /* 30px — section header */
+  --text-heading-md:  1.5rem;      /* 24px — card title */
+  --text-heading-sm:  1.25rem;     /* 20px — subheading */
+  --text-body-lg:     1.0625rem;   /* 17px — primary copy */
+  --text-body-md:     0.9375rem;   /* 15px — UI default */
+  --text-body-sm:     0.875rem;    /* 14px — secondary copy */
+  --text-label-md:    0.8125rem;   /* 13px — form labels */
+  --text-label-sm:    0.75rem;     /* 12px — captions / metadata */
+  --text-code-sm:     0.8125rem;   /* 13px monospace — inline digests */
 
-  /* Text */
-  --color-text-primary:   #e6edf3;
-  --color-text-secondary: #8b949e;
-  --color-text-muted:     #6e7681;
-  --color-text-inverse:   #0d1117;
+  /* Spacing — 4px base, generous. */
+  --spacing-xs:  0.25rem;
+  --spacing-sm:  0.5rem;
+  --spacing-md:  0.75rem;
+  --spacing-lg:  1rem;
+  --spacing-xl:  1.5rem;
+  --spacing-2xl: 2rem;
+  --spacing-3xl: 3rem;
+  --spacing-4xl: 4rem;
 
-  /* Accent */
-  --color-accent:       #388bfd;
-  --color-accent-hover: #4d9bff;
-  --color-accent-muted: #1f3a5f;
+  /* Radii — soft, friendly. No sharp corners. */
+  --radius-xs:  0.25rem;   /* 4px  — chips, tags */
+  --radius-sm:  0.5rem;    /* 8px  — inputs, buttons */
+  --radius-md:  0.75rem;   /* 12px — cards */
+  --radius-lg:  1rem;      /* 16px — modals, large surfaces */
+  --radius-xl:  1.5rem;    /* 24px — hero panels */
+  --radius-full: 9999px;   /* — pills, avatars */
 
-  /* Severity */
-  --color-critical: #f85149;
-  --color-high:     #d29922;
-  --color-medium:   #e3b341;
-  --color-low:      #3fb950;
-  --color-info:     #388bfd;
+  /* Shadows — soft and warm, not the harsh black drop-shadow default. */
+  --shadow-xs:  0 1px 2px 0 rgb(15 23 42 / 0.04);
+  --shadow-sm:  0 1px 3px 0 rgb(15 23 42 / 0.05), 0 1px 2px -1px rgb(15 23 42 / 0.04);
+  --shadow-md:  0 4px 6px -1px rgb(15 23 42 / 0.06), 0 2px 4px -2px rgb(15 23 42 / 0.04);
+  --shadow-lg:  0 10px 15px -3px rgb(15 23 42 / 0.08), 0 4px 6px -4px rgb(15 23 42 / 0.04);
+  --shadow-xl:  0 20px 25px -5px rgb(15 23 42 / 0.08), 0 8px 10px -6px rgb(15 23 42 / 0.04);
 
-  /* Status */
-  --color-success: #3fb950;
-  --color-error:   #f85149;
-  --color-warning: #d29922;
+  /* Motion — used as transition durations + easing on every interactive el. */
+  --ease-out-quad:    cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast:    120ms;
+  --duration-base:    200ms;
+  --duration-slow:    300ms;
 
-  /* Typography */
-  --font-sans: "Hanken Grotesk", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  /* -----------------------------------------------------------------------
+   * LIGHT MODE — default token values.
+   * Naming convention: --color-<role>[-<variant>]
+   *   surface             : page / card backgrounds
+   *   surface-muted       : sidebar / subtle panels
+   *   surface-raised      : popovers / dropdowns / dialogs
+   *   surface-overlay     : modal scrims
+   *   on-surface          : primary text on surface
+   *   on-surface-muted    : secondary text
+   *   on-surface-subtle   : tertiary / placeholders / metadata
+   *   border              : default divider
+   *   border-strong       : emphasised divider (focus rings, separators)
+   *   primary             : accent — buttons, links, focus rings, active state
+   *   on-primary          : text on primary background
+   *   primary-soft        : tinted background for selected rows, active chips
+   *   success / warning / danger / info : status palette
+   * ----------------------------------------------------------------------- */
 
-  /*
-   * Design-system palette from the login page reference design.
-   * Named to match the Tailwind config in design/stitch/login/code.html so
-   * that the same class names work here (e.g. bg-primary-container, text-secondary).
-   */
-  --color-primary:                  #000917;
-  --color-primary-container:        #0d2137;
-  --color-primary-fixed:            #d2e4ff;
-  --color-primary-fixed-dim:        #b5c8e5;
-  --color-on-primary:               #ffffff;
-  --color-on-primary-container:     #7689a4;
-  --color-on-primary-fixed:         #081c32;
-  --color-on-primary-fixed-variant: #364860;
-  --color-inverse-primary:          #b5c8e5;
+  /* Neutral grays — slate-tinged for a slightly cooler, more "design-y" feel. */
+  --color-neutral-50:  oklch(0.985 0.002 247);
+  --color-neutral-100: oklch(0.97 0.003 247);
+  --color-neutral-200: oklch(0.93 0.005 247);
+  --color-neutral-300: oklch(0.87 0.007 247);
+  --color-neutral-400: oklch(0.71 0.012 247);
+  --color-neutral-500: oklch(0.56 0.015 247);
+  --color-neutral-600: oklch(0.45 0.017 247);
+  --color-neutral-700: oklch(0.37 0.019 247);
+  --color-neutral-800: oklch(0.27 0.020 247);
+  --color-neutral-900: oklch(0.18 0.021 247);
+  --color-neutral-950: oklch(0.13 0.024 247);
 
-  --color-secondary:                    #2f6096;
-  --color-secondary-container:          #97c4ff;
-  --color-secondary-fixed:              #d2e4ff;
-  --color-secondary-fixed-dim:          #a1c9ff;
-  --color-on-secondary:                 #ffffff;
-  --color-on-secondary-container:       #1b5185;
-  --color-on-secondary-fixed:           #001c37;
-  --color-on-secondary-fixed-variant:   #0d487c;
+  /* Indigo accent — Tailwind's classic indigo scale, slightly punched. */
+  --color-primary-50:  oklch(0.97 0.018 280);
+  --color-primary-100: oklch(0.94 0.040 280);
+  --color-primary-200: oklch(0.87 0.080 280);
+  --color-primary-300: oklch(0.78 0.130 280);
+  --color-primary-400: oklch(0.68 0.180 280);
+  --color-primary-500: oklch(0.60 0.215 280);   /* base accent — buttons, links */
+  --color-primary-600: oklch(0.54 0.220 280);   /* hover */
+  --color-primary-700: oklch(0.46 0.200 280);   /* active */
+  --color-primary-800: oklch(0.38 0.165 280);
+  --color-primary-900: oklch(0.30 0.130 280);
 
-  --color-tertiary:                   #000a03;
-  --color-tertiary-container:         #002610;
-  --color-tertiary-fixed:             #65fe9f;
-  --color-tertiary-fixed-dim:         #43e186;
-  --color-on-tertiary:                #ffffff;
-  --color-on-tertiary-container:      #009c54;
-  --color-on-tertiary-fixed:          #00210d;
-  --color-on-tertiary-fixed-variant:  #00522a;
+  /* Status palette — calm, not screamy. */
+  --color-success-500: oklch(0.65 0.165 155);
+  --color-success-100: oklch(0.95 0.04 155);
+  --color-warning-500: oklch(0.75 0.16 75);
+  --color-warning-100: oklch(0.95 0.045 75);
+  --color-danger-500:  oklch(0.62 0.21 25);
+  --color-danger-100:  oklch(0.95 0.045 25);
+  --color-info-500:    oklch(0.65 0.13 230);
+  --color-info-100:    oklch(0.95 0.04 230);
 
-  --color-surface:                  #f8f9ff;
-  --color-surface-dim:              #cbdbf5;
-  --color-surface-bright:           #f8f9ff;
-  --color-surface-variant:          #d3e4fe;
-  --color-surface-tint:             #4d6079;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low:    #eff4ff;
-  --color-surface-container:        #e5eeff;
-  --color-surface-container-high:   #dce9ff;
-  --color-surface-container-highest:#d3e4fe;
-  --color-inverse-surface:          #213145;
-  --color-inverse-on-surface:       #eaf1ff;
+  /* Semantic surfaces — light mode. */
+  --color-surface:         oklch(1 0 0);                 /* white */
+  --color-surface-muted:   oklch(0.985 0.002 247);       /* near-white tinted */
+  --color-surface-raised:  oklch(1 0 0);                 /* same as surface — shadow does the work */
+  --color-surface-overlay: oklch(0.18 0.021 247 / 0.5); /* scrim */
+  --color-surface-inverse: oklch(0.18 0.021 247);       /* dark surface used in light mode for emphasis */
 
-  --color-background:   #f8f9ff;
-  --color-on-background:#0b1c30;
-  --color-on-surface:         #0b1c30;
-  --color-on-surface-variant: #44474d;
+  /* Semantic on-surface text — light mode. */
+  --color-on-surface:        oklch(0.18 0.021 247);   /* neutral-900 */
+  --color-on-surface-muted:  oklch(0.45 0.017 247);   /* neutral-600 */
+  --color-on-surface-subtle: oklch(0.56 0.015 247);   /* neutral-500 */
+  --color-on-surface-inverse: oklch(0.985 0.002 247); /* near-white text on dark surfaces */
 
-  --color-outline:         #74777d;
-  --color-outline-variant: #c4c6cd;
+  /* Borders — light mode. */
+  --color-border:        oklch(0.93 0.005 247);     /* neutral-200 */
+  --color-border-strong: oklch(0.87 0.007 247);     /* neutral-300 */
 
-  --color-error:             #ba1a1a;
-  --color-error-container:   #ffdad6;
-  --color-on-error:          #ffffff;
-  --color-on-error-container:#93000a;
-
-  /*
-   * Spacing tokens — used as p-gutter, px-md, gap-lg, etc.
-   * --spacing-* is the Tailwind v4 convention for custom spacing values;
-   * the old --space-* prefix is NOT recognised by the v4 engine.
-   */
-  --spacing-gutter: 20px;
-  --spacing-xs:     4px;
-  --spacing-sm:     8px;
-  --spacing-md:     16px;
-  --spacing-lg:     24px;
-  --spacing-xl:     32px;
-  --spacing-base:   4px;
-
-  /*
-   * Border-radius tokens — these OVERRIDE the Tailwind defaults.
-   * Crucially, --radius-full becomes 0.75rem (12px), NOT 9999px,
-   * which matches the Stitch design system's "full" pill shape for chips.
-   */
-  --radius-DEFAULT: 0.125rem; /* 2px  — used as rounded            */
-  --radius-lg:      0.25rem;  /* 4px  — used as rounded-lg         */
-  --radius-xl:      0.5rem;   /* 8px  — used as rounded-xl         */
-  --radius-full:    0.75rem;  /* 12px — used as rounded-full       */
-
-  /*
-   * Max-width token for the page container so we can use max-w-container-max
-   * without hard-coding 1440px in every layout component.
-   */
-  --width-container-max: 1440px;
+  /* Accent semantic aliases — light mode. */
+  --color-primary:        var(--color-primary-500);
+  --color-on-primary:     oklch(1 0 0);
+  --color-primary-soft:   var(--color-primary-50);
 }
 
-* {
-  box-sizing: border-box;
+/* -----------------------------------------------------------------------
+ * DARK MODE — override only the semantic tokens. The numeric scales
+ * (neutral-*, primary-*) stay the same so utilities like `bg-primary-600`
+ * keep their meaning; semantic tokens flip the *role* assignments.
+ * ----------------------------------------------------------------------- */
+.dark {
+  --color-surface:         oklch(0.18 0.021 247);   /* neutral-900 */
+  --color-surface-muted:   oklch(0.13 0.024 247);   /* neutral-950 */
+  --color-surface-raised:  oklch(0.27 0.020 247);   /* neutral-800 — popovers pop */
+  --color-surface-overlay: oklch(0.07 0.024 247 / 0.7);
+  --color-surface-inverse: oklch(1 0 0);
+
+  --color-on-surface:        oklch(0.97 0.003 247);   /* neutral-100 */
+  --color-on-surface-muted:  oklch(0.71 0.012 247);   /* neutral-400 */
+  --color-on-surface-subtle: oklch(0.56 0.015 247);   /* neutral-500 */
+  --color-on-surface-inverse: oklch(0.18 0.021 247);
+
+  --color-border:        oklch(0.37 0.019 247);     /* neutral-700 */
+  --color-border-strong: oklch(0.45 0.017 247);     /* neutral-600 */
+
+  /* Dark mode wants a slightly brighter primary so it doesn't muddy against dark surfaces. */
+  --color-primary:      oklch(0.70 0.190 280);
+  --color-on-primary:   oklch(1 0 0);
+  --color-primary-soft: oklch(0.30 0.130 280 / 0.4);
+}
+
+/* -----------------------------------------------------------------------
+ * Base element styles — small set, intentionally restrained.
+ * ----------------------------------------------------------------------- */
+html, body, #root {
+  height: 100%;
 }
 
 body {
-  background-color: var(--color-bg-base);
-  color: var(--color-text-primary);
   font-family: var(--font-sans);
+  color: var(--color-on-surface);
+  background-color: var(--color-surface-muted);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Login page overrides the body background — applied via a class on the route */
-body.login-page {
-  background-color: #f8f9ff;
-  background-image: radial-gradient(#e2e8f0 0.5px, transparent 0.5px);
-  background-size: 24px 24px;
+/* Selection always uses the accent so it feels branded. */
+::selection {
+  background: var(--color-primary-soft);
   color: var(--color-on-surface);
 }
 
-/* Frosted glass card used on the login page */
-.login-card-blur {
-  backdrop-filter: blur(8px);
-  background-color: rgba(255, 255, 255, 0.95);
+/* Focus-visible — accessible focus ring on every interactive element.
+   Use ring instead of outline for proper border-radius following. */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-primary);
+  border-radius: var(--radius-sm);
 }
 
-/*
- * Material Symbols Outlined baseline style.
- * The variable font axes control the icon's appearance without extra requests:
- *   FILL 0   → outlined (not filled) style
- *   wght 400 → regular weight stroke
- *   GRAD 0   → no grade adjustment
- *   opsz 24  → optimised for 24px display size
+/* -----------------------------------------------------------------------
+ * Auth-screen background — combines a soft radial indigo wash with a
+ * subtle dot grid. The grid keeps the page from feeling blank while
+ * staying quiet enough not to compete with the card on top.
  *
- * vertical-align: middle keeps icons vertically centred when placed inline
- * next to text — avoids the classic "icon sits 2px too low" layout shift.
- */
-.material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-  vertical-align: middle;
+ * Why a utility class rather than inline styles on every auth route:
+ *   * Sprint 1 onboards more public routes (password reset, accept-invite,
+ *     verify-email) — they all want the same background. One class,
+ *     consistent look.
+ *   * Easy to swap to a different texture later without hunting through
+ *     every route file.
+ * ----------------------------------------------------------------------- */
+.bg-auth-canvas {
+  background-color: var(--color-surface);
+  background-image:
+    /* Radial wash — soft indigo tint, brightest at top-center, fading to
+       neutral by the lower third. Adds depth without committing to a
+       full gradient palette. */
+    radial-gradient(
+      ellipse 80% 60% at 50% -10%,
+      color-mix(in oklch, var(--color-primary-100) 80%, transparent),
+      transparent 70%
+    ),
+    /* Dot grid — tiny 1px dots on a 22px lattice. Just visible enough to
+       hint at "engineered" without screaming about it. */
+    radial-gradient(
+      circle at 1px 1px,
+      color-mix(in oklch, var(--color-on-surface) 8%, transparent) 1px,
+      transparent 0
+    );
+  background-size: auto, 22px 22px;
+  background-position: top center, top left;
+  background-repeat: no-repeat, repeat;
 }
 
-/*
- * Typography utility classes — mirrors the Stitch design system scale.
- * Using @utility in Tailwind v4 registers these as first-class utility
- * classes that participate in the normal cascade (no !important needed).
- * Each class sets the full typographic spec: size, line-height, weight,
- * letter-spacing (where relevant), and the correct font family.
- */
-
-/* display: hero headlines, empty-state illustrations, marketing copy */
-@utility text-display {
-  font-size: 36px;
-  line-height: 44px;
-  letter-spacing: -0.02em;
-  font-weight: 700;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/* headline-lg: section titles, modal headings */
-@utility text-headline-lg {
-  font-size: 28px;
-  line-height: 36px;
-  font-weight: 600;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/* headline-md: card titles, table section headers, nav wordmark */
-@utility text-headline-md {
-  font-size: 20px;
-  line-height: 28px;
-  font-weight: 600;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/* body-lg: standard readable prose, form hints */
-@utility text-body-lg {
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/* body-md: default UI text, table cell values, nav link labels */
-@utility text-body-md {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 400;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/*
- * label-caps: compact micro-label style used for column headers, badges, stat
- * card labels, and filter buttons. The letter-spacing of 0.05em compensates
- * for the tighter optical feel of small all-caps text.
- *
- * NOTE: text-transform is intentionally NOT set here — elements that need
- * ALL-CAPS should either write their content in uppercase in JSX or add the
- * Tailwind `uppercase` utility class explicitly. This matches the reference
- * design system where some label-caps text is mixed-case (e.g. stat card
- * labels, sidebar nav items) and some is all-caps (e.g. column headers, badges).
- */
-@utility text-label-caps {
-  font-size: 12px;
-  line-height: 16px;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-  font-family: "Hanken Grotesk", sans-serif;
-}
-
-/* code-md: inline code, pull command strings, digest references */
-@utility text-code-md {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 400;
-  font-family: "JetBrains Mono", monospace;
-}
-
-/*
- * code-sm: compact monospace — version badges, short digests, sub-labels
- * under repo names. Weight 500 gives slightly bolder rendering at small sizes.
- */
-@utility text-code-sm {
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 500;
-  font-family: "JetBrains Mono", monospace;
+.dark .bg-auth-canvas {
+  background-color: var(--color-surface-muted);
+  background-image:
+    radial-gradient(
+      ellipse 80% 60% at 50% -10%,
+      color-mix(in oklch, var(--color-primary) 25%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      circle at 1px 1px,
+      color-mix(in oklch, var(--color-on-surface) 10%, transparent) 1px,
+      transparent 0
+    );
+  background-size: auto, 22px 22px;
+  background-position: top center, top left;
+  background-repeat: no-repeat, repeat;
 }
