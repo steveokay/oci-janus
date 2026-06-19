@@ -12,7 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
+import { Route as AuthenticatedRepositoriesOrgRepoRouteImport } from './routes/_authenticated/repositories/$org/$repo'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -28,21 +31,44 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedRepositoriesIndexRoute =
+  AuthenticatedRepositoriesIndexRouteImport.update({
+    id: '/repositories/',
+    path: '/repositories/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesOrgRepoRoute =
+  AuthenticatedRepositoriesOrgRepoRouteImport.update({
+    id: '/repositories/$org/$repo',
+    path: '/repositories/$org/$repo',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/profile': typeof AuthenticatedProfileRoute
+  '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
+  '/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/profile': typeof AuthenticatedProfileRoute
+  '/repositories': typeof AuthenticatedRepositoriesIndexRoute
+  '/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -50,18 +76,36 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/profile': typeof AuthenticatedProfileRoute
+  '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
+  '/_authenticated/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/dashboard'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/profile'
+    | '/repositories/'
+    | '/repositories/$org/$repo'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/dashboard'
+  to:
+    | '/'
+    | '/login'
+    | '/dashboard'
+    | '/profile'
+    | '/repositories'
+    | '/repositories/$org/$repo'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/profile'
+    | '/_authenticated/repositories/'
+    | '/_authenticated/repositories/$org/$repo'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,6 +137,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/profile': {
+      id: '/_authenticated/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AuthenticatedProfileRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/dashboard': {
       id: '/_authenticated/dashboard'
       path: '/dashboard'
@@ -100,15 +151,35 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/repositories/': {
+      id: '/_authenticated/repositories/'
+      path: '/repositories'
+      fullPath: '/repositories/'
+      preLoaderRoute: typeof AuthenticatedRepositoriesIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$org/$repo': {
+      id: '/_authenticated/repositories/$org/$repo'
+      path: '/repositories/$org/$repo'
+      fullPath: '/repositories/$org/$repo'
+      preLoaderRoute: typeof AuthenticatedRepositoriesOrgRepoRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
+  AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
+  AuthenticatedRepositoriesOrgRepoRoute: typeof AuthenticatedRepositoriesOrgRepoRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedProfileRoute: AuthenticatedProfileRoute,
+  AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
+  AuthenticatedRepositoriesOrgRepoRoute: AuthenticatedRepositoriesOrgRepoRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

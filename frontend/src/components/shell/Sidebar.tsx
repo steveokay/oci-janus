@@ -50,9 +50,9 @@ export function Sidebar() {
           label="Dashboard"
         />
         <NavItem
+          to="/repositories"
           icon={<Package className="w-4 h-4" />}
           label="Repositories"
-          comingSoonNote="Sprint 1c: repository list with TanStack Table."
         />
 
         <SectionHeading className="pt-lg">Manage</SectionHeading>
