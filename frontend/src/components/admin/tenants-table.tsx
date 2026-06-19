@@ -47,20 +47,23 @@ export function TenantsTable({
           ) : (
             tenants.map((t) => (
               <TableRow key={t.tenant_id}>
-                <TableCell>
+                <TableCell className="py-3">
                   <div className="flex items-center gap-3">
                     <TenantInitial name={t.name} />
                     <div className="min-w-0">
-                      <div className="font-medium text-sm text-[var(--color-fg)]">
+                      <div className="text-sm font-medium text-[var(--color-fg)]">
                         {t.name}
                       </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <code className="font-mono text-[10px] text-[var(--color-fg-subtle)]">
-                          {t.tenant_id.slice(0, 8)}
-                        </code>
-                        <CopyButton value={t.tenant_id} iconOnly />
+                      <div className="mt-0.5 font-mono text-[10px] text-[var(--color-fg-subtle)]">
+                        {t.tenant_id.slice(0, 8)}
                       </div>
                     </div>
+                    {/* Copy moved out of the inner stack so it has its own
+                        vertical centerline. Previously it shared a line with
+                        the UUID; with the icon-button being h-9 wide, the
+                        cell content exceeded h-12 and pushed the name into
+                        the row's top border. */}
+                    <CopyButton value={t.tenant_id} iconOnly />
                   </div>
                 </TableCell>
                 <TableCell>

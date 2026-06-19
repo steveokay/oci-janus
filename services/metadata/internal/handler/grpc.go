@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -142,6 +143,9 @@ func (h *MetadataHandler) GetRepositoryByName(ctx context.Context, req *metadata
 func (h *MetadataHandler) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
 	repos, err := h.repo.ListRepositories(stream.Context(), req.TenantId, req.OrgId)
 	if err != nil {
+		// Temporary diagnostic logging — same reason as UpdateTenantQuota.
+		slog.ErrorContext(stream.Context(), "ListRepositories repo error",
+			"tenant_id", req.TenantId, "org_id", req.OrgId, "err", err)
 		return mapErr(err)
 	}
 	for _, r := range repos {
@@ -265,6 +269,16 @@ func (h *MetadataHandler) UpdateTenantQuota(ctx context.Context, req *metadatav1
 		return nil, status.Error(codes.InvalidArgument, "quota_bytes must be non-negative")
 	}
 	usage, err := h.repo.UpdateTenantQuota(ctx, req.GetTenantId(), req.GetQuotaBytes())
+	if err != nil {
+		// Log the underlying error so we can diagnose without rebuilding —
+		// mapErr swallows it as a generic codes.Internal. Temporary
+		// instrumentation; leave in until we land structured DB-error
+		// classification in libs/errors/codes.
+		slog.ErrorContext(ctx, "UpdateTenantQuota repo error",
+			"tenant_id", req.GetTenantId(),
+			"quota_bytes", req.GetQuotaBytes(),
+			"err", err)
+	}
 	return usage, mapErr(err)
 }
 

@@ -164,8 +164,13 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID strin
 	for rows.Next() {
 		var repo metadatav1.Repository
 		var createdAt time.Time
+		// FE-API-006 added r.description to repoSelectCols; the scan needs to
+		// drain all 10 columns or pgx returns "number of field descriptions
+		// must equal number of destinations". Keep field order aligned with
+		// repoSelectCols and scanOneRepo.
 		if err := rows.Scan(&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
-			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org); err != nil {
+			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
+			&repo.Description); err != nil {
 			return nil, fmt.Errorf("scan repository: %w", err)
 		}
 		repo.CreatedAt = timestamppb.New(createdAt)
@@ -603,14 +608,25 @@ func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (
 
 // UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
 // API's super-admin quota route to bump quotas for large customers.
+//
+// UPSERT semantics: a tenant created via registry-tenant does not get a row
+// in registry-metadata's tenants table until first push activity. Platform
+// admins legitimately need to set quotas ahead of that first push — without
+// the upsert this returned NotFound for every newly-created tenant. The
+// placeholder name is the tenant_id stringified (the name column has a
+// UNIQUE constraint but no semantic meaning to this service); the
+// metadata-side onboarding flow can overwrite the placeholder later.
 func (r *Repository) UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error) {
-	const q = `UPDATE tenants SET storage_quota = $2 WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, tenantID, quotaBytes)
-	if err != nil {
-		return nil, fmt.Errorf("update tenant quota: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
+	// Pass tenantID as both $1 (UUID) and $2 (TEXT) — Postgres refuses to
+	// deduce a single type for a placeholder used in two columns of
+	// different types (SQLSTATE 42P08), so separate placeholders are
+	// required even though they bind to the same value.
+	const q = `
+		INSERT INTO tenants (id, name, storage_quota)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET storage_quota = EXCLUDED.storage_quota`
+	if _, err := r.pool.Exec(ctx, q, tenantID, tenantID, quotaBytes); err != nil {
+		return nil, fmt.Errorf("upsert tenant quota: %w", err)
 	}
 	return r.GetTenantQuotaUsage(ctx, tenantID)
 }
