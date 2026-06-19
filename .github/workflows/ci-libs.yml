@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.23" }
+        with: { go-version: "1.25.7" }
       - uses: golangci/golangci-lint-action@v6
         with:
           working-directory: libs
@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.23" }
+        with: { go-version: "1.25.7" }
       - run: cd libs && go test -race ./...
 
   security:
@@ -31,5 +31,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.23" }
+        with: { go-version: "1.25.7" }
       - run: cd libs && go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
