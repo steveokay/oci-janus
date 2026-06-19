@@ -13,7 +13,22 @@
       "Bash(go work *)",
       "Bash(go test *)",
       "Bash(go tool *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git checkout *)",
+      "Bash(buf generate *)",
+      "Bash(Remove-Item *)",
+      "Bash(npm run *)",
+      "Bash(GOWORK=off go build ./...)",
+      "Bash(GOWORK=off go test ./internal/handler/... ./internal/service/...)",
+      "Bash(make test-conformance *)",
+      "Bash(git stash *)",
+      "Bash(AUTH_REALM=http://registry-auth:8080/auth/token docker compose -f infra/docker-compose/docker-compose.yml -p docker-compose up -d --no-deps --wait registry-core)",
+      "Bash(git apply *)",
+      "Read(//tmp/**)",
+      "Bash(docker exec *)",
+      "Bash(curl -sv -u \"conformance:Conform1234!dev\" http://localhost:8081/v2/)",
+      "Bash(git pull *)",
+      "mcp__claude_ai_Higsfield__job_display"
     ]
   },
   "enableAllProjectMcpServers": true,

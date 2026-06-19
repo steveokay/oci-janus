@@ -57,6 +57,17 @@ Considered for later:
 
 ---
 
+## Deferred decisions
+
+> Decisions surfaced during the rebuild that aren't blocking the next sprint
+> but need an answer before the relevant feature ships to production.
+
+| Decision | Context | Touches | Revisit when |
+|---|---|---|---|
+| **Super-admin login URL in production.** Where do platform operators log in? Three viable setups: (1) a system "platform" tenant resolved from the platform's naked domain (`registry.example.com/login`); (2) a dedicated admin subdomain (`admin.registry.example.com/login`); (3) platform-admin marker on a user inside a regular customer tenant. Today only #3 works because there's no platform tenant — the login form's "Use a different workspace" disclosure is the dev-only escape hatch. In production with custom domains the workspace field should disappear entirely (host resolves the tenant), so the super-admin path needs a real answer first. | `login.tsx`, gateway host→tenant routing, `services/tenant`, deployment docs | Before super-admin features ship to production / before Sprint 3 tenant work, whichever is sooner |
+
+---
+
 ## Sprint 0 — Bootstrap & foundation (PAUSED MID-ITERATION)
 
 > **Resume here:** branch `feat/frontend-rebuild`, dev server `cd frontend && npm run dev` → http://localhost:5173/login. Old UI lives on `frontend-archive-v1` if you ever need to compare.

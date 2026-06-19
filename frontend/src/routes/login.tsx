@@ -1,32 +1,28 @@
 /**
- * /login — public route. Single centered card on a quiet off-white surface.
+ * /login — public route. Single centered card on a warm cream surface.
  *
  * Design rationale:
- *   * The split-screen-with-hero pattern is played-out SaaS aesthetic. Stripe,
- *     Linear, Vercel, GitHub, Cal.com, Resend — none of them do it anymore.
- *     A login is a transactional moment; visual noise here just costs the
- *     user time before they get to the actual app.
- *   * One card, one column, one primary action. Works at every viewport
- *     from 320px upward without any media-query gymnastics.
- *   * Type stays modest (heading-md, not display-*). The card itself
- *     carries the visual weight via subtle border + shadow.
- *
- * Form rules:
+ *   * Credential login leads — username/password is the primary path for
+ *     self-hosted deployments. SSO follows as a secondary option.
+ *   * Brand mark sits inside the card header so the gradient band above
+ *     can act as pure decoration.
+ *   * Warm gradient header band gives the page visual weight without a
+ *     busy background texture.
  *   * Tenant ("workspace") ID is collapsed behind a disclosure — defaults
- *     from VITE_TENANT_ID in dev. Production deployments resolve tenant
- *     from host header so most users will never see this field.
+ *     from VITE_TENANT_ID in dev. Production resolves from host header so
+ *     most users will never see this field.
  *   * Error mapping mirrors PENTEST-005: never disclose which input was
  *     wrong. Single 401 → single "Invalid credentials" toast.
  */
 import { useState } from 'react'
-import { createFileRoute, useNavigate, redirect } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, useRouter, redirect } from '@tanstack/react-router'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { AxiosError } from 'axios'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Eye, EyeOff, KeyRound } from 'lucide-react'
 import { apiClient } from '@/lib/api/client'
 import { useAuthStore } from '@/store/authStore'
 import { Button } from '@/components/ui/Button'
@@ -55,17 +51,26 @@ export const Route = createFileRoute('/login')({
       throw redirect({ to: '/dashboard' })
     }
   },
+  // Only accept relative paths as `from` to prevent open-redirect attacks.
+  // A `from` like `//evil.example.com/x` would otherwise navigate off-site.
   validateSearch: (search: Record<string, unknown>) => ({
-    from: typeof search.from === 'string' ? search.from : undefined,
+    from:
+      typeof search.from === 'string' &&
+      search.from.startsWith('/') &&
+      !search.from.startsWith('//')
+        ? search.from
+        : undefined,
   }),
   component: LoginPage,
 })
 
 function LoginPage() {
   const navigate = useNavigate()
+  const router = useRouter()
   const setSession = useAuthStore((s) => s.setSession)
   const { from } = Route.useSearch()
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   const {
     register,
@@ -92,7 +97,15 @@ function LoginPage() {
     onSuccess: (data) => {
       setSession(data.token)
       toast.success('Signed in')
-      navigate({ to: (from as '/dashboard') ?? '/dashboard' })
+      // Round-trip to the originally requested route when present. We use
+      // `router.history.push` for the `from` case because it accepts a raw
+      // string — `navigate({ to: ... })` would require a typed route
+      // literal, which `from` (runtime-validated above) can't satisfy.
+      if (from) {
+        router.history.push(from)
+      } else {
+        navigate({ to: '/dashboard' })
+      }
     },
     onError: (err: unknown) => {
       let message = 'Invalid credentials. Please try again.'
@@ -107,82 +120,59 @@ function LoginPage() {
     },
   })
 
-  // SSO is UI-complete here but the backend doesn't have any providers wired
-  // yet (services/auth only does username/password + API keys today). When the
-  // operator clicks an SSO button we surface a "coming soon" toast so the
-  // affordance is honest. Sprint 1 backend work adds the OIDC/OAuth flow.
+  // SSO is UI-complete but the backend doesn't have providers wired yet.
+  // Sprint 1a backend work adds the OIDC/OAuth flow.
   const ssoComingSoon = (provider: string) => () =>
     toast.message(`${provider} sign-in is coming soon`, {
       description: 'Use your username and password for now.',
     })
 
-  return (
-    <div className="min-h-screen w-full flex flex-col items-center justify-center bg-auth-canvas px-md py-2xl">
-      {/* Brand mark — sits above the card so it doesn't compete for space inside */}
-      <div className="flex items-center gap-md mb-xl">
-        <Mark />
-        <span className="text-heading-sm font-semibold text-on-surface tracking-tight">
-          Janus
-        </span>
-      </div>
+  const onForgotPassword = () =>
+    toast.message('Password reset is coming soon', {
+      description: 'For now, contact your workspace admin to reset it.',
+    })
 
-      {/* The card. max-w-[400px] keeps the form readable on any viewport. */}
-      <div className="w-full max-w-[400px] bg-surface rounded-md border border-border shadow-sm">
+  return (
+    <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-auth-canvas px-md py-2xl overflow-hidden">
+
+      {/* Warm gradient header band — amber-to-rose, fades out going down.
+          Pure decoration; the brand mark lives inside the card. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-44 pointer-events-none"
+        style={{
+          background: 'linear-gradient(120deg, oklch(0.91 0.07 58), oklch(0.88 0.065 355))',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 35%, transparent 100%)',
+          maskImage: 'linear-gradient(to bottom, black 0%, black 35%, transparent 100%)',
+        }}
+      />
+
+      {/* Card */}
+      <div className="relative z-10 w-full max-w-[400px] bg-surface rounded-lg border border-border shadow-md">
         <div className="p-xl space-y-lg">
-          <header className="space-y-xs">
-            <h1 className="text-heading-md font-semibold text-on-surface">
-              Sign in to your workspace
+
+          <header>
+            <Mark />
+            <h1 className="mt-md text-heading-md font-semibold text-on-surface">
+              Sign in to Janus
             </h1>
-            <p className="text-body-sm text-on-surface-muted">
-              Continue with a single sign-on provider or your username and password.
+            <p className="mt-xs text-body-sm text-on-surface-muted">
+              Continue to your workspace.
             </p>
           </header>
 
-          {/* SSO providers — leads the screen because for most enterprise
-              deployments this is the path most users will take. */}
-          <div className="space-y-sm">
-            <SSOButton provider="Google" onClick={ssoComingSoon('Google')}>
-              <GoogleGlyph />
-              Continue with Google
-            </SSOButton>
-            <SSOButton provider="GitHub" onClick={ssoComingSoon('GitHub')}>
-              <GitHubGlyph />
-              Continue with GitHub
-            </SSOButton>
-            <SSOButton provider="Microsoft" onClick={ssoComingSoon('Microsoft')}>
-              <MicrosoftGlyph />
-              Continue with Microsoft
-            </SSOButton>
-            <button
-              type="button"
-              onClick={ssoComingSoon('SAML / OIDC')}
-              className="w-full text-center text-label-md text-on-surface-muted hover:text-on-surface transition-colors pt-xs"
-            >
-              Use a different SSO provider
-            </button>
-          </div>
-
-          {/* Divider with "or" — separates SSO from credential login. */}
-          <div className="relative flex items-center" aria-hidden="true">
-            <div className="flex-1 h-px bg-border" />
-            <span className="mx-md text-label-sm text-on-surface-subtle uppercase tracking-wider">
-              or
-            </span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
+          {/* Credential form — leads the card. */}
           <form
             noValidate
             onSubmit={handleSubmit((v) => loginMutation.mutate(v))}
             className="space-y-lg"
           >
             <div>
-              <Label htmlFor="username" required>Username</Label>
+              <Label htmlFor="username">Username</Label>
               <Input
                 id="username"
                 type="text"
                 autoComplete="username"
-                autoFocus
                 placeholder="admin"
                 aria-invalid={!!errors.username}
                 error={!!errors.username}
@@ -192,20 +182,58 @@ function LoginPage() {
             </div>
 
             <div>
-              <Label htmlFor="password" required>Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
-                aria-invalid={!!errors.password}
-                error={!!errors.password}
-                {...register('password')}
-              />
+              {/* Label + "Forgot password?" share a row. */}
+              <div className="flex items-baseline justify-between mb-sm">
+                <label
+                  htmlFor="password"
+                  className="text-label-md font-medium text-on-surface"
+                >
+                  Password
+                </label>
+                <button
+                  type="button"
+                  onClick={onForgotPassword}
+                  className="text-label-sm text-on-surface-muted hover:text-on-surface underline-offset-4 hover:underline transition-colors"
+                >
+                  Forgot password?
+                </button>
+              </div>
+              {/* Input + show/hide toggle. Pad the input right so text
+                  never collides with the icon button. */}
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  aria-invalid={!!errors.password}
+                  error={!!errors.password}
+                  className="pr-11"
+                  {...register('password')}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className={cn(
+                    'absolute right-sm top-1/2 -translate-y-1/2',
+                    'inline-flex items-center justify-center w-8 h-8 rounded-xs',
+                    'text-on-surface-muted hover:text-on-surface',
+                    'hover:bg-surface-muted transition-colors',
+                  )}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
               {errors.password && <FieldError>{errors.password.message}</FieldError>}
             </div>
 
-            {/* Workspace ID — collapsed by default. */}
+            {/* Workspace ID — collapsed by default; production routes by host. */}
             <div>
               <button
                 type="button"
@@ -254,11 +282,36 @@ function LoginPage() {
               Sign in
             </Button>
           </form>
+
+          {/* Soft divider — plain centered copy, no horizontal rules. */}
+          <p className="text-center text-label-sm text-on-surface-subtle">
+            or continue with
+          </p>
+
+          {/* SSO — compact icon row; secondary to the credential form. */}
+          <div className="flex items-center justify-center gap-sm">
+            <SSOIconButton provider="Google" onClick={ssoComingSoon('Google')}>
+              <GoogleGlyph />
+            </SSOIconButton>
+            <SSOIconButton provider="GitHub" onClick={ssoComingSoon('GitHub')}>
+              <GitHubGlyph />
+            </SSOIconButton>
+            <SSOIconButton provider="Microsoft" onClick={ssoComingSoon('Microsoft')}>
+              <MicrosoftGlyph />
+            </SSOIconButton>
+            <SSOIconButton
+              provider="Other SSO provider"
+              onClick={ssoComingSoon('Other SSO')}
+            >
+              <KeyRound size={18} className="text-on-surface-muted" />
+            </SSOIconButton>
+          </div>
+
         </div>
       </div>
 
-      {/* Footer line below the card */}
-      <p className="mt-xl text-label-sm text-on-surface-subtle">
+      {/* Footer */}
+      <p className="relative z-10 mt-xl text-label-sm text-on-surface-subtle">
         Need access?{' '}
         <button
           type="button"
@@ -287,15 +340,9 @@ function Mark() {
   )
 }
 
-/**
- * SSOButton — full-width neutral button with a brand glyph on the left.
- *
- * We use ONE button style for every provider (no Google blue, GitHub black,
- * etc.) so the wall of buttons reads as a coherent list rather than a
- * stripe of colors fighting each other. The brand identity comes from the
- * glyph alone — that's the convention Stripe / Linear / Vercel use.
- */
-function SSOButton({
+/** Compact icon-only SSO button — 44px square, brand glyph centered.
+    No shadow: the parent card already provides the elevation. */
+function SSOIconButton({
   provider,
   onClick,
   children,
@@ -310,13 +357,11 @@ function SSOButton({
       onClick={onClick}
       aria-label={`Continue with ${provider}`}
       className={cn(
-        'w-full h-11 inline-flex items-center justify-center gap-md',
+        'w-11 h-11 inline-flex items-center justify-center',
         'rounded-sm border border-border bg-surface',
-        'text-body-sm font-medium text-on-surface',
-        'transition-[background-color,border-color,box-shadow] duration-[120ms] ease-out',
+        'transition-[background-color,border-color] duration-[120ms] ease-out',
         'hover:bg-surface-muted hover:border-border-strong',
-        'active:scale-[0.99]',
-        'shadow-xs',
+        'active:scale-[0.97]',
       )}
     >
       {children}
@@ -324,9 +369,7 @@ function SSOButton({
   )
 }
 
-// ---- Provider glyphs ------------------------------------------------------
-// Inline SVG so we don't ship an icon dep just for these three. Each glyph
-// is sized to ~18px and uses each brand's official mark + colors.
+// ---- Provider glyphs -------------------------------------------------------
 
 function GoogleGlyph() {
   return (

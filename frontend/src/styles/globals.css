@@ -9,10 +9,7 @@
  *                                   characterful, excellent at every size
  *   Code mono: JetBrains Mono     — distinctive ligatures + clear digits
  */
-@import "@fontsource/geist/400.css";
-@import "@fontsource/geist/500.css";
-@import "@fontsource/geist/600.css";
-@import "@fontsource/geist/700.css";
+@import "@fontsource-variable/dm-sans";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 
@@ -31,7 +28,7 @@
  * ------------------------------------------------------------------------- */
 @theme {
   /* Typography — explicit families keep us off the OS default cascade. */
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans Variable", "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Type scale — looser than Material because non-dev users prefer breathing room. */
@@ -214,54 +211,37 @@ body {
 }
 
 /* -----------------------------------------------------------------------
- * Auth-screen background — combines a soft radial indigo wash with a
- * subtle dot grid. The grid keeps the page from feeling blank while
- * staying quiet enough not to compete with the card on top.
+ * Auth-screen background — warm cream with a subtle dot grid.
+ * The gradient header band (see login.tsx) provides the visual interest
+ * at the top; the canvas just needs to feel warm and uncluttered below it.
  *
  * Why a utility class rather than inline styles on every auth route:
  *   * Sprint 1 onboards more public routes (password reset, accept-invite,
- *     verify-email) — they all want the same background. One class,
- *     consistent look.
- *   * Easy to swap to a different texture later without hunting through
- *     every route file.
+ *     verify-email) — they all want the same background.
+ *   * Easy to swap later without hunting through every route file.
  * ----------------------------------------------------------------------- */
 .bg-auth-canvas {
-  background-color: var(--color-surface);
-  background-image:
-    /* Radial wash — soft indigo tint, brightest at top-center, fading to
-       neutral by the lower third. Adds depth without committing to a
-       full gradient palette. */
-    radial-gradient(
-      ellipse 80% 60% at 50% -10%,
-      color-mix(in oklch, var(--color-primary-100) 80%, transparent),
-      transparent 70%
-    ),
-    /* Dot grid — tiny 1px dots on a 22px lattice. Just visible enough to
-       hint at "engineered" without screaming about it. */
-    radial-gradient(
-      circle at 1px 1px,
-      color-mix(in oklch, var(--color-on-surface) 8%, transparent) 1px,
-      transparent 0
-    );
-  background-size: auto, 22px 22px;
-  background-position: top center, top left;
-  background-repeat: no-repeat, repeat;
+  /* Warm off-white — a touch of yellow-orange hue, almost imperceptible. */
+  background-color: oklch(0.985 0.010 70);
+  /* Dot grid — warm-tinted dots, subtle enough to read as texture not noise. */
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    oklch(0.80 0.015 70 / 0.18) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+  background-position: top left;
+  background-repeat: repeat;
 }
 
 .dark .bg-auth-canvas {
   background-color: var(--color-surface-muted);
-  background-image:
-    radial-gradient(
-      ellipse 80% 60% at 50% -10%,
-      color-mix(in oklch, var(--color-primary) 25%, transparent),
-      transparent 70%
-    ),
-    radial-gradient(
-      circle at 1px 1px,
-      color-mix(in oklch, var(--color-on-surface) 10%, transparent) 1px,
-      transparent 0
-    );
-  background-size: auto, 22px 22px;
-  background-position: top center, top left;
-  background-repeat: no-repeat, repeat;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklch, var(--color-on-surface) 10%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
+  background-position: top left;
+  background-repeat: repeat;
 }
