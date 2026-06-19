@@ -477,7 +477,11 @@ func mapWebhookGRPCError(w http.ResponseWriter, err error, opLabel string) {
 	st, _ := status.FromError(err)
 	switch st.Code() {
 	case codes.InvalidArgument:
-		writeError(w, http.StatusBadRequest, st.Message())
+		// Log the real gRPC message server-side (may contain SSRF guard
+		// internals such as blocked IP addresses) but return a generic string
+		// to the caller so that probe attacks cannot enumerate private ranges.
+		slog.Warn(opLabel+" invalid argument", "detail", st.Message())
+		writeError(w, http.StatusBadRequest, "invalid request")
 	case codes.NotFound:
 		writeError(w, http.StatusNotFound, "endpoint not found")
 	case codes.PermissionDenied:

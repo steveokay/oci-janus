@@ -178,7 +178,15 @@ func (h *MetadataHandler) DeleteTag(ctx context.Context, req *metadatav1.DeleteT
 
 // ── Manifests ────────────────────────────────────────────────────────────────
 
+// maxManifestJSONBytes is the maximum size accepted for a manifest's raw JSON.
+// OCI manifests are tiny; 4 MiB is already generous and guards against
+// allocating unbounded memory in parseImageSize.
+const maxManifestJSONBytes = 4 << 20 // 4 MiB
+
 func (h *MetadataHandler) PutManifest(ctx context.Context, req *metadatav1.PutManifestRequest) (*metadatav1.Manifest, error) {
+	if len(req.RawJson) > maxManifestJSONBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "manifest JSON exceeds maximum size of %d bytes", maxManifestJSONBytes)
+	}
 	m, err := h.repo.PutManifest(ctx, req.TenantId, req.RepoId, req.Digest, req.MediaType, req.RawJson, req.SizeBytes)
 	return m, mapErr(err)
 }

@@ -365,7 +365,16 @@ func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, 
 // manifest documents the index points to. Returns 0 when the JSON cannot be
 // parsed or has no recognised structure; the caller stores 0 and any future
 // reader treats it as "unknown".
+// maxManifestEntries caps the number of layers/manifests we iterate over when
+// computing image size. A legitimate OCI image rarely exceeds ~200 layers; 1000
+// is a generous ceiling that prevents a crafted document from consuming CPU in a
+// tight summation loop.
+const maxManifestEntries = 1000
+
 func parseImageSize(rawJSON []byte) int64 {
+	if len(rawJSON) == 0 {
+		return 0
+	}
 	var doc struct {
 		Config    *struct{ Size int64 `json:"size"` } `json:"config"`
 		Layers    []struct{ Size int64 `json:"size"` } `json:"layers"`
@@ -374,16 +383,24 @@ func parseImageSize(rawJSON []byte) int64 {
 	if err := json.Unmarshal(rawJSON, &doc); err != nil {
 		return 0
 	}
+	layers := doc.Layers
+	if len(layers) > maxManifestEntries {
+		layers = layers[:maxManifestEntries]
+	}
+	manifests := doc.Manifests
+	if len(manifests) > maxManifestEntries {
+		manifests = manifests[:maxManifestEntries]
+	}
 	var total int64
 	if doc.Config != nil {
 		total += doc.Config.Size
 	}
-	for _, l := range doc.Layers {
+	for _, l := range layers {
 		total += l.Size
 	}
 	// Image index path: no layers, sum child manifest doc sizes instead.
-	if len(doc.Layers) == 0 {
-		for _, m := range doc.Manifests {
+	if len(layers) == 0 {
+		for _, m := range manifests {
 			total += m.Size
 		}
 	}

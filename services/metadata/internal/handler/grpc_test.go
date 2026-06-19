@@ -660,6 +660,21 @@ func TestPutManifest_nilRawJSON_stillSucceeds(t *testing.T) {
 	}
 }
 
+// TestPutManifest_oversizeJSON_returnsInvalidArgument verifies that raw_json
+// payloads above the 4 MiB cap are rejected before reaching the repository.
+func TestPutManifest_oversizeJSON_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{}) // repo should never be called
+
+	_, err := h.PutManifest(context.Background(), &metadatav1.PutManifestRequest{
+		TenantId:  "t1",
+		RepoId:    "r1",
+		Digest:    "sha256:big",
+		MediaType: "application/vnd.oci.image.manifest.v1+json",
+		RawJson:   make([]byte, 4<<20+1), // one byte over the 4 MiB limit
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
 // ── GetManifest ───────────────────────────────────────────────────────────────
 
 // TestGetManifest_found_returnsManifest verifies the happy path.
