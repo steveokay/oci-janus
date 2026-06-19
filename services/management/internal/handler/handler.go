@@ -25,6 +25,7 @@ import (
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -42,6 +43,9 @@ type Handler struct {
 	// tenant is optional — wired only when TENANT_GRPC_ADDR is set. nil disables
 	// the super-admin `/api/v1/admin/tenants` routes (they return 404).
 	tenant tenantv1.TenantServiceClient
+	// webhook is optional — wired only when WEBHOOK_GRPC_ADDR is set. nil
+	// disables the `/api/v1/webhooks` family (they return 404 "route disabled").
+	webhook webhookv1.WebhookServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
@@ -89,6 +93,15 @@ func (h *Handler) WithRateLimiter(l *middleware.PerUserRateLimiter) *Handler {
 // when PLATFORM_ADMIN_TENANT_ID is unset.
 func (h *Handler) WithTenantClient(c tenantv1.TenantServiceClient) *Handler {
 	h.tenant = c
+	return h
+}
+
+// WithWebhookClient enables the `/api/v1/webhooks` family (CRUD + deliveries
+// + test + rotate-secret). Nil disables the routes (404 "route disabled") so
+// management can deploy without registry-webhook in environments that don't
+// need outbound webhooks.
+func (h *Handler) WithWebhookClient(c webhookv1.WebhookServiceClient) *Handler {
+	h.webhook = c
 	return h
 }
 
@@ -160,6 +173,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
+
+	// Webhook management — CRUD + deliveries + test + rotate-secret.
+	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
+	h.RegisterWebhooks(mux, authMW)
 
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
@@ -254,8 +271,12 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // RepoResponse is the JSON representation of a single repository.
 type RepoResponse struct {
-	RepoID       string    `json:"repo_id"`
-	OrgID        string    `json:"org_id"`
+	RepoID string `json:"repo_id"`
+	OrgID  string `json:"org_id"`
+	// Org is the parent organisation's human name (e.g. "dev"), JOINed from
+	// `organizations.name` so callers can render `/repositories/{org}/{name}`
+	// without a second lookup (FE-API-010).
+	Org          string    `json:"org"`
 	Name         string    `json:"name"`
 	IsPublic     bool      `json:"is_public"`
 	StorageUsed  int64     `json:"storage_used_bytes"`
@@ -465,10 +486,15 @@ func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request)
 
 // TagResponse is the JSON representation of a single tag.
 type TagResponse struct {
-	Name           string    `json:"name"`
-	ManifestDigest string    `json:"manifest_digest"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	CreatedAt      time.Time `json:"created_at"`
+	Name           string `json:"name"`
+	ManifestDigest string `json:"manifest_digest"`
+	// SizeBytes is the total image size — config blob + sum of layer blob
+	// sizes for an image manifest, or sum of child manifest sizes for an
+	// image index. Computed at push time and stored on `manifests`; 0 for
+	// pre-FE-API-001 rows that haven't been re-pushed since the backfill.
+	SizeBytes int64     `json:"size_bytes"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +540,7 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 		tags = append(tags, TagResponse{
 			Name:           tag.GetName(),
 			ManifestDigest: tag.GetManifestDigest(),
+			SizeBytes:      tag.GetSizeBytes(),
 			UpdatedAt:      tag.GetUpdatedAt().AsTime(),
 			CreatedAt:      tag.GetCreatedAt().AsTime(),
 		})
@@ -855,6 +882,7 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	return RepoResponse{
 		RepoID:       r.GetRepoId(),
 		OrgID:        r.GetOrgId(),
+		Org:          r.GetOrg(),
 		Name:         r.GetName(),
 		IsPublic:     r.GetIsPublic(),
 		StorageUsed:  r.GetStorageUsed(),

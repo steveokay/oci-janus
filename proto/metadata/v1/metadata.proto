@@ -54,11 +54,17 @@ message Repository {
   string repo_id       = 1;
   string org_id        = 2;
   string tenant_id     = 3;
+  // name is the leaf repository name (e.g. "alpine"); the parent org's
+  // human name lives in `org` for callers that want to render
+  // "org/leaf" without a separate lookup.
   string name          = 4;
   bool   is_public     = 5;
   int64  storage_quota = 6;
   int64  storage_used  = 7;
   google.protobuf.Timestamp created_at = 8;
+  // Parent organization's name, joined from `organizations.name`.
+  // Surfaced so the management API can return `org` + `name` together.
+  string org           = 9;
 }
 
 message Tag {
@@ -69,6 +75,12 @@ message Tag {
   string manifest_digest = 5;
   google.protobuf.Timestamp updated_at = 6;
   google.protobuf.Timestamp created_at = 7;
+  // Total image size in bytes (config blob + sum of layer blob sizes for an
+  // image manifest, or sum of child manifest sizes for an image index).
+  // Computed at push time from the referenced manifest's raw JSON and
+  // stored in `manifests.image_size_bytes`; 0 when the manifest is missing
+  // or its JSON could not be parsed.
+  int64 size_bytes       = 8;
 }
 
 message Manifest {

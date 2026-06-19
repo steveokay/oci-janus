@@ -9,8 +9,19 @@ import "google/protobuf/timestamp.proto";
 
 service WebhookService {
   rpc CreateEndpoint(CreateEndpointRequest) returns (Endpoint);
+  rpc UpdateEndpoint(UpdateEndpointRequest) returns (Endpoint);
   rpc DeleteEndpoint(DeleteEndpointRequest) returns (google.protobuf.Empty);
   rpc ListEndpoints(ListEndpointsRequest) returns (stream Endpoint);
+  // RotateEndpointSecret replaces the stored HMAC key with a fresh ciphertext.
+  // The management API generates the plaintext, displays it once to the
+  // caller, then forwards the new secret here for encryption + storage.
+  rpc RotateEndpointSecret(RotateEndpointSecretRequest) returns (google.protobuf.Empty);
+  // ListDeliveries streams recent dispatch attempts for one endpoint, newest
+  // first. Used by the dashboard "deliveries" panel (FE-API-022).
+  rpc ListDeliveries(ListDeliveriesRequest) returns (stream Delivery);
+  // TestDispatch sends a synthetic `webhook.test` event to the configured URL
+  // and returns the response code + duration synchronously (FE-API-023).
+  rpc TestDispatch(TestDispatchRequest) returns (TestDispatchResponse);
 }
 
 message Endpoint {
@@ -22,6 +33,24 @@ message Endpoint {
   google.protobuf.Timestamp created_at = 6;
 }
 
+// Delivery is one dispatch attempt for one endpoint + one event.
+// `payload` is intentionally omitted from the wire format so a list-deliveries
+// response stays bounded even when many large pushes have happened recently —
+// callers that need the full payload should look it up via the audit log.
+message Delivery {
+  string delivery_id     = 1;
+  string endpoint_id     = 2;
+  string tenant_id       = 3;
+  string event_type      = 4;
+  string status          = 5; // pending | delivered | failed | dead
+  int32  attempts        = 6;
+  int32  max_attempts    = 7;
+  string last_error      = 8;
+  google.protobuf.Timestamp next_attempt_at = 9;
+  google.protobuf.Timestamp created_at      = 10;
+  google.protobuf.Timestamp delivered_at    = 11;
+}
+
 message CreateEndpointRequest {
   string tenant_id       = 1;
   string url             = 2;
@@ -30,3 +59,44 @@ message CreateEndpointRequest {
 }
 message DeleteEndpointRequest { string endpoint_id = 1; string tenant_id = 2; }
 message ListEndpointsRequest  { string tenant_id = 1; }
+
+// UpdateEndpointRequest patches a subset of fields on an existing endpoint.
+// `optional` markers let the handler tell "leave unchanged" from "set to zero
+// value"; for `events`, an empty repeated list means "leave unchanged" since
+// proto3 has no `optional` for repeated fields and a zero-event endpoint
+// would be useless.
+message UpdateEndpointRequest {
+  string endpoint_id = 1;
+  string tenant_id   = 2;
+  optional string url    = 3;
+  repeated string events = 4;
+  optional bool active   = 5;
+}
+
+message RotateEndpointSecretRequest {
+  string endpoint_id = 1;
+  string tenant_id   = 2;
+  string secret      = 3; // new plaintext HMAC key; encrypted before persistence
+}
+
+message ListDeliveriesRequest {
+  string endpoint_id = 1;
+  string tenant_id   = 2;
+  // since filters to deliveries created at or after this instant; omitted
+  // when the caller wants the most recent N regardless of age.
+  google.protobuf.Timestamp since = 3;
+  int32 limit = 4;
+}
+
+message TestDispatchRequest {
+  string endpoint_id = 1;
+  string tenant_id   = 2;
+}
+
+message TestDispatchResponse {
+  // status_code is the HTTP status returned by the endpoint. 0 when the
+  // dispatcher failed before getting a response (DNS / timeout / SSRF block).
+  int32  status_code = 1;
+  string error       = 2; // empty on success (2xx)
+  int64  duration_ms = 3;
+}

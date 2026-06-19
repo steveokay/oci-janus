@@ -20,9 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	WebhookService_CreateEndpoint_FullMethodName = "/registry.webhook.v1.WebhookService/CreateEndpoint"
-	WebhookService_DeleteEndpoint_FullMethodName = "/registry.webhook.v1.WebhookService/DeleteEndpoint"
-	WebhookService_ListEndpoints_FullMethodName  = "/registry.webhook.v1.WebhookService/ListEndpoints"
+	WebhookService_CreateEndpoint_FullMethodName       = "/registry.webhook.v1.WebhookService/CreateEndpoint"
+	WebhookService_UpdateEndpoint_FullMethodName       = "/registry.webhook.v1.WebhookService/UpdateEndpoint"
+	WebhookService_DeleteEndpoint_FullMethodName       = "/registry.webhook.v1.WebhookService/DeleteEndpoint"
+	WebhookService_ListEndpoints_FullMethodName        = "/registry.webhook.v1.WebhookService/ListEndpoints"
+	WebhookService_RotateEndpointSecret_FullMethodName = "/registry.webhook.v1.WebhookService/RotateEndpointSecret"
+	WebhookService_ListDeliveries_FullMethodName       = "/registry.webhook.v1.WebhookService/ListDeliveries"
+	WebhookService_TestDispatch_FullMethodName         = "/registry.webhook.v1.WebhookService/TestDispatch"
 )
 
 // WebhookServiceClient is the client API for WebhookService service.
@@ -30,8 +34,19 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WebhookServiceClient interface {
 	CreateEndpoint(ctx context.Context, in *CreateEndpointRequest, opts ...grpc.CallOption) (*Endpoint, error)
+	UpdateEndpoint(ctx context.Context, in *UpdateEndpointRequest, opts ...grpc.CallOption) (*Endpoint, error)
 	DeleteEndpoint(ctx context.Context, in *DeleteEndpointRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ListEndpoints(ctx context.Context, in *ListEndpointsRequest, opts ...grpc.CallOption) (WebhookService_ListEndpointsClient, error)
+	// RotateEndpointSecret replaces the stored HMAC key with a fresh ciphertext.
+	// The management API generates the plaintext, displays it once to the
+	// caller, then forwards the new secret here for encryption + storage.
+	RotateEndpointSecret(ctx context.Context, in *RotateEndpointSecretRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ListDeliveries streams recent dispatch attempts for one endpoint, newest
+	// first. Used by the dashboard "deliveries" panel (FE-API-022).
+	ListDeliveries(ctx context.Context, in *ListDeliveriesRequest, opts ...grpc.CallOption) (WebhookService_ListDeliveriesClient, error)
+	// TestDispatch sends a synthetic `webhook.test` event to the configured URL
+	// and returns the response code + duration synchronously (FE-API-023).
+	TestDispatch(ctx context.Context, in *TestDispatchRequest, opts ...grpc.CallOption) (*TestDispatchResponse, error)
 }
 
 type webhookServiceClient struct {
@@ -46,6 +61,16 @@ func (c *webhookServiceClient) CreateEndpoint(ctx context.Context, in *CreateEnd
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Endpoint)
 	err := c.cc.Invoke(ctx, WebhookService_CreateEndpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *webhookServiceClient) UpdateEndpoint(ctx context.Context, in *UpdateEndpointRequest, opts ...grpc.CallOption) (*Endpoint, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Endpoint)
+	err := c.cc.Invoke(ctx, WebhookService_UpdateEndpoint_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +120,77 @@ func (x *webhookServiceListEndpointsClient) Recv() (*Endpoint, error) {
 	return m, nil
 }
 
+func (c *webhookServiceClient) RotateEndpointSecret(ctx context.Context, in *RotateEndpointSecretRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, WebhookService_RotateEndpointSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *webhookServiceClient) ListDeliveries(ctx context.Context, in *ListDeliveriesRequest, opts ...grpc.CallOption) (WebhookService_ListDeliveriesClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WebhookService_ServiceDesc.Streams[1], WebhookService_ListDeliveries_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &webhookServiceListDeliveriesClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type WebhookService_ListDeliveriesClient interface {
+	Recv() (*Delivery, error)
+	grpc.ClientStream
+}
+
+type webhookServiceListDeliveriesClient struct {
+	grpc.ClientStream
+}
+
+func (x *webhookServiceListDeliveriesClient) Recv() (*Delivery, error) {
+	m := new(Delivery)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *webhookServiceClient) TestDispatch(ctx context.Context, in *TestDispatchRequest, opts ...grpc.CallOption) (*TestDispatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestDispatchResponse)
+	err := c.cc.Invoke(ctx, WebhookService_TestDispatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WebhookServiceServer is the server API for WebhookService service.
 // All implementations should embed UnimplementedWebhookServiceServer
 // for forward compatibility
 type WebhookServiceServer interface {
 	CreateEndpoint(context.Context, *CreateEndpointRequest) (*Endpoint, error)
+	UpdateEndpoint(context.Context, *UpdateEndpointRequest) (*Endpoint, error)
 	DeleteEndpoint(context.Context, *DeleteEndpointRequest) (*emptypb.Empty, error)
 	ListEndpoints(*ListEndpointsRequest, WebhookService_ListEndpointsServer) error
+	// RotateEndpointSecret replaces the stored HMAC key with a fresh ciphertext.
+	// The management API generates the plaintext, displays it once to the
+	// caller, then forwards the new secret here for encryption + storage.
+	RotateEndpointSecret(context.Context, *RotateEndpointSecretRequest) (*emptypb.Empty, error)
+	// ListDeliveries streams recent dispatch attempts for one endpoint, newest
+	// first. Used by the dashboard "deliveries" panel (FE-API-022).
+	ListDeliveries(*ListDeliveriesRequest, WebhookService_ListDeliveriesServer) error
+	// TestDispatch sends a synthetic `webhook.test` event to the configured URL
+	// and returns the response code + duration synchronously (FE-API-023).
+	TestDispatch(context.Context, *TestDispatchRequest) (*TestDispatchResponse, error)
 }
 
 // UnimplementedWebhookServiceServer should be embedded to have forward compatible implementations.
@@ -111,11 +200,23 @@ type UnimplementedWebhookServiceServer struct {
 func (UnimplementedWebhookServiceServer) CreateEndpoint(context.Context, *CreateEndpointRequest) (*Endpoint, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateEndpoint not implemented")
 }
+func (UnimplementedWebhookServiceServer) UpdateEndpoint(context.Context, *UpdateEndpointRequest) (*Endpoint, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateEndpoint not implemented")
+}
 func (UnimplementedWebhookServiceServer) DeleteEndpoint(context.Context, *DeleteEndpointRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteEndpoint not implemented")
 }
 func (UnimplementedWebhookServiceServer) ListEndpoints(*ListEndpointsRequest, WebhookService_ListEndpointsServer) error {
 	return status.Errorf(codes.Unimplemented, "method ListEndpoints not implemented")
+}
+func (UnimplementedWebhookServiceServer) RotateEndpointSecret(context.Context, *RotateEndpointSecretRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RotateEndpointSecret not implemented")
+}
+func (UnimplementedWebhookServiceServer) ListDeliveries(*ListDeliveriesRequest, WebhookService_ListDeliveriesServer) error {
+	return status.Errorf(codes.Unimplemented, "method ListDeliveries not implemented")
+}
+func (UnimplementedWebhookServiceServer) TestDispatch(context.Context, *TestDispatchRequest) (*TestDispatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TestDispatch not implemented")
 }
 
 // UnsafeWebhookServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -143,6 +244,24 @@ func _WebhookService_CreateEndpoint_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WebhookServiceServer).CreateEndpoint(ctx, req.(*CreateEndpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WebhookService_UpdateEndpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateEndpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WebhookServiceServer).UpdateEndpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WebhookService_UpdateEndpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WebhookServiceServer).UpdateEndpoint(ctx, req.(*UpdateEndpointRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -186,6 +305,63 @@ func (x *webhookServiceListEndpointsServer) Send(m *Endpoint) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _WebhookService_RotateEndpointSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateEndpointSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WebhookServiceServer).RotateEndpointSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WebhookService_RotateEndpointSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WebhookServiceServer).RotateEndpointSecret(ctx, req.(*RotateEndpointSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WebhookService_ListDeliveries_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListDeliveriesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WebhookServiceServer).ListDeliveries(m, &webhookServiceListDeliveriesServer{ServerStream: stream})
+}
+
+type WebhookService_ListDeliveriesServer interface {
+	Send(*Delivery) error
+	grpc.ServerStream
+}
+
+type webhookServiceListDeliveriesServer struct {
+	grpc.ServerStream
+}
+
+func (x *webhookServiceListDeliveriesServer) Send(m *Delivery) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _WebhookService_TestDispatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestDispatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WebhookServiceServer).TestDispatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WebhookService_TestDispatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WebhookServiceServer).TestDispatch(ctx, req.(*TestDispatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WebhookService_ServiceDesc is the grpc.ServiceDesc for WebhookService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -198,14 +374,31 @@ var WebhookService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WebhookService_CreateEndpoint_Handler,
 		},
 		{
+			MethodName: "UpdateEndpoint",
+			Handler:    _WebhookService_UpdateEndpoint_Handler,
+		},
+		{
 			MethodName: "DeleteEndpoint",
 			Handler:    _WebhookService_DeleteEndpoint_Handler,
+		},
+		{
+			MethodName: "RotateEndpointSecret",
+			Handler:    _WebhookService_RotateEndpointSecret_Handler,
+		},
+		{
+			MethodName: "TestDispatch",
+			Handler:    _WebhookService_TestDispatch_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ListEndpoints",
 			Handler:       _WebhookService_ListEndpoints_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ListDeliveries",
+			Handler:       _WebhookService_ListDeliveries_Handler,
 			ServerStreams: true,
 		},
 	},

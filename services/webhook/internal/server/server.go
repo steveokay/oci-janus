@@ -86,7 +86,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	go w.RunDeliveryLoop(ctx)
 
-	grpcHdl, err := handler.New(repo, cfg.CredentialKeyHex)
+	// The handler reuses the worker's dispatcher for TestDispatch so the
+	// SSRF guard + timeouts applied to production sends also apply to the
+	// "send test" button in the dashboard.
+	grpcHdl, err := handler.New(repo, dispatcher, cfg.CredentialKeyHex)
 	if err != nil {
 		return fmt.Errorf("new gRPC handler: %w", err)
 	}

@@ -1,6 +1,6 @@
 # Security Issues
 
-> Last updated: 2026-06-18 (SEC-001..SEC-036 all resolved. **Pentest fully closed: 26/26 PENTEST-001..026 RESOLVED ✅.** Round 1: 20 findings closed. Round 2: 6 new findings, all closed same day — PENTEST-026 storage tenant-prefix validation turned out not to need a proto change because every storage RPC already had a `tenant_id` field that callers were populating; the handler just wasn't validating it. Sprint 6 backend gaps in `status.md` are feature work, not security findings. **The codebase has zero open security findings as of 2026-06-18.**)
+> Last updated: 2026-06-19 (SEC-001..SEC-036 all resolved; PENTEST-001..026 all resolved. **Round 3 (2026-06-19):** post-merge review of FE-API-001/010/021..024 + the 00004 manifest backfill migration on branch `feat/frontend-rebuild` — 7 new findings (0 critical, 2 high, 3 medium, 2 low). **PENTEST-027 + PENTEST-028 (both HIGH) resolved same day** — webhook list/deliveries routes gated by `requireWebhookAdmin`; dispatcher errors sanitised so persisted `last_error` never carries URL-embedded tokens; manifest backfill split out of the migration into an idempotent `psql` runbook with a high-water-mark cursor + per-batch commits. PENTEST-029..033 (3 medium + 2 low) remain OPEN as follow-ups.)
 > This file tracks all known security issues, findings, and open remediations across the platform.
 > Sensitive details (CVEs, exploit paths) should not be committed here — link to a private issue tracker for those.
 
@@ -411,6 +411,111 @@ Tracked per service. `?` = not yet assessed.
 | `gosec` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `gitleaks` in CI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | No secrets in Docker layers | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+---
+
+## Pentest Findings — Round 3 (2026-06-19)
+
+> Defensive review of branch `feat/frontend-rebuild` covering FE-API-001
+> (`Repository.org` + `Tag.size_bytes`), FE-API-010 (`Org` surfaced on
+> management REST), FE-API-021..024 (webhook CRUD / deliveries / test /
+> rotate-secret), and the 00004 manifest backfill migration. 7 findings
+> (0 CRITICAL, 2 HIGH, 3 MEDIUM, 2 LOW). All review items 1–10 from the
+> request are covered; categories where nothing was found are stated
+> explicitly.
+
+### PENTEST-027 — Webhook URL list discloses URL-embedded credentials to any tenant reader
+- **Severity:** HIGH
+- **Status:** RESOLVED 2026-06-19
+- **Service:** `services/management`
+- **Raised:** 2026-06-19
+- **Description:** `GET /api/v1/webhooks` and `GET /api/v1/webhooks/{id}/deliveries` were gated only by `RequireAuth` — every authenticated user in the tenant could read the full list of webhook endpoints. The `EndpointResponse.URL` field and the `Delivery.LastError` field (which the dispatcher wrote with the target URL embedded) both surfaced the raw webhook URL. A common operator anti-pattern is to embed an auth token in the webhook URL itself (`https://hooks.example.com/registry?token=...`). Combined with `last_error` containing the failing URL, a low-privilege reader could exfiltrate another team's webhook secret in the same tenant. The dispatcher message wrapping the URL in failures meant even a write-once URL leak via a deleted endpoint could persist in `webhook_deliveries.last_error`.
+- **Resolution (2026-06-19):**
+  1. `handleListWebhooks` and `handleListWebhookDeliveries` now call `h.requireWebhookAdmin(r)` before any data is returned — matches the mutation-side gate. (`services/management/internal/handler/webhooks.go:111-127`, `:271-289`.)
+  2. Dispatcher errors now sanitise the URL: `sanitizeURLForError` strips query, fragment, and userinfo via `url.Parse`/rebuild; `stripURLFromError` unwraps `*url.Error` so the stdlib doesn't reattach the raw URL via `%w`. Result: `webhook_deliveries.last_error` only ever sees `scheme://host[:port]/path`. (`services/webhook/internal/delivery/dispatcher.go:18-83`, `:127-137`.)
+  3. Tests added in `dispatcher_test.go`: `TestSanitizeURLForError` (7 cases, including userinfo / query / fragment / unparseable / hostless) and `TestDispatcher_errorMessageRedactsURL` (end-to-end check that an SSRF-blocked send never echoes the URL token).
+- **Choices considered but not taken:** Userinfo redaction on `EndpointResponse.URL` itself — held off because list is now admin-gated, admins should be able to see what they configured, and a PATCH that omits `url` cleanly preserves the stored userinfo (the gRPC `optional` field is untouched). Revisit if FE-API-024 ever ships an inline-edit UI that re-sends `url` on every save.
+- **References:** CLAUDE.md §10 (no sensitive data in logs/responses), CWE-200, OWASP A01:2021.
+
+### PENTEST-028 — Manifest backfill migration is an unbounded full-table scan that can stall startup
+- **Severity:** HIGH
+- **Status:** RESOLVED 2026-06-19
+- **Service:** `services/metadata`
+- **Raised:** 2026-06-19
+- **Description:** `services/metadata/migrations/00004_manifest_image_size.sql` ran a `DO $$ ... FOR r IN SELECT id, raw_json FROM manifests WHERE image_size_bytes = 0 LOOP ... END LOOP $$` inside a single goose migration step. Goose runs the entire `StatementBegin/StatementEnd` block in one transaction — on a tenant with 100k–1M manifests this would (a) hold a long-running transaction blocking autovacuum / DDL on `manifests`, (b) load every `raw_json` into the backend session memory one row at a time, (c) keep one DB connection occupied for the duration and prevent the metadata service from accepting traffic since `goose up` blocks before `Serve`.
+- **Resolution (2026-06-19):** Recommendation #1 chosen.
+  1. `00004_manifest_image_size.sql` reduced to the `ALTER TABLE ... ADD COLUMN image_size_bytes BIGINT NOT NULL DEFAULT 0` only — no backfill in the migration. With a constant default this is a metadata-only catalog change in PG 11+ (no row rewrite), so it returns instantly regardless of row count.
+  2. New rows are populated by `parseImageSize(rawJSON)` inside `PutManifest` (Go) — already shipped with FE-API-001.
+  3. The batched, COMMIT-per-batch backfill lives in `infra/runbooks/manifest-image-size-backfill.md` as a `psql -f backfill.sql` script for operators to run during a maintenance window. The procedure (a) uses a high-water-mark cursor on `id` so a row whose JSON fails to parse is permanently skipped (otherwise an all-malformed batch would loop forever on `WHERE image_size_bytes = 0`), (b) commits every 1000 rows so vacuum and replication can keep up, (c) wraps each row in `BEGIN ... EXCEPTION WHEN OTHERS THEN NULL ... END` so one bad row never derails the batch, (d) is idempotent — re-running it skips already-backfilled rows via the same predicate. Postgres 11+ procedure semantics (`COMMIT` inside a `CALL`'d procedure, outside any FOR-cursor body) make this safe.
+- **References:** CLAUDE.md §11, CWE-400.
+
+### PENTEST-029 — `parseImageSize` has no input bound, opening a memory DoS via crafted manifest JSON
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/metadata`
+- **Raised:** 2026-06-19
+- **Description:** `services/metadata/internal/repository/repository.go:368-391` (`parseImageSize`) calls `json.Unmarshal(rawJSON, &doc)` with an anonymous struct that has `Layers []struct{...}` and `Manifests []struct{...}`. Per the request, OCI core's `services/core/internal/handler/http.go:34` does cap manifest body to 4 MiB before forwarding — that bound holds for the OCI push path. **However the metadata gRPC `PutManifest` RPC (`services/metadata/internal/handler/grpc.go:181`) accepts `raw_json` from any internal caller without enforcing the same cap**, and the default grpc-go MaxRecvMsgSize is 4 MiB which is a soft ceiling, not a parser-side guard. A 4 MiB JSON document with ~1M empty array entries unmarshals into ~16-24 MiB of Go slice memory per call (16-byte struct × 1M). Concurrent crafted pushes from a misbehaving internal client (or any future direct-call path) would multiply this. There is also no recursion-depth limit on `json.Unmarshal`; a deeply nested document (`{"layers":[{"layers":[...]}...]}`) does not match this schema, so depth attack is not a concern in the actual struct — but the resource cost stands for wide arrays.
+- **Remediation:**
+  1. Enforce the 4 MiB cap at the metadata gRPC server too — either a `MaxRecvMsgSize` on the server (defence in depth) or an explicit `len(req.RawJson) <= 4*1024*1024` check in `PutManifest`.
+  2. Add a sanity cap on element counts inside `parseImageSize`: `if len(doc.Layers) > 1024 || len(doc.Manifests) > 1024 { return 0 }`. Real-world OCI manifests have <100 layers and indexes <50 platforms.
+- **References:** CLAUDE.md §13 (request body size limits on all servers), CWE-400, CWE-770.
+
+### PENTEST-030 — Test-dispatch endpoint enables low-cost outbound amplification within the per-user limit
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/management` + `services/webhook`
+- **Raised:** 2026-06-19
+- **Description:** `POST /api/v1/webhooks/{id}/test` (`services/management/internal/handler/webhooks.go:330-360`) and `services/webhook/internal/handler/grpc.go:295-344` (`TestDispatch`) let an authenticated admin trigger a synchronous HTTPS POST to a previously-validated URL. The SSRF guard, response-body cap (8 KiB), and 15s timeout are all in place — good. The amplification concern is volume: a single admin under the per-user limit (20 rps, burst 40) can sustain ~1200 requests/min to one URL from this service alone; horizontally scaled (`replicas × rps` per `services/management/internal/middleware/ratelimit.go:21-23`) the cluster-wide cap is N×. The synthetic payload is ~256 bytes, the response cap is 8 KiB, so amplification factor is small (≤32×), but the source IPs are the registry's egress IPs — useful for an attacker who has already compromised one tenant-admin credential and wants to obscure attribution. The URL was validated at create time, but DNS-rebinding between create and test can shift the resolved IP without re-running `ValidateURL` (the runtime dialer in `dispatcher.go:50-66` re-resolves and re-checks, so this is actually OK — call out as INFO not a finding).
+- **Remediation:**
+  1. Add a dedicated per-endpoint test-dispatch rate limit (e.g. max 1 test per endpoint per 10s) keyed on `(tenant_id, endpoint_id)` in Redis so a runaway script cannot drive 1k/min at one victim URL.
+  2. Add a `TEST_DISPATCH_DAILY_LIMIT` counter per tenant (Redis INCR with EXPIRE 86400) and 429 when the daily budget is exhausted.
+- **References:** CLAUDE.md §13 (request body size limits, rate limits), CWE-406 (Insufficient Control of Network Message Volume).
+
+### PENTEST-031 — Webhook gRPC `mapWebhookGRPCError` leaks SSRF guard internals via `InvalidArgument` message passthrough
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/management`
+- **Raised:** 2026-06-19
+- **Description:** `services/management/internal/handler/webhooks.go:459-472` maps gRPC errors to HTTP. For `codes.InvalidArgument` the response body is `{"error": st.Message()}` — the verbatim gRPC `status.Message`. Upstream messages include strings like `invalid webhook URL: webhook destination "10.20.30.40.nip.io" resolves to private IP 10.20.30.40 — blocked (SSRF protection)` (from `services/webhook/internal/delivery/ssrf.go:65` via `services/webhook/internal/handler/grpc.go:81`). The `tenant_id and url are required` / `invalid tenant_id` strings also reach the client. CLAUDE.md §4.13 (and the file-top doc of `webhooks.go:13`) say internal gRPC detail must NOT be leaked to the API client. Bad enough on its own; the SSRF message also confirms to an attacker that the SSRF filter is enabled and what IP they hit, which is useful reconnaissance.
+- **Remediation:**
+  1. For `codes.InvalidArgument`, return a fixed message (`{"error":"invalid request"}`) and log the upstream `st.Message()` server-side only.
+  2. Audit the webhook gRPC handler to ensure no status messages contain target IPs or hostnames; replace with `"invalid webhook URL"` generically.
+- **References:** CLAUDE.md §4.13 (generic error responses), CWE-209 (Information Exposure Through an Error Message).
+
+### PENTEST-032 — `UpdateEndpoint` proto leaves URL revalidation optional when caller omits the field but events change
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/webhook`
+- **Raised:** 2026-06-19
+- **Description:** `services/webhook/internal/handler/grpc.go:165-200` (`UpdateEndpoint`) only revalidates the destination URL when `req.Url != nil` (line 179). This is correct for partial updates, but if an operator originally created an endpoint pointing at a public IP that has since been moved to RFC1918 (e.g. a DNS A-record flip), every subsequent PATCH that touches `events`/`active` will silently leave the now-private URL in place. The runtime dialer (`dispatcher.go:50-66`) still re-resolves on each delivery so SSRF is still blocked at send-time — but an operator who's edited the row recently might assume "the URL was validated when I last touched the row." Suggestion: opportunistically re-run `ValidateURL` on the current stored URL whenever any update is performed; if validation now fails, refuse the update with a clear error (`webhook endpoint URL no longer resolvable to a public address — please update or delete the endpoint`).
+- **Remediation:**
+  1. Fetch the existing URL inside `UpdateEndpoint` and run `ValidateURL` against the post-update value (either the newly-supplied URL or the stored one) before persisting.
+  2. Add an integration test that confirms PATCHing only `active` on an endpoint whose stored URL now resolves to RFC1918 returns `InvalidArgument`.
+- **References:** CLAUDE.md §13 (SSRF posture), CWE-918 (defence in depth).
+
+### PENTEST-033 — Postman collection ships dev credentials inline and tenant UUID as a default
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `docs/postman`
+- **Raised:** 2026-06-19
+- **Description:** `docs/postman/registry-management.postman_collection.json:74` has `"password": "Admin1234!dev"` and `:114` has `"password": "NewUser1234!"` baked into the request body raw text (not as environment variables). The environment file (`docs/postman/registry-management.postman_environment.json:6`) defaults `tenantId` to `98dbe36b-ef28-4903-b25c-bff1b2921c9e`, which matches the dev seed. None of these are real production secrets, but: (a) operators commonly copy a working Postman collection into Slack / a wiki; baked-in creds increase the chance someone runs the dev login attempt against a production gateway, (b) seeing `Admin1234!dev` on a screen during a demo trains operators that simple passwords are acceptable, (c) the seed tenant UUID being in version control makes targeted enumeration trivial if the gateway is reachable.
+- **Remediation:**
+  1. Move both passwords into the environment file with `"type": "secret"` and empty default, with a comment in `README.md` pointing at the dev seed migration where the dev password lives.
+  2. Make the tenant UUID a required prompt rather than a default — Postman supports `value: ""` with a description.
+  3. Add a `// dev seed — not for any non-local environment` comment string into the login request body's pre-request script.
+- **References:** CLAUDE.md §13 ("No secrets in Git history"), CWE-798 (Use of Hard-coded Credentials — informational level, since these are documented dev seeds).
+
+### Items reviewed with no findings
+
+- **IDOR / cross-tenant access on webhook routes:** every handler in `webhooks.go` calls `middleware.TenantIDFromContext(r.Context())` (lines 116, 154, 206, 249, 275, 345, 387) and passes it to the gRPC request. The repository layer (`services/webhook/internal/repository/repository.go:69-81, 229-240, 245-260, 265-278, 283-315`) gates every query by `tenant_id`. The gRPC handler enforces UUID parsing on both `endpoint_id` and `tenant_id` and always passes both to the repo. `GetEndpointForTenant` (line 229) returns `pgx.ErrNoRows` for a real endpoint in another tenant — confirmed correct.
+- **SSRF coverage:** `services/webhook/internal/delivery/ssrf.go:14-35` covers 0.0.0.0/8, 10/8, 127/8, 169.254/16 (incl. cloud metadata), 172.16/12, 192.168/16, 100.64/10 (CGNAT), ::1/128, fc00::/7 (ULA), fe80::/10 (link-local). HTTPS-only enforced (`ssrf.go:45-47`). Runtime dialer re-resolves DNS on every connect (`dispatcher.go:50-66`) so DNS-rebinding between create and use is blocked. The shared dispatcher is reused by `TestDispatch` (confirmed via `services/webhook/internal/handler/grpc.go:335`). One minor gap noted: the IPv4-mapped IPv6 form `::ffff:10.0.0.1` is not in the table — Go's `net.IP.To4()` would still flag the IPv4 portion as private when re-evaluated, but it's worth a defensive `ip.To4()` normalisation pass.
+- **Secret handling on creation/rotation:** secret is generated by `crypto/rand` in management (`webhooks.go:413-419`), passed once over the mTLS-encrypted gRPC channel, encrypted with AES-256-GCM in the webhook service before persistence (`services/webhook/internal/handler/grpc.go:90-94`, `:217-220`), and `EndpointResponse.Secret` uses `omitempty` so list/update/delete never include it. The `RotateEndpointSecret` error path does not echo the new secret (`webhooks.go:399-403`). The shared gRPC logging interceptor (`libs/middleware/grpc/server.go:140-160`) only logs `method`/`code`/`duration_ms`/`peer`/`request_id` — request bodies are never serialised. No leak of the plaintext secret found.
+- **Auth gate strength for webhook mutations:** `requireWebhookAdmin` (`webhooks.go:83-93`) requires `role >= admin AND scope_type == "org"`. The platform-admin marker (`admin`, `org`, `*`) satisfies this. A repo-scoped admin does NOT satisfy this. List/list-deliveries deliberately open — see PENTEST-027 for the recommendation to tighten this.
+- **SQL injection in new JOINs:** `o.name || '/' || r.name = $2` in `services/metadata/internal/repository/repository.go:113` is parameterised; the bound parameter is the user's `org/repo` string. Org names are constrained by `services/core/internal/service/registry.go:26` (`^[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$`) on push and by `validateOrgName` (`services/management/internal/handler/validate.go:37`) on REST create, neither of which permits `/` — so the `o.name || '/' || r.name` predicate cannot have ambiguous matches. The metadata gRPC `GetOrCreateOrganization` (`services/metadata/internal/repository/repository.go:206`) does not itself revalidate the org name, but every caller path validates first. Worth a defence-in-depth assertion (`reOrgName`-equivalent guard inside `GetOrCreateOrganization`) but not exploitable today.
+- **Info disclosure via `Org` on Repository:** the metadata cache (`services/metadata/internal/server/server.go:184-217`) keys every cacheable method on `tenant_id + ...`; `GetRepositoryByName` / `GetRepositoryByFullName` are NOT in the cache map, so the new `Repository.org` field cannot be served from a stale cross-tenant entry. The repo's `repoSelectCols` (`services/metadata/internal/repository/repository.go:53-54`) always JOINs and the tenant predicate is in every `WHERE` clause. No leak path found.
+- **JSON parsing DoS on PutManifest:** covered as PENTEST-029.
+- **Migration backfill DoS:** covered as PENTEST-028.
+- **Postman hygiene:** covered as PENTEST-033. No real production hostnames or live bearer tokens present.
 
 ---
 
