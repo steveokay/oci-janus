@@ -9,7 +9,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { LogOut, User } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
-import { toast } from 'sonner'
 import { useAuthStore } from '@/store/authStore'
 
 export function UserMenu() {
@@ -54,12 +53,7 @@ export function UserMenu() {
           className="z-50 min-w-[200px] bg-surface-raised border border-border rounded-sm shadow-md p-xs"
         >
           <DropdownMenu.Item
-            onSelect={() =>
-              toast.message('Profile is coming soon', {
-                description:
-                  'Manage your name, email, password, and API keys (Sprint 1e).',
-              })
-            }
+            onSelect={() => navigate({ to: '/profile' })}
             className="flex items-center gap-md px-md py-sm rounded-xs text-body-sm text-on-surface hover:bg-surface-muted focus:bg-surface-muted outline-none cursor-default"
           >
             <User className="w-4 h-4 text-on-surface-muted" aria-hidden="true" />

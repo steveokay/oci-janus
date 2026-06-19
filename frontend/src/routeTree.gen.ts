@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
 import { Route as AuthenticatedRepositoriesOrgRepoRouteImport } from './routes/_authenticated/repositories/$org/$repo'
@@ -29,6 +30,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/profile': typeof AuthenticatedProfileRoute
   '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
   '/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
@@ -59,6 +66,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/profile': typeof AuthenticatedProfileRoute
   '/repositories': typeof AuthenticatedRepositoriesIndexRoute
   '/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
@@ -68,6 +76,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/profile': typeof AuthenticatedProfileRoute
   '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
   '/_authenticated/repositories/$org/$repo': typeof AuthenticatedRepositoriesOrgRepoRoute
 }
@@ -77,6 +86,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/profile'
     | '/repositories/'
     | '/repositories/$org/$repo'
   fileRoutesByTo: FileRoutesByTo
@@ -84,6 +94,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/profile'
     | '/repositories'
     | '/repositories/$org/$repo'
   id:
@@ -92,6 +103,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/dashboard'
+    | '/_authenticated/profile'
     | '/_authenticated/repositories/'
     | '/_authenticated/repositories/$org/$repo'
   fileRoutesById: FileRoutesById
@@ -125,6 +137,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/profile': {
+      id: '/_authenticated/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AuthenticatedProfileRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/dashboard': {
       id: '/_authenticated/dashboard'
       path: '/dashboard'
@@ -151,12 +170,14 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedProfileRoute: typeof AuthenticatedProfileRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
   AuthenticatedRepositoriesOrgRepoRoute: typeof AuthenticatedRepositoriesOrgRepoRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedProfileRoute: AuthenticatedProfileRoute,
   AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
   AuthenticatedRepositoriesOrgRepoRoute: AuthenticatedRepositoriesOrgRepoRoute,
 }
