@@ -1,14 +1,17 @@
 /**
  * Quickstart — copy-pasteable CLI snippet for first-time setup.
  *
- * Three lines: `docker login`, `docker tag`, `docker push` against the
- * current workspace's registry hostname. The hostname is a placeholder
- * for now (we don't have a per-tenant host wired up in dev); Sprint 3a
- * (runtime site settings) makes this a real configured value.
+ * Full-width card with a two-column layout on md+: pitch + CTA on the
+ * left, terminal-styled snippet on the right. Stacks vertically below
+ * md so phone widths still work.
  *
- * The copy button writes to the clipboard via the standard API. On
- * insecure contexts (some corporate dev machines) clipboard writes can
- * fail — we surface that as a toast rather than silently no-oping.
+ * Card background is a plain `bg-surface` — earlier iterations layered
+ * a Higgsfield photograph on top of a gradient, but it made the card
+ * read as too "designed" relative to its neighbours. Plain surface
+ * with the terminal chrome carrying the visual interest reads cleaner.
+ *
+ * Hostname (`registry.localhost:5000`) is hardcoded for dev. Sprint 3a
+ * (runtime site settings) turns this into a per-tenant resolved value.
  */
 import { useState } from 'react'
 import { Check, Copy, Terminal } from 'lucide-react'
@@ -28,8 +31,6 @@ export function Quickstart() {
     try {
       await navigator.clipboard.writeText(SNIPPET)
       setCopied(true)
-      // Reset the icon after a beat. setTimeout is fine for this — no
-      // state coordination needed and the user already has their copy.
       setTimeout(() => setCopied(false), 1600)
     } catch {
       toast.error("Couldn't copy to clipboard", {
@@ -41,46 +42,66 @@ export function Quickstart() {
   return (
     <section
       aria-labelledby="quickstart-heading"
-      className="flex flex-col rounded-lg border border-border bg-surface"
+      className="rounded-lg border border-border bg-surface"
     >
-      <header className="flex items-center justify-between p-lg pb-md border-b border-border">
-        <div className="flex items-center gap-sm">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-lg p-xl">
+        {/* Left column — pitch + heading. */}
+        <div className="lg:col-span-2 flex flex-col justify-center">
           <span
             aria-hidden="true"
-            className="inline-flex items-center justify-center w-8 h-8 rounded-sm bg-primary-soft text-primary"
+            className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-primary-soft text-primary"
           >
-            <Terminal className="w-4 h-4" />
+            <Terminal className="w-5 h-5" />
           </span>
           <h2
             id="quickstart-heading"
-            className="text-heading-sm font-semibold text-on-surface"
+            className="mt-md text-heading-sm font-semibold text-on-surface"
           >
-            Quickstart
+            Push your first image
           </h2>
+          <p className="mt-xs text-body-sm text-on-surface-muted">
+            Authenticate, tag your local image, push. The repository
+            auto-creates on first push if your role allows it — no need
+            to pre-provision.
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={onCopy}
-          aria-label={copied ? 'Copied to clipboard' : 'Copy command to clipboard'}
-          className={cn(
-            'inline-flex items-center gap-xs h-8 px-md rounded-xs',
-            'text-label-md font-medium transition-colors',
-            copied
-              ? 'text-success-500 bg-success-100'
-              : 'text-on-surface-muted hover:text-on-surface hover:bg-surface-muted',
-          )}
-        >
-          {copied ? (
-            <Check className="w-4 h-4" aria-hidden="true" />
-          ) : (
-            <Copy className="w-4 h-4" aria-hidden="true" />
-          )}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </header>
-      <pre className="m-lg overflow-x-auto rounded-sm bg-neutral-950 text-on-surface-inverse p-lg text-code-sm font-mono leading-relaxed">
-        <code>{SNIPPET}</code>
-      </pre>
+
+        {/* Right column — terminal-styled code block. */}
+        <div className="lg:col-span-3">
+          <div className="rounded-md overflow-hidden shadow-sm border border-neutral-800">
+            <header className="flex items-center justify-between px-md py-sm bg-neutral-900 border-b border-neutral-800">
+              <div className="flex items-center gap-xs text-label-sm font-mono text-on-surface-inverse/70">
+                <span className="w-2.5 h-2.5 rounded-full bg-danger-500/80" aria-hidden="true" />
+                <span className="w-2.5 h-2.5 rounded-full bg-warning-500/80" aria-hidden="true" />
+                <span className="w-2.5 h-2.5 rounded-full bg-success-500/80" aria-hidden="true" />
+                <span className="ml-sm">terminal</span>
+              </div>
+              <button
+                type="button"
+                onClick={onCopy}
+                aria-label={copied ? 'Copied to clipboard' : 'Copy command to clipboard'}
+                className={cn(
+                  'inline-flex items-center gap-xs h-7 px-sm rounded-xs',
+                  'text-label-sm font-medium transition-colors',
+                  copied
+                    ? 'text-success-500 bg-success-500/15'
+                    : 'text-on-surface-inverse/70 hover:text-on-surface-inverse hover:bg-white/10',
+                )}
+              >
+                {copied ? (
+                  <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </header>
+            <pre className="overflow-x-auto bg-neutral-950 text-on-surface-inverse px-lg py-md text-code-sm font-mono leading-relaxed">
+              <code>{SNIPPET}</code>
+            </pre>
+          </div>
+        </div>
+      </div>
     </section>
   )
 }

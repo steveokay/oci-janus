@@ -107,14 +107,19 @@ function DashboardPage() {
           tone="warning"
         />
 
-        {/* Row 2-3 — demo activity, top repos, quickstart. */}
-        <div className="sm:col-span-2 lg:col-span-2 lg:row-span-2">
-          <ActivityFeed items={DEMO_ACTIVITY} />
-        </div>
+        {/* Row 2 — TopRepos on the left, ActivityFeed on the right, equal
+            columns. Both demo for now (no per-repo activity / audit
+            events query yet). */}
         <div className="sm:col-span-2 lg:col-span-2">
           <TopRepos repos={DEMO_TOP_REPOS} />
         </div>
         <div className="sm:col-span-2 lg:col-span-2">
+          <ActivityFeed items={DEMO_ACTIVITY} />
+        </div>
+
+        {/* Row 3 — full-width Quickstart so its background image gets the
+            whole width to breathe. */}
+        <div className="sm:col-span-2 lg:col-span-4">
           <Quickstart />
         </div>
       </div>

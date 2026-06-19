@@ -2,17 +2,22 @@
  * HeroCard — slim warm welcome strip at the top of the dashboard.
  *
  * Compact by design: a single horizontal row with the greeting + summary
- * on the left and the health pill + primary CTA on the right. The
- * gradient echoes the login band (amber → rose) so the visual transition
- * from login → app feels continuous, but without dominating the page.
+ * on the left and the health pill + primary CTA on the right.
  *
- * Sprint 1b makes the data props optional so the card renders during the
- * `useStats()` round-trip: missing numbers fall back to em-dashes and
- * the health pill defaults to a neutral "Checking…" state. The tag
- * count is still a placeholder — `/api/v1/stats` doesn't expose tag
- * totals today (would need a new metadata RPC), so we display "—" rather
- * than show a stale demo number alongside real ones.
+ * Time-of-day system:
+ *   The current hour buckets into one of four periods — morning,
+ *   afternoon, evening, night — each with its own gradient palette and
+ *   matching Higgsfield-generated photograph at `/hero/{period}.png`.
+ *   The gradient always renders as a fallback so the layout never
+ *   shows a blank card if the image fails to load (404, slow network,
+ *   etc.); the image fades on top via mix-blend-overlay so even a
+ *   moody photograph keeps the left-side text legible.
+ *
+ * Sprint 1b makes the data props optional so the card renders during
+ * the `useStats()` round-trip: missing numbers fall back to em-dashes
+ * and the health pill defaults to a neutral "Checking…" state.
  */
+import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { ArrowUpRight, Plus } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
@@ -31,6 +36,44 @@ export interface HeroCardProps {
   loading?: boolean
 }
 
+type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night'
+
+/** Per-period configuration: greeting copy, fallback gradient, image path. */
+const PERIODS: Record<
+  TimeOfDay,
+  { greeting: string; gradient: string; imageUrl: string }
+> = {
+  morning: {
+    greeting: 'Good morning',
+    // Warm dawn — peach + amber fading to almost-white.
+    gradient:
+      'linear-gradient(105deg, oklch(0.92 0.08 55) 0%, oklch(0.95 0.05 35) 45%, oklch(0.99 0.02 60) 85%)',
+    imageUrl: '/hero/morning.png',
+  },
+  afternoon: {
+    greeting: 'Good afternoon',
+    // Midday — soft sky blue → bright cream.
+    gradient:
+      'linear-gradient(105deg, oklch(0.93 0.05 230) 0%, oklch(0.96 0.03 220) 45%, oklch(0.99 0.01 60) 85%)',
+    imageUrl: '/hero/afternoon.png',
+  },
+  evening: {
+    greeting: 'Good evening',
+    // Golden hour — coral + pink fading to soft lavender.
+    gradient:
+      'linear-gradient(105deg, oklch(0.86 0.10 35) 0%, oklch(0.89 0.08 350) 45%, oklch(0.96 0.03 280) 85%)',
+    imageUrl: '/hero/evening.png',
+  },
+  night: {
+    greeting: 'Good evening',
+    // Late night — pale moon-blue / silver lavender. Stays light enough
+    // that dark text on top still reads cleanly.
+    gradient:
+      'linear-gradient(105deg, oklch(0.83 0.05 260) 0%, oklch(0.88 0.04 280) 45%, oklch(0.95 0.02 240) 85%)',
+    imageUrl: '/hero/night.png',
+  },
+}
+
 export function HeroCard({
   repoCount,
   tagCount,
@@ -40,24 +83,53 @@ export function HeroCard({
 }: HeroCardProps) {
   const navigate = useNavigate()
   const username = useAuthStore((s) => s.user?.username ?? '')
-  const greeting = timeOfDayGreeting()
+  const period = currentPeriod()
+  const config = PERIODS[period]
+  // If the per-period image is missing or 404s, we drop the <img> and
+  // fall back to the gradient alone — no broken-icon glyph in the card.
+  const [imageBroken, setImageBroken] = useState(false)
 
   return (
     <section
       aria-labelledby="hero-heading"
-      className="relative overflow-hidden rounded-lg border border-border bg-surface"
-      style={{
-        backgroundImage:
-          'linear-gradient(105deg, oklch(0.96 0.05 60) 0%, oklch(0.97 0.03 350) 45%, oklch(1 0 0) 85%)',
-      }}
+      className="relative overflow-hidden rounded-lg border border-border"
+      data-period={period}
     >
-      <div className="flex flex-col gap-md md:flex-row md:items-center md:justify-between p-lg">
+      {/* Layer 1: per-period gradient — always visible, the safety net. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0"
+        style={{ backgroundImage: config.gradient }}
+      />
+      {/* Layer 2: per-period photograph, blended at low opacity so even
+          a moody image stays out of the way of the foreground text. */}
+      {!imageBroken && (
+        <img
+          src={config.imageUrl}
+          alt=""
+          aria-hidden="true"
+          onError={() => setImageBroken(true)}
+          className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none"
+        />
+      )}
+      {/* Layer 3: left-fading white veil so the text column always has
+          a quiet background regardless of what the image throws at it. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0"
+        style={{
+          background:
+            'linear-gradient(105deg, oklch(1 0 0 / 0.65), oklch(1 0 0 / 0.25) 55%, transparent 90%)',
+        }}
+      />
+
+      <div className="relative flex flex-col gap-md md:flex-row md:items-center md:justify-between px-xl py-2xl">
         <div className="flex-1 min-w-0">
           <h2
             id="hero-heading"
             className="text-heading-md font-semibold text-on-surface tracking-tight"
           >
-            {greeting}
+            {config.greeting}
             {username && (
               <>
                 , <span className="text-primary">{username}</span>
@@ -131,8 +203,6 @@ function Dot() {
  * Health pill — green when healthy, amber when vulnerabilities exist,
  * red when the backend reports a degraded health score, neutral while
  * the first fetch resolves.
- *
- * Healthy means: 0 open vulns AND backend self-reports ≥95%.
  */
 function HealthPill({
   loading,
@@ -189,11 +259,22 @@ function HealthPill({
   )
 }
 
-/** Client time is fine here — no SSR. */
-function timeOfDayGreeting(): string {
+/**
+ * Bucket the current hour into morning / afternoon / evening / night.
+ *
+ *   5  → 11  morning
+ *   12 → 16  afternoon
+ *   17 → 20  evening
+ *   21 → 4   night (across midnight)
+ *
+ * Bound on system clock — same caveats as any client-time logic. The
+ * worst case is a sunrise gradient at 4:55 a.m. instead of 5:05; not a
+ * correctness concern.
+ */
+function currentPeriod(): TimeOfDay {
   const h = new Date().getHours()
-  if (h < 5) return 'Good evening'
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  return 'Good evening'
+  if (h >= 5 && h < 12)  return 'morning'
+  if (h >= 12 && h < 17) return 'afternoon'
+  if (h >= 17 && h < 21) return 'evening'
+  return 'night'
 }
