@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -21,13 +22,14 @@ import (
 type metadataRepo interface {
 	// Repositories
 	GetOrCreateOrganization(ctx context.Context, tenantID, orgName string) (string, error)
-	CreateRepository(ctx context.Context, tenantID, orgID, name string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error)
+	CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error)
 	GetRepository(ctx context.Context, tenantID, repoID string) (*metadatav1.Repository, error)
 	GetRepositoryByName(ctx context.Context, tenantID, orgID, name string) (*metadatav1.Repository, error)
 	GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error)
 	ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error)
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
+	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
 	// Tags
 	PutTag(ctx context.Context, tenantID, repoID, name, manifestDigest string) (*metadatav1.Tag, error)
 	GetTag(ctx context.Context, tenantID, repoID, name string) (*metadatav1.Tag, error)
@@ -50,7 +52,9 @@ type metadataRepo interface {
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
-	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error)
+	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error)
+	// Security overview (FE-API-020) — single tenant-scoped aggregate.
+	GetSecurityOverview(ctx context.Context, tenantID string) (*repository.SecurityOverview, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
@@ -100,10 +104,21 @@ func (h *MetadataHandler) CreateRepository(ctx context.Context, req *metadatav1.
 		name = parts[1]
 	}
 
-	repo, err := h.repo.CreateRepository(ctx, req.TenantId, orgID, name, req.IsPublic, req.StorageQuota)
+	repo, err := h.repo.CreateRepository(ctx, req.TenantId, orgID, name, req.GetDescription(), req.IsPublic, req.StorageQuota)
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return h.repo.GetRepositoryByName(ctx, req.TenantId, orgID, name)
 	}
+	return repo, mapErr(err)
+}
+
+func (h *MetadataHandler) UpdateRepository(ctx context.Context, req *metadatav1.UpdateRepositoryRequest) (*metadatav1.Repository, error) {
+	if req.RepoId == "" {
+		return nil, status.Error(codes.InvalidArgument, "repo_id is required")
+	}
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	repo, err := h.repo.UpdateRepository(ctx, req.TenantId, req.RepoId, req.Description)
 	return repo, mapErr(err)
 }
 
@@ -128,6 +143,9 @@ func (h *MetadataHandler) GetRepositoryByName(ctx context.Context, req *metadata
 func (h *MetadataHandler) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
 	repos, err := h.repo.ListRepositories(stream.Context(), req.TenantId, req.OrgId)
 	if err != nil {
+		// Temporary diagnostic logging — same reason as UpdateTenantQuota.
+		slog.ErrorContext(stream.Context(), "ListRepositories repo error",
+			"tenant_id", req.TenantId, "org_id", req.OrgId, "err", err)
 		return mapErr(err)
 	}
 	for _, r := range repos {
@@ -178,7 +196,15 @@ func (h *MetadataHandler) DeleteTag(ctx context.Context, req *metadatav1.DeleteT
 
 // ── Manifests ────────────────────────────────────────────────────────────────
 
+// maxManifestJSONBytes is the maximum size accepted for a manifest's raw JSON.
+// OCI manifests are tiny; 4 MiB is already generous and guards against
+// allocating unbounded memory in parseImageSize.
+const maxManifestJSONBytes = 4 << 20 // 4 MiB
+
 func (h *MetadataHandler) PutManifest(ctx context.Context, req *metadatav1.PutManifestRequest) (*metadatav1.Manifest, error) {
+	if len(req.RawJson) > maxManifestJSONBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "manifest JSON exceeds maximum size of %d bytes", maxManifestJSONBytes)
+	}
 	m, err := h.repo.PutManifest(ctx, req.TenantId, req.RepoId, req.Digest, req.MediaType, req.RawJson, req.SizeBytes)
 	return m, mapErr(err)
 }
@@ -243,6 +269,16 @@ func (h *MetadataHandler) UpdateTenantQuota(ctx context.Context, req *metadatav1
 		return nil, status.Error(codes.InvalidArgument, "quota_bytes must be non-negative")
 	}
 	usage, err := h.repo.UpdateTenantQuota(ctx, req.GetTenantId(), req.GetQuotaBytes())
+	if err != nil {
+		// Log the underlying error so we can diagnose without rebuilding —
+		// mapErr swallows it as a generic codes.Internal. Temporary
+		// instrumentation; leave in until we land structured DB-error
+		// classification in libs/errors/codes.
+		slog.ErrorContext(ctx, "UpdateTenantQuota repo error",
+			"tenant_id", req.GetTenantId(),
+			"quota_bytes", req.GetQuotaBytes(),
+			"err", err)
+	}
 	return usage, mapErr(err)
 }
 
@@ -269,14 +305,51 @@ func (h *MetadataHandler) GetScanResult(ctx context.Context, req *metadatav1.Get
 // GetTenantVulnerabilityCount returns the aggregated CRITICAL+HIGH vulnerability
 // counts across all completed scans for the tenant.
 func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
-	total, critical, high, err := h.repo.GetTenantVulnerabilityCount(ctx, req.TenantId)
+	total, critical, high, medium, low, negligible, err := h.repo.GetTenantVulnerabilityCount(ctx, req.TenantId)
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	return &metadatav1.VulnerabilityCountResponse{
-		Total:         total,
-		CriticalCount: critical,
-		HighCount:     high,
+		Total:            total,
+		CriticalCount:    critical,
+		HighCount:        high,
+		MediumCount:      medium,
+		LowCount:         low,
+		NegligibleCount:  negligible,
+	}, nil
+}
+
+// GetSecurityOverview returns the tenant-scoped FE-API-020 payload. Maps the
+// repository's typed SecurityOverview to the proto message; the tenant_id
+// check is performed in the repository SQL (every CTE branch filters on $1).
+func (h *MetadataHandler) GetSecurityOverview(ctx context.Context, req *metadatav1.GetSecurityOverviewRequest) (*metadatav1.SecurityOverview, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	ov, err := h.repo.GetSecurityOverview(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	var pct float64
+	if ov.TagsTotal > 0 {
+		pct = float64(ov.TagsScanned) / float64(ov.TagsTotal) * 100.0
+	}
+	return &metadatav1.SecurityOverview{
+		OpenVulnerabilitiesTotal: ov.OpenVulnerabilitiesTotal,
+		SeverityCounts: &metadatav1.SecurityCounts{
+			Critical:   ov.Critical,
+			High:       ov.High,
+			Medium:     ov.Medium,
+			Low:        ov.Low,
+			Negligible: ov.Negligible,
+		},
+		ScanCoverage: &metadatav1.ScanCoverage{
+			TagsTotal:   ov.TagsTotal,
+			TagsScanned: ov.TagsScanned,
+			Percent:     pct,
+		},
+		RecentScans_24H:    ov.RecentScans24h,
+		DaysSinceLastScan:  ov.DaysSinceLastScan,
 	}, nil
 }
 

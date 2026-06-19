@@ -46,49 +46,79 @@ func (r *Repository) reader() *pgxpool.Pool {
 
 // ── Repositories ────────────────────────────────────────────────────────────
 
+// repoSelectCols is the column list for every Repository row read.
+// Always joined against organizations so callers receive the parent org name —
+// FE-API-010 needs `org` to render `/repositories/{org}/{leaf}` links without
+// a second lookup.
+const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
+	r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
+
 // CreateRepository inserts a new repository row.
-func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
+func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
+	// Two-step insert: the RETURNING clause cannot reference the joined
+	// organizations row, so we fetch the org name in the same query via a CTE.
 	const q = `
-		INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at`
+		WITH inserted AS (
+			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
+		)
+		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
+		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
+		FROM inserted r
+		JOIN organizations o ON o.id = r.org_id`
 
 	quota := storageQuota
 	if quota <= 0 {
 		quota = 10 << 30 // 10 GiB default
 	}
 
-	var repo metadatav1.Repository
-	var createdAt time.Time
-	err := r.pool.QueryRow(ctx, q, orgID, tenantID, name, isPublic, quota).Scan(
-		&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
-		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt,
-	)
+	repo, err := r.scanOneRepo(ctx, q, orgID, tenantID, name, isPublic, quota, description)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrAlreadyExists
 		}
 		return nil, fmt.Errorf("create repository: %w", err)
 	}
-	repo.CreatedAt = timestamppb.New(createdAt)
-	return &repo, nil
+	return repo, nil
+}
+
+// UpdateRepository patches mutable fields on a repository. Currently only
+// description is mutable — quota has its own RPC to preserve audit intent.
+func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error) {
+	const q = `
+		UPDATE repositories r
+		SET    description = $1
+		FROM   organizations o
+		WHERE  r.id        = $2
+		  AND  r.tenant_id = $3
+		  AND  o.id        = r.org_id
+		RETURNING r.id, r.org_id, r.tenant_id, r.name, r.is_public,
+		          r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
+	repo, err := r.scanOneRepo(ctx, q, description, repoID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("update repository: %w", err)
+	}
+	return repo, nil
 }
 
 // GetRepository returns a repository by repo_id, enforcing tenant isolation.
 func (r *Repository) GetRepository(ctx context.Context, tenantID, repoID string) (*metadatav1.Repository, error) {
 	const q = `
-		SELECT id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
-		FROM   repositories
-		WHERE  id = $1 AND tenant_id = $2`
+		SELECT ` + repoSelectCols + `
+		FROM repositories r
+		JOIN organizations o ON o.id = r.org_id
+		WHERE  r.id = $1 AND r.tenant_id = $2`
 	return r.scanOneRepo(ctx, q, repoID, tenantID)
 }
 
 // GetRepositoryByName looks up a repository by org+name within a tenant.
 func (r *Repository) GetRepositoryByName(ctx context.Context, tenantID, orgID, name string) (*metadatav1.Repository, error) {
 	const q = `
-		SELECT id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
-		FROM   repositories
-		WHERE  org_id = $1 AND name = $2 AND tenant_id = $3`
+		SELECT ` + repoSelectCols + `
+		FROM repositories r
+		JOIN organizations o ON o.id = r.org_id
+		WHERE  r.org_id = $1 AND r.name = $2 AND r.tenant_id = $3`
 	return r.scanOneRepo(ctx, q, orgID, name, tenantID)
 }
 
@@ -96,7 +126,7 @@ func (r *Repository) GetRepositoryByName(ctx context.Context, tenantID, orgID, n
 // The SQL JOIN avoids an application-side split and keeps the query parameterised (CLAUDE.md §13).
 func (r *Repository) GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error) {
 	const q = `
-		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public, r.storage_quota, r.storage_used, r.created_at
+		SELECT ` + repoSelectCols + `
 		FROM repositories r
 		JOIN organizations o ON o.id = r.org_id
 		WHERE r.tenant_id = $1 AND o.name || '/' || r.name = $2
@@ -111,12 +141,16 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID strin
 		args []any
 	)
 	if orgID != "" {
-		q = `SELECT id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
-		     FROM repositories WHERE tenant_id = $1 AND org_id = $2 ORDER BY name`
+		q = `SELECT ` + repoSelectCols + `
+		     FROM repositories r
+		     JOIN organizations o ON o.id = r.org_id
+		     WHERE r.tenant_id = $1 AND r.org_id = $2 ORDER BY r.name`
 		args = []any{tenantID, orgID}
 	} else {
-		q = `SELECT id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
-		     FROM repositories WHERE tenant_id = $1 ORDER BY name`
+		q = `SELECT ` + repoSelectCols + `
+		     FROM repositories r
+		     JOIN organizations o ON o.id = r.org_id
+		     WHERE r.tenant_id = $1 ORDER BY r.name`
 		args = []any{tenantID}
 	}
 
@@ -130,8 +164,13 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID strin
 	for rows.Next() {
 		var repo metadatav1.Repository
 		var createdAt time.Time
+		// FE-API-006 added r.description to repoSelectCols; the scan needs to
+		// drain all 10 columns or pgx returns "number of field descriptions
+		// must equal number of destinations". Keep field order aligned with
+		// repoSelectCols and scanOneRepo.
 		if err := rows.Scan(&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
-			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt); err != nil {
+			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
+			&repo.Description); err != nil {
 			return nil, fmt.Errorf("scan repository: %w", err)
 		}
 		repo.CreatedAt = timestamppb.New(createdAt)
@@ -155,10 +194,18 @@ func (r *Repository) DeleteRepository(ctx context.Context, tenantID, repoID stri
 
 // UpdateRepositoryQuota sets storage_quota for a repository.
 func (r *Repository) UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error) {
+	// As with CreateRepository, RETURNING can't reach the joined org row;
+	// CTE-then-join to surface the parent org name in a single round trip.
 	const q = `
-		UPDATE repositories SET storage_quota = $1
-		WHERE  id = $2 AND tenant_id = $3
-		RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at`
+		WITH updated AS (
+			UPDATE repositories SET storage_quota = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
+		)
+		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
+		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
+		FROM updated r
+		JOIN organizations o ON o.id = r.org_id`
 	return r.scanOneRepo(ctx, q, quota, repoID, tenantID)
 }
 
@@ -167,7 +214,8 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 	var createdAt time.Time
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
-		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt,
+		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
+		&repo.Description,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -195,35 +243,47 @@ func (r *Repository) GetOrCreateOrganization(ctx context.Context, tenantID, orgN
 
 // ── Tags ────────────────────────────────────────────────────────────────────
 
+// tagSelectCols is the column list for every Tag row read.
+// LEFT JOIN against `manifests` keeps the row when the referenced manifest is
+// missing (transient state during deletes) and returns size_bytes=0 in that
+// case instead of dropping the tag from the result set.
+const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
+	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)`
+
+const tagFromJoin = `FROM tags t
+	LEFT JOIN manifests m
+	  ON  m.repo_id   = t.repo_id
+	  AND m.tenant_id = t.tenant_id
+	  AND m.digest    = t.manifest_digest`
+
 // PutTag upserts a tag (insert or update manifest_digest + updated_at).
 func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifestDigest string) (*metadatav1.Tag, error) {
+	// CTE-then-join: RETURNING from the upsert can't reach the joined
+	// manifests row, so wrap the INSERT and join the size in a second SELECT.
 	const q = `
-		INSERT INTO tags (repo_id, tenant_id, name, manifest_digest)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (repo_id, name) DO UPDATE
-		  SET manifest_digest = EXCLUDED.manifest_digest, updated_at = now()
-		RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at`
-
-	var tag metadatav1.Tag
-	var updatedAt, createdAt time.Time
-	err := r.pool.QueryRow(ctx, q, repoID, tenantID, name, manifestDigest).Scan(
-		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-		&tag.ManifestDigest, &updatedAt, &createdAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("put tag: %w", err)
-	}
-	tag.UpdatedAt = timestamppb.New(updatedAt)
-	tag.CreatedAt = timestamppb.New(createdAt)
-	return &tag, nil
+		WITH upserted AS (
+			INSERT INTO tags (repo_id, tenant_id, name, manifest_digest)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (repo_id, name) DO UPDATE
+			  SET manifest_digest = EXCLUDED.manifest_digest, updated_at = now()
+			RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
+		)
+		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
+		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)
+		FROM upserted t
+		LEFT JOIN manifests m
+		  ON  m.repo_id   = t.repo_id
+		  AND m.tenant_id = t.tenant_id
+		  AND m.digest    = t.manifest_digest`
+	return r.scanOneTag(ctx, q, repoID, tenantID, name, manifestDigest)
 }
 
 // GetTag returns a tag by repo_id + name, enforcing tenant isolation.
 func (r *Repository) GetTag(ctx context.Context, tenantID, repoID, name string) (*metadatav1.Tag, error) {
 	const q = `
-		SELECT id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
-		FROM   tags
-		WHERE  repo_id = $1 AND name = $2 AND tenant_id = $3`
+		SELECT ` + tagSelectCols + `
+		` + tagFromJoin + `
+		WHERE  t.repo_id = $1 AND t.name = $2 AND t.tenant_id = $3`
 	return r.scanOneTag(ctx, q, repoID, name, tenantID)
 }
 
@@ -235,12 +295,14 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		args []any
 	)
 	if last != "" {
-		q = `SELECT id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
-		     FROM tags WHERE repo_id = $1 AND tenant_id = $2 AND name > $3 ORDER BY name`
+		q = `SELECT ` + tagSelectCols + `
+		     ` + tagFromJoin + `
+		     WHERE t.repo_id = $1 AND t.tenant_id = $2 AND t.name > $3 ORDER BY t.name`
 		args = []any{repoID, tenantID, last}
 	} else {
-		q = `SELECT id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
-		     FROM tags WHERE repo_id = $1 AND tenant_id = $2 ORDER BY name`
+		q = `SELECT ` + tagSelectCols + `
+		     ` + tagFromJoin + `
+		     WHERE t.repo_id = $1 AND t.tenant_id = $2 ORDER BY t.name`
 		args = []any{repoID, tenantID}
 	}
 	if pageSize > 0 {
@@ -258,7 +320,7 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		var tag metadatav1.Tag
 		var updatedAt, createdAt time.Time
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-			&tag.ManifestDigest, &updatedAt, &createdAt); err != nil {
+			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tag.UpdatedAt = timestamppb.New(updatedAt)
@@ -286,7 +348,7 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 	var updatedAt, createdAt time.Time
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-		&tag.ManifestDigest, &updatedAt, &createdAt,
+		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -302,16 +364,72 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 // ── Manifests ───────────────────────────────────────────────────────────────
 
 // PutManifest upserts a manifest row.
+//
+// `size_bytes` is the on-the-wire size of the manifest document itself; the
+// aggregate image size (config blob + sum of layer blob sizes, or for an
+// index, the sum of child manifest sizes) is parsed from rawJSON via
+// parseImageSize and stored in `image_size_bytes` so the tag-level size can
+// be returned in O(1) without re-parsing on every read.
 func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, mediaType string, rawJSON []byte, sizeBytes int64) (*metadatav1.Manifest, error) {
 	const q = `
-		INSERT INTO manifests (repo_id, tenant_id, digest, media_type, raw_json, size_bytes)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO manifests (repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (repo_id, digest) DO UPDATE
-		  SET media_type = EXCLUDED.media_type,
-		      raw_json   = EXCLUDED.raw_json,
-		      size_bytes = EXCLUDED.size_bytes
+		  SET media_type        = EXCLUDED.media_type,
+		      raw_json          = EXCLUDED.raw_json,
+		      size_bytes        = EXCLUDED.size_bytes,
+		      image_size_bytes  = EXCLUDED.image_size_bytes
 		RETURNING id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, created_at`
-	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes)
+	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes, parseImageSize(rawJSON))
+}
+
+// parseImageSize derives the total image size in bytes from an OCI manifest's
+// raw JSON. For an image manifest, the size is config.size + sum(layers[].size).
+// For an image index, the index document doesn't reference blob sizes directly,
+// so the size is sum(manifests[].size) — the cumulative size of the per-platform
+// manifest documents the index points to. Returns 0 when the JSON cannot be
+// parsed or has no recognised structure; the caller stores 0 and any future
+// reader treats it as "unknown".
+// maxManifestEntries caps the number of layers/manifests we iterate over when
+// computing image size. A legitimate OCI image rarely exceeds ~200 layers; 1000
+// is a generous ceiling that prevents a crafted document from consuming CPU in a
+// tight summation loop.
+const maxManifestEntries = 1000
+
+func parseImageSize(rawJSON []byte) int64 {
+	if len(rawJSON) == 0 {
+		return 0
+	}
+	var doc struct {
+		Config    *struct{ Size int64 `json:"size"` } `json:"config"`
+		Layers    []struct{ Size int64 `json:"size"` } `json:"layers"`
+		Manifests []struct{ Size int64 `json:"size"` } `json:"manifests"`
+	}
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		return 0
+	}
+	layers := doc.Layers
+	if len(layers) > maxManifestEntries {
+		layers = layers[:maxManifestEntries]
+	}
+	manifests := doc.Manifests
+	if len(manifests) > maxManifestEntries {
+		manifests = manifests[:maxManifestEntries]
+	}
+	var total int64
+	if doc.Config != nil {
+		total += doc.Config.Size
+	}
+	for _, l := range layers {
+		total += l.Size
+	}
+	// Image index path: no layers, sum child manifest doc sizes instead.
+	if len(layers) == 0 {
+		for _, m := range manifests {
+			total += m.Size
+		}
+	}
+	return total
 }
 
 // GetManifest resolves a reference (digest or tag name) to a manifest.
@@ -490,14 +608,25 @@ func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (
 
 // UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
 // API's super-admin quota route to bump quotas for large customers.
+//
+// UPSERT semantics: a tenant created via registry-tenant does not get a row
+// in registry-metadata's tenants table until first push activity. Platform
+// admins legitimately need to set quotas ahead of that first push — without
+// the upsert this returned NotFound for every newly-created tenant. The
+// placeholder name is the tenant_id stringified (the name column has a
+// UNIQUE constraint but no semantic meaning to this service); the
+// metadata-side onboarding flow can overwrite the placeholder later.
 func (r *Repository) UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error) {
-	const q = `UPDATE tenants SET storage_quota = $2 WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, tenantID, quotaBytes)
-	if err != nil {
-		return nil, fmt.Errorf("update tenant quota: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
+	// Pass tenantID as both $1 (UUID) and $2 (TEXT) — Postgres refuses to
+	// deduce a single type for a placeholder used in two columns of
+	// different types (SQLSTATE 42P08), so separate placeholders are
+	// required even though they bind to the same value.
+	const q = `
+		INSERT INTO tenants (id, name, storage_quota)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET storage_quota = EXCLUDED.storage_quota`
+	if _, err := r.pool.Exec(ctx, q, tenantID, tenantID, quotaBytes); err != nil {
+		return nil, fmt.Errorf("upsert tenant quota: %w", err)
 	}
 	return r.GetTenantQuotaUsage(ctx, tenantID)
 }
@@ -650,17 +779,141 @@ func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (in
 	return n, nil
 }
 
-func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error) {
+// SecurityOverview is the value type returned by GetSecurityOverview. Kept in
+// the repository layer so the handler can map it 1:1 to the proto message
+// without re-importing repository types into protos.
+type SecurityOverview struct {
+	OpenVulnerabilitiesTotal int64
+	Critical                 int32
+	High                     int32
+	Medium                   int32
+	Low                      int32
+	Negligible               int32
+	TagsTotal                int64
+	TagsScanned              int64
+	RecentScans24h           int64
+	DaysSinceLastScan        int64
+}
+
+// GetTenantSeverityBreakdown returns the per-severity vulnerability counts for
+// a tenant, computed from the LATEST complete scan per (repo_id, manifest_digest).
+// This deduplicates re-scanned tags so a re-scan does not double the dashboard
+// numbers (FE-API-016).
+//
+// The query is a single round-trip CTE: `latest` picks the most recent
+// scan_results row per tag using DISTINCT ON; the outer SELECT sums the JSONB
+// severity counter keys. NULL/missing keys are coalesced to 0. Severity keys
+// are upper-case to match the scanner plugins (CLAUDE.md §4.7).
+func (r *Repository) GetTenantSeverityBreakdown(ctx context.Context, tenantID string) (critical, high, medium, low, negligible int32, err error) {
+	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		)
+		SELECT
+		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
+		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
+		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
+		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
+		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
+		FROM latest`
+
+	if err = r.reader().QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+		return 0, 0, 0, 0, 0, fmt.Errorf("GetTenantSeverityBreakdown: %w", err)
+	}
+	return critical, high, medium, low, negligible, nil
+}
+
+// GetSecurityOverview computes the tenant-scoped security summary backing
+// FE-API-020. Implemented as a single CTE so we never load tag/scan rows
+// into Go memory:
+//
+//   - `latest` picks the most recent scan_results row per (repo_id, manifest_digest)
+//     so re-scanned tags only count once toward the severity sums.
+//   - `tag_counts` returns (tags_total, tags_scanned), where tags_scanned is the
+//     number of tags whose current manifest_digest has at least one scan_result row.
+//   - `recency` returns the count of complete scans in the last 24h and the age in
+//     whole days of the most recent complete scan (0 when never scanned).
+//
+// All three sub-queries are tenant-scoped on every row to honour the §9
+// tenant-isolation rule.
+func (r *Repository) GetSecurityOverview(ctx context.Context, tenantID string) (*SecurityOverview, error) {
+	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		),
+		severities AS (
+			SELECT
+			  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0)::int AS critical,
+			  COALESCE(SUM((severity_counts->>'HIGH')::int),       0)::int AS high,
+			  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0)::int AS medium,
+			  COALESCE(SUM((severity_counts->>'LOW')::int),        0)::int AS low,
+			  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)::int AS negligible
+			FROM latest
+		),
+		tag_counts AS (
+			SELECT
+			  (SELECT COUNT(*) FROM tags WHERE tenant_id = $1)::bigint AS tags_total,
+			  (SELECT COUNT(DISTINCT (t.repo_id, t.manifest_digest))
+			     FROM tags t
+			     WHERE t.tenant_id = $1
+			       AND EXISTS (
+			         SELECT 1 FROM scan_results sr
+			         WHERE  sr.tenant_id = $1
+			           AND  sr.repo_id = t.repo_id
+			           AND  sr.manifest_digest = t.manifest_digest
+			       ))::bigint AS tags_scanned
+		),
+		recency AS (
+			SELECT
+			  (SELECT COUNT(*) FROM scan_results
+			     WHERE tenant_id = $1
+			       AND status = 'complete'
+			       AND completed_at >= now() - INTERVAL '24 hours')::bigint AS recent_scans_24h,
+			  COALESCE(
+			    (SELECT EXTRACT(EPOCH FROM (now() - MAX(completed_at)))::bigint / 86400
+			       FROM scan_results
+			       WHERE tenant_id = $1 AND status = 'complete' AND completed_at IS NOT NULL),
+			    0
+			  )::bigint AS days_since_last_scan
+		)
+		SELECT
+		  s.critical, s.high, s.medium, s.low, s.negligible,
+		  tc.tags_total, tc.tags_scanned,
+		  rc.recent_scans_24h, rc.days_since_last_scan
+		FROM   severities s, tag_counts tc, recency rc`
+
+	var ov SecurityOverview
+	if err := r.reader().QueryRow(ctx, q, tenantID).Scan(
+		&ov.Critical, &ov.High, &ov.Medium, &ov.Low, &ov.Negligible,
+		&ov.TagsTotal, &ov.TagsScanned,
+		&ov.RecentScans24h, &ov.DaysSinceLastScan,
+	); err != nil {
+		return nil, fmt.Errorf("GetSecurityOverview: %w", err)
+	}
+	ov.OpenVulnerabilitiesTotal = int64(ov.Critical) + int64(ov.High) + int64(ov.Medium) + int64(ov.Low) + int64(ov.Negligible)
+	return &ov, nil
+}
+
+func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error) {
 	const q = `
 		SELECT
-		  COALESCE(SUM((severity_counts->>'CRITICAL')::int), 0) AS critical_count,
-		  COALESCE(SUM((severity_counts->>'HIGH')::int),     0) AS high_count
+		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
+		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
+		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
+		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
+		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
 		FROM scan_results
 		WHERE tenant_id = $1
 		  AND status    = 'complete'`
 
-	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high); err != nil {
-		return 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
+	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
 	}
-	return critical + high, critical, high, nil
+	return critical + high + medium + low + negligible, critical, high, medium, low, negligible, nil
 }

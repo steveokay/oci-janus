@@ -24,6 +24,10 @@ type Config struct {
 	// routes (they return 404 "route disabled") in the same pattern as
 	// PLATFORM_ADMIN_TENANT_ID.
 	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+	// WebhookGRPCAddr is optional — only required when the `/api/v1/webhooks`
+	// routes are enabled. Empty disables those routes (they return 404
+	// "route disabled").
+	WebhookGRPCAddr string `mapstructure:"WEBHOOK_GRPC_ADDR"`
 
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`

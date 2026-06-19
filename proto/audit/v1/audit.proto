@@ -16,6 +16,13 @@ service AuditService {
   // in the past 24 hours. Used by registry-management to populate the
   // DailyPulls stat tile on the operations overview dashboard.
   rpc GetDailyPullCount(GetDailyPullCountRequest) returns (GetDailyPullCountResponse);
+
+  // GetRepoActivity returns operator-facing audit events for a single
+  // repository (push, delete, scan, sign — never internal queue noise).
+  // Results are ordered newest-first and cursor-paginated. The payload field
+  // exposes only a curated handful of fields per event so the full raw
+  // payload never crosses the gRPC wire.
+  rpc GetRepoActivity(GetRepoActivityRequest) returns (GetRepoActivityResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -62,4 +69,60 @@ message GetDailyPullCountRequest {
 // GetDailyPullCountResponse carries the number of pull events in the last 24h.
 message GetDailyPullCountResponse {
   int64 count = 1;
+}
+
+// GetRepoActivityRequest filters audit events to a single repository.
+message GetRepoActivityRequest {
+  // tenant_id scopes the query to prevent cross-tenant data leakage.
+  string tenant_id = 1;
+  // repository_name is the canonical "org/repo" form as stored in event payloads.
+  string repository_name = 2;
+  // since is the lower bound on occurred_at. Zero ⇒ default to 7 days ago.
+  // Capped server-side at 90 days back to align with partition retention.
+  google.protobuf.Timestamp since = 3;
+  // limit caps the number of returned records; 0 ⇒ default 50. Hard cap 200.
+  int32 limit = 4;
+  // page_token is the opaque cursor returned by a prior call. Base64 of the
+  // tuple "(occurred_at RFC3339Nano|event_id)" — stable across same-instant
+  // events because the secondary sort key (event_id) is the table PK.
+  string page_token = 5;
+  // event_types optionally restricts the result to the listed action values
+  // (e.g. "push.image", "scan.completed"). Empty list ⇒ the operator-facing
+  // default allowlist enforced by the handler. Unknown values are rejected
+  // server-side to keep the SQL IN list parameterised + injection-safe.
+  repeated string event_types = 6;
+}
+
+// RepoActivityEvent is one audit event in a repository's activity stream.
+// Payload fields are extracted server-side; the full raw payload never crosses
+// the wire so we don't accidentally leak IPs, tokens, or future PII added to
+// upstream payload structs.
+message RepoActivityEvent {
+  // event_id is the UUID of the audit_events row.
+  string event_id = 1;
+  // event_type is the action column (e.g. "push.image", "scan.completed").
+  string event_type = 2;
+  // occurred_at is the wall-clock time of the event.
+  google.protobuf.Timestamp occurred_at = 3;
+  // actor_id is the user UUID (or "system") that initiated the action.
+  string actor_id = 4;
+  // actor_username is best-effort extracted from event metadata; empty when not present.
+  string actor_username = 5;
+  // tag is extracted from event metadata when applicable (push, delete.tag).
+  string tag = 6;
+  // digest is extracted from event metadata when applicable (push manifest_digest,
+  // scan manifest_digest, image.signed).
+  string digest = 7;
+  // summary is a short human-readable description suitable for direct UI render.
+  string summary = 8;
+  // outcome is the audit outcome ("success" | "failure"). Useful when the
+  // event_type alone (e.g. "scan.completed") doesn't carry the verdict.
+  string outcome = 9;
+}
+
+// GetRepoActivityResponse carries a page of events plus the next cursor.
+message GetRepoActivityResponse {
+  repeated RepoActivityEvent events = 1;
+  // next_page_token is empty when there is no next page.
+  string next_page_token = 2;
 }

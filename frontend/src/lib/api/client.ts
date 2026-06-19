@@ -1,44 +1,102 @@
-/**
- * apiClient — single axios instance for the whole app.
- *
- * Why one instance:
- *   * One place to attach the Bearer token interceptor.
- *   * One place to detect 401s and bounce to /login (auto-expire UX).
- *   * Per-request configs still compose via the .get/.post second arg.
- *
- * The Vite dev proxy (vite.config.ts) forwards /api → auth (8080) +
- * management (8091) so this file doesn't care which host serves a path.
- * In production, nginx (frontend Dockerfile) does the same routing.
- */
-import axios, { AxiosError } from 'axios'
-import { useAuthStore } from '@/store/authStore'
+import axios, {
+  AxiosError,
+  type AxiosInstance,
+  type InternalAxiosRequestConfig,
+} from "axios";
+import { authStore } from "@/lib/auth/store";
 
-export const apiClient = axios.create({
-  baseURL: '/api/v1',
-  // Reasonable upper bound — slowest backend RPC is a fresh tag listing on
-  // a cold metadata cache, which still completes well under this.
-  timeout: 15000,
-})
+// Beacon — HTTP client.
+//
+// Two axios instances:
+//   `apiClient`        — the workhorse. Carries Bearer auth, 401→refresh→retry.
+//   `apiClientRaw`     — bare instance with no interceptors. The refresh path
+//                        uses this one so a failing refresh does not recurse.
 
-// Request interceptor: attach the Bearer token if we have one.
-apiClient.interceptors.request.use((config) => {
-  const { token } = useAuthStore.getState()
+const baseURL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+
+export const apiClientRaw: AxiosInstance = axios.create({
+  baseURL,
+  withCredentials: false,
+  timeout: 30_000,
+});
+
+export const apiClient: AxiosInstance = axios.create({
+  baseURL,
+  withCredentials: false,
+  timeout: 30_000,
+});
+
+// Attach the current Bearer on every request. Reading from the store keeps
+// the interceptor stateless — no need to re-register on login/logout.
+apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const token = authStore.getToken();
   if (token) {
-    config.headers.set('Authorization', `Bearer ${token}`)
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
   }
-  return config
-})
+  return config;
+});
 
-// Response interceptor: 401 → clear session.
-// We DON'T auto-redirect here because the routing layer's auth guards
-// re-derive the redirect target (login + `?from=<current>`); doing it
-// here would race with TanStack Router's beforeLoad.
-apiClient.interceptors.response.use(
-  (resp) => resp,
-  (err: AxiosError) => {
-    if (err.response?.status === 401) {
-      useAuthStore.getState().clearSession()
+// 401 handling — try to refresh, replay original request once, otherwise
+// hand back to the caller so the route guard can punt to /login.
+//
+// We use a module-level singleton promise so multiple concurrent 401s share
+// one refresh round-trip instead of stampeding the auth service.
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshOnce(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const current = authStore.getToken();
+      if (!current) return null;
+      const { data } = await apiClientRaw.post<{ token: string }>(
+        "/token/refresh",
+        { grant_type: "bearer_jwt" },
+        { headers: { Authorization: `Bearer ${current}` } },
+      );
+      authStore.setToken(data.token);
+      return data.token;
+    } catch {
+      authStore.clear();
+      return null;
+    } finally {
+      // Allow the next 401 to attempt a fresh refresh.
+      refreshPromise = null;
     }
-    return Promise.reject(err)
+  })();
+  return refreshPromise;
+}
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const original = error.config as InternalAxiosRequestConfig & {
+      _retried?: boolean;
+    };
+    if (error.response?.status !== 401 || !original || original._retried) {
+      return Promise.reject(error);
+    }
+    // Don't try to refresh from auth endpoints themselves — would recurse.
+    if (
+      original.url?.includes("/login") ||
+      original.url?.includes("/token/refresh") ||
+      original.url?.includes("/logout")
+    ) {
+      return Promise.reject(error);
+    }
+    const fresh = await refreshOnce();
+    if (!fresh) {
+      return Promise.reject(error);
+    }
+    original._retried = true;
+    original.headers = original.headers ?? {};
+    original.headers.Authorization = `Bearer ${fresh}`;
+    return apiClient.request(original);
   },
-)
+);
+
+// Manual refresh — exported so the scheduler can pre-empt expiry.
+export async function refreshNow(): Promise<string | null> {
+  return refreshOnce();
+}

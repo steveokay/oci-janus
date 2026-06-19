@@ -158,6 +158,102 @@ func (r *Repository) GetBuildHistory(ctx context.Context, tenantID uuid.UUID, re
 	return out, rows.Err()
 }
 
+// RepoActivityRow is one row returned by GetRepoActivity. The caller projects
+// the raw payload (held in metadata.raw) into a tighter wire type — full
+// payloads never cross the gRPC boundary.
+type RepoActivityRow struct {
+	ID         uuid.UUID
+	ActorID    string
+	ActorType  string
+	Action     string
+	Resource   string
+	Outcome    string
+	Metadata   json.RawMessage
+	OccurredAt time.Time
+}
+
+// GetRepoActivity returns audit events for a single repository identified by
+// its canonical "org/repo" name, ordered newest-first then by event_id DESC so
+// the secondary sort key matches the partition primary key.
+//
+// repositoryName is matched against metadata.raw.repository_name (the
+// payload field set by registry-core and registry-scanner). Events whose
+// payload lacks that field (e.g. RoutingTenantCreated) are not returned —
+// which is correct because they're not repo-scoped activity.
+//
+// eventTypes is REQUIRED to be a non-empty caller-supplied allowlist. The
+// handler is responsible for substituting its operator-facing default when
+// the caller did not specify any types. Empty slice ⇒ no rows returned (the
+// IN clause would match nothing). The caller MUST also validate each entry
+// against an allowlist before passing them through here — even though the
+// values are bound as a parameterised array, restricting the set keeps the
+// repository layer honest about which actions a frontend can request.
+//
+// since lower-bounds occurred_at. cursorTime + cursorID, when both non-zero,
+// drive keyset pagination using the lexicographic (occurred_at, id) pair so
+// stable pagination is possible even when many events share an instant.
+func (r *Repository) GetRepoActivity(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	repositoryName string,
+	since time.Time,
+	cursorTime time.Time,
+	cursorID uuid.UUID,
+	eventTypes []string,
+	limit int,
+) ([]*RepoActivityRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if len(eventTypes) == 0 {
+		return nil, nil
+	}
+
+	// Keyset pagination. When the cursor is empty, the (occurred_at < $X
+	// OR (= AND id <)) branch must never fire — supply a far-future
+	// sentinel so the WHERE clause is still parameterised and the planner
+	// can use idx_audit_events_tenant_occurred regardless.
+	cursorActive := !cursorTime.IsZero()
+	// Far future so the < check is trivially true when no cursor; we also
+	// guard via cursorActive so the AND id check is bypassed.
+	if !cursorActive {
+		cursorTime = time.Now().Add(100 * 365 * 24 * time.Hour)
+		cursorID = uuid.Nil
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, actor_id, actor_type, action, resource, outcome, metadata, occurred_at
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND metadata->'raw'->>'repository_name' = $2
+		   AND occurred_at >= $3
+		   AND action = ANY($4)
+		   AND ($5 = FALSE OR occurred_at < $6 OR (occurred_at = $6 AND id < $7))
+		 ORDER BY occurred_at DESC, id DESC
+		 LIMIT $8`,
+		tenantID, repositoryName, since, eventTypes,
+		cursorActive, cursorTime, cursorID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("audit GetRepoActivity: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*RepoActivityRow
+	for rows.Next() {
+		e := &RepoActivityRow{}
+		if err := rows.Scan(
+			&e.ID, &e.ActorID, &e.ActorType, &e.Action, &e.Resource,
+			&e.Outcome, &e.Metadata, &e.OccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("audit GetRepoActivity scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CountPulls returns the number of pull.image audit events for a tenant since the given time.
 func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error) {
 	var count int64

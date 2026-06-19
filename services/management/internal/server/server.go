@@ -18,6 +18,7 @@ import (
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/config"
@@ -77,12 +78,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		tenantClient = tenantv1.NewTenantServiceClient(tenantConn)
 	}
 
+	// webhook gRPC client is optional too — only wired when WEBHOOK_GRPC_ADDR is set
+	// (enables the /api/v1/webhooks routes from FE-API-021..024).
+	var webhookClient webhookv1.WebhookServiceClient
+	if cfg.WebhookGRPCAddr != "" {
+		webhookConn, err := grpc.NewClient(cfg.WebhookGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		if err != nil {
+			return fmt.Errorf("dial webhook grpc: %w", err)
+		}
+		defer webhookConn.Close()
+		webhookClient = webhookv1.NewWebhookServiceClient(webhookConn)
+	}
+
 	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
 		healthpb.NewHealthClient(auditConn),
 	)
 	h = h.WithTenantClient(tenantClient)
+	h = h.WithWebhookClient(webhookClient)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
 	// interactive dashboard while blocking a runaway script.
 	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))

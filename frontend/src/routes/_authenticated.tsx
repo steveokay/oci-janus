@@ -1,34 +1,31 @@
-/**
- * _authenticated — pathless layout route that gates every authenticated
- * screen. beforeLoad runs synchronously during routing, so unauth users
- * never see a flash of the protected layout before redirect.
- *
- * Sprint 1a: this now wraps `<Outlet />` in the AppShell (sidebar +
- * topbar + content slot). Every child route inherits the chrome for
- * free — page components only need to render their content.
- */
-import { createFileRoute, Outlet, redirect } from '@tanstack/react-router'
-import { useAuthStore } from '@/store/authStore'
-import { AppShell } from '@/components/shell/AppShell'
+import * as React from "react";
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { AppShell } from "@/components/shell/app-shell";
+import { authStore } from "@/lib/auth/store";
 
-export const Route = createFileRoute('/_authenticated')({
+// Beacon — `_authenticated` layout route.
+// Any file under `routes/_authenticated/` automatically renders inside the
+// AppShell and requires a valid JWT. We check the auth store synchronously
+// in `beforeLoad`; the silent-refresh scheduler keeps it fresh while the
+// user is here.
+export const Route = createFileRoute("/_authenticated")({
   beforeLoad: ({ location }) => {
-    const { token } = useAuthStore.getState()
-    if (!token) {
+    if (!authStore.getToken()) {
       throw redirect({
-        to: '/login',
-        // Round-trip the original target so login can bounce back after auth.
+        to: "/login",
+        // Preserve where the user was headed so we can bounce back after login
+        // (handled by login.tsx when we wire the redirect step in S0 polish).
         search: { from: location.pathname },
-      })
+      });
     }
   },
   component: AuthenticatedLayout,
-})
+});
 
-function AuthenticatedLayout() {
+function AuthenticatedLayout(): React.ReactElement {
   return (
     <AppShell>
       <Outlet />
     </AppShell>
-  )
+  );
 }

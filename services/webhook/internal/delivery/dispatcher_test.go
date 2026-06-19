@@ -168,3 +168,66 @@ func TestDispatcher_deliverContextCancelled(t *testing.T) {
 		t.Error("expected error for cancelled context, got nil")
 	}
 }
+
+// TestSanitizeURLForError covers the PENTEST-027 fix: the URL strings we
+// embed in error messages (which end up in webhook_deliveries.last_error)
+// must never carry query strings, userinfo, or fragments — operators
+// commonly stash per-endpoint auth tokens there.
+func TestSanitizeURLForError(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"strips query", "https://hooks.example.com/p?token=secret123", "https://hooks.example.com/p"},
+		{"strips userinfo", "https://user:pass@hooks.example.com/p", "https://hooks.example.com/p"},
+		{"strips fragment", "https://hooks.example.com/p#sig=abc", "https://hooks.example.com/p"},
+		{"strips all three", "https://u:p@hooks.example.com/p?t=x#f", "https://hooks.example.com/p"},
+		{"keeps port", "https://hooks.example.com:8443/hook", "https://hooks.example.com:8443/hook"},
+		{"unparseable", "not a url", "[redacted url]"},
+		{"hostless", "file:///etc/passwd", "[redacted url]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeURLForError(tc.in); got != tc.want {
+				t.Errorf("sanitizeURLForError(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDispatcher_errorMessageRedactsURL verifies that an SSRF-blocked delivery
+// produces an error string without the original URL's query string. This
+// guards the full pipeline (DeliverWithResult → http.Client.Do →
+// stripURLFromError → sanitizeURLForError) end to end so a regression that
+// re-introduces the raw URL into the persisted last_error is caught.
+func TestDispatcher_errorMessageRedactsURL(t *testing.T) {
+	d := NewDispatcher(5)
+	// 127.0.0.1 is blocked by the SSRF dialer; the embedded token must not
+	// appear in the error string the worker would persist.
+	const secret = "verysecrettoken"
+	_, _, err := d.DeliverWithResult(
+		context.Background(),
+		"https://127.0.0.1:9/hook?token="+secret,
+		[]byte("{}"),
+		[]byte("key"),
+	)
+	if err == nil {
+		t.Fatal("expected SSRF block error, got nil")
+	}
+	msg := err.Error()
+	if contains(msg, secret) {
+		t.Errorf("error message leaks query token: %q", msg)
+	}
+}
+
+// contains is a tiny strings.Contains stand-in kept local to avoid widening
+// the test imports.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}

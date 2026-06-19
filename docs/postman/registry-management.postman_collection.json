@@ -1,0 +1,509 @@
+{
+  "info": {
+    "_postman_id": "8a7b3c12-9e4f-4a1d-9c81-1c2a3b4c5d6e",
+    "name": "registry-management API",
+    "description": "All public HTTP endpoints exposed by services/management (the BFF for the dashboard, CLI, and Terraform). Also covers the auth-side HTTP routes the gateway exposes under the same prefix (/api/v1/login, /logout, /token/refresh, /users, /apikeys). See docs/postman/README.md for env setup.\n\n**Auth flow:** run *Auth → Login* first. The collection's test script writes the returned JWT to {{token}} so all subsequent requests use it via the collection-level Bearer auth.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {"type": "text/javascript", "exec": [""]}
+    }
+  ],
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:8091", "type": "string"},
+    {"key": "token", "value": "", "type": "string"},
+    {"key": "tenantId", "value": "", "type": "string"},
+    {"key": "org", "value": "dev", "type": "string"},
+    {"key": "repo", "value": "alpine", "type": "string"},
+    {"key": "tag", "value": "3.20", "type": "string"},
+    {"key": "assignmentId", "value": "", "type": "string"},
+    {"key": "userId", "value": "", "type": "string"},
+    {"key": "apiKeyId", "value": "", "type": "string"},
+    {"key": "webhookId", "value": "", "type": "string"}
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /healthz",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "GET",
+            "header": [],
+            "url": {"raw": "{{baseUrl}}/healthz", "host": ["{{baseUrl}}"], "path": ["healthz"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "description": "Endpoints served by registry-auth and routed by the gateway under the same /api/v1 prefix.",
+      "item": [
+        {
+          "name": "POST /api/v1/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Capture the JWT into the {{token}} env variable so subsequent requests authenticate automatically.",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.token) pm.collectionVariables.set('token', body.token);",
+                  "  if (body.user_id) pm.collectionVariables.set('userId', body.user_id);",
+                  "  if (body.tenant_id) pm.collectionVariables.set('tenantId', body.tenant_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant_id\": \"{{tenantId}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "login"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/logout",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{baseUrl}}/api/v1/logout", "host": ["{{baseUrl}}"], "path": ["api", "v1", "logout"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/token/refresh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.token) pm.collectionVariables.set('token', body.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{baseUrl}}/api/v1/token/refresh", "host": ["{{baseUrl}}"], "path": ["api", "v1", "token", "refresh"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/users (admin only)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"newuser\",\n  \"password\": \"NewUser1234!\",\n  \"email\": \"newuser@example.com\",\n  \"tenant_id\": \"{{tenantId}}\"\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/users", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "API Keys",
+      "item": [
+        {
+          "name": "GET /api/v1/apikeys",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/apikeys", "host": ["{{baseUrl}}"], "path": ["api", "v1", "apikeys"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/apikeys",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.id) pm.collectionVariables.set('apiKeyId', body.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ci-runner\",\n  \"scope\": \"push\",\n  \"expires_in_days\": 90\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/apikeys", "host": ["{{baseUrl}}"], "path": ["api", "v1", "apikeys"]}
+          }
+        },
+        {
+          "name": "DELETE /api/v1/apikeys/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/apikeys/{{apiKeyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "apikeys", "{{apiKeyId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Stats",
+      "item": [
+        {
+          "name": "GET /api/v1/stats",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/stats", "host": ["{{baseUrl}}"], "path": ["api", "v1", "stats"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Repositories",
+      "item": [
+        {
+          "name": "GET /api/v1/repositories",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories?per_page=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories"],
+              "query": [
+                {"key": "per_page", "value": "25"},
+                {"key": "visibility", "value": "public", "disabled": true},
+                {"key": "page_token", "value": "", "disabled": true}
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org\": \"{{org}}\",\n  \"name\": \"{{repo}}\",\n  \"is_public\": false,\n  \"storage_quota\": 0\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/repositories", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories"]}
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tags",
+      "item": [
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags"]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scans",
+      "item": [
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "scan"]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Builds",
+      "item": [
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/builds?limit=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "builds"],
+              "query": [{"key": "limit", "value": "25"}]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — org members",
+      "item": [
+        {
+          "name": "GET /api/v1/orgs/{org}/members",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/orgs/{org}/members",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"role\": \"writer\"\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members"]}
+          }
+        },
+        {
+          "name": "DELETE /api/v1/orgs/{org}/members/{assignmentID}",
+          "request": {
+            "method": "DELETE",
+            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members/{{assignmentId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members", "{{assignmentId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "RBAC — repo members",
+      "item": [
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/members",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/members",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"role\": \"reader\"\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members"]}
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/members/{assignmentID}",
+          "request": {
+            "method": "DELETE",
+            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members/{{assignmentId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members", "{{assignmentId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin — tenants (platform-admin)",
+      "description": "Requires the platform-admin marker grant (admin / org / *). 404 'route disabled' when TENANT_GRPC_ADDR is unset on the management service.",
+      "item": [
+        {
+          "name": "GET /api/v1/admin/tenants",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/admin/tenants",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"acme\"\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants"]}
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/tenants/{tenantID}",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}"]}
+          }
+        },
+        {
+          "name": "DELETE /api/v1/admin/tenants/{tenantID}",
+          "request": {
+            "method": "DELETE",
+            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}"]}
+          }
+        },
+        {
+          "name": "PUT /api/v1/admin/tenants/{tenantID}/quota",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quota_bytes\": 107374182400\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/quota", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}", "quota"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "description": "FE-API-021..024. Routes return 404 'route disabled' when WEBHOOK_GRPC_ADDR is unset on the management service. Create/update/delete/rotate/test require an admin role on some org in the tenant.",
+      "item": [
+        {
+          "name": "GET /api/v1/webhooks",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/webhooks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.endpoint_id) pm.collectionVariables.set('webhookId', body.endpoint_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://hooks.example.com/registry\",\n  \"events\": [\"push.completed\", \"scan.completed\"]\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks"]}
+          }
+        },
+        {
+          "name": "PATCH /api/v1/webhooks/{id}",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"active\": false\n}"
+            },
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}"]}
+          }
+        },
+        {
+          "name": "DELETE /api/v1/webhooks/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}"]}
+          }
+        },
+        {
+          "name": "GET /api/v1/webhooks/{id}/deliveries",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/deliveries?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "webhooks", "{{webhookId}}", "deliveries"],
+              "query": [
+                {"key": "limit", "value": "50"},
+                {"key": "since", "value": "2026-06-19T00:00:00Z", "disabled": true}
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/webhooks/{id}/test",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/test", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}", "test"]}
+          }
+        },
+        {
+          "name": "POST /api/v1/webhooks/{id}/rotate-secret",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/rotate-secret", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}", "rotate-secret"]}
+          }
+        }
+      ]
+    }
+  ]
+}

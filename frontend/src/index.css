@@ -1,0 +1,313 @@
+/* Beacon — design tokens + globals.
+   Tailwind v4 reads `@theme` to produce utility classes.
+   We expose semantic tokens (--color-surface, --color-fg-muted, …) instead
+   of raw palette values so dark mode just swaps a single block.
+   Light is the default; `.dark` on <html> flips the variables. */
+
+@import "tailwindcss";
+
+/* The `.dark` class on <html> toggles the dark scheme — declare it as a
+   Tailwind v4 dark variant so `dark:` utilities still work. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* -------------------------------------------------------------------------- *
+ * Font face wiring — actual @font-face entries come from the @fontsource
+ * packages imported in main.tsx. We only declare CSS custom properties here.
+ * -------------------------------------------------------------------------- */
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Fraunces Variable", ui-serif, Georgia, Cambria,
+    "Times New Roman", Times, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
+    Menlo, Consolas, monospace;
+
+  /* Beacon palette — raw values. Used by semantic tokens below. */
+  --color-teal-50: oklch(0.985 0.014 178);
+  --color-teal-100: oklch(0.955 0.04 178);
+  --color-teal-200: oklch(0.905 0.075 178);
+  --color-teal-300: oklch(0.84 0.105 178);
+  --color-teal-400: oklch(0.74 0.13 178);
+  --color-teal-500: oklch(0.66 0.135 178);
+  --color-teal-600: oklch(0.555 0.125 178); /* primary accent */
+  --color-teal-700: oklch(0.46 0.1 178);
+  --color-teal-800: oklch(0.385 0.08 178);
+  --color-teal-900: oklch(0.31 0.06 178);
+  --color-teal-950: oklch(0.215 0.045 178);
+
+  --color-amber-50: oklch(0.985 0.022 80);
+  --color-amber-100: oklch(0.955 0.06 80);
+  --color-amber-300: oklch(0.84 0.135 75);
+  --color-amber-500: oklch(0.74 0.165 65);
+  --color-amber-600: oklch(0.66 0.165 55); /* secondary highlight */
+  --color-amber-700: oklch(0.555 0.145 50);
+
+  --color-emerald-500: oklch(0.72 0.155 160);
+  --color-emerald-600: oklch(0.62 0.16 160);
+  --color-rose-500: oklch(0.66 0.215 18);
+  --color-rose-600: oklch(0.58 0.225 22);
+  --color-slate-300: oklch(0.84 0.012 240);
+  --color-slate-500: oklch(0.6 0.018 240);
+  --color-slate-700: oklch(0.4 0.022 240);
+
+  /* Severity scale — used by vulnerability badges. */
+  --color-sev-critical: oklch(0.55 0.225 25);
+  --color-sev-high: oklch(0.62 0.18 45);
+  --color-sev-medium: oklch(0.7 0.135 85);
+  --color-sev-low: oklch(0.6 0.018 240);
+
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* Spacing — Tailwind defaults stay; we add a couple of larger steps for
+     the dashboard hero rhythm. */
+  --spacing-18: 4.5rem;
+  --spacing-22: 5.5rem;
+
+  /* Motion — durations used across micro-interactions. */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* -------------------------------------------------------------------------- *
+ * Semantic tokens — light theme (default).
+ *
+ * Naming:
+ *   --color-bg            page background
+ *   --color-surface       card / panel background
+ *   --color-surface-2     elevated layer (popovers, dropdowns)
+ *   --color-fg            primary text
+ *   --color-fg-muted      secondary text / metadata labels
+ *   --color-fg-subtle     tertiary / placeholder
+ *   --color-border        default 1px hairlines
+ *   --color-border-strong stronger hairlines on hover/focus
+ *   --color-accent        primary brand action (teal)
+ *   --color-accent-fg     foreground when overlaid on accent
+ *   --color-highlight     secondary CTA / live indicator (amber)
+ *   --color-success       emerald
+ *   --color-warning       amber-700
+ *   --color-danger        rose
+ * -------------------------------------------------------------------------- */
+
+:root {
+  --color-bg: oklch(0.985 0.005 95);                /* warm off-white */
+  --color-surface: oklch(1 0 0);                     /* pure white card */
+  --color-surface-2: oklch(0.985 0.005 95);
+  --color-surface-sunken: oklch(0.97 0.005 95);     /* table zebra, code blocks */
+
+  --color-fg: oklch(0.21 0.02 250);
+  --color-fg-muted: oklch(0.46 0.022 250);
+  --color-fg-subtle: oklch(0.62 0.018 250);
+
+  --color-border: oklch(0.91 0.006 250);
+  --color-border-strong: oklch(0.84 0.012 250);
+
+  --color-accent: var(--color-teal-600);
+  --color-accent-hover: var(--color-teal-700);
+  --color-accent-fg: oklch(0.99 0 0);
+  --color-accent-subtle: var(--color-teal-50);
+  --color-accent-border: var(--color-teal-200);
+
+  --color-highlight: var(--color-amber-600);
+  --color-highlight-subtle: var(--color-amber-50);
+
+  --color-success: var(--color-emerald-600);
+  --color-warning: var(--color-amber-700);
+  --color-danger: var(--color-rose-600);
+
+  --color-ring: var(--color-teal-500);
+
+  /* Shadow tokens — used sparingly; we lean on borders. */
+  --shadow-card: 0 1px 0 oklch(0.94 0.006 250 / 1);
+  --shadow-elevated:
+    0 1px 2px oklch(0.21 0.02 250 / 0.04),
+    0 4px 16px oklch(0.21 0.02 250 / 0.06);
+  --shadow-floating:
+    0 1px 2px oklch(0.21 0.02 250 / 0.06),
+    0 8px 32px oklch(0.21 0.02 250 / 0.08);
+
+  color-scheme: light;
+}
+
+.dark {
+  --color-bg: oklch(0.16 0.012 250);                /* deep navy-near-black */
+  --color-surface: oklch(0.19 0.014 250);
+  --color-surface-2: oklch(0.225 0.016 250);
+  --color-surface-sunken: oklch(0.165 0.012 250);
+
+  --color-fg: oklch(0.96 0.005 250);
+  --color-fg-muted: oklch(0.72 0.014 250);
+  --color-fg-subtle: oklch(0.55 0.018 250);
+
+  --color-border: oklch(0.275 0.018 250);
+  --color-border-strong: oklch(0.36 0.022 250);
+
+  --color-accent: var(--color-teal-400);
+  --color-accent-hover: var(--color-teal-300);
+  --color-accent-fg: oklch(0.12 0.012 250);
+  --color-accent-subtle: oklch(0.27 0.03 178);
+  --color-accent-border: var(--color-teal-700);
+
+  --color-highlight: var(--color-amber-500);
+  --color-highlight-subtle: oklch(0.28 0.05 75);
+
+  --color-success: var(--color-emerald-500);
+  --color-warning: var(--color-amber-500);
+  --color-danger: var(--color-rose-500);
+
+  --color-ring: var(--color-teal-400);
+
+  --shadow-card: 0 1px 0 oklch(0.27 0.018 250 / 1);
+  --shadow-elevated:
+    0 1px 2px oklch(0 0 0 / 0.4),
+    0 4px 16px oklch(0 0 0 / 0.45);
+  --shadow-floating:
+    0 1px 2px oklch(0 0 0 / 0.5),
+    0 8px 32px oklch(0 0 0 / 0.55);
+
+  color-scheme: dark;
+}
+
+/* Map Tailwind utility classes to semantic tokens so `bg-bg`, `bg-surface`,
+   `text-fg`, etc. all just work. */
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-surface-sunken: var(--color-surface-sunken);
+  --color-fg: var(--color-fg);
+  --color-fg-muted: var(--color-fg-muted);
+  --color-fg-subtle: var(--color-fg-subtle);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-fg: var(--color-accent-fg);
+  --color-accent-subtle: var(--color-accent-subtle);
+  --color-accent-border: var(--color-accent-border);
+  --color-highlight: var(--color-highlight);
+  --color-highlight-subtle: var(--color-highlight-subtle);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-ring: var(--color-ring);
+}
+
+/* -------------------------------------------------------------------------- *
+ * Base resets / typography.
+ * -------------------------------------------------------------------------- */
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+
+::selection {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+/* Focus ring — single style across every interactive primitive.
+   We use box-shadow rather than outline so it respects border-radius. */
+:where(button, a, [role="button"], input, textarea, select):focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 4px var(--color-ring);
+}
+
+/* -------------------------------------------------------------------------- *
+ * Decorative — dotted grid for empty states + login screen.
+ * Kept here so any component can opt in via `class="bg-dot-grid"`.
+ * -------------------------------------------------------------------------- */
+
+.bg-dot-grid {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    var(--color-border) 1px,
+    transparent 0
+  );
+  background-size: 18px 18px;
+}
+
+/* Skeleton shimmer — used by <Skeleton /> primitive. */
+@keyframes beacon-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-sunken) 0%,
+    var(--color-border) 50%,
+    var(--color-surface-sunken) 100%
+  );
+  background-size: 200% 100%;
+  animation: beacon-shimmer 1.6s ease-in-out infinite;
+}
+
+/* Scan-in-progress pulse — used by severity badges + status dots. */
+@keyframes beacon-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.beacon-pulse {
+  animation: beacon-pulse 2s var(--ease-in-out-soft) infinite;
+}
+
+/* -------------------------------------------------------------------------- *
+ * Overlay / dialog open + close animations.
+ * Radix toggles `data-state="open|closed"` on its surfaces; we drive purely
+ * CSS keyframes from those, no plugin needed.
+ * -------------------------------------------------------------------------- */
+
+@keyframes beacon-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes beacon-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes beacon-content-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes beacon-content-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+}
+
+[data-beacon-overlay][data-state="open"] {
+  animation: beacon-overlay-in 180ms var(--ease-out-soft);
+}
+[data-beacon-overlay][data-state="closed"] {
+  animation: beacon-overlay-out 140ms var(--ease-out-soft);
+}
+[data-beacon-content][data-state="open"] {
+  animation: beacon-content-in 200ms var(--ease-out-soft);
+}
+[data-beacon-content][data-state="closed"] {
+  animation: beacon-content-out 140ms var(--ease-out-soft);
+}

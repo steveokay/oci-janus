@@ -29,7 +29,8 @@
       "Bash(curl -sv -u \"conformance:Conform1234!dev\" http://localhost:8081/v2/)",
       "Bash(git pull *)",
       "mcp__claude_ai_Higsfield__job_display",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npm install *)"
     ]
   },
   "enableAllProjectMcpServers": true,

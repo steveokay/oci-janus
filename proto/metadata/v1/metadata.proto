@@ -15,6 +15,7 @@ service MetadataService {
   rpc ListRepositories(ListRepositoriesRequest) returns (stream Repository);
   rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
   rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (Repository);
 
   // Tags
   rpc PutTag(PutTagRequest) returns (Tag);
@@ -48,17 +49,30 @@ service MetadataService {
 
   // Repository count — efficient alternative to draining ListRepositories for stats.
   rpc CountRepositories(CountRepositoriesRequest) returns (CountRepositoriesResponse);
+
+  // Security overview (FE-API-020) — single tenant-scoped aggregate combining
+  // open-vulnerability counts, scan coverage, and recency. Backs
+  // GET /api/v1/security/overview on registry-management.
+  rpc GetSecurityOverview(GetSecurityOverviewRequest) returns (SecurityOverview);
 }
 
 message Repository {
   string repo_id       = 1;
   string org_id        = 2;
   string tenant_id     = 3;
+  // name is the leaf repository name (e.g. "alpine"); the parent org's
+  // human name lives in `org` for callers that want to render
+  // "org/leaf" without a separate lookup.
   string name          = 4;
   bool   is_public     = 5;
   int64  storage_quota = 6;
   int64  storage_used  = 7;
   google.protobuf.Timestamp created_at = 8;
+  // Parent organization's name, joined from `organizations.name`.
+  // Surfaced so the management API can return `org` + `name` together.
+  string org           = 9;
+  // Operator-supplied markdown description / README for the repository.
+  string description   = 10;
 }
 
 message Tag {
@@ -69,6 +83,12 @@ message Tag {
   string manifest_digest = 5;
   google.protobuf.Timestamp updated_at = 6;
   google.protobuf.Timestamp created_at = 7;
+  // Total image size in bytes (config blob + sum of layer blob sizes for an
+  // image manifest, or sum of child manifest sizes for an image index).
+  // Computed at push time from the referenced manifest's raw JSON and
+  // stored in `manifests.image_size_bytes`; 0 when the manifest is missing
+  // or its JSON could not be parsed.
+  int64 size_bytes       = 8;
 }
 
 message Manifest {
@@ -115,6 +135,12 @@ message CreateRepositoryRequest {
   string name          = 3;
   bool   is_public     = 4;
   int64  storage_quota = 5;
+  string description   = 6;
+}
+message UpdateRepositoryRequest {
+  string repo_id     = 1;
+  string tenant_id   = 2;
+  string description = 3;
 }
 message GetRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
 message GetRepositoryByNameRequest {
@@ -155,11 +181,52 @@ message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; s
 // Vulnerability count requests
 message GetTenantVulnerabilityCountRequest { string tenant_id = 1; }
 message VulnerabilityCountResponse {
-  int64 total          = 1;
-  int64 critical_count = 2;
-  int64 high_count     = 3;
+  int64 total              = 1;
+  int64 critical_count     = 2;
+  int64 high_count         = 3;
+  int64 medium_count       = 4;
+  int64 low_count          = 5;
+  int64 negligible_count   = 6;
 }
 
 // Repository count requests
 message CountRepositoriesRequest { string tenant_id = 1; }
 message CountRepositoriesResponse { int64 count = 1; }
+
+// Security overview requests (FE-API-020).
+message GetSecurityOverviewRequest { string tenant_id = 1; }
+
+// SecurityCounts is the per-severity breakdown used by both StatsResponse
+// (FE-API-016) and SecurityOverview (FE-API-020). Counts are aggregated across
+// the latest complete scan per tag — never summed across multiple scans for
+// the same tag.
+message SecurityCounts {
+  int32 critical   = 1;
+  int32 high       = 2;
+  int32 medium     = 3;
+  int32 low        = 4;
+  int32 negligible = 5;
+}
+
+// ScanCoverage describes how much of the tenant's tag inventory has at least
+// one scan_result row. percent is `tags_scanned / tags_total * 100`, or 0 when
+// `tags_total == 0`.
+message ScanCoverage {
+  int64  tags_total   = 1;
+  int64  tags_scanned = 2;
+  double percent      = 3;
+}
+
+// SecurityOverview is the single payload returned by GetSecurityOverview.
+//
+// open_vulnerabilities_total mirrors VulnerabilityCountResponse.total but is
+// computed from the per-tag latest scan to match the dashboard severity bar.
+// days_since_last_scan is 0 when the tenant has never been scanned (callers
+// can distinguish via recent_scans_24h == 0 and tags_scanned == 0).
+message SecurityOverview {
+  int64           open_vulnerabilities_total = 1;
+  SecurityCounts  severity_counts            = 2;
+  ScanCoverage    scan_coverage              = 3;
+  int64           recent_scans_24h           = 4;
+  int64           days_since_last_scan       = 5;
+}

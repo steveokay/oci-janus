@@ -34,6 +34,19 @@ type fakeRepo struct {
 	listEndpointsRecs []*repository.EndpointRecord
 	listEndpointsErr  error
 
+	// GetEndpointForTenant / Update / Rotate / ListDeliveries — added with
+	// the FE-API-021..024 routes. Each method returns its `*Rec`/`*Err` pair.
+	getEndpointRec *repository.EndpointRecord
+	getEndpointErr error
+
+	updateEndpointRec *repository.EndpointRecord
+	updateEndpointErr error
+
+	rotateSecretErr error
+
+	listDeliveriesRecs []*repository.DeliveryRecord
+	listDeliveriesErr  error
+
 	// Recorded arguments for assertion
 	lastCreateURL    string
 	lastCreateEvents []string
@@ -55,10 +68,38 @@ func (f *fakeRepo) ListEndpoints(_ context.Context, _ uuid.UUID) ([]*repository.
 	return f.listEndpointsRecs, f.listEndpointsErr
 }
 
+func (f *fakeRepo) GetEndpointForTenant(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*repository.EndpointRecord, error) {
+	return f.getEndpointRec, f.getEndpointErr
+}
+
+func (f *fakeRepo) UpdateEndpoint(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ *string, _ []string, _ *bool) (*repository.EndpointRecord, error) {
+	return f.updateEndpointRec, f.updateEndpointErr
+}
+
+func (f *fakeRepo) RotateSecret(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string) error {
+	return f.rotateSecretErr
+}
+
+func (f *fakeRepo) ListDeliveries(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ time.Time, _ int) ([]*repository.DeliveryRecord, error) {
+	return f.listDeliveriesRecs, f.listDeliveriesErr
+}
+
+// fakeDispatcher implements testDispatcher with a configurable result.
+type fakeDispatcher struct {
+	code   int
+	durMs  int64
+	err    error
+}
+
+func (d *fakeDispatcher) DeliverWithResult(_ context.Context, _ string, _ []byte, _ []byte) (int, int64, error) {
+	return d.code, d.durMs, d.err
+}
+
 // makeHandler creates a handler with the given fake repo and the validKeyHex credential key.
+// dispatcher is nil here — none of the existing test cases exercise TestDispatch.
 func makeHandler(t *testing.T, repo webhookRepo) *GRPCHandler {
 	t.Helper()
-	h, err := newWithRepo(repo, validKeyHex)
+	h, err := newWithRepo(repo, &fakeDispatcher{}, validKeyHex)
 	if err != nil {
 		t.Fatalf("newWithRepo: %v", err)
 	}
@@ -81,7 +122,7 @@ func sampleEndpoint() *repository.EndpointRecord {
 // TestNew_invalidKeyTooShort verifies that New() returns an error when the
 // credential key is shorter than 64 hex characters (< 32 bytes).
 func TestNew_invalidKeyTooShort(t *testing.T) {
-	_, err := newWithRepo(&fakeRepo{}, "deadbeef")
+	_, err := newWithRepo(&fakeRepo{}, &fakeDispatcher{}, "deadbeef")
 	if err == nil {
 		t.Fatal("expected error for key shorter than 32 bytes")
 	}
@@ -89,7 +130,7 @@ func TestNew_invalidKeyTooShort(t *testing.T) {
 
 // TestNew_invalidKeyNotHex verifies that New() returns an error for non-hex input.
 func TestNew_invalidKeyNotHex(t *testing.T) {
-	_, err := newWithRepo(&fakeRepo{}, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	_, err := newWithRepo(&fakeRepo{}, &fakeDispatcher{}, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
 	if err == nil {
 		t.Fatal("expected error for non-hex credential key")
 	}
@@ -97,7 +138,7 @@ func TestNew_invalidKeyNotHex(t *testing.T) {
 
 // TestNew_validKey verifies that New() succeeds with a 64-hex-char key.
 func TestNew_validKey(t *testing.T) {
-	h, err := newWithRepo(&fakeRepo{}, validKeyHex)
+	h, err := newWithRepo(&fakeRepo{}, &fakeDispatcher{}, validKeyHex)
 	if err != nil {
 		t.Fatalf("expected success with valid key, got: %v", err)
 	}

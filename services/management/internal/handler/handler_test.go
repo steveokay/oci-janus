@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -193,6 +194,32 @@ func (s *fakeMetaServer) GetScanResult(_ context.Context, _ *metadatav1.GetScanR
 	}, nil
 }
 
+// securityOverrides lets individual tests swap in a custom SecurityOverview
+// payload without redefining the whole fakeMetaServer. The pointer is set via
+// the package-level test variable `securityOverviewOverride` below.
+func (s *fakeMetaServer) GetSecurityOverview(_ context.Context, _ *metadatav1.GetSecurityOverviewRequest) (*metadatav1.SecurityOverview, error) {
+	if securityOverviewOverride != nil {
+		return securityOverviewOverride, nil
+	}
+	// Default: mixed-severity populated payload covering the FE-API-020 happy
+	// path. Mirrors the dashboard's "scanned, partial coverage" state.
+	return &metadatav1.SecurityOverview{
+		OpenVulnerabilitiesTotal: 12,
+		SeverityCounts: &metadatav1.SecurityCounts{
+			Critical: 2, High: 3, Medium: 4, Low: 2, Negligible: 1,
+		},
+		ScanCoverage: &metadatav1.ScanCoverage{
+			TagsTotal: 4, TagsScanned: 3, Percent: 75.0,
+		},
+		RecentScans_24H:   5,
+		DaysSinceLastScan: 2,
+	}, nil
+}
+
+// securityOverviewOverride is consulted by fakeMetaServer.GetSecurityOverview
+// when non-nil. Tests reset it via t.Cleanup so cases stay isolated.
+var securityOverviewOverride *metadatav1.SecurityOverview
+
 // fakeAuditServer handles build history and daily pull count.
 type fakeAuditServer struct {
 	auditv1.UnimplementedAuditServiceServer
@@ -209,6 +236,62 @@ func (s *fakeAuditServer) GetBuildHistory(_ context.Context, _ *auditv1.GetBuild
 
 func (s *fakeAuditServer) GetDailyPullCount(_ context.Context, _ *auditv1.GetDailyPullCountRequest) (*auditv1.GetDailyPullCountResponse, error) {
 	return &auditv1.GetDailyPullCountResponse{Count: 7}, nil
+}
+
+// repoActivityCall captures the parameters passed to one GetRepoActivity invocation
+// against the fake audit server. Test cases read activityCalls to assert the
+// handler forwarded the expected fields (event_types, page_token, etc.).
+type repoActivityCall struct {
+	tenantID       string
+	repositoryName string
+	limit          int32
+	pageToken      string
+	eventTypes     []string
+	sinceUnix      int64
+}
+
+// lastActivityCall is set on every GetRepoActivity invocation. Tests inspect it
+// to verify the handler forwarded the right CSV / cursor / etc. to the audit
+// service. Reset by t.Cleanup in tests that read it so cases stay isolated.
+var lastActivityCall *repoActivityCall
+
+// GetRepoActivity returns a small canned activity feed plus an opaque next
+// page token so the management handler tests can assert wire mapping without
+// the full keyset cursor dance.
+func (s *fakeAuditServer) GetRepoActivity(_ context.Context, req *auditv1.GetRepoActivityRequest) (*auditv1.GetRepoActivityResponse, error) {
+	c := &repoActivityCall{
+		tenantID:       req.GetTenantId(),
+		repositoryName: req.GetRepositoryName(),
+		limit:          req.GetLimit(),
+		pageToken:      req.GetPageToken(),
+		eventTypes:     append([]string(nil), req.GetEventTypes()...),
+	}
+	if ts := req.GetSince(); ts != nil {
+		c.sinceUnix = ts.AsTime().Unix()
+	}
+	lastActivityCall = c
+
+	// If the caller passed page_token, return an empty page so the test sees
+	// the cursor was forwarded.
+	if req.GetPageToken() != "" {
+		return &auditv1.GetRepoActivityResponse{Events: nil, NextPageToken: ""}, nil
+	}
+	return &auditv1.GetRepoActivityResponse{
+		Events: []*auditv1.RepoActivityEvent{
+			{
+				EventId:       "ev-1",
+				EventType:     "push.image",
+				ActorId:       testUserID,
+				ActorUsername: "alice",
+				Tag:           "v1.0",
+				Digest:        "sha256:abc",
+				Outcome:       "success",
+				Summary:       "Pushed myorg/myrepo:v1.0",
+				OccurredAt:    timestamppb.Now(),
+			},
+		},
+		NextPageToken: "next-cursor",
+	}, nil
 }
 
 // fakeHealthServer always returns SERVING.
@@ -778,5 +861,284 @@ func TestRevokeRepoMember_adminToken_returns204(t *testing.T) {
 	resp := env.del(t, "/api/v1/repositories/myorg/myrepo/members/assign-1", adminToken)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/stats — FE-API-016 nested severity_counts
+// ---------------------------------------------------------------------------
+
+// TestStats_severityCountsNested_returnsNestedObject verifies that the FE-API-016
+// dashboard mini-bar receives a fully populated nested object even when the
+// upstream proto carries the same data as flat *_count fields.
+func TestStats_severityCountsNested_returnsNestedObject(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/stats", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.StatsResponse
+	decodeJSON(t, resp, &body)
+	// The fakeMetaServer returns Total=3 with all *_count fields zero. The
+	// nested object should therefore also be all-zero — but exist.
+	if body.SeverityCounts.Critical != 0 ||
+		body.SeverityCounts.High != 0 ||
+		body.SeverityCounts.Medium != 0 ||
+		body.SeverityCounts.Low != 0 ||
+		body.SeverityCounts.Negligible != 0 {
+		t.Errorf("severity_counts: expected all zeros, got %+v", body.SeverityCounts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/security/overview — FE-API-020
+// ---------------------------------------------------------------------------
+
+// TestSecurityOverview_unauthenticated_returns401 ensures the route is gated
+// by RequireAuth even though it surfaces non-sensitive aggregate counts.
+func TestSecurityOverview_unauthenticated_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/overview", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestSecurityOverview_populated_returnsAggregatedJSON exercises the happy
+// path: mixed-severity findings, partial scan coverage, recent activity.
+func TestSecurityOverview_populated_returnsAggregatedJSON(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/overview", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.SecurityOverviewResponse
+	decodeJSON(t, resp, &body)
+	if body.OpenVulnerabilitiesTotal != 12 {
+		t.Errorf("OpenVulnerabilitiesTotal: got %d, want 12", body.OpenVulnerabilitiesTotal)
+	}
+	if body.SeverityCounts.Critical != 2 || body.SeverityCounts.High != 3 {
+		t.Errorf("severity: got %+v, want C=2 H=3", body.SeverityCounts)
+	}
+	if body.ScanCoverage.TagsTotal != 4 || body.ScanCoverage.TagsScanned != 3 {
+		t.Errorf("coverage: got %+v, want 3/4", body.ScanCoverage)
+	}
+	if body.ScanCoverage.Percent != 75.0 {
+		t.Errorf("percent: got %f, want 75.0", body.ScanCoverage.Percent)
+	}
+	if body.RecentScans24h != 5 {
+		t.Errorf("RecentScans24h: got %d, want 5", body.RecentScans24h)
+	}
+}
+
+// TestSecurityOverview_emptyTenant_returnsZeros covers a fresh tenant where
+// no tags have been pushed and no scans have run. The route must still
+// succeed and emit a fully zero-valued payload (no nulls).
+func TestSecurityOverview_emptyTenant_returnsZeros(t *testing.T) {
+	securityOverviewOverride = &metadatav1.SecurityOverview{
+		SeverityCounts: &metadatav1.SecurityCounts{},
+		ScanCoverage:   &metadatav1.ScanCoverage{},
+	}
+	t.Cleanup(func() { securityOverviewOverride = nil })
+
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/overview", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.SecurityOverviewResponse
+	decodeJSON(t, resp, &body)
+	if body.OpenVulnerabilitiesTotal != 0 ||
+		body.ScanCoverage.TagsTotal != 0 ||
+		body.ScanCoverage.TagsScanned != 0 ||
+		body.RecentScans24h != 0 {
+		t.Errorf("expected all-zero overview, got %+v", body)
+	}
+}
+
+// TestSecurityOverview_partialCoverage_returnsCorrectPercent verifies the
+// scan_coverage.percent field is whatever the metadata RPC reports. Computing
+// it again in management would risk drift; the SQL CTE owns the calculation.
+func TestSecurityOverview_partialCoverage_returnsCorrectPercent(t *testing.T) {
+	securityOverviewOverride = &metadatav1.SecurityOverview{
+		OpenVulnerabilitiesTotal: 1,
+		SeverityCounts:           &metadatav1.SecurityCounts{Critical: 1},
+		ScanCoverage: &metadatav1.ScanCoverage{
+			TagsTotal: 8, TagsScanned: 2, Percent: 25.0,
+		},
+		RecentScans_24H:   1,
+		DaysSinceLastScan: 0,
+	}
+	t.Cleanup(func() { securityOverviewOverride = nil })
+
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/overview", adminToken)
+	var body handler.SecurityOverviewResponse
+	decodeJSON(t, resp, &body)
+
+	if body.ScanCoverage.Percent != 25.0 {
+		t.Errorf("percent: got %f, want 25.0", body.ScanCoverage.Percent)
+	}
+	if body.SeverityCounts.Critical != 1 {
+		t.Errorf("Critical: got %d, want 1", body.SeverityCounts.Critical)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/repositories/{org}/{repo}/activity   (FE-API-004)
+// ---------------------------------------------------------------------------
+
+// resetActivityCall clears lastActivityCall before/after a test that reads it
+// so cases don't observe a stale value from a previous run.
+func resetActivityCall(t *testing.T) {
+	t.Helper()
+	lastActivityCall = nil
+	t.Cleanup(func() { lastActivityCall = nil })
+}
+
+func TestRepoActivity_adminToken_returnsEvents(t *testing.T) {
+	resetActivityCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.ActivityResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(body.Events))
+	}
+	ev := body.Events[0]
+	if ev.EventType != "push.image" {
+		t.Errorf("EventType: got %q, want push.image", ev.EventType)
+	}
+	if ev.Tag != "v1.0" {
+		t.Errorf("Tag: got %q, want v1.0", ev.Tag)
+	}
+	if ev.Digest != "sha256:abc" {
+		t.Errorf("Digest: got %q, want sha256:abc", ev.Digest)
+	}
+	if ev.ActorUsername != "alice" {
+		t.Errorf("ActorUsername: got %q, want alice", ev.ActorUsername)
+	}
+	if ev.Summary == "" {
+		t.Errorf("Summary: expected non-empty")
+	}
+	if body.NextPageToken != "next-cursor" {
+		t.Errorf("NextPageToken: got %q, want next-cursor", body.NextPageToken)
+	}
+	// payload_summary should hold the same curated fields. It should never
+	// have keys for actor_ip / raw / etc.
+	if _, ok := ev.PayloadSummary["tag"]; !ok {
+		t.Errorf("PayloadSummary missing tag")
+	}
+	for badKey := range map[string]struct{}{"actor_ip": {}, "raw": {}, "metadata": {}} {
+		if _, leaked := ev.PayloadSummary[badKey]; leaked {
+			t.Errorf("PayloadSummary leaked forbidden key %q", badKey)
+		}
+	}
+}
+
+func TestRepoActivity_unknownRepo_returns404(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/unknown/activity", adminToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_nonMember_returns404(t *testing.T) {
+	// "wrong-org" sits outside the role assignments seeded by fakeAuthServer,
+	// so even the admin token has no grant. The handler must respond 404 (not
+	// 403) so non-members can't enumerate other orgs.
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/wrong-org/myrepo/activity", adminToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_invalidOrgName_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/INVALID/myrepo/activity", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_unknownEventType_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?event_types=push.image,shenanigans", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_eventTypesFilter_forwarded(t *testing.T) {
+	resetActivityCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?event_types=push.image,scan.completed", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if lastActivityCall == nil {
+		t.Fatal("expected GetRepoActivity to be called")
+	}
+	want := []string{"push.image", "scan.completed"}
+	if len(lastActivityCall.eventTypes) != len(want) {
+		t.Fatalf("eventTypes len: got %v, want %v", lastActivityCall.eventTypes, want)
+	}
+	for i, et := range want {
+		if lastActivityCall.eventTypes[i] != et {
+			t.Errorf("eventTypes[%d]: got %q, want %q", i, lastActivityCall.eventTypes[i], et)
+		}
+	}
+}
+
+func TestRepoActivity_pageTokenForwarded_returnsEmptyPage(t *testing.T) {
+	resetActivityCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?page_token=opaqueCursor123", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if lastActivityCall == nil || lastActivityCall.pageToken != "opaqueCursor123" {
+		t.Errorf("expected page_token forwarded; lastCall=%+v", lastActivityCall)
+	}
+	var body handler.ActivityResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Events) != 0 {
+		t.Errorf("expected empty events on page 2, got %d", len(body.Events))
+	}
+	if body.NextPageToken != "" {
+		t.Errorf("expected empty next_page_token on terminal page, got %q", body.NextPageToken)
+	}
+}
+
+func TestRepoActivity_limitOutOfRange_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?limit=99999", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_futureSince_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	future := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?since="+future, adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestRepoActivity_invalidSince_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?since=not-a-time", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -42,6 +43,9 @@ type Handler struct {
 	// tenant is optional — wired only when TENANT_GRPC_ADDR is set. nil disables
 	// the super-admin `/api/v1/admin/tenants` routes (they return 404).
 	tenant tenantv1.TenantServiceClient
+	// webhook is optional — wired only when WEBHOOK_GRPC_ADDR is set. nil
+	// disables the `/api/v1/webhooks` family (they return 404 "route disabled").
+	webhook webhookv1.WebhookServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
@@ -92,6 +96,15 @@ func (h *Handler) WithTenantClient(c tenantv1.TenantServiceClient) *Handler {
 	return h
 }
 
+// WithWebhookClient enables the `/api/v1/webhooks` family (CRUD + deliveries
+// + test + rotate-secret). Nil disables the routes (404 "route disabled") so
+// management can deploy without registry-webhook in environments that don't
+// need outbound webhooks.
+func (h *Handler) WithWebhookClient(c webhookv1.WebhookServiceClient) *Handler {
+	h.webhook = c
+	return h
+}
+
 // checkServicesHealth calls the gRPC health check on each configured service and
 // returns the percentage (0–100) that are currently SERVING.
 // Uses a 2-second deadline so a slow or unreachable service never stalls the stats page.
@@ -139,17 +152,24 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
 
+	// Current workspace / tenant info (FE-API-009).
+	mux.Handle("GET /api/v1/workspace/me", authMW(http.HandlerFunc(h.handleGetWorkspace)))
+
 	// Repository management.
 	// POST and DELETE require admin role or above (enforced in handler body).
 	mux.Handle("GET /api/v1/repositories", authMW(http.HandlerFunc(h.handleListRepositories)))
 	mux.Handle("POST /api/v1/repositories", authMW(http.HandlerFunc(h.handleCreateRepository)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleGetRepository)))
+	mux.Handle("PATCH /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleUpdateRepository)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleDeleteRepository)))
 
 	// Tag management.
 	// DELETE requires writer role or above (enforced in handler body).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleListTags)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}", authMW(http.HandlerFunc(h.handleDeleteTag)))
+
+	// Manifest detail for a specific tag (FE-API-002).
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
 
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
@@ -158,8 +178,19 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Build / audit history — returns empty list until registry-audit query API is ready.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
 
+	// FE-API-004 repo-scoped activity feed — wide slice of the audit log for
+	// one repo (push, delete, scan, sign). Handler lives in repo_activity.go.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/activity", authMW(http.HandlerFunc(h.handleListRepoActivity)))
+
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
+
+	// Security overview (FE-API-020) — single tenant-scoped aggregate.
+	h.RegisterSecurity(mux, authMW)
+
+	// Webhook management — CRUD + deliveries + test + rotate-secret.
+	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
+	h.RegisterWebhooks(mux, authMW)
 
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
@@ -189,6 +220,17 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // GET /api/v1/stats
 // ---------------------------------------------------------------------------
 
+// SeverityCounts is the per-severity vulnerability breakdown shared by
+// /api/v1/stats (FE-API-016) and /api/v1/security/overview (FE-API-020).
+// All counts are int32 to match the underlying scanner plugin payloads.
+type SeverityCounts struct {
+	Critical   int32 `json:"critical"`
+	High       int32 `json:"high"`
+	Medium     int32 `json:"medium"`
+	Low        int32 `json:"low"`
+	Negligible int32 `json:"negligible"`
+}
+
 // StatsResponse is the JSON body returned by GET /api/v1/stats.
 type StatsResponse struct {
 	TotalRepos         int     `json:"total_repos"`
@@ -197,6 +239,15 @@ type StatsResponse struct {
 	DailyPulls         int64   `json:"daily_pulls"`
 	VulnerabilityCount int     `json:"vulnerability_count"`
 	SystemHealthPct    float64 `json:"system_health_pct"`
+	// Per-severity breakdown (FE-API-016). Both root-level *_count fields and
+	// the nested severity_counts object are emitted so existing consumers do
+	// not break while the dashboard migrates to the nested shape.
+	CriticalCount   int64          `json:"critical_count"`
+	HighCount       int64          `json:"high_count"`
+	MediumCount     int64          `json:"medium_count"`
+	LowCount        int64          `json:"low_count"`
+	NegligibleCount int64          `json:"negligible_count"`
+	SeverityCounts  SeverityCounts `json:"severity_counts"`
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +296,22 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		DailyPulls:         dailyPulls,
 		VulnerabilityCount: int(vulns.GetTotal()),
 		SystemHealthPct:    h.checkServicesHealth(r.Context()),
+		CriticalCount:      vulns.GetCriticalCount(),
+		HighCount:          vulns.GetHighCount(),
+		MediumCount:        vulns.GetMediumCount(),
+		LowCount:           vulns.GetLowCount(),
+		NegligibleCount:    vulns.GetNegligibleCount(),
+		// FE-API-016: nested object the frontend severity bar reads. The
+		// proto VulnerabilityCountResponse uses int64 internally but the
+		// scanner payloads are int32 — narrow without overflow concerns
+		// (no tenant has 2.1B findings).
+		SeverityCounts: SeverityCounts{
+			Critical:   int32(vulns.GetCriticalCount()),
+			High:       int32(vulns.GetHighCount()),
+			Medium:     int32(vulns.GetMediumCount()),
+			Low:        int32(vulns.GetLowCount()),
+			Negligible: int32(vulns.GetNegligibleCount()),
+		},
 	})
 }
 
@@ -254,13 +321,18 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // RepoResponse is the JSON representation of a single repository.
 type RepoResponse struct {
-	RepoID       string    `json:"repo_id"`
-	OrgID        string    `json:"org_id"`
+	RepoID string `json:"repo_id"`
+	OrgID  string `json:"org_id"`
+	// Org is the parent organisation's human name (e.g. "dev"), JOINed from
+	// `organizations.name` so callers can render `/repositories/{org}/{name}`
+	// without a second lookup (FE-API-010).
+	Org          string    `json:"org"`
 	Name         string    `json:"name"`
 	IsPublic     bool      `json:"is_public"`
 	StorageUsed  int64     `json:"storage_used_bytes"`
 	StorageQuota int64     `json:"storage_quota_bytes"`
 	CreatedAt    time.Time `json:"created_at"`
+	Description  string    `json:"description"`
 }
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +414,13 @@ type createRepositoryBody struct {
 	IsPublic bool `json:"is_public"`
 	// StorageQuota is the max storage in bytes; 0 uses the metadata default (10 GB).
 	StorageQuota int64 `json:"storage_quota"`
+	// Description is an optional markdown README for the repository (FE-API-006).
+	Description string `json:"description"`
+}
+
+// updateRepositoryBody is the expected JSON body for PATCH /api/v1/repositories/{org}/{repo}.
+type updateRepositoryBody struct {
+	Description string `json:"description"`
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
@@ -382,6 +461,7 @@ func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request)
 		Name:         body.Org + "/" + body.Name,
 		IsPublic:     body.IsPublic,
 		StorageQuota: body.StorageQuota,
+		Description:  body.Description,
 	})
 	if err != nil {
 		slog.Error("CreateRepository", "err", err, "org", body.Org, "name", body.Name)
@@ -465,10 +545,15 @@ func (h *Handler) handleDeleteRepository(w http.ResponseWriter, r *http.Request)
 
 // TagResponse is the JSON representation of a single tag.
 type TagResponse struct {
-	Name           string    `json:"name"`
-	ManifestDigest string    `json:"manifest_digest"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	CreatedAt      time.Time `json:"created_at"`
+	Name           string `json:"name"`
+	ManifestDigest string `json:"manifest_digest"`
+	// SizeBytes is the total image size — config blob + sum of layer blob
+	// sizes for an image manifest, or sum of child manifest sizes for an
+	// image index. Computed at push time and stored on `manifests`; 0 for
+	// pre-FE-API-001 rows that haven't been re-pushed since the backfill.
+	SizeBytes int64     `json:"size_bytes"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +599,7 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 		tags = append(tags, TagResponse{
 			Name:           tag.GetName(),
 			ManifestDigest: tag.GetManifestDigest(),
+			SizeBytes:      tag.GetSizeBytes(),
 			UpdatedAt:      tag.GetUpdatedAt().AsTime(),
 			CreatedAt:      tag.GetCreatedAt().AsTime(),
 		})
@@ -855,12 +941,211 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	return RepoResponse{
 		RepoID:       r.GetRepoId(),
 		OrgID:        r.GetOrgId(),
+		Org:          r.GetOrg(),
 		Name:         r.GetName(),
 		IsPublic:     r.GetIsPublic(),
 		StorageUsed:  r.GetStorageUsed(),
 		StorageQuota: r.GetStorageQuota(),
 		CreatedAt:    r.GetCreatedAt().AsTime(),
+		Description:  r.GetDescription(),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/v1/repositories/{org}/{repo}   (FE-API-006)
+// ---------------------------------------------------------------------------
+
+func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName := r.PathValue("org"), r.PathValue("repo")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// Only admins/owners on this repo (or parent org) may update metadata.
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "admin") {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
+	var body updateRepositoryBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Resolve repo_id — UpdateRepository RPC is keyed by ID, not name.
+	existing, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	repo, err := h.meta.UpdateRepository(r.Context(), &metadatav1.UpdateRepositoryRequest{
+		TenantId:    tenantID,
+		RepoId:      existing.GetRepoId(),
+		Description: body.Description,
+	})
+	if err != nil {
+		slog.Error("UpdateRepository", "err", err, "repo_id", existing.GetRepoId())
+		writeError(w, http.StatusInternalServerError, "failed to update repository")
+		return
+	}
+	writeJSON(w, http.StatusOK, repoToResponse(repo))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest   (FE-API-002)
+// ---------------------------------------------------------------------------
+
+// manifestLayer is a single layer entry extracted from the manifest JSON.
+type manifestLayer struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"media_type"`
+}
+
+// manifestConfig holds the image config descriptor extracted from the manifest JSON.
+type manifestConfig struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"media_type"`
+}
+
+// ManifestResponse is the JSON body for GET …/tags/{tag}/manifest.
+type ManifestResponse struct {
+	Digest    string         `json:"digest"`
+	MediaType string         `json:"media_type"`
+	SizeBytes int64          `json:"size_bytes"`
+	CreatedAt time.Time      `json:"created_at"`
+	Config    manifestConfig `json:"config"`
+	Layers    []manifestLayer `json:"layers"`
+}
+
+// rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
+type rawManifest struct {
+	Config struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+	} `json:"config"`
+	Layers []struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+	} `json:"layers"`
+}
+
+func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName, tagName := r.PathValue("org"), r.PathValue("repo"), r.PathValue("tag")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+	if err := validateTagName(tagName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tag name")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	tag, err := h.meta.GetTag(r.Context(), &metadatav1.GetTagRequest{
+		RepoId:   repo.GetRepoId(),
+		TenantId: tenantID,
+		Name:     tagName,
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "tag not found")
+		return
+	}
+
+	m, err := h.meta.GetManifest(r.Context(), &metadatav1.GetManifestRequest{
+		RepoId:    repo.GetRepoId(),
+		TenantId:  tenantID,
+		Reference: tag.GetManifestDigest(),
+	})
+	if err != nil {
+		slog.Error("GetManifest", "err", err, "digest", tag.GetManifestDigest())
+		writeError(w, http.StatusInternalServerError, "failed to fetch manifest")
+		return
+	}
+
+	resp := ManifestResponse{
+		Digest:    m.GetDigest(),
+		MediaType: m.GetMediaType(),
+		SizeBytes: m.GetSizeBytes(),
+		CreatedAt: m.GetCreatedAt().AsTime(),
+		Layers:    []manifestLayer{},
+	}
+
+	var raw rawManifest
+	if err := json.Unmarshal(m.GetRawJson(), &raw); err == nil {
+		resp.Config = manifestConfig{
+			Digest:    raw.Config.Digest,
+			Size:      raw.Config.Size,
+			MediaType: raw.Config.MediaType,
+		}
+		for _, l := range raw.Layers {
+			resp.Layers = append(resp.Layers, manifestLayer{
+				Digest:    l.Digest,
+				Size:      l.Size,
+				MediaType: l.MediaType,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/workspace/me   (FE-API-009)
+// ---------------------------------------------------------------------------
+
+// WorkspaceResponse is the JSON body for GET /api/v1/workspace/me.
+type WorkspaceResponse struct {
+	TenantID  string    `json:"tenant_id"`
+	Name      string    `json:"name"`
+	Plan      string    `json:"plan"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
+	if h.tenant == nil {
+		writeError(w, http.StatusNotFound, "route disabled")
+		return
+	}
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	t, err := h.tenant.GetTenant(r.Context(), &tenantv1.GetTenantRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.Error("GetTenant", "err", err, "tenant_id", tenantID)
+		writeError(w, http.StatusInternalServerError, "failed to fetch workspace")
+		return
+	}
+	writeJSON(w, http.StatusOK, WorkspaceResponse{
+		TenantID:  t.GetTenantId(),
+		Name:      t.GetName(),
+		Plan:      t.GetPlan(),
+		CreatedAt: t.GetCreatedAt().AsTime(),
+	})
 }
 
 // writeJSON sets Content-Type, writes the given status code, and encodes v as JSON.
