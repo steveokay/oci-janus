@@ -17,6 +17,7 @@
  * how Stripe/Linear/Vercel signal "this is a search you can also click
  * on". The `⌘ K` chip teaches the shortcut.
  */
+import { useNavigate } from '@tanstack/react-router'
 import { Bell, Plus, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Breadcrumbs } from './Breadcrumbs'
@@ -92,15 +93,15 @@ function NotificationBell() {
   )
 }
 
-/** Primary CTA. Toast for now; Sprint 1c wires the new-repo dialog. */
+/** Primary CTA — navigates to the repositories list with ?new=true so
+    the create dialog opens on arrival. */
 function NewRepositoryCTA() {
+  const navigate = useNavigate()
   return (
     <button
       type="button"
       onClick={() =>
-        toast.message('New repository flow coming soon', {
-          description: 'Sprint 1c wires the create-repo dialog.',
-        })
+        navigate({ to: '/repositories', search: { new: true } })
       }
       className="inline-flex items-center gap-xs h-9 px-md rounded-sm bg-primary text-on-primary text-body-sm font-medium shadow-xs hover:bg-primary-600 active:bg-primary-700 transition-colors shrink-0 whitespace-nowrap"
     >

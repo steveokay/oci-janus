@@ -13,8 +13,8 @@
  * totals today (would need a new metadata RPC), so we display "—" rather
  * than show a stale demo number alongside real ones.
  */
+import { useNavigate } from '@tanstack/react-router'
 import { ArrowUpRight, Plus } from 'lucide-react'
-import { toast } from 'sonner'
 import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils/cn'
 
@@ -38,6 +38,7 @@ export function HeroCard({
   systemHealthPct,
   loading,
 }: HeroCardProps) {
+  const navigate = useNavigate()
   const username = useAuthStore((s) => s.user?.username ?? '')
   const greeting = timeOfDayGreeting()
 
@@ -87,9 +88,7 @@ export function HeroCard({
           <button
             type="button"
             onClick={() =>
-              toast.message('Repository create flow coming soon', {
-                description: 'Sprint 1c wires the new-repo dialog.',
-              })
+              navigate({ to: '/repositories', search: { new: true } })
             }
             className="inline-flex items-center gap-xs h-9 px-md rounded-sm bg-primary text-on-primary text-body-sm font-medium shadow-xs hover:bg-primary-600 active:bg-primary-700 transition-colors"
           >
