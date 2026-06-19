@@ -50,7 +50,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S0 | Foundation | DONE ✅ | bootstrap, design tokens, auth store, API client, AppShell, login |
 | S1 | Dashboard & Repositories | DONE ✅ | `/`, `/repositories`, `/repositories/:org/:repo` |
 | S2 | Tags & Image detail | DONE ✅ | `/repositories/:org/:repo/tags/:tag`, scan result, build history |
-| S3 | Security & Activity | NOT STARTED | `/security/overview`, `/security/vulnerabilities`, `/security/scans` (stubbed for NOT-STARTED endpoints) |
+| S3 | Security & Activity | DONE ✅ | `/security` (tabs), `/activity` |
 | S4 | RBAC & Members | NOT STARTED | `/orgs/:org/members`, repo members tab on repo detail |
 | S5 | Webhooks | NOT STARTED | `/webhooks`, create/edit, delivery log, test, rotate-secret |
 | S6 | Platform Admin | NOT STARTED | `/admin/tenants`, tenant CRUD + quota |
@@ -105,7 +105,28 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] FE-API-002 (layers) and FE-API-003 (signing) tabs render explicit "arrives with X" placeholders so the surface is honest
 - [x] Build + typecheck + lint pass
 
-### S3..S8 — checklist deferred until each sprint kicks off
+### S3 — Security & Activity
+
+> Most backend endpoints in this domain are explicitly NOT STARTED (FE-API-014..020,
+> FE-API-008). Strategy: build the `/security` IA with sub-tabs + a polished Overview
+> using what `/stats` already gives us; tabs for vulnerabilities / scans / remediation /
+> policies render branded empty states pointing at the exact API id they'll consume
+> when the backend ships. `/activity` ships as a single stub for FE-API-008.
+
+- [x] `/security` route — sub-tabs: Overview / Vulnerabilities / Scans / Remediation / Policies
+- [x] Reusable `ComingSoon` primitive — apiId chip + dotted-grid wash + highlight bullets, used per tab
+- [x] Header tile — total open findings + real severity bar (FE-API-016 just shipped backend-side)
+- [x] Overview tab — full severity breakdown card (SeverityBar + SeverityLegend) + FE-API-020 coming-soon panel for scan coverage / freshness
+- [x] Dashboard vulnerability tile now renders a mini SeverityBar (FE-API-016 wired)
+- [x] Tab stubs keyed to FE-API-014/015/017/018 with concrete "what this will show" copy
+- [x] `/activity` route — header + activity-stream card with sketched preview rows + FE-API-008 badge
+- [x] Build + typecheck + lint pass
+
+> **Backend follow-up surfaced this sprint:** `types.ts` now also includes
+> `Repository.description` (FE-API-006 done). The repository detail page should
+> render this on a tab in S4 follow-up — out of scope here, tracked in S4 checklist.
+
+### S4..S8 — checklist deferred until each sprint kicks off
 
 ---
 

@@ -9,6 +9,12 @@ export interface StatsResponse {
   daily_pulls: number;
   vulnerability_count: number;
   system_health_pct: number;
+  // FE-API-016 — per-severity counts now returned by the backend.
+  critical_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  negligible_count: number;
 }
 
 export interface Repository {
@@ -21,6 +27,8 @@ export interface Repository {
   storage_used_bytes: number;
   storage_quota_bytes: number;
   created_at: string;
+  // FE-API-006 — operator-supplied markdown description.
+  description: string;
 }
 
 export interface RepositoriesListResponse {
@@ -34,6 +42,7 @@ export interface CreateRepositoryBody {
   name: string;
   is_public: boolean;
   storage_quota?: number;
+  description?: string;
 }
 
 export interface Tag {

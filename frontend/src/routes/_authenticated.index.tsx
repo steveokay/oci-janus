@@ -6,6 +6,7 @@ import { StorageCard } from "@/components/dashboard/storage-card";
 import { HealthCard } from "@/components/dashboard/health-card";
 import { QuickActions } from "@/components/dashboard/quick-actions";
 import { ErrorState } from "@/components/ui/error-state";
+import { SeverityBar } from "@/components/security/severity-bar";
 import { useStats } from "@/lib/api/stats";
 import { formatCompactNumber } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth/store";
@@ -74,9 +75,35 @@ function DashboardHome(): React.ReactElement {
               value={data?.vulnerability_count}
               loading={isLoading}
               accentBar={
-                (data?.vulnerability_count ?? 0) > 0 ? "warning" : "accent"
+                (data?.critical_count ?? 0) + (data?.high_count ?? 0) > 0
+                  ? "danger"
+                  : (data?.vulnerability_count ?? 0) > 0
+                    ? "warning"
+                    : "accent"
               }
-              caption="Total open findings across the latest scan per tag."
+              caption={
+                isLoading ? (
+                  "Total open findings across the latest scan per tag."
+                ) : (
+                  // FE-API-016 — the per-severity breakdown lets us show a
+                  // mini SeverityBar instead of plain prose, so the tile
+                  // reads "where the problem is" at a glance.
+                  <div className="mt-1 space-y-1.5">
+                    <SeverityBar
+                      counts={{
+                        CRITICAL: data?.critical_count ?? 0,
+                        HIGH: data?.high_count ?? 0,
+                        MEDIUM: data?.medium_count ?? 0,
+                        LOW: data?.low_count ?? 0,
+                      }}
+                      className="h-1"
+                    />
+                    <span>
+                      Across the latest scan per tag.
+                    </span>
+                  </div>
+                )
+              }
             />
             <HealthCard pct={data?.system_health_pct} loading={isLoading} />
             <div className="md:col-span-1" />
