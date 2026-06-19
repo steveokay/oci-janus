@@ -182,6 +182,22 @@ func (h *GRPCHandler) UpdateEndpoint(ctx context.Context, req *webhookv1.UpdateE
 			return nil, status.Errorf(codes.InvalidArgument, "invalid webhook URL: %v", err)
 		}
 		urlPtr = &newURL
+	} else {
+		// PENTEST-032: even when the caller only updates events/active, re-validate
+		// the currently stored URL. A stored URL may have become RFC1918-routable
+		// via DNS reassignment or IP churn since the endpoint was created.
+		// The runtime dialer already blocks at send time, but opportunistic
+		// re-validation removes stale bad URLs proactively.
+		existing, err := h.repo.GetEndpointForTenant(ctx, endpointID, tenantID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, status.Error(codes.NotFound, "endpoint not found")
+			}
+			return nil, status.Errorf(codes.Internal, "get endpoint: %v", err)
+		}
+		if err := delivery.ValidateURL(existing.URL); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "stored webhook URL is no longer valid: %v", err)
+		}
 	}
 	var activePtr *bool
 	if req.Active != nil {
