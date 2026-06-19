@@ -135,6 +135,13 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 	if err != nil {
 		return "", fmt.Errorf("sign token: %w", err)
 	}
+	// Track the JTI in the user's active-token set so ChangePassword can
+	// revoke every live session in one shot. A Redis hiccup must not fail
+	// token issuance — log and move on; the worst case is one stale session
+	// surviving a password change, which the token's 5-minute TTL bounds.
+	if err := s.recordIssuedJTI(ctx, userID, claims.ID); err != nil {
+		slog.WarnContext(ctx, "auth: failed to record issued JTI", "user_id", userID, "error", err)
+	}
 	return signed, nil
 }
 
