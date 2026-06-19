@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -125,16 +126,17 @@ func newWebhookTestEnv(t *testing.T, wh webhookv1.WebhookServiceServer) *testEnv
 // gRPC detail to the HTTP response body.
 func TestWebhookTestDispatch_invalidArgument_doesNotLeakSSRFDetails(t *testing.T) {
 	sensitiveDetail := "blocked private IP 10.20.30.40 (RFC1918)"
+	epID := uuid.New().String()
 
 	env := newWebhookTestEnv(t, &errWebhookServer{
 		err: status.Error(codes.InvalidArgument, sensitiveDetail),
 	})
 
-	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/webhooks/00000000-0000-0000-0000-000000000042/test", nil)
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/webhooks/"+epID+"/test", nil)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /api/v1/webhooks/00000000-0000-0000-0000-000000000042/test: %v", err)
+		t.Fatalf("POST /api/v1/webhooks/%s/test: %v", epID, err)
 	}
 	defer resp.Body.Close()
 

@@ -18,7 +18,7 @@
   "variable": [
     {"key": "baseUrl", "value": "http://localhost:8091", "type": "string"},
     {"key": "token", "value": "", "type": "string"},
-    {"key": "tenantId", "value": "98dbe36b-ef28-4903-b25c-bff1b2921c9e", "type": "string"},
+    {"key": "tenantId", "value": "", "type": "string"},
     {"key": "org", "value": "dev", "type": "string"},
     {"key": "repo", "value": "alpine", "type": "string"},
     {"key": "tag", "value": "3.20", "type": "string"},
@@ -71,7 +71,7 @@
             "header": [{"key": "Content-Type", "value": "application/json"}],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"tenant_id\": \"{{tenantId}}\",\n  \"username\": \"admin\",\n  \"password\": \"Admin1234!dev\"\n}"
+              "raw": "{\n  \"tenant_id\": \"{{tenantId}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
             },
             "url": {"raw": "{{baseUrl}}/api/v1/login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "login"]}
           }
