@@ -52,6 +52,8 @@ type metadataRepo interface {
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
 	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error)
+	// Security overview (FE-API-020) — single tenant-scoped aggregate.
+	GetSecurityOverview(ctx context.Context, tenantID string) (*repository.SecurityOverview, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
@@ -300,6 +302,40 @@ func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *
 		MediumCount:      medium,
 		LowCount:         low,
 		NegligibleCount:  negligible,
+	}, nil
+}
+
+// GetSecurityOverview returns the tenant-scoped FE-API-020 payload. Maps the
+// repository's typed SecurityOverview to the proto message; the tenant_id
+// check is performed in the repository SQL (every CTE branch filters on $1).
+func (h *MetadataHandler) GetSecurityOverview(ctx context.Context, req *metadatav1.GetSecurityOverviewRequest) (*metadatav1.SecurityOverview, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	ov, err := h.repo.GetSecurityOverview(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	var pct float64
+	if ov.TagsTotal > 0 {
+		pct = float64(ov.TagsScanned) / float64(ov.TagsTotal) * 100.0
+	}
+	return &metadatav1.SecurityOverview{
+		OpenVulnerabilitiesTotal: ov.OpenVulnerabilitiesTotal,
+		SeverityCounts: &metadatav1.SecurityCounts{
+			Critical:   ov.Critical,
+			High:       ov.High,
+			Medium:     ov.Medium,
+			Low:        ov.Low,
+			Negligible: ov.Negligible,
+		},
+		ScanCoverage: &metadatav1.ScanCoverage{
+			TagsTotal:   ov.TagsTotal,
+			TagsScanned: ov.TagsScanned,
+			Percent:     pct,
+		},
+		RecentScans_24H:    ov.RecentScans24h,
+		DaysSinceLastScan:  ov.DaysSinceLastScan,
 	}, nil
 }
 

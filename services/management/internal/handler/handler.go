@@ -178,8 +178,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Build / audit history — returns empty list until registry-audit query API is ready.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
 
+	// FE-API-004 repo-scoped activity feed — wide slice of the audit log for
+	// one repo (push, delete, scan, sign). Handler lives in repo_activity.go.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/activity", authMW(http.HandlerFunc(h.handleListRepoActivity)))
+
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
+
+	// Security overview (FE-API-020) — single tenant-scoped aggregate.
+	h.RegisterSecurity(mux, authMW)
 
 	// Webhook management — CRUD + deliveries + test + rotate-secret.
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
@@ -213,6 +220,17 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // GET /api/v1/stats
 // ---------------------------------------------------------------------------
 
+// SeverityCounts is the per-severity vulnerability breakdown shared by
+// /api/v1/stats (FE-API-016) and /api/v1/security/overview (FE-API-020).
+// All counts are int32 to match the underlying scanner plugin payloads.
+type SeverityCounts struct {
+	Critical   int32 `json:"critical"`
+	High       int32 `json:"high"`
+	Medium     int32 `json:"medium"`
+	Low        int32 `json:"low"`
+	Negligible int32 `json:"negligible"`
+}
+
 // StatsResponse is the JSON body returned by GET /api/v1/stats.
 type StatsResponse struct {
 	TotalRepos         int     `json:"total_repos"`
@@ -221,12 +239,15 @@ type StatsResponse struct {
 	DailyPulls         int64   `json:"daily_pulls"`
 	VulnerabilityCount int     `json:"vulnerability_count"`
 	SystemHealthPct    float64 `json:"system_health_pct"`
-	// Per-severity breakdown (FE-API-016).
-	CriticalCount   int64 `json:"critical_count"`
-	HighCount       int64 `json:"high_count"`
-	MediumCount     int64 `json:"medium_count"`
-	LowCount        int64 `json:"low_count"`
-	NegligibleCount int64 `json:"negligible_count"`
+	// Per-severity breakdown (FE-API-016). Both root-level *_count fields and
+	// the nested severity_counts object are emitted so existing consumers do
+	// not break while the dashboard migrates to the nested shape.
+	CriticalCount   int64          `json:"critical_count"`
+	HighCount       int64          `json:"high_count"`
+	MediumCount     int64          `json:"medium_count"`
+	LowCount        int64          `json:"low_count"`
+	NegligibleCount int64          `json:"negligible_count"`
+	SeverityCounts  SeverityCounts `json:"severity_counts"`
 }
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -280,6 +301,17 @@ func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 		MediumCount:        vulns.GetMediumCount(),
 		LowCount:           vulns.GetLowCount(),
 		NegligibleCount:    vulns.GetNegligibleCount(),
+		// FE-API-016: nested object the frontend severity bar reads. The
+		// proto VulnerabilityCountResponse uses int64 internally but the
+		// scanner payloads are int32 — narrow without overflow concerns
+		// (no tenant has 2.1B findings).
+		SeverityCounts: SeverityCounts{
+			Critical:   int32(vulns.GetCriticalCount()),
+			High:       int32(vulns.GetHighCount()),
+			Medium:     int32(vulns.GetMediumCount()),
+			Low:        int32(vulns.GetLowCount()),
+			Negligible: int32(vulns.GetNegligibleCount()),
+		},
 	})
 }
 

@@ -98,13 +98,22 @@ type fakeRepo struct {
 	decrStorageErr   error
 
 	// Scan results
-	upsertScanErr   error
-	getScanResult   *metadatav1.ScanResult
-	getScanErr      error
-	vulnTotal       int64
-	vulnCritical    int64
-	vulnHigh        int64
-	vulnErr         error
+	upsertScanErr error
+	getScanResult *metadatav1.ScanResult
+	getScanErr    error
+	vulnTotal     int64
+	vulnCritical  int64
+	vulnHigh      int64
+	vulnMedium    int64
+	vulnLow       int64
+	vulnNeg       int64
+	vulnErr       error
+	// Security overview (FE-API-020)
+	securityOverview    *repository.SecurityOverview
+	securityOverviewErr error
+	// UpdateRepository
+	updateRepoResult *metadatav1.Repository
+	updateRepoErr    error
 	// Repository count
 	repoCount    int64
 	repoCountErr error
@@ -116,8 +125,12 @@ func (f *fakeRepo) GetOrCreateOrganization(_ context.Context, _, _ string) (stri
 	return f.getOrCreateOrgID, f.getOrCreateOrgErr
 }
 
-func (f *fakeRepo) CreateRepository(_ context.Context, _, _, _ string, _ bool, _ int64) (*metadatav1.Repository, error) {
+func (f *fakeRepo) CreateRepository(_ context.Context, _, _, _, _ string, _ bool, _ int64) (*metadatav1.Repository, error) {
 	return f.createRepoResult, f.createRepoErr
+}
+
+func (f *fakeRepo) UpdateRepository(_ context.Context, _, _, _ string) (*metadatav1.Repository, error) {
+	return f.updateRepoResult, f.updateRepoErr
 }
 
 func (f *fakeRepo) GetRepository(_ context.Context, _, _ string) (*metadatav1.Repository, error) {
@@ -212,8 +225,12 @@ func (f *fakeRepo) GetScanResult(_ context.Context, _, _ string) (*metadatav1.Sc
 	return f.getScanResult, f.getScanErr
 }
 
-func (f *fakeRepo) GetTenantVulnerabilityCount(_ context.Context, _ string) (int64, int64, int64, error) {
-	return f.vulnTotal, f.vulnCritical, f.vulnHigh, f.vulnErr
+func (f *fakeRepo) GetTenantVulnerabilityCount(_ context.Context, _ string) (int64, int64, int64, int64, int64, int64, error) {
+	return f.vulnTotal, f.vulnCritical, f.vulnHigh, f.vulnMedium, f.vulnLow, f.vulnNeg, f.vulnErr
+}
+
+func (f *fakeRepo) GetSecurityOverview(_ context.Context, _ string) (*repository.SecurityOverview, error) {
+	return f.securityOverview, f.securityOverviewErr
 }
 
 func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
@@ -1066,6 +1083,98 @@ func TestGetTenantVulnerabilityCount_repoError_returnsInternal(t *testing.T) {
 	_, err := h.GetTenantVulnerabilityCount(context.Background(), &metadatav1.GetTenantVulnerabilityCountRequest{
 		TenantId: "t1",
 	})
+	requireCode(t, err, codes.Internal)
+}
+
+// ── GetSecurityOverview (FE-API-020) ──────────────────────────────────────────
+
+// TestGetSecurityOverview_emptyTenant_returnsZeroValues verifies that a tenant
+// with no scans, no tags, and no recent activity returns a fully zero-valued
+// SecurityOverview — the frontend distinguishes "never scanned" from "clean"
+// via tags_scanned + recent_scans_24h, both zero here.
+func TestGetSecurityOverview_emptyTenant_returnsZeroValues(t *testing.T) {
+	h := newHandler(&fakeRepo{
+		securityOverview: &repository.SecurityOverview{},
+	})
+
+	got, err := h.GetSecurityOverview(context.Background(), &metadatav1.GetSecurityOverviewRequest{
+		TenantId: "t1",
+	})
+	requireNoErr(t, err)
+	if got.GetOpenVulnerabilitiesTotal() != 0 {
+		t.Errorf("OpenVulnerabilitiesTotal: got %d, want 0", got.GetOpenVulnerabilitiesTotal())
+	}
+	if got.GetSeverityCounts().GetCritical() != 0 {
+		t.Errorf("Critical: got %d, want 0", got.GetSeverityCounts().GetCritical())
+	}
+	if got.GetScanCoverage().GetTagsTotal() != 0 {
+		t.Errorf("TagsTotal: got %d, want 0", got.GetScanCoverage().GetTagsTotal())
+	}
+	if got.GetScanCoverage().GetPercent() != 0 {
+		t.Errorf("Percent: got %f, want 0", got.GetScanCoverage().GetPercent())
+	}
+	if got.GetRecentScans_24H() != 0 {
+		t.Errorf("RecentScans24h: got %d, want 0", got.GetRecentScans_24H())
+	}
+}
+
+// TestGetSecurityOverview_populated_returnsAggregatedView verifies the full
+// happy path: counts flow through to the proto, percent is computed correctly,
+// and partial coverage (3 of 4 tags scanned = 75%) is preserved.
+func TestGetSecurityOverview_populated_returnsAggregatedView(t *testing.T) {
+	h := newHandler(&fakeRepo{
+		securityOverview: &repository.SecurityOverview{
+			OpenVulnerabilitiesTotal: 12,
+			Critical:                 2,
+			High:                     3,
+			Medium:                   4,
+			Low:                      2,
+			Negligible:               1,
+			TagsTotal:                4,
+			TagsScanned:              3,
+			RecentScans24h:           5,
+			DaysSinceLastScan:        2,
+		},
+	})
+
+	got, err := h.GetSecurityOverview(context.Background(), &metadatav1.GetSecurityOverviewRequest{
+		TenantId: "t1",
+	})
+	requireNoErr(t, err)
+	if got.GetOpenVulnerabilitiesTotal() != 12 {
+		t.Errorf("Total: got %d, want 12", got.GetOpenVulnerabilitiesTotal())
+	}
+	if got.GetSeverityCounts().GetCritical() != 2 || got.GetSeverityCounts().GetHigh() != 3 {
+		t.Errorf("severity: got %+v, want C=2 H=3", got.GetSeverityCounts())
+	}
+	if got.GetScanCoverage().GetTagsScanned() != 3 || got.GetScanCoverage().GetTagsTotal() != 4 {
+		t.Errorf("coverage: got %+v, want 3/4", got.GetScanCoverage())
+	}
+	if got.GetScanCoverage().GetPercent() != 75.0 {
+		t.Errorf("percent: got %f, want 75.0", got.GetScanCoverage().GetPercent())
+	}
+	if got.GetRecentScans_24H() != 5 {
+		t.Errorf("RecentScans24h: got %d, want 5", got.GetRecentScans_24H())
+	}
+	if got.GetDaysSinceLastScan() != 2 {
+		t.Errorf("DaysSinceLastScan: got %d, want 2", got.GetDaysSinceLastScan())
+	}
+}
+
+// TestGetSecurityOverview_emptyTenantID_returnsInvalidArgument enforces the
+// CLAUDE.md §7 input-validation rule at the handler boundary.
+func TestGetSecurityOverview_emptyTenantID_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetSecurityOverview(context.Background(), &metadatav1.GetSecurityOverviewRequest{TenantId: ""})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestGetSecurityOverview_repoError_returnsInternal verifies unexpected errors
+// from the repository map to codes.Internal (and never leak the underlying
+// driver text via the gRPC status).
+func TestGetSecurityOverview_repoError_returnsInternal(t *testing.T) {
+	h := newHandler(&fakeRepo{securityOverviewErr: errors.New("db fail")})
+	_, err := h.GetSecurityOverview(context.Background(), &metadatav1.GetSecurityOverviewRequest{TenantId: "t1"})
 	requireCode(t, err, codes.Internal)
 }
 

@@ -763,6 +763,127 @@ func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (in
 	return n, nil
 }
 
+// SecurityOverview is the value type returned by GetSecurityOverview. Kept in
+// the repository layer so the handler can map it 1:1 to the proto message
+// without re-importing repository types into protos.
+type SecurityOverview struct {
+	OpenVulnerabilitiesTotal int64
+	Critical                 int32
+	High                     int32
+	Medium                   int32
+	Low                      int32
+	Negligible               int32
+	TagsTotal                int64
+	TagsScanned              int64
+	RecentScans24h           int64
+	DaysSinceLastScan        int64
+}
+
+// GetTenantSeverityBreakdown returns the per-severity vulnerability counts for
+// a tenant, computed from the LATEST complete scan per (repo_id, manifest_digest).
+// This deduplicates re-scanned tags so a re-scan does not double the dashboard
+// numbers (FE-API-016).
+//
+// The query is a single round-trip CTE: `latest` picks the most recent
+// scan_results row per tag using DISTINCT ON; the outer SELECT sums the JSONB
+// severity counter keys. NULL/missing keys are coalesced to 0. Severity keys
+// are upper-case to match the scanner plugins (CLAUDE.md §4.7).
+func (r *Repository) GetTenantSeverityBreakdown(ctx context.Context, tenantID string) (critical, high, medium, low, negligible int32, err error) {
+	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		)
+		SELECT
+		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
+		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
+		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
+		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
+		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
+		FROM latest`
+
+	if err = r.reader().QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+		return 0, 0, 0, 0, 0, fmt.Errorf("GetTenantSeverityBreakdown: %w", err)
+	}
+	return critical, high, medium, low, negligible, nil
+}
+
+// GetSecurityOverview computes the tenant-scoped security summary backing
+// FE-API-020. Implemented as a single CTE so we never load tag/scan rows
+// into Go memory:
+//
+//   - `latest` picks the most recent scan_results row per (repo_id, manifest_digest)
+//     so re-scanned tags only count once toward the severity sums.
+//   - `tag_counts` returns (tags_total, tags_scanned), where tags_scanned is the
+//     number of tags whose current manifest_digest has at least one scan_result row.
+//   - `recency` returns the count of complete scans in the last 24h and the age in
+//     whole days of the most recent complete scan (0 when never scanned).
+//
+// All three sub-queries are tenant-scoped on every row to honour the §9
+// tenant-isolation rule.
+func (r *Repository) GetSecurityOverview(ctx context.Context, tenantID string) (*SecurityOverview, error) {
+	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		),
+		severities AS (
+			SELECT
+			  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0)::int AS critical,
+			  COALESCE(SUM((severity_counts->>'HIGH')::int),       0)::int AS high,
+			  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0)::int AS medium,
+			  COALESCE(SUM((severity_counts->>'LOW')::int),        0)::int AS low,
+			  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)::int AS negligible
+			FROM latest
+		),
+		tag_counts AS (
+			SELECT
+			  (SELECT COUNT(*) FROM tags WHERE tenant_id = $1)::bigint AS tags_total,
+			  (SELECT COUNT(DISTINCT (t.repo_id, t.manifest_digest))
+			     FROM tags t
+			     WHERE t.tenant_id = $1
+			       AND EXISTS (
+			         SELECT 1 FROM scan_results sr
+			         WHERE  sr.tenant_id = $1
+			           AND  sr.repo_id = t.repo_id
+			           AND  sr.manifest_digest = t.manifest_digest
+			       ))::bigint AS tags_scanned
+		),
+		recency AS (
+			SELECT
+			  (SELECT COUNT(*) FROM scan_results
+			     WHERE tenant_id = $1
+			       AND status = 'complete'
+			       AND completed_at >= now() - INTERVAL '24 hours')::bigint AS recent_scans_24h,
+			  COALESCE(
+			    (SELECT EXTRACT(EPOCH FROM (now() - MAX(completed_at)))::bigint / 86400
+			       FROM scan_results
+			       WHERE tenant_id = $1 AND status = 'complete' AND completed_at IS NOT NULL),
+			    0
+			  )::bigint AS days_since_last_scan
+		)
+		SELECT
+		  s.critical, s.high, s.medium, s.low, s.negligible,
+		  tc.tags_total, tc.tags_scanned,
+		  rc.recent_scans_24h, rc.days_since_last_scan
+		FROM   severities s, tag_counts tc, recency rc`
+
+	var ov SecurityOverview
+	if err := r.reader().QueryRow(ctx, q, tenantID).Scan(
+		&ov.Critical, &ov.High, &ov.Medium, &ov.Low, &ov.Negligible,
+		&ov.TagsTotal, &ov.TagsScanned,
+		&ov.RecentScans24h, &ov.DaysSinceLastScan,
+	); err != nil {
+		return nil, fmt.Errorf("GetSecurityOverview: %w", err)
+	}
+	ov.OpenVulnerabilitiesTotal = int64(ov.Critical) + int64(ov.High) + int64(ov.Medium) + int64(ov.Low) + int64(ov.Negligible)
+	return &ov, nil
+}
+
 func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error) {
 	const q = `
 		SELECT

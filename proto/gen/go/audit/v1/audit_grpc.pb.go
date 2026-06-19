@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion8
 const (
 	AuditService_GetBuildHistory_FullMethodName   = "/registry.audit.v1.AuditService/GetBuildHistory"
 	AuditService_GetDailyPullCount_FullMethodName = "/registry.audit.v1.AuditService/GetDailyPullCount"
+	AuditService_GetRepoActivity_FullMethodName   = "/registry.audit.v1.AuditService/GetRepoActivity"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -36,6 +37,12 @@ type AuditServiceClient interface {
 	// in the past 24 hours. Used by registry-management to populate the
 	// DailyPulls stat tile on the operations overview dashboard.
 	GetDailyPullCount(ctx context.Context, in *GetDailyPullCountRequest, opts ...grpc.CallOption) (*GetDailyPullCountResponse, error)
+	// GetRepoActivity returns operator-facing audit events for a single
+	// repository (push, delete, scan, sign — never internal queue noise).
+	// Results are ordered newest-first and cursor-paginated. The payload field
+	// exposes only a curated handful of fields per event so the full raw
+	// payload never crosses the gRPC wire.
+	GetRepoActivity(ctx context.Context, in *GetRepoActivityRequest, opts ...grpc.CallOption) (*GetRepoActivityResponse, error)
 }
 
 type auditServiceClient struct {
@@ -66,6 +73,16 @@ func (c *auditServiceClient) GetDailyPullCount(ctx context.Context, in *GetDaily
 	return out, nil
 }
 
+func (c *auditServiceClient) GetRepoActivity(ctx context.Context, in *GetRepoActivityRequest, opts ...grpc.CallOption) (*GetRepoActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRepoActivityResponse)
+	err := c.cc.Invoke(ctx, AuditService_GetRepoActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -79,6 +96,12 @@ type AuditServiceServer interface {
 	// in the past 24 hours. Used by registry-management to populate the
 	// DailyPulls stat tile on the operations overview dashboard.
 	GetDailyPullCount(context.Context, *GetDailyPullCountRequest) (*GetDailyPullCountResponse, error)
+	// GetRepoActivity returns operator-facing audit events for a single
+	// repository (push, delete, scan, sign — never internal queue noise).
+	// Results are ordered newest-first and cursor-paginated. The payload field
+	// exposes only a curated handful of fields per event so the full raw
+	// payload never crosses the gRPC wire.
+	GetRepoActivity(context.Context, *GetRepoActivityRequest) (*GetRepoActivityResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -90,6 +113,9 @@ func (UnimplementedAuditServiceServer) GetBuildHistory(context.Context, *GetBuil
 }
 func (UnimplementedAuditServiceServer) GetDailyPullCount(context.Context, *GetDailyPullCountRequest) (*GetDailyPullCountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetDailyPullCount not implemented")
+}
+func (UnimplementedAuditServiceServer) GetRepoActivity(context.Context, *GetRepoActivityRequest) (*GetRepoActivityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRepoActivity not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -139,6 +165,24 @@ func _AuditService_GetDailyPullCount_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetRepoActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepoActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetRepoActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetRepoActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetRepoActivity(ctx, req.(*GetRepoActivityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -153,6 +197,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDailyPullCount",
 			Handler:    _AuditService_GetDailyPullCount_Handler,
+		},
+		{
+			MethodName: "GetRepoActivity",
+			Handler:    _AuditService_GetRepoActivity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

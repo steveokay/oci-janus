@@ -46,6 +46,7 @@ const (
 	MetadataService_GetScanResult_FullMethodName               = "/registry.metadata.v1.MetadataService/GetScanResult"
 	MetadataService_GetTenantVulnerabilityCount_FullMethodName = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
 	MetadataService_CountRepositories_FullMethodName           = "/registry.metadata.v1.MetadataService/CountRepositories"
+	MetadataService_GetSecurityOverview_FullMethodName         = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -86,6 +87,10 @@ type MetadataServiceClient interface {
 	GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error)
 	// Repository count — efficient alternative to draining ListRepositories for stats.
 	CountRepositories(ctx context.Context, in *CountRepositoriesRequest, opts ...grpc.CallOption) (*CountRepositoriesResponse, error)
+	// Security overview (FE-API-020) — single tenant-scoped aggregate combining
+	// open-vulnerability counts, scan coverage, and recency. Backs
+	// GET /api/v1/security/overview on registry-management.
+	GetSecurityOverview(ctx context.Context, in *GetSecurityOverviewRequest, opts ...grpc.CallOption) (*SecurityOverview, error)
 }
 
 type metadataServiceClient struct {
@@ -448,6 +453,16 @@ func (c *metadataServiceClient) CountRepositories(ctx context.Context, in *Count
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetSecurityOverview(ctx context.Context, in *GetSecurityOverviewRequest, opts ...grpc.CallOption) (*SecurityOverview, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecurityOverview)
+	err := c.cc.Invoke(ctx, MetadataService_GetSecurityOverview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -486,6 +501,10 @@ type MetadataServiceServer interface {
 	GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error)
 	// Repository count — efficient alternative to draining ListRepositories for stats.
 	CountRepositories(context.Context, *CountRepositoriesRequest) (*CountRepositoriesResponse, error)
+	// Security overview (FE-API-020) — single tenant-scoped aggregate combining
+	// open-vulnerability counts, scan coverage, and recency. Backs
+	// GET /api/v1/security/overview on registry-management.
+	GetSecurityOverview(context.Context, *GetSecurityOverviewRequest) (*SecurityOverview, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -569,6 +588,9 @@ func (UnimplementedMetadataServiceServer) GetTenantVulnerabilityCount(context.Co
 }
 func (UnimplementedMetadataServiceServer) CountRepositories(context.Context, *CountRepositoriesRequest) (*CountRepositoriesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CountRepositories not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetSecurityOverview(context.Context, *GetSecurityOverviewRequest) (*SecurityOverview, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSecurityOverview not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1062,6 +1084,24 @@ func _MetadataService_CountRepositories_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetSecurityOverview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSecurityOverviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetSecurityOverview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetSecurityOverview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetSecurityOverview(ctx, req.(*GetSecurityOverviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1156,6 +1196,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CountRepositories",
 			Handler:    _MetadataService_CountRepositories_Handler,
+		},
+		{
+			MethodName: "GetSecurityOverview",
+			Handler:    _MetadataService_GetSecurityOverview_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
