@@ -3,12 +3,13 @@
  * screen. beforeLoad runs synchronously during routing, so unauth users
  * never see a flash of the protected layout before redirect.
  *
- * Sprint 0: this is a stub that just renders <Outlet />. Sprint 1 will
- * add the app shell (sidebar, topbar, breadcrumbs) here so every child
- * route inherits it for free.
+ * Sprint 1a: this now wraps `<Outlet />` in the AppShell (sidebar +
+ * topbar + content slot). Every child route inherits the chrome for
+ * free — page components only need to render their content.
  */
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/store/authStore'
+import { AppShell } from '@/components/shell/AppShell'
 
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: ({ location }) => {
@@ -25,6 +26,9 @@ export const Route = createFileRoute('/_authenticated')({
 })
 
 function AuthenticatedLayout() {
-  // Sprint 1 wires the full shell here — sidebar + topbar + content slot.
-  return <Outlet />
+  return (
+    <AppShell>
+      <Outlet />
+    </AppShell>
+  )
 }
