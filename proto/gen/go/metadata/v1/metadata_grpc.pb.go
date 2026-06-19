@@ -26,6 +26,7 @@ const (
 	MetadataService_ListRepositories_FullMethodName            = "/registry.metadata.v1.MetadataService/ListRepositories"
 	MetadataService_DeleteRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/DeleteRepository"
 	MetadataService_UpdateRepositoryQuota_FullMethodName       = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
+	MetadataService_UpdateRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateRepository"
 	MetadataService_PutTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/PutTag"
 	MetadataService_GetTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/GetTag"
 	MetadataService_ListTags_FullMethodName                    = "/registry.metadata.v1.MetadataService/ListTags"
@@ -58,6 +59,7 @@ type MetadataServiceClient interface {
 	ListRepositories(ctx context.Context, in *ListRepositoriesRequest, opts ...grpc.CallOption) (MetadataService_ListRepositoriesClient, error)
 	DeleteRepository(ctx context.Context, in *DeleteRepositoryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(ctx context.Context, in *UpdateRepositoryQuotaRequest, opts ...grpc.CallOption) (*Repository, error)
+	UpdateRepository(ctx context.Context, in *UpdateRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Tags
 	PutTag(ctx context.Context, in *PutTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
@@ -171,6 +173,16 @@ func (c *metadataServiceClient) UpdateRepositoryQuota(ctx context.Context, in *U
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryQuota_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateRepository(ctx context.Context, in *UpdateRepositoryRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateRepository_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -447,6 +459,7 @@ type MetadataServiceServer interface {
 	ListRepositories(*ListRepositoriesRequest, MetadataService_ListRepositoriesServer) error
 	DeleteRepository(context.Context, *DeleteRepositoryRequest) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(context.Context, *UpdateRepositoryQuotaRequest) (*Repository, error)
+	UpdateRepository(context.Context, *UpdateRepositoryRequest) (*Repository, error)
 	// Tags
 	PutTag(context.Context, *PutTagRequest) (*Tag, error)
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
@@ -496,6 +509,9 @@ func (UnimplementedMetadataServiceServer) DeleteRepository(context.Context, *Del
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositoryQuota(context.Context, *UpdateRepositoryQuotaRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryQuota not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateRepository(context.Context, *UpdateRepositoryRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepository not implemented")
 }
 func (UnimplementedMetadataServiceServer) PutTag(context.Context, *PutTagRequest) (*Tag, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutTag not implemented")
@@ -673,6 +689,24 @@ func _MetadataService_UpdateRepositoryQuota_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositoryQuota(ctx, req.(*UpdateRepositoryQuotaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateRepository(ctx, req.(*UpdateRepositoryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1054,6 +1088,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositoryQuota",
 			Handler:    _MetadataService_UpdateRepositoryQuota_Handler,
+		},
+		{
+			MethodName: "UpdateRepository",
+			Handler:    _MetadataService_UpdateRepository_Handler,
 		},
 		{
 			MethodName: "PutTag",

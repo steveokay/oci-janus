@@ -51,20 +51,20 @@ func (r *Repository) reader() *pgxpool.Pool {
 // FE-API-010 needs `org` to render `/repositories/{org}/{leaf}` links without
 // a second lookup.
 const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-	r.storage_quota, r.storage_used, r.created_at, o.name`
+	r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
 
 // CreateRepository inserts a new repository row.
-func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
+func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
 	// Two-step insert: the RETURNING clause cannot reference the joined
 	// organizations row, so we fetch the org name in the same query via a CTE.
 	const q = `
 		WITH inserted AS (
-			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota)
-			VALUES ($1, $2, $3, $4, $5)
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
+			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
 		)
 		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-		       r.storage_quota, r.storage_used, r.created_at, o.name
+		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
 		FROM inserted r
 		JOIN organizations o ON o.id = r.org_id`
 
@@ -73,12 +73,31 @@ func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name
 		quota = 10 << 30 // 10 GiB default
 	}
 
-	repo, err := r.scanOneRepo(ctx, q, orgID, tenantID, name, isPublic, quota)
+	repo, err := r.scanOneRepo(ctx, q, orgID, tenantID, name, isPublic, quota, description)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrAlreadyExists
 		}
 		return nil, fmt.Errorf("create repository: %w", err)
+	}
+	return repo, nil
+}
+
+// UpdateRepository patches mutable fields on a repository. Currently only
+// description is mutable — quota has its own RPC to preserve audit intent.
+func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error) {
+	const q = `
+		UPDATE repositories r
+		SET    description = $1
+		FROM   organizations o
+		WHERE  r.id        = $2
+		  AND  r.tenant_id = $3
+		  AND  o.id        = r.org_id
+		RETURNING r.id, r.org_id, r.tenant_id, r.name, r.is_public,
+		          r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
+	repo, err := r.scanOneRepo(ctx, q, description, repoID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("update repository: %w", err)
 	}
 	return repo, nil
 }
@@ -176,10 +195,10 @@ func (r *Repository) UpdateRepositoryQuota(ctx context.Context, tenantID, repoID
 		WITH updated AS (
 			UPDATE repositories SET storage_quota = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
 		)
 		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-		       r.storage_quota, r.storage_used, r.created_at, o.name
+		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
 		FROM updated r
 		JOIN organizations o ON o.id = r.org_id`
 	return r.scanOneRepo(ctx, q, quota, repoID, tenantID)
@@ -191,6 +210,7 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
+		&repo.Description,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -743,17 +763,20 @@ func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (in
 	return n, nil
 }
 
-func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error) {
+func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error) {
 	const q = `
 		SELECT
-		  COALESCE(SUM((severity_counts->>'CRITICAL')::int), 0) AS critical_count,
-		  COALESCE(SUM((severity_counts->>'HIGH')::int),     0) AS high_count
+		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
+		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
+		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
+		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
+		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
 		FROM scan_results
 		WHERE tenant_id = $1
 		  AND status    = 'complete'`
 
-	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high); err != nil {
-		return 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
+	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+		return 0, 0, 0, 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
 	}
-	return critical + high, critical, high, nil
+	return critical + high + medium + low + negligible, critical, high, medium, low, negligible, nil
 }

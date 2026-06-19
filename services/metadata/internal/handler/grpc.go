@@ -21,13 +21,14 @@ import (
 type metadataRepo interface {
 	// Repositories
 	GetOrCreateOrganization(ctx context.Context, tenantID, orgName string) (string, error)
-	CreateRepository(ctx context.Context, tenantID, orgID, name string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error)
+	CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error)
 	GetRepository(ctx context.Context, tenantID, repoID string) (*metadatav1.Repository, error)
 	GetRepositoryByName(ctx context.Context, tenantID, orgID, name string) (*metadatav1.Repository, error)
 	GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error)
 	ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error)
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
+	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
 	// Tags
 	PutTag(ctx context.Context, tenantID, repoID, name, manifestDigest string) (*metadatav1.Tag, error)
 	GetTag(ctx context.Context, tenantID, repoID, name string) (*metadatav1.Tag, error)
@@ -50,7 +51,7 @@ type metadataRepo interface {
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
-	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high int64, err error)
+	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
@@ -100,10 +101,21 @@ func (h *MetadataHandler) CreateRepository(ctx context.Context, req *metadatav1.
 		name = parts[1]
 	}
 
-	repo, err := h.repo.CreateRepository(ctx, req.TenantId, orgID, name, req.IsPublic, req.StorageQuota)
+	repo, err := h.repo.CreateRepository(ctx, req.TenantId, orgID, name, req.GetDescription(), req.IsPublic, req.StorageQuota)
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return h.repo.GetRepositoryByName(ctx, req.TenantId, orgID, name)
 	}
+	return repo, mapErr(err)
+}
+
+func (h *MetadataHandler) UpdateRepository(ctx context.Context, req *metadatav1.UpdateRepositoryRequest) (*metadatav1.Repository, error) {
+	if req.RepoId == "" {
+		return nil, status.Error(codes.InvalidArgument, "repo_id is required")
+	}
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	repo, err := h.repo.UpdateRepository(ctx, req.TenantId, req.RepoId, req.Description)
 	return repo, mapErr(err)
 }
 
@@ -277,14 +289,17 @@ func (h *MetadataHandler) GetScanResult(ctx context.Context, req *metadatav1.Get
 // GetTenantVulnerabilityCount returns the aggregated CRITICAL+HIGH vulnerability
 // counts across all completed scans for the tenant.
 func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
-	total, critical, high, err := h.repo.GetTenantVulnerabilityCount(ctx, req.TenantId)
+	total, critical, high, medium, low, negligible, err := h.repo.GetTenantVulnerabilityCount(ctx, req.TenantId)
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	return &metadatav1.VulnerabilityCountResponse{
-		Total:         total,
-		CriticalCount: critical,
-		HighCount:     high,
+		Total:            total,
+		CriticalCount:    critical,
+		HighCount:        high,
+		MediumCount:      medium,
+		LowCount:         low,
+		NegligibleCount:  negligible,
 	}, nil
 }
 

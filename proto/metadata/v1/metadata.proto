@@ -15,6 +15,7 @@ service MetadataService {
   rpc ListRepositories(ListRepositoriesRequest) returns (stream Repository);
   rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
   rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (Repository);
 
   // Tags
   rpc PutTag(PutTagRequest) returns (Tag);
@@ -65,6 +66,8 @@ message Repository {
   // Parent organization's name, joined from `organizations.name`.
   // Surfaced so the management API can return `org` + `name` together.
   string org           = 9;
+  // Operator-supplied markdown description / README for the repository.
+  string description   = 10;
 }
 
 message Tag {
@@ -127,6 +130,12 @@ message CreateRepositoryRequest {
   string name          = 3;
   bool   is_public     = 4;
   int64  storage_quota = 5;
+  string description   = 6;
+}
+message UpdateRepositoryRequest {
+  string repo_id     = 1;
+  string tenant_id   = 2;
+  string description = 3;
 }
 message GetRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
 message GetRepositoryByNameRequest {
@@ -167,9 +176,12 @@ message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; s
 // Vulnerability count requests
 message GetTenantVulnerabilityCountRequest { string tenant_id = 1; }
 message VulnerabilityCountResponse {
-  int64 total          = 1;
-  int64 critical_count = 2;
-  int64 high_count     = 3;
+  int64 total              = 1;
+  int64 critical_count     = 2;
+  int64 high_count         = 3;
+  int64 medium_count       = 4;
+  int64 low_count          = 5;
+  int64 negligible_count   = 6;
 }
 
 // Repository count requests
