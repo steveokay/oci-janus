@@ -54,7 +54,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S4 | RBAC & Members | DONE ✅ | `/members`, `/orgs/:org/members`, repo members tab |
 | S5 | Webhooks | DONE ✅ | `/webhooks` list + `/webhooks/$id` detail, create/edit/delete, delivery log, test, rotate-secret |
 | S6 | Platform Admin | DONE ✅ | `/admin/tenants`, tenant CRUD + quota + page footer |
-| S7A | Profile & API keys | IN PROGRESS | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
+| S7A | Profile & API keys | DONE ✅ | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
 | S7B | Image detail enhancement | NOT STARTED | Layers + Signing tabs on tag-detail — needs FE-API-002 + FE-API-003 backend first |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 
@@ -111,12 +111,14 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 > Backend FE-API-011/012/013 (`GET/PATCH /api/v1/users/me`, `POST /api/v1/users/me/password`)
 > landed in merge `22fa246`. Existing `/api/v1/apikeys` GET/POST/DELETE already live.
 
-- [ ] `useMe`, `useUpdateMe`, `useChangePassword` hooks
-- [ ] `/profile` identity card real wiring (display_name, email, last_login, account_created)
-- [ ] Inline-edit display_name + email (toggle row, zod validation, optimistic update)
-- [ ] Change-password dialog (current + new + confirm, password-policy hint, success toast)
-- [ ] API keys section — re-use existing CRUD + `SecretRevealDialog` from Sprint 5
-- [ ] Build / typecheck / lint pass
+- [x] `useMe`, `useUpdateMe`, `useChangePassword` hooks + `useApiKeys`, `useCreateApiKey`, `useDeleteApiKey`
+- [x] `IdentityCard` — hero (avatar + display_name + role chip + username + truncated tenant) + inline-edit rows for display_name + email + read-only last_login / created / memberships
+- [x] Inline-edit pattern: click Pencil → toggles to Input → Enter / Check saves, Esc / X cancels; live email validation; cache updated optimistically
+- [x] `ChangePasswordDialog` — current + new + confirm fields; **live 5-rule policy checklist** ticking off lowercase / uppercase / digit / non-alphanumeric / 12+ chars as you type; vague error mapping (401/403 → "incorrect")
+- [x] `ApiKeysSection` with Issue + Revoke flows; `CreateApiKeyDialog` chains into the Sprint 5 `SecretRevealDialog` for the once-shown secret
+- [x] `DeleteApiKeyDialog` — single-click revoke confirmation (key cards are revocable, not destructive)
+- [x] `/profile` route replaces the Sprint 0 placeholder
+- [x] Build / typecheck / lint pass
 
 ### S7B — Image detail enhancement (Layers + Signing)
 
