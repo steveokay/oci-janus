@@ -107,6 +107,49 @@ func (f *handlerFakeUserRepo) ResetFailedLogins(_ context.Context, id uuid.UUID)
 	return nil
 }
 
+// UpdateProfile applies the optional display_name / email mutations against
+// the in-memory user. Used by /users/me PATCH tests; mirrors the production
+// repository's semantics (empty-string display_name clears, empty email maps
+// to empty Email field — handler-level logic decides whether to allow that).
+func (f *handlerFakeUserRepo) UpdateProfile(_ context.Context, id uuid.UUID, req repository.UpdateProfileRequest) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID != id {
+			continue
+		}
+		if req.DisplayName != nil {
+			if *req.DisplayName == "" {
+				u.DisplayName = nil
+			} else {
+				v := *req.DisplayName
+				u.DisplayName = &v
+			}
+		}
+		if req.Email != nil {
+			// Reject collision with another user's email in the same tenant
+			// so tests can exercise the 409 path.
+			for _, other := range f.users {
+				if other.ID != id && other.TenantID == u.TenantID && other.Email == *req.Email && *req.Email != "" {
+					return nil, repository.ErrAlreadyExists
+				}
+			}
+			u.Email = *req.Email
+		}
+		return u, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+// UpdatePasswordHash sets the in-memory password_hash for the user.
+func (f *handlerFakeUserRepo) UpdatePasswordHash(_ context.Context, id uuid.UUID, newHash string) error {
+	for _, u := range f.users {
+		if u.ID == id {
+			u.PasswordHash = newHash
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
 func (f *handlerFakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
 	if !f.adminUsers[userID] {
 		return nil, nil

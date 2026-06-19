@@ -21,6 +21,9 @@ type userRepo interface {
 	RecordFailedLogin(ctx context.Context, id uuid.UUID) (int, error)
 	LockUntil(ctx context.Context, id uuid.UUID, until time.Time) error
 	ResetFailedLogins(ctx context.Context, id uuid.UUID) error
+	// Profile / password mutations — used by /users/me endpoints (FE-API-011/012/013).
+	UpdateProfile(ctx context.Context, id uuid.UUID, req repository.UpdateProfileRequest) (*repository.User, error)
+	UpdatePasswordHash(ctx context.Context, id uuid.UUID, newHash string) error
 	// RBAC methods — used by the GRPC handler's role management endpoints.
 	GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error)
 	GrantRole(ctx context.Context, a repository.RoleAssignment) error

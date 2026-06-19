@@ -92,6 +92,10 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/apikeys", h.createAPIKey)
 	mux.HandleFunc("GET /api/v1/apikeys", h.listAPIKeys)
 	mux.HandleFunc("DELETE /api/v1/apikeys/{id}", h.deleteAPIKey)
+	// FE-API-011 / FE-API-012 / FE-API-013 — current-user profile & password.
+	mux.HandleFunc("GET /api/v1/users/me", h.getCurrentUser)
+	mux.HandleFunc("PATCH /api/v1/users/me", h.updateCurrentUser)
+	mux.HandleFunc("POST /api/v1/users/me/password", h.changeCurrentUserPassword)
 }
 
 // ── Docker token endpoint ─────────────────────────────────────────────────────

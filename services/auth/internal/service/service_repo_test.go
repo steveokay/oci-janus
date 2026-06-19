@@ -101,6 +101,42 @@ func (f *fakeUserRepo) ResetFailedLogins(_ context.Context, id uuid.UUID) error 
 	return nil
 }
 
+// UpdateProfile mutates the in-memory user record so unit tests of
+// UpdateUserProfile / ChangePassword can observe the change without a real DB.
+// Returns ErrNotFound when no user matches the supplied ID.
+func (f *fakeUserRepo) UpdateProfile(_ context.Context, id uuid.UUID, req repository.UpdateProfileRequest) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID != id {
+			continue
+		}
+		if req.DisplayName != nil {
+			// Empty string clears (matches the repo's NULLIF behaviour).
+			if *req.DisplayName == "" {
+				u.DisplayName = nil
+			} else {
+				v := *req.DisplayName
+				u.DisplayName = &v
+			}
+		}
+		if req.Email != nil {
+			u.Email = *req.Email
+		}
+		return u, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+// UpdatePasswordHash overwrites the stored hash for the given user in-memory.
+func (f *fakeUserRepo) UpdatePasswordHash(_ context.Context, id uuid.UUID, newHash string) error {
+	for _, u := range f.users {
+		if u.ID == id {
+			u.PasswordHash = newHash
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
 func (f *fakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]repository.RoleAssignment, error) {
 	return nil, nil
 }
