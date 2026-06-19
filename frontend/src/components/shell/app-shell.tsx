@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
+import { Footer } from "./footer";
 
 interface AppShellProps {
   breadcrumb?: React.ReactNode;
@@ -9,7 +10,8 @@ interface AppShellProps {
 
 // Beacon — AppShell. Persistent layout for every authenticated route.
 // Sidebar is fixed-width 248px (lg+); content fills the rest. The Topbar
-// breadcrumb slot is filled per-route.
+// breadcrumb slot is filled per-route. The Footer pins to the bottom of
+// the right column as a status bar that's always in view.
 export function AppShell({
   breadcrumb,
   children,
@@ -22,6 +24,7 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto px-6 py-6 lg:px-10 lg:py-8">
           <div className="mx-auto w-full max-w-[1440px]">{children}</div>
         </main>
+        <Footer />
       </div>
     </div>
   );

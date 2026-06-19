@@ -39,6 +39,7 @@ export default defineConfig({
       "/api/v1/apikeys":        { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/users":          { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1":                { target: "http://localhost:8091", changeOrigin: true },
+      "/healthz":               { target: "http://localhost:8091", changeOrigin: true },
       "/auth":                  { target: "http://localhost:8080", changeOrigin: true },
       "/.well-known":           { target: "http://localhost:8080", changeOrigin: true },
     },

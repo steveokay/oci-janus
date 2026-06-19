@@ -53,7 +53,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S3 | Security & Activity | DONE ✅ | `/security` (tabs), `/activity` |
 | S4 | RBAC & Members | DONE ✅ | `/members`, `/orgs/:org/members`, repo members tab |
 | S5 | Webhooks | DONE ✅ | `/webhooks` list + `/webhooks/$id` detail, create/edit/delete, delivery log, test, rotate-secret |
-| S6 | Platform Admin | NOT STARTED | `/admin/tenants`, tenant CRUD + quota |
+| S6 | Platform Admin | DONE ✅ | `/admin/tenants`, tenant CRUD + quota + page footer |
 | S7 | Profile & API keys | NOT STARTED | `/profile`, API key CRUD, password change (stubbed if NOT STARTED) |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 
