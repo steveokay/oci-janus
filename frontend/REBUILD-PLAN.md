@@ -69,52 +69,30 @@ Considered for later:
 
 ---
 
-## Sprint 0 — Bootstrap & foundation (PAUSED MID-ITERATION)
+## Sprint 0 — Bootstrap & foundation ✅
 
-> **Resume here:** branch `feat/frontend-rebuild`, dev server `cd frontend && npm run dev` → http://localhost:5173/login. Old UI lives on `frontend-archive-v1` if you ever need to compare.
+Shipped. UI tokens, login screen, auth wiring, and base components are all on `feat/frontend-rebuild` (PR #11). Switched from Geist to DM Sans after review; warm cream + amber-to-rose login band replaced the cold indigo radial; credential form leads, SSO follows as a compact icon row. Open-redirect-guarded `?from` round-trip lives in `validateSearch`.
 
-| Task | Status | Notes |
-|---|---|---|
-| Archive old frontend to `frontend-archive-v1` branch | ✅ | Pushed to origin |
-| Wipe `frontend/src/`, keep `package.json` / `vite.config.ts` / `tsconfig.json` / `Dockerfile` / `nginx.conf` | ✅ | |
-| Design tokens — colors, type, spacing, shadow, radius, motion (light + dark in `styles/globals.css`) | ✅ | Indigo accent in OKLCH, dark-mode token overrides declared but toggle not wired |
-| Add `class-variance-authority` | ✅ | |
-| Add `@fontsource/geist` (swapped from Hanken Grotesk after operator feedback) | ✅ | `--font-sans` = Geist |
-| Base components: `Button`, `Input`, `Label`, `FieldHint`, `FieldError` | ✅ | CVA-driven Button variants: primary/secondary/ghost/destructive/link |
-| Auth wiring: `authStore` (memory-only JWT), `apiClient` with 401 interceptor | ✅ | Token decoded client-side for UI gating only |
-| Router setup: `__root.tsx`, `index.tsx` (auth-aware redirect), `_authenticated.tsx` layout guard | ✅ | TanStack file-based routes |
-| Login screen V1 — split layout with Higgsfield hero | 🗑️ Replaced | Layout was bad at narrow widths; played-out aesthetic |
-| Login screen V2 — single centered card, Stripe/Linear minimal | ✅ | `frontend/src/routes/login.tsx` |
-| Auth canvas background — dotted grid + soft indigo radial wash | ✅ | Reusable `.bg-auth-canvas` utility for all public routes |
-| SSO buttons (Google / GitHub / Microsoft / Other) — UI only | ✅ | Shows "coming soon" toast; backend tracked as Sprint 1a |
-| `/dashboard` placeholder proving login round-trip | ✅ | Shows user + roles; sign-out works |
-| Brand favicon (`public/brand/favicon.svg`) + page metadata | ✅ | |
-| `vite.config.ts` proxy rules updated for the rebuild (auth vs management split) | ✅ | |
-| `.env.local` template with `VITE_TENANT_ID` for the dev workspace | ✅ | |
-
-### Pending operator review (resume from here)
-
-| Open item | Last operator feedback | Next move |
-|---|---|---|
-| Font | Geist looks OK but worth comparing alternatives (Inter, Manrope, Plus Jakarta) | Try one alt and A/B; commit whichever the operator prefers |
-| Background | Dotted grid + radial wash shipped; not yet reviewed | Get operator screenshot reaction |
-| SSO button visual | Currently neutral buttons with brand glyphs (Stripe/Linear convention). Could try per-provider colored variants instead | Optional iteration |
-| Brand mark icon | Operator said "icon is okay" — keep | — |
-| Commit + PR | Not yet committed — work lives on local branch only | Commit when design is signed off; then PR |
-
-## Sprint 1 — Foundation screens (NOT STARTED)
+## Sprint 1 — Foundation screens
 
 App shell + the four screens every user touches daily.
 
-| Task | Notes |
+| Sub-phase | Status | Notes |
+|---|---|---|
+| 1a — App shell (sidebar + topbar + breadcrumbs) | ✅ | `components/shell/*`. MAIN/MANAGE/ADMIN nav grouping; `usePlatformAdmin` probes `/admin/tenants` once per session to gate the admin section. Workspace switcher placeholder. Topbar Cmd+K trigger fixed-width to survive intermediate viewports. |
+| 1b — Dashboard overview (real `/api/v1/stats`) | ✅ | `useStats` (60 s refetch). Repositories + Storage tiles + hero (repos / vulns / health pill) are live. Tags + Scans today stay on demo data with sparklines intact. Loading skeletons + inline error note. Demo banner enumerates what's live vs placeholder. |
+| 1c — Repositories list (filter + sort + create + delete) | ✅ | `useRepositories` / `useCreateRepository` / `useDeleteRepository`. TanStack Table, client-side name search, server-applied visibility filter. Create dialog (Radix + RHF + zod). Delete dialog with GitHub-style "type the name to confirm". Page now opens with a Higgsfield banner header + 4-tile SummaryStrip (Total/Public/Private/Storage). Empty state ships a copy-pasteable `docker login/tag/push` snippet. |
+| 1d — Image / tag detail page | ⬜ Next | Layers, history, signing status. Backend: `GET /api/v1/repositories/{org}/{repo}` + `…/tags` already exist. Layers come from the manifest; signing status comes from `services/signer`. Repo table rows currently toast "Sprint 1d wires the detail route" so the wiring touchpoints are already labeled. |
+| 1e — Profile page | ⬜ | NEW vs original plan. Update name / email / password, list own API keys, regenerate token. Wires the UserMenu's "Profile" item that currently toasts. |
+| 1f — Theme toggle (light / dark / system) + Cmd+K palette | ⬜ | Theme toggle persists to `prefers-color-scheme`. Cmd+K palette wires the topbar search trigger. Both can move to Sprint 4 polish if time-boxed. |
+
+### Sprint 1 extras shipped along the way
+
+| Item | Notes |
 |---|---|
-| App shell: sidebar + topbar + breadcrumbs | Role-aware nav; collapsible sidebar |
-| Theme toggle (light / dark / system) | Persists to `prefers-color-scheme` |
-| Command palette (`Cmd+K`) | Search across repos / tags |
-| Dashboard overview | Real `/api/v1/stats` data, no fakes |
-| Repositories list + filter + sort + create + delete | Uses TanStack Table |
-| Image / tag detail page | Layers, history, signing status |
-| Profile page (NEW) | Update name / email / password, list own API keys, regenerate token |
+| Time-of-day hero photographs | `HeroCard` buckets the hour into morning/afternoon/evening/night and renders matching Higgsfield images at `/hero/{period}.png` over a gradient + white veil. Image hides gracefully via `onError`. |
+| Repositories hero banner | Same triple-layer composition over `/hero/repositories.png` (warm peach/coral with abstract floating glass cubes). Replaces the flat icon+title row. |
+| Dashboard bento swap | TopRepos on the left of ActivityFeed (equal columns), Quickstart spans full width below as a side-by-side card with a macOS-styled terminal block. |
 
 ## Sprint 2 — Operations screens (NOT STARTED)
 
