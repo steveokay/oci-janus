@@ -1,25 +1,46 @@
 /**
- * usePlatformAdmin — UX-level "is this user a platform admin?" check.
+ * usePlatformAdmin — true if the current user holds the platform-admin
+ * marker (the `role_assignments` row with scope_type='org', scope_value='*'
+ * introduced in PENTEST-024 and seeded for the dev admin).
  *
- * IMPORTANT: this is a UX gate only. It hides admin controls the server
- * would deny anyway. The authoritative check lives in the management API
- * (PENTEST-024 — hasScopedRole(_, "org", "*", "admin")), which we can't
- * fully replicate client-side because the JWT only carries the flat
- * `roles` list, not the scope of each assignment.
+ * Why this is a probe and not a JWT claim:
+ *   The JWT only carries flat role names (`['admin']`, etc.), not their
+ *   scope values, so the marker isn't decidable from claims alone. Until
+ *   a `/api/v1/me` endpoint surfaces a typed `is_platform_admin` flag,
+ *   we send one GET to `/admin/tenants?page_size=1` per session. That
+ *   route is gated by the marker in services/management
+ *   (admin_tenants.go), so a 200 is proof the caller holds it. A 403 is
+ *   proof they don't. Any other failure (network, 5xx) is conservatively
+ *   treated as "not admin" — we'd rather hide a section than render an
+ *   admin nav for someone who can't use it.
  *
- * Heuristic: a user is treated as a candidate platform-admin when they
- * hold an `admin` or `owner` role anywhere in the tenant. If the server
- * later rejects an `/admin/*` call (because their assignment is on a
- * specific org, not the `*` marker), the UI surfaces the 403 via the
- * existing apiClient interceptor + toast pattern.
+ * The result is cached for the session (`staleTime: Infinity`) so the
+ * sidebar doesn't re-probe on every render.
  */
-
+import { useQuery } from '@tanstack/react-query'
+import { AxiosError } from 'axios'
+import { apiClient } from '@/lib/api/client'
 import { useAuthStore } from '@/store/authStore'
 
-/** True when the user holds admin or owner anywhere in the tenant. */
-export function useUserIsPlatformAdmin(): boolean {
-  const user = useAuthStore((s) => s.user)
-  const roles = user?.roles
-  if (!Array.isArray(roles)) return false
-  return roles.includes('admin') || roles.includes('owner')
+export function usePlatformAdmin(): boolean {
+  const token = useAuthStore((s) => s.token)
+  const query = useQuery({
+    queryKey: ['auth', 'platform-admin'],
+    queryFn: async () => {
+      try {
+        await apiClient.get('/admin/tenants', { params: { page_size: 1 } })
+        return true
+      } catch (err) {
+        if (err instanceof AxiosError && err.response?.status === 403) {
+          return false
+        }
+        // Network errors / 5xx fall here. Default to non-admin so we
+        // never accidentally surface admin nav to a non-admin caller.
+        return false
+      }
+    },
+    staleTime: Infinity,
+    enabled: !!token,
+  })
+  return query.data === true
 }

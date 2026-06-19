@@ -1,46 +1,44 @@
-import axios from 'axios'
+/**
+ * apiClient — single axios instance for the whole app.
+ *
+ * Why one instance:
+ *   * One place to attach the Bearer token interceptor.
+ *   * One place to detect 401s and bounce to /login (auto-expire UX).
+ *   * Per-request configs still compose via the .get/.post second arg.
+ *
+ * The Vite dev proxy (vite.config.ts) forwards /api → auth (8080) +
+ * management (8091) so this file doesn't care which host serves a path.
+ * In production, nginx (frontend Dockerfile) does the same routing.
+ */
+import axios, { AxiosError } from 'axios'
 import { useAuthStore } from '@/store/authStore'
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api/v1',
-  timeout: 30_000,
-  headers: { 'Content-Type': 'application/json' },
+  baseURL: '/api/v1',
+  // Reasonable upper bound — slowest backend RPC is a fresh tag listing on
+  // a cold metadata cache, which still completes well under this.
+  timeout: 15000,
 })
 
-/** Attach the in-memory JWT to every outgoing request. */
+// Request interceptor: attach the Bearer token if we have one.
 apiClient.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
-  if (token) config.headers.Authorization = `Bearer ${token}`
+  const { token } = useAuthStore.getState()
+  if (token) {
+    config.headers.set('Authorization', `Bearer ${token}`)
+  }
   return config
 })
 
-/**
- * On 401: clear auth state from the Zustand store and redirect to /login.
- * We use window.location rather than TanStack Router navigate() here because
- * this interceptor lives outside any React component, so the router context
- * is unavailable. The hard navigation also serves as a full memory wipe of
- * any in-flight query cache that might contain sensitive data.
- *
- * isRedirecting prevents multiple concurrent 401 responses from firing
- * multiple redirects. It is reset on popstate so re-entering the app after
- * navigating back works correctly.
- */
-let isRedirecting = false
-
+// Response interceptor: 401 → clear session.
+// We DON'T auto-redirect here because the routing layer's auth guards
+// re-derive the redirect target (login + `?from=<current>`); doing it
+// here would race with TanStack Router's beforeLoad.
 apiClient.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err.response?.status === 401 && !isRedirecting) {
-      isRedirecting = true
-      useAuthStore.getState().clearAuth()
-      // Append reason so the login page can display a session-expired banner.
-      window.location.href = '/login?reason=session_expired'
+  (resp) => resp,
+  (err: AxiosError) => {
+    if (err.response?.status === 401) {
+      useAuthStore.getState().clearSession()
     }
     return Promise.reject(err)
-  }
+  },
 )
-
-// Reset the flag when the user navigates back so future 401s redirect again.
-window.addEventListener('popstate', () => {
-  isRedirecting = false
-})
