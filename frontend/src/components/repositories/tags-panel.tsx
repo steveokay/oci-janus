@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Tag as TagIcon, ArrowRight } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Tag as TagIcon } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   Table,
   TableBody,
@@ -26,6 +26,7 @@ interface TagsPanelProps {
 // Light wrapper around the tags table — keeps the state machine local so
 // switching tabs doesn't re-mount the rest of the page.
 export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
+  const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useTags(org, repo);
 
   if (isError) {
@@ -64,24 +65,33 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
             <SkeletonRows />
           ) : (
             data?.map((t) => (
-              <TableRow key={`${t.name}-${t.manifest_digest}`}>
+              <TableRow
+                key={`${t.name}-${t.manifest_digest}`}
+                interactive
+                onClick={() =>
+                  void navigate({
+                    to: "/repositories/$org/$repo/tags/$tag",
+                    params: { org, repo, tag: t.name },
+                  })
+                }
+              >
                 <TableCell>
-                  <div className="flex items-center gap-3">
+                  <Link
+                    to="/repositories/$org/$repo/tags/$tag"
+                    params={{ org, repo, tag: t.name }}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Open tag ${t.name}`}
+                  >
                     <Badge tone="accent">
                       <TagIcon className="size-3" /> {t.name}
                     </Badge>
-                    <Link
-                      to="/repositories/$org/$repo"
-                      params={{ org, repo }}
-                      className="invisible text-xs text-[var(--color-accent)] hover:underline group-hover:visible"
-                      aria-label={`Open tag ${t.name}`}
-                    >
-                      Open <ArrowRight className="inline size-3" />
-                    </Link>
-                  </div>
+                  </Link>
                 </TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-2">
+                  <div
+                    className="flex items-center gap-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <code
                       className="truncate font-mono text-xs text-[var(--color-fg-muted)]"
                       title={t.manifest_digest}

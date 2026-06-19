@@ -49,7 +49,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 |---|---|---|---|
 | S0 | Foundation | DONE ✅ | bootstrap, design tokens, auth store, API client, AppShell, login |
 | S1 | Dashboard & Repositories | DONE ✅ | `/`, `/repositories`, `/repositories/:org/:repo` |
-| S2 | Tags & Image detail | NOT STARTED | `/repositories/:org/:repo/tags/:tag`, scan result, build history |
+| S2 | Tags & Image detail | DONE ✅ | `/repositories/:org/:repo/tags/:tag`, scan result, build history |
 | S3 | Security & Activity | NOT STARTED | `/security/overview`, `/security/vulnerabilities`, `/security/scans` (stubbed for NOT-STARTED endpoints) |
 | S4 | RBAC & Members | NOT STARTED | `/orgs/:org/members`, repo members tab on repo detail |
 | S5 | Webhooks | NOT STARTED | `/webhooks`, create/edit, delivery log, test, rotate-secret |
@@ -92,7 +92,20 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] `DeleteRepositoryDialog` — type-`org/repo`-to-confirm guard
 - [x] Build + typecheck + lint pass
 
-### S2..S8 — checklist deferred until each sprint kicks off
+### S2 — Tags & Image detail
+
+- [x] API hooks — `useScan` (auto-poll while pending/running), `useTriggerScan`, `useBuilds`
+- [x] Severity primitives — `SeverityBar` stacked horizontal bar with 2px floor + `SeverityLegend` for counts
+- [x] `parseFindings` for the Trivy `findings_json` payload (forgiving — every field optional)
+- [x] Tag detail route `/repositories/:org/:repo/tags/:tag` — breadcrumb back through repo, identity card with monospace digest + copy, pull command for `org/repo:tag`, Rescan + Delete action ribbon
+- [x] Repo detail Tags table rows now navigate to the new tag detail page
+- [x] ScanPanel — five distinct states: not-yet, pending (pulse badge), running (pulse badge), failed (with retry CTA), complete (clean / warning / danger top-border + findings table). Findings table shows severity badge, CVE id + title + reference link, package + installed version, fixed version
+- [x] BuildTimeline — vertical timeline rail with success/failure dots, triggered_by, duration, occurred_at, relative + absolute date tooltip
+- [x] DeleteTagDialog — type-tag-name-to-confirm
+- [x] FE-API-002 (layers) and FE-API-003 (signing) tabs render explicit "arrives with X" placeholders so the surface is honest
+- [x] Build + typecheck + lint pass
+
+### S3..S8 — checklist deferred until each sprint kicks off
 
 ---
 
