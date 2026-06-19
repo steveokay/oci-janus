@@ -54,7 +54,8 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S4 | RBAC & Members | DONE ✅ | `/members`, `/orgs/:org/members`, repo members tab |
 | S5 | Webhooks | DONE ✅ | `/webhooks` list + `/webhooks/$id` detail, create/edit/delete, delivery log, test, rotate-secret |
 | S6 | Platform Admin | DONE ✅ | `/admin/tenants`, tenant CRUD + quota + page footer |
-| S7 | Profile & API keys | NOT STARTED | `/profile`, API key CRUD, password change (stubbed if NOT STARTED) |
+| S7A | Profile & API keys | IN PROGRESS | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
+| S7B | Image detail enhancement | NOT STARTED | Layers + Signing tabs on tag-detail — needs FE-API-002 + FE-API-003 backend first |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 
 ### S0 — Foundation
@@ -104,6 +105,40 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] DeleteTagDialog — type-tag-name-to-confirm
 - [x] FE-API-002 (layers) and FE-API-003 (signing) tabs render explicit "arrives with X" placeholders so the surface is honest
 - [x] Build + typecheck + lint pass
+
+### S7A — Profile & API keys
+
+> Backend FE-API-011/012/013 (`GET/PATCH /api/v1/users/me`, `POST /api/v1/users/me/password`)
+> landed in merge `22fa246`. Existing `/api/v1/apikeys` GET/POST/DELETE already live.
+
+- [ ] `useMe`, `useUpdateMe`, `useChangePassword` hooks
+- [ ] `/profile` identity card real wiring (display_name, email, last_login, account_created)
+- [ ] Inline-edit display_name + email (toggle row, zod validation, optimistic update)
+- [ ] Change-password dialog (current + new + confirm, password-policy hint, success toast)
+- [ ] API keys section — re-use existing CRUD + `SecretRevealDialog` from Sprint 5
+- [ ] Build / typecheck / lint pass
+
+### S7B — Image detail enhancement (Layers + Signing)
+
+> Both backends (`FE-API-002`, `FE-API-003`) are NOT STARTED. Sprint scope therefore
+> includes the backend work, not just frontend wiring.
+
+**Backend FE-API-002 — manifest detail**
+- [ ] `GetManifest` RPC on `services/metadata` returning layer digests + sizes + media types + os/arch (parse `raw_json` server-side; cache by digest)
+- [ ] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest` HTTP route on `services/management`
+- [ ] Integration tests
+
+**Backend FE-API-003 — signing status**
+- [ ] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature` HTTP route on `services/management` calling `signer.VerifyManifest` over gRPC
+- [ ] Response shape: `{ verified, signer_id, key_id, signed_at, failure_reason? }`
+- [ ] Integration tests
+
+**Frontend wiring**
+- [ ] `useManifest`, `useSignature` hooks
+- [ ] Layers tab — table of layers (digest, size, media type, OS/arch chips for index manifests), config blob summary
+- [ ] Signing tab — verification result with Cosign/Notary identity, public-key fingerprint, signed-at, failure reason if invalid
+- [ ] Signing pill on the tag list row (signed ✓ / unsigned / invalid)
+- [ ] Build / typecheck / lint pass
 
 ### S3 — Security & Activity
 
