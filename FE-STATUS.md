@@ -51,7 +51,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S1 | Dashboard & Repositories | DONE ✅ | `/`, `/repositories`, `/repositories/:org/:repo` |
 | S2 | Tags & Image detail | DONE ✅ | `/repositories/:org/:repo/tags/:tag`, scan result, build history |
 | S3 | Security & Activity | DONE ✅ | `/security` (tabs), `/activity` |
-| S4 | RBAC & Members | NOT STARTED | `/orgs/:org/members`, repo members tab on repo detail |
+| S4 | RBAC & Members | DONE ✅ | `/members`, `/orgs/:org/members`, repo members tab |
 | S5 | Webhooks | NOT STARTED | `/webhooks`, create/edit, delivery log, test, rotate-secret |
 | S6 | Platform Admin | NOT STARTED | `/admin/tenants`, tenant CRUD + quota |
 | S7 | Profile & API keys | NOT STARTED | `/profile`, API key CRUD, password change (stubbed if NOT STARTED) |
@@ -126,7 +126,20 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 > `Repository.description` (FE-API-006 done). The repository detail page should
 > render this on a tab in S4 follow-up — out of scope here, tracked in S4 checklist.
 
-### S4..S8 — checklist deferred until each sprint kicks off
+### S4 — RBAC & Members
+
+- [x] API hooks: `useOrgMembers`, `useGrantOrgRole`, `useRevokeOrgRole`, `useRepoMembers`, `useGrantRepoRole`, `useRevokeRepoRole` + `UUID_REGEX` validator
+- [x] `RoleBadge` primitive — owner (Crown / warning), admin (Shield / accent), writer (Pencil / success), reader (Eye / neutral)
+- [x] `MembersTable` — reusable across org + repo, avatar tile from first UUID char, copy-able user_id
+- [x] `AddMemberDialog` — UUID input with regex validation, radio-style role picker with descriptions per role
+- [x] `RemoveMemberDialog` — single-click confirmation (lighter touch than type-to-confirm because revoking doesn't drop data)
+- [x] `/members` — workspace org selector, auto-fetches all pages so derived org list is complete
+- [x] `/orgs/:org/members` — breadcrumb + member count + table + add/remove
+- [x] Repo detail "Members" tab wired via new `RepoMembersPanel` (same primitives, repo-scoped hooks)
+- [x] FE-API-006 — `DescriptionCard` renders Repository.description on the repo detail page (paragraph-split, no markdown parsing yet per FE-SEC-011); `CreateRepositoryDialog` gains an optional description textarea
+- [x] Build + typecheck + lint pass
+
+### S5..S8 — checklist deferred until each sprint kicks off
 
 ---
 

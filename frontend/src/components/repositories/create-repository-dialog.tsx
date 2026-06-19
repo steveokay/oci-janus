@@ -36,6 +36,9 @@ const schema = z.object({
       "Lowercase letters, digits, and `._-` only.",
     ),
   is_public: z.boolean(),
+  // FE-API-006 — optional markdown description. We don't constrain length
+  // beyond a sane upper bound; the backend caps at 8 KiB.
+  description: z.string().max(8_000).optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -60,14 +63,19 @@ export function CreateRepositoryDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { org: "", name: "", is_public: false },
+    defaultValues: { org: "", name: "", is_public: false, description: "" },
   });
 
   const isPublic = watch("is_public");
 
   async function onSubmit(values: FormValues): Promise<void> {
     try {
-      const created = await create.mutateAsync(values);
+      const created = await create.mutateAsync({
+        ...values,
+        // Trim trailing whitespace so the description-card render logic
+        // doesn't see ghost paragraphs.
+        description: values.description?.trim() || undefined,
+      });
       toast.success(`Created ${created.org}/${created.name}.`);
       reset();
       onOpenChange(false);
@@ -135,6 +143,17 @@ export function CreateRepositoryDialog({
               {errors.org?.message ?? errors.name?.message}
             </p>
           ) : null}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="description">Description (optional)</Label>
+            <textarea
+              id="description"
+              rows={3}
+              className="flex w-full rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm leading-relaxed placeholder:text-[var(--color-fg-subtle)] focus-visible:border-[var(--color-accent)] focus-visible:outline-none"
+              placeholder="What lives in this repository? Markdown supported (paragraphs only for now)."
+              {...register("description")}
+            />
+          </div>
 
           <div className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-4 py-3">
             <div className="space-y-0.5">
