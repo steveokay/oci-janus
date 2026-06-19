@@ -75,6 +75,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] Dockerfile + nginx.conf for prod build
 - [x] `.env.example`, `.gitignore`, `.dockerignore`
 - [x] Build passes `npm run build` + `npm run typecheck` + `npm run lint`
+- [x] SSO sign-in section on `/login` — Google / GitHub / Microsoft / SAML buttons; brand SVG icons inline; clicks toast "coming with next release" pending backend Sprint 1a wiring
 
 ### S1 — Dashboard & Repositories
 

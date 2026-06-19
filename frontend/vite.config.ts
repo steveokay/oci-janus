@@ -27,18 +27,20 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    // In production the gateway routes all `/api/v1/*` to the right service.
+    // In dev we don't have the gateway in front, so the proxy has to split
+    // the namespace itself: auth-owned subroutes go to :8080, everything else
+    // goes to the management BFF on :8091. Order matters — Vite picks the
+    // first matching key, so the auth-specific entries must come first.
     proxy: {
-      // Management BFF carries every /api/v1/* route the UI consumes.
-      "/api": {
-        target: "http://localhost:8091",
-        changeOrigin: true,
-      },
-      // Auth service exposes its own /api/v1/login etc.; the gateway co-locates them in prod.
-      // We route /auth/* directly to the auth service for Docker token + JWKS surfaces.
-      "/auth": {
-        target: "http://localhost:8080",
-        changeOrigin: true,
-      },
+      "/api/v1/login":          { target: "http://localhost:8080", changeOrigin: true },
+      "/api/v1/logout":         { target: "http://localhost:8080", changeOrigin: true },
+      "/api/v1/token":          { target: "http://localhost:8080", changeOrigin: true },
+      "/api/v1/apikeys":        { target: "http://localhost:8080", changeOrigin: true },
+      "/api/v1/users":          { target: "http://localhost:8080", changeOrigin: true },
+      "/api/v1":                { target: "http://localhost:8091", changeOrigin: true },
+      "/auth":                  { target: "http://localhost:8080", changeOrigin: true },
+      "/.well-known":           { target: "http://localhost:8080", changeOrigin: true },
     },
   },
   build: {

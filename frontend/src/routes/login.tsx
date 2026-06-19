@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
+import { SSOButtons } from "@/components/auth/sso-buttons";
 
 // FE-SEC-005 — vague error messages on both the inline form error AND the
 // toast. Never reveal whether the username exists.
@@ -50,11 +51,24 @@ function LoginPage(): React.ReactElement {
     defaultValues: { username: "", password: "" },
   });
 
+  // Tenant is fixed per environment — see VITE_DEFAULT_TENANT_ID.
+  // We surface the UUID in the form footer for transparency without
+  // making it editable; flipping tenants in dev should be a config change,
+  // not a typed-in UUID at a login form.
+  const tenantId =
+    import.meta.env.VITE_DEFAULT_TENANT_ID ?? "";
+
   async function onSubmit(values: FormValues): Promise<void> {
     setRootError(null);
     setSubmitting(true);
     try {
-      await login(values.username, values.password);
+      if (!tenantId) {
+        setRootError(
+          "Login is not configured for this environment. Set VITE_DEFAULT_TENANT_ID.",
+        );
+        return;
+      }
+      await login(values.username, values.password, tenantId);
       void navigate({ to: "/", replace: true });
     } catch {
       // Single error path for every failure mode — see FE-SEC-005.
@@ -101,9 +115,23 @@ function LoginPage(): React.ReactElement {
           </div>
         </div>
 
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-elevated)]">
+          <SSOButtons />
+
+          {/* Divider — the small label sits inside the line for the
+              "either / or" cue. Pattern lifted from Stripe / Vercel logins. */}
+          <div className="relative my-5">
+            <div className="absolute inset-x-0 top-1/2 h-px bg-[var(--color-border)]" />
+            <div className="relative flex justify-center">
+              <span className="bg-[var(--color-surface)] px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+                or sign in with credentials
+              </span>
+            </div>
+          </div>
+
         <form
           onSubmit={handleSubmit(onSubmit)}
-          className="space-y-5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-elevated)]"
+          className="space-y-5"
           noValidate
         >
           <div className="space-y-1.5">
@@ -159,10 +187,14 @@ function LoginPage(): React.ReactElement {
             {!submitting ? <ArrowRight className="size-4" /> : null}
           </Button>
         </form>
+        </div>
 
-        <p className="mt-6 text-center text-xs text-[var(--color-fg-subtle)]">
-          Trouble signing in? Ask your platform administrator.
-        </p>
+        <div className="mt-6 flex flex-col items-center gap-1 text-center text-xs text-[var(--color-fg-subtle)]">
+          <span>Trouble signing in? Ask your platform administrator.</span>
+          {tenantId ? (
+            <span className="font-mono">tenant · {tenantId.slice(0, 8)}…</span>
+          ) : null}
+        </div>
       </motion.div>
     </div>
   );

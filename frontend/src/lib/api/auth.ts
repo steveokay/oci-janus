@@ -20,10 +20,13 @@ export interface LoginResponse {
 export async function login(
   username: string,
   password: string,
+  tenantId: string,
 ): Promise<string> {
-  // The management gateway proxies /api/v1/login to the auth service.
-  // The body shape matches services/auth login handler.
+  // The auth service's /api/v1/login handler expects a tenant_id alongside
+  // the credentials. In production the gateway resolves tenant from the
+  // request hostname; in dev we pass it explicitly from VITE_DEFAULT_TENANT_ID.
   const { data } = await apiClientRaw.post<LoginResponse>("/login", {
+    tenant_id: tenantId,
     username,
     password,
   });
