@@ -30,7 +30,7 @@ import { useRepositories, type VisibilityFilter } from '@/lib/api/hooks/useRepos
 import { formatBytes } from '@/lib/format/bytes'
 import { cn } from '@/lib/utils/cn'
 
-export const Route = createFileRoute('/_authenticated/repositories')({
+export const Route = createFileRoute('/_authenticated/repositories/')({
   staticData: { crumb: 'Repositories' },
   validateSearch: (search) => ({
     // `?new=true` opens the create dialog on mount; anything else

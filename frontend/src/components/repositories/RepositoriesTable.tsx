@@ -17,6 +17,7 @@
  * a name shows a "coming soon" toast.
  */
 import { useMemo, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import {
   flexRender,
   getCoreRowModel,
@@ -26,7 +27,6 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, Globe, Lock, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
 import { cn } from '@/lib/utils/cn'
 import { formatBytes } from '@/lib/format/bytes'
 import { relativeTime } from '@/lib/format/time'
@@ -38,6 +38,7 @@ export interface RepositoriesTableProps {
 }
 
 export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
+  const navigate = useNavigate()
   const [sorting, setSorting] = useState<SortingState>([
     { id: 'created_at', desc: true },
   ])
@@ -49,12 +50,25 @@ export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
         header: 'Name',
         cell: (info) => {
           const name = info.getValue<string>()
+          // The management `RepoResponse.name` is just the leaf today —
+          // org lives in `org_id` (UUID) and the org name isn't on the
+          // response (tracked as FE-API-010 in status.md). Until that
+          // ships, fall back to the dev tenant's seeded `dev` org so
+          // the click takes the user somewhere useful instead of
+          // 404'ing. Full org/repo names (when present) still split
+          // on the first slash.
+          const slash = name.indexOf('/')
+          const org = slash >= 0 ? name.slice(0, slash) : 'dev'
+          const repo = slash >= 0 ? name.slice(slash + 1) : name
           return (
             <button
               type="button"
-              onClick={() =>
-                toast.message(`Repo "${name}" detail is coming in Sprint 1d`)
-              }
+              onClick={() => {
+                navigate({
+                  to: '/repositories/$org/$repo',
+                  params: { org, repo },
+                })
+              }}
               className="flex items-center gap-md text-left group"
             >
               <span
