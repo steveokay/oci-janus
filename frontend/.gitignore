@@ -1,0 +1,27 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Generated route tree (re-emitted by TanStack Router on dev)
+src/routeTree.gen.ts
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage
