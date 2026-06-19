@@ -55,7 +55,7 @@ export function TagHeader({
           params={{ org, repo }}
           className="font-mono hover:text-[var(--color-fg)]"
         >
-          {org}/{repo}
+          {org ? `${org}/` : ""}{repo}
         </Link>
         <ChevronRight className="size-3 text-[var(--color-fg-subtle)]" />
         <span className="font-mono text-[var(--color-fg)]">{tagName}</span>

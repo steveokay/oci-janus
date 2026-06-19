@@ -20,8 +20,13 @@ export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const navigate = useNavigate();
 
-  const username = claims?.username ?? "User";
-  const initial = (username[0] ?? "U").toUpperCase();
+  // The dev admin JWT doesn't carry a `username` claim, only `sub`. Showing
+  // the literal string "User" looked sloppy; instead, derive an initial from
+  // sub when username is missing, and hide the label text on the chip so the
+  // avatar + tenant_id chip stand alone.
+  const username = claims?.username;
+  const initial =
+    (username?.[0] ?? claims?.sub?.[0] ?? "·").toUpperCase();
 
   async function handleLogout(): Promise<void> {
     await logout();
@@ -43,7 +48,9 @@ export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
               >
                 {initial}
               </span>
-              <span className="hidden text-sm md:inline">{username}</span>
+              {username ? (
+                <span className="hidden text-sm md:inline">{username}</span>
+              ) : null}
               <ChevronDown className="size-3.5 text-[var(--color-fg-muted)]" />
             </Button>
           </DropdownMenu.Trigger>
@@ -54,7 +61,13 @@ export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
               className="z-50 min-w-52 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-1 shadow-[var(--shadow-floating)]"
             >
               <div className="px-2 pb-2 pt-1.5">
-                <div className="text-sm font-medium">{username}</div>
+                <div className="text-sm font-medium">
+                  {username ?? (
+                    <span className="font-mono text-[var(--color-fg-muted)]">
+                      {claims?.sub?.slice(0, 8) ?? "—"}…
+                    </span>
+                  )}
+                </div>
                 <div className="truncate font-mono text-[11px] text-[var(--color-fg-muted)]">
                   {claims?.tenant_id ?? "—"}
                 </div>

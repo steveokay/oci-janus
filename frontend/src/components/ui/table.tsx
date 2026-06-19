@@ -54,8 +54,14 @@ interface TableRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
   interactive?: boolean;
 }
 
-// `interactive` rows get the left-accent hover state — used wherever clicking
-// a row drills into a detail view.
+// `interactive` rows get the left-accent hover state via an inset box-shadow.
+//
+// WHY NOT position: relative + ::before — we tried that first and it broke
+// every table in the app: applying position:relative to a <tr> causes some
+// browsers to fall back from display:table-row to display:block, which
+// collapses the column layout and shifts content one column right. Using
+// an inset box-shadow keeps the <tr> in its native display mode and paints
+// the 2px stripe entirely inside the row's box without affecting layout.
 export const TableRow = React.forwardRef<HTMLTableRowElement, TableRowProps>(
   function TableRow({ className, interactive, ...props }, ref) {
     return (
@@ -64,9 +70,7 @@ export const TableRow = React.forwardRef<HTMLTableRowElement, TableRowProps>(
         className={cn(
           "border-b border-[var(--color-border)] transition-colors",
           interactive &&
-            "cursor-pointer relative hover:bg-[var(--color-surface-sunken)] focus-within:bg-[var(--color-surface-sunken)]",
-          interactive &&
-            "before:absolute before:left-0 before:top-0 before:h-full before:w-[2px] before:bg-transparent hover:before:bg-[var(--color-accent)]",
+            "cursor-pointer hover:bg-[var(--color-surface-sunken)] focus-within:bg-[var(--color-surface-sunken)] hover:shadow-[inset_2px_0_0_var(--color-accent)]",
           className,
         )}
         {...props}

@@ -83,7 +83,12 @@ function Row({ repo }: { repo: Repository }): React.ReactElement {
           </span>
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">
-              <span className="text-[var(--color-fg-muted)]">{repo.org}/</span>
+              {/* Older dev rows may have an empty `org` (FE-API-010 only
+                  populates new pushes). Skip the slash entirely when blank
+                  so we don't print a lonely "/alpine". */}
+              {repo.org ? (
+                <span className="text-[var(--color-fg-muted)]">{repo.org}/</span>
+              ) : null}
               <span>{repo.name}</span>
             </div>
             <div className="font-mono text-[11px] text-[var(--color-fg-subtle)]">

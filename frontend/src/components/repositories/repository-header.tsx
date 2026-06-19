@@ -44,7 +44,8 @@ export function RepositoryHeader({
           <Skeleton className="h-3 w-32" />
         ) : (
           <span className="font-mono text-[var(--color-fg)]">
-            {repo?.org}/{repo?.name}
+            {repo?.org ? `${repo.org}/` : ""}
+            {repo?.name}
           </span>
         )}
       </nav>
@@ -62,7 +63,12 @@ export function RepositoryHeader({
               <Skeleton className="h-7 w-72" />
             ) : (
               <h1 className="font-display text-2xl font-medium tracking-tight">
-                <span className="text-[var(--color-fg-muted)]">{repo?.org}/</span>
+                {/* Skip the empty-org slash for older dev rows. */}
+                {repo?.org ? (
+                  <span className="text-[var(--color-fg-muted)]">
+                    {repo.org}/
+                  </span>
+                ) : null}
                 {repo?.name}
               </h1>
             )}
