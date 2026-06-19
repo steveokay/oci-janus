@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Janus Registry mark — stacked indigo cubes hinting at container layers. -->
-  <rect width="32" height="32" rx="7" fill="#6366f1"/>
-  <path d="M9 14l7-4 7 4-7 4-7-4z" fill="#fff" fill-opacity="0.95"/>
-  <path d="M9 14v6l7 4v-6L9 14z" fill="#fff" fill-opacity="0.7"/>
-  <path d="M23 14v6l-7 4v-6l7-4z" fill="#fff" fill-opacity="0.55"/>
-</svg>
