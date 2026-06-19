@@ -84,20 +84,3 @@ export interface BuildsListResponse {
   total: number;
 }
 
-export interface Member {
-  id: string;
-  user_id: string;
-  role: string;
-  scope_type: string;
-  scope_value: string;
-  granted_by: string;
-}
-
-export interface MembersResponse {
-  members: Member[];
-}
-
-export interface GrantMemberBody {
-  user_id: string;
-  role: string;
-}

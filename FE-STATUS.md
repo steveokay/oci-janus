@@ -52,7 +52,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S2 | Tags & Image detail | DONE ✅ | `/repositories/:org/:repo/tags/:tag`, scan result, build history |
 | S3 | Security & Activity | DONE ✅ | `/security` (tabs), `/activity` |
 | S4 | RBAC & Members | DONE ✅ | `/members`, `/orgs/:org/members`, repo members tab |
-| S5 | Webhooks | NOT STARTED | `/webhooks`, create/edit, delivery log, test, rotate-secret |
+| S5 | Webhooks | DONE ✅ | `/webhooks` list + `/webhooks/$id` detail, create/edit/delete, delivery log, test, rotate-secret |
 | S6 | Platform Admin | NOT STARTED | `/admin/tenants`, tenant CRUD + quota |
 | S7 | Profile & API keys | NOT STARTED | `/profile`, API key CRUD, password change (stubbed if NOT STARTED) |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
@@ -139,7 +139,23 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] FE-API-006 — `DescriptionCard` renders Repository.description on the repo detail page (paragraph-split, no markdown parsing yet per FE-SEC-011); `CreateRepositoryDialog` gains an optional description textarea
 - [x] Build + typecheck + lint pass
 
-### S5..S8 — checklist deferred until each sprint kicks off
+### S5 — Webhooks
+
+- [x] API hooks: `useWebhooks` / `useWebhook` / `useCreateWebhook` / `useUpdateWebhook` / `useDeleteWebhook` / `useDeliveries` / `useTestWebhook` / `useRotateSecret`
+- [x] `WEBHOOK_EVENT_CATALOG` constant — curated operator-facing routing keys with label + description per event
+- [x] `WebhookFormFields` — shared URL input + event multi-select + active toggle, used by both Create and Edit dialogs
+- [x] `/webhooks` list — table with URL / events / status / created date, click-through to detail
+- [x] `CreateWebhookDialog` — URL + events multi-select + submit → secret revealed via SecretRevealDialog
+- [x] `SecretRevealDialog` — show-once, masked by default, copy button, escape/outside-click gated so operator must acknowledge
+- [x] `/webhooks/$id` detail — breadcrumb, URL header, events card, action ribbon (Edit / Rotate secret / Delete), TestDispatchPanel, DeliveriesPanel
+- [x] `EditWebhookDialog` — PATCH URL + events + active toggle
+- [x] `TestDispatchPanel` — synchronous fire-and-show: status_code, duration_ms, error; persists last result until next dispatch
+- [x] `DeliveriesPanel` — vertical timeline (delivered=success / failed=warning / dead=danger) with attempts, last_error, next_attempt_at
+- [x] `DeleteWebhookDialog` — type URL to confirm; navigates to `/webhooks` on success
+- [x] Bug fix: `ListResponse.webhooks` → `ListResponse.endpoints` to match BFF JSON key `"endpoints"`
+- [x] Build + typecheck + lint pass
+
+### S6..S8 — checklist deferred until each sprint kicks off
 
 ---
 
