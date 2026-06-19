@@ -3,18 +3,15 @@
  *
  * Compact by design: a single horizontal row with the greeting + summary
  * on the left and the health pill + primary CTA on the right. The
- * gradient echoes the login band (amber → rose) so the visual
- * transition from login → app feels continuous, but without dominating
- * the page the way a full-bleed welcome card would.
+ * gradient echoes the login band (amber → rose) so the visual transition
+ * from login → app feels continuous, but without dominating the page.
  *
- * The previous iteration of this component used `lg:flex-row` with a
- * `max-w-xl` text column. That capped the text width even on wide
- * screens, and on intermediate widths the flex layout collapsed the
- * text column to roughly the width of the longest word, wrapping the
- * paragraph one-word-per-line. The fix: drop the max-width, use
- * `flex-1 min-w-0` so the text takes available space cleanly, and break
- * to a column layout earlier (md, not lg) so cramped mid-widths get
- * the stacked layout instead of a broken row.
+ * Sprint 1b makes the data props optional so the card renders during the
+ * `useStats()` round-trip: missing numbers fall back to em-dashes and
+ * the health pill defaults to a neutral "Checking…" state. The tag
+ * count is still a placeholder — `/api/v1/stats` doesn't expose tag
+ * totals today (would need a new metadata RPC), so we display "—" rather
+ * than show a stale demo number alongside real ones.
  */
 import { ArrowUpRight, Plus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -22,25 +19,33 @@ import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils/cn'
 
 export interface HeroCardProps {
-  repoCount: number
-  tagCount: number
-  criticalCount: number
+  /** undefined while stats are loading. */
+  repoCount?: number
+  /** undefined when no tag-count endpoint exists yet (today). */
+  tagCount?: number
+  /** Open vulnerabilities, not just criticals — API doesn't split by severity. */
+  vulnerabilityCount?: number
+  /** Backend health 0–100; undefined while loading. */
+  systemHealthPct?: number
+  /** Suppresses fallback dashes while the first fetch is in-flight. */
+  loading?: boolean
 }
 
-export function HeroCard({ repoCount, tagCount, criticalCount }: HeroCardProps) {
+export function HeroCard({
+  repoCount,
+  tagCount,
+  vulnerabilityCount,
+  systemHealthPct,
+  loading,
+}: HeroCardProps) {
   const username = useAuthStore((s) => s.user?.username ?? '')
   const greeting = timeOfDayGreeting()
-  const isHealthy = criticalCount === 0
 
   return (
     <section
       aria-labelledby="hero-heading"
       className="relative overflow-hidden rounded-lg border border-border bg-surface"
       style={{
-        // Same amber → rose family as the login band, dialled down so it
-        // tints the card rather than billboarding it. The card's
-        // `bg-surface` sits underneath; the gradient fades to transparent
-        // on the right so the text always meets a neutral backdrop.
         backgroundImage:
           'linear-gradient(105deg, oklch(0.96 0.05 60) 0%, oklch(0.97 0.03 350) 45%, oklch(1 0 0) 85%)',
       }}
@@ -59,19 +64,26 @@ export function HeroCard({ repoCount, tagCount, criticalCount }: HeroCardProps) 
             )}
           </h2>
           <p className="mt-xs text-body-sm text-on-surface-muted">
-            <Stat n={repoCount} label={repoCount === 1 ? 'repository' : 'repositories'} />
+            <Stat
+              n={repoCount}
+              label={(repoCount ?? 0) === 1 ? 'repository' : 'repositories'}
+            />
             <Dot />
             <Stat n={tagCount} label="tags" />
             <Dot />
             <Stat
-              n={criticalCount}
-              label={`critical ${criticalCount === 1 ? 'issue' : 'issues'}`}
+              n={vulnerabilityCount}
+              label={`open ${(vulnerabilityCount ?? 0) === 1 ? 'vulnerability' : 'vulnerabilities'}`}
             />
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-sm shrink-0">
-          <HealthPill healthy={isHealthy} criticalCount={criticalCount} />
+          <HealthPill
+            loading={loading}
+            vulnerabilityCount={vulnerabilityCount}
+            systemHealthPct={systemHealthPct}
+          />
           <button
             type="button"
             onClick={() =>
@@ -100,11 +112,11 @@ export function HeroCard({ repoCount, tagCount, criticalCount }: HeroCardProps) 
 }
 
 /** Number + label pair, used inline in the hero subtitle. */
-function Stat({ n, label }: { n: number; label: string }) {
+function Stat({ n, label }: { n: number | undefined; label: string }) {
   return (
     <>
       <strong className="text-on-surface font-semibold tabular-nums">
-        {n.toLocaleString()}
+        {typeof n === 'number' ? n.toLocaleString() : '—'}
       </strong>{' '}
       {label}
     </>
@@ -116,34 +128,63 @@ function Dot() {
   return <span aria-hidden="true" className="mx-sm text-on-surface-subtle">·</span>
 }
 
-/** Compact status pill — green when healthy, danger-tinted otherwise. */
+/**
+ * Health pill — green when healthy, amber when vulnerabilities exist,
+ * red when the backend reports a degraded health score, neutral while
+ * the first fetch resolves.
+ *
+ * Healthy means: 0 open vulns AND backend self-reports ≥95%.
+ */
 function HealthPill({
-  healthy,
-  criticalCount,
+  loading,
+  vulnerabilityCount,
+  systemHealthPct,
 }: {
-  healthy: boolean
-  criticalCount: number
+  loading?: boolean
+  vulnerabilityCount?: number
+  systemHealthPct?: number
 }) {
+  if (loading) {
+    return (
+      <div className="inline-flex items-center gap-sm rounded-full px-md h-9 border bg-neutral-100 border-border text-on-surface-muted">
+        <span aria-hidden="true" className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse" />
+        <span className="text-label-md font-medium whitespace-nowrap">Checking…</span>
+      </div>
+    )
+  }
+
+  const vulns = vulnerabilityCount ?? 0
+  const health = systemHealthPct ?? 100
+  const backendOk = health >= 95
+  const healthy = vulns === 0 && backendOk
+
+  if (healthy) {
+    return (
+      <div className="inline-flex items-center gap-sm rounded-full px-md h-9 border bg-success-100 border-success-500/30 text-success-500">
+        <span aria-hidden="true" className="w-2 h-2 rounded-full bg-success-500 animate-pulse" />
+        <span className="text-label-md font-medium whitespace-nowrap">
+          All systems healthy
+        </span>
+      </div>
+    )
+  }
+
+  if (!backendOk) {
+    return (
+      <div className="inline-flex items-center gap-sm rounded-full px-md h-9 border bg-danger-100 border-danger-500/30 text-danger-500">
+        <span aria-hidden="true" className="w-2 h-2 rounded-full bg-danger-500" />
+        <span className={cn('text-label-md font-medium whitespace-nowrap')}>
+          Service issues
+        </span>
+      </div>
+    )
+  }
+
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-sm rounded-full px-md h-9 border',
-        healthy
-          ? 'bg-success-100 border-success-500/30 text-success-500'
-          : 'bg-danger-100 border-danger-500/30 text-danger-500',
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          'w-2 h-2 rounded-full',
-          healthy ? 'bg-success-500 animate-pulse' : 'bg-danger-500',
-        )}
-      />
+    <div className="inline-flex items-center gap-sm rounded-full px-md h-9 border bg-warning-100 border-warning-500/30 text-warning-500">
+      <span aria-hidden="true" className="w-2 h-2 rounded-full bg-warning-500" />
       <span className="text-label-md font-medium whitespace-nowrap">
-        {healthy
-          ? 'All systems healthy'
-          : `${criticalCount} critical ${criticalCount === 1 ? 'issue' : 'issues'}`}
+        {vulns} open {vulns === 1 ? 'vulnerability' : 'vulnerabilities'}
       </span>
     </div>
   )

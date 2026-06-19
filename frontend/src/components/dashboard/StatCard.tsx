@@ -2,51 +2,85 @@
  * StatCard — one tile in the dashboard stats row.
  *
  * Anatomy (top to bottom):
- *   * Icon chip in a tone-tinted background
+ *   * Icon chip (tone-tinted) + delta badge in the top-right corner
  *   * Label (text-label-sm uppercase)
- *   * Big number + delta-vs-prior badge
- *   * Sparkline of the last 12 data points
+ *   * Big number (+ optional unit suffix)
+ *   * Sparkline of recent trend (only if `trend` data is provided)
  *
- * `tone` picks one of the design-token palettes (primary / info /
- * success / warning) so the page gets visual variety without us
- * hand-picking colours per card.
+ * The component takes individual props rather than a single `stat`
+ * object so the dashboard can wire some tiles to live API data (where
+ * `trend` and `deltaPct` aren't available yet — `/api/v1/stats` returns
+ * only current values) and others to demo data (which has both).
+ *
+ * `loading` renders a skeleton with the same overall shape so tiles
+ * don't jump as data resolves.
  */
-import { ArrowDown, ArrowRight, ArrowUp, HardDrive, Package, Tag, Search, Upload } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, HardDrive, Package, Tag, Search, Upload, ShieldAlert, Download } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { Sparkline } from './Sparkline'
-import type { DemoStat } from '@/lib/demo/dashboardData'
 
-const ICONS: Record<DemoStat['iconKey'], LucideIcon> = {
+export type StatIconKey =
+  | 'package'
+  | 'tag'
+  | 'scan'
+  | 'upload'
+  | 'storage'
+  | 'shield'
+  | 'download'
+
+export type StatTone = 'primary' | 'info' | 'success' | 'warning' | 'danger'
+
+export interface StatCardProps {
+  label: string
+  value: number
+  /** Optional unit shown after the value (e.g. "GB"). */
+  unit?: string
+  iconKey: StatIconKey
+  tone: StatTone
+  /** Optional sparkline series (oldest → newest). Omit to hide it. */
+  trend?: number[]
+  /** Optional percent change vs prior period. Omit to hide the badge. */
+  deltaPct?: number
+  /** Render a skeleton placeholder instead of data. */
+  loading?: boolean
+}
+
+const ICONS: Record<StatIconKey, LucideIcon> = {
   package: Package,
   tag: Tag,
   scan: Search,
   upload: Upload,
   storage: HardDrive,
+  shield: ShieldAlert,
+  download: Download,
 }
 
-const TONE_STYLES: Record<DemoStat['tone'], { chip: string; spark: string }> = {
-  primary: {
-    chip: 'bg-primary-soft text-primary',
-    spark: 'var(--color-primary)',
-  },
-  info: {
-    chip: 'bg-info-100 text-info-500',
-    spark: 'var(--color-info-500)',
-  },
-  success: {
-    chip: 'bg-success-100 text-success-500',
-    spark: 'var(--color-success-500)',
-  },
-  warning: {
-    chip: 'bg-warning-100 text-warning-500',
-    spark: 'var(--color-warning-500)',
-  },
+const TONE_STYLES: Record<StatTone, { chip: string; spark: string }> = {
+  primary: { chip: 'bg-primary-soft text-primary',     spark: 'var(--color-primary)' },
+  info:    { chip: 'bg-info-100 text-info-500',        spark: 'var(--color-info-500)' },
+  success: { chip: 'bg-success-100 text-success-500',  spark: 'var(--color-success-500)' },
+  warning: { chip: 'bg-warning-100 text-warning-500',  spark: 'var(--color-warning-500)' },
+  danger:  { chip: 'bg-danger-100 text-danger-500',    spark: 'var(--color-danger-500)' },
 }
 
-export function StatCard({ stat }: { stat: DemoStat }) {
-  const Icon = ICONS[stat.iconKey]
-  const styles = TONE_STYLES[stat.tone]
+export function StatCard({
+  label,
+  value,
+  unit,
+  iconKey,
+  tone,
+  trend,
+  deltaPct,
+  loading,
+}: StatCardProps) {
+  if (loading) {
+    return <StatCardSkeleton />
+  }
+
+  const Icon = ICONS[iconKey]
+  const styles = TONE_STYLES[tone]
+  const hasTrend = Array.isArray(trend) && trend.length > 1
 
   return (
     <div className="flex flex-col gap-md rounded-lg border border-border bg-surface p-lg">
@@ -60,24 +94,49 @@ export function StatCard({ stat }: { stat: DemoStat }) {
         >
           <Icon className="w-[18px] h-[18px]" />
         </span>
-        <DeltaBadge deltaPct={stat.deltaPct} />
+        {typeof deltaPct === 'number' && <DeltaBadge deltaPct={deltaPct} />}
       </div>
 
       <div>
         <div className="text-label-sm uppercase tracking-wider text-on-surface-subtle font-semibold">
-          {stat.label}
+          {label}
         </div>
         <div className="mt-xs text-heading-lg font-semibold text-on-surface tabular-nums">
-          {stat.value.toLocaleString()}
-          {stat.unit && (
+          {value.toLocaleString()}
+          {unit && (
             <span className="ml-xs text-heading-sm font-medium text-on-surface-muted">
-              {stat.unit}
+              {unit}
             </span>
           )}
         </div>
       </div>
 
-      <Sparkline data={stat.trend} color={styles.spark} />
+      {/* Reserve sparkline space so tiles without trend data still match
+          the vertical rhythm of tiles that have it. */}
+      <div className="h-9">
+        {hasTrend && <Sparkline data={trend!} color={styles.spark} />}
+      </div>
+    </div>
+  )
+}
+
+/** Loading skeleton — pulsing rectangles in the same overall layout. */
+function StatCardSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading stat"
+      className="flex flex-col gap-md rounded-lg border border-border bg-surface p-lg"
+    >
+      <div className="flex items-center justify-between">
+        <span className="w-9 h-9 rounded-sm bg-surface-muted animate-pulse" />
+        <span className="w-10 h-4 rounded-xs bg-surface-muted animate-pulse" />
+      </div>
+      <div>
+        <span className="block w-20 h-3 rounded-xs bg-surface-muted animate-pulse" />
+        <span className="block mt-xs w-24 h-7 rounded-xs bg-surface-muted animate-pulse" />
+      </div>
+      <div className="h-9 w-full rounded-xs bg-surface-muted animate-pulse" />
     </div>
   )
 }

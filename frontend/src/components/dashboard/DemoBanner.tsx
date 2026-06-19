@@ -1,9 +1,11 @@
 /**
- * DemoBanner — slim warning at the top of any screen still using fake data.
+ * DemoBanner — slim note above the dashboard explaining which tiles
+ * are wired to the real backend and which still use placeholders.
  *
- * Honest signal that the numbers/people/repos below are stand-ins. Slim
- * amber strip with an info glyph; meant to be conspicuous-but-not-loud.
- * Comes off the page entirely the moment Sprint 1b wires real data.
+ * As more backend endpoints land, the items in this banner shrink.
+ * Sprint 1b: Repositories + Storage + the hero pill + repo/vuln counts
+ * are live; Tags, Scans today, Activity, and Top Repos still need
+ * dedicated endpoints.
  */
 import { Sparkles } from 'lucide-react'
 
@@ -12,9 +14,11 @@ export function DemoBanner() {
     <div className="flex items-center gap-sm px-md py-sm rounded-sm border border-warning-500/30 bg-warning-100 text-warning-500">
       <Sparkles className="w-4 h-4 shrink-0" aria-hidden="true" />
       <p className="text-label-md font-medium">
-        Demo data — the numbers, activity, and repos below are placeholders.
-        Sprint 1b wires real values from{' '}
-        <code className="font-mono">/api/v1/stats</code>.
+        <strong className="font-semibold">Partial demo data.</strong>{' '}
+        Repositories, Storage, and the hero are live (
+        <code className="font-mono">/api/v1/stats</code>). Tags, Scans
+        today, Activity, and Top Repositories still use placeholders —
+        Sprint 2 wires the audit + tag-count endpoints.
       </p>
     </div>
   )
