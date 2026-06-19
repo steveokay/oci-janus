@@ -18,9 +18,9 @@
  * on". The `⌘ K` chip teaches the shortcut.
  */
 import { useNavigate } from '@tanstack/react-router'
-import { Bell, Plus, Search } from 'lucide-react'
-import { toast } from 'sonner'
+import { Plus, Search } from 'lucide-react'
 import { Breadcrumbs } from './Breadcrumbs'
+import { usePaletteStore } from '@/store/paletteStore'
 
 export function Topbar() {
   return (
@@ -32,7 +32,9 @@ export function Topbar() {
       <CommandPaletteTrigger />
 
       <div className="flex-1 flex items-center justify-end gap-sm min-w-0">
-        <NotificationBell />
+        {/* NotificationBell hidden until the events stream lands
+            (FE-API-008). The previous hardcoded "2" badge was the most
+            honest-looking thing on the page that wasn't real. */}
         <NewRepositoryCTA />
       </div>
     </header>
@@ -41,14 +43,11 @@ export function Topbar() {
 
 /** Fixed-width centre column. Hidden on narrow screens to free up space. */
 function CommandPaletteTrigger() {
+  const openPalette = usePaletteStore((s) => s.setOpen)
   return (
     <button
       type="button"
-      onClick={() =>
-        toast.message('Command palette coming soon', {
-          description: 'Sprint 1f wires ⌘K search across repos, tags, and users.',
-        })
-      }
+      onClick={() => openPalette(true)}
       aria-label="Open command palette"
       className="hidden md:flex items-center gap-sm w-96 h-9 px-md rounded-sm border border-border bg-surface-muted/60 hover:bg-surface-muted hover:border-border-strong transition-colors shrink-0"
     >
@@ -66,32 +65,6 @@ function CommandPaletteTrigger() {
   )
 }
 
-/** Bell with a stub unread badge. Sprint 2 wires it to the events stream. */
-function NotificationBell() {
-  const unread = 2 // TODO Sprint 2: subscribe to webhook/audit notifications
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        toast.message('Notifications inbox coming soon', {
-          description: 'Sprint 2 surfaces webhook deliveries + scan results here.',
-        })
-      }
-      aria-label={`Notifications (${unread} unread)`}
-      className="relative inline-flex items-center justify-center w-9 h-9 rounded-sm text-on-surface-muted hover:text-on-surface hover:bg-surface-muted transition-colors shrink-0"
-    >
-      <Bell className="w-[18px] h-[18px]" aria-hidden="true" />
-      {unread > 0 && (
-        <span
-          aria-hidden="true"
-          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-danger-500 text-white text-[10px] font-semibold leading-none tabular-nums"
-        >
-          {unread > 9 ? '9+' : unread}
-        </span>
-      )}
-    </button>
-  )
-}
 
 /** Primary CTA — navigates to the repositories list with ?new=true so
     the create dialog opens on arrival. */

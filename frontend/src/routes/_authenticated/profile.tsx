@@ -29,7 +29,6 @@ import {
   Eye,
   EyeOff,
   Info,
-  KeyRound,
   Lock,
   Plus,
   Trash2,
@@ -58,6 +57,10 @@ import {
 } from '@/lib/api/hooks/useApiKeys'
 import { useAuthStore } from '@/store/authStore'
 import { relativeTime } from '@/lib/format/time'
+import { EmptyPanel } from '@/components/ui/states/EmptyPanel'
+import { ErrorPanel } from '@/components/ui/states/ErrorPanel'
+import { TableSkeleton } from '@/components/ui/states/TableSkeleton'
+import { ApiKeyIllustration } from '@/components/ui/illustrations'
 import { cn } from '@/lib/utils/cn'
 
 export const Route = createFileRoute('/_authenticated/profile')({
@@ -84,11 +87,11 @@ function PageHero() {
   return (
     <section
       aria-labelledby="profile-heading"
-      className="relative overflow-hidden rounded-lg border border-border"
+      className="relative overflow-hidden rounded-lg border border-border bg-surface"
     >
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           backgroundImage:
             'linear-gradient(110deg, oklch(0.95 0.06 50) 0%, oklch(0.96 0.04 30) 45%, oklch(0.99 0.02 60) 90%)',
@@ -101,14 +104,22 @@ function PageHero() {
         onError={(e) => {
           ;(e.currentTarget as HTMLImageElement).style.display = 'none'
         }}
-        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none"
+        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none dark:hidden"
       />
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           background:
             'linear-gradient(105deg, oklch(1 0 0 / 0.65), oklch(1 0 0 / 0.30) 60%, transparent 90%)',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="hidden dark:block absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(105deg, oklch(0.22 0.06 280) 0%, oklch(0.19 0.04 260) 60%, oklch(0.16 0.03 250) 100%)',
         }}
       />
       <div className="relative px-xl py-xl flex items-center gap-md">
@@ -276,29 +287,21 @@ function ApiKeysCard() {
 
       {isError ? (
         <div className="p-lg">
-          <div className="rounded-lg border border-danger-500/30 bg-danger-100 p-lg">
-            <div className="flex items-start gap-md">
-              <span
-                aria-hidden="true"
-                className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-danger-500/10 text-danger-500 shrink-0"
-              >
-                <TriangleAlert className="w-5 h-5" />
-              </span>
-              <div className="flex-1">
-                <h3 className="text-body-md font-semibold text-danger-500">
-                  Couldn't load API keys
-                </h3>
-                <p className="mt-xs text-body-sm text-danger-500/80">
-                  Retrying automatically. If this persists, check{' '}
-                  <code className="font-mono text-code-sm">registry-auth</code>{' '}
-                  is reachable.
-                </p>
-              </div>
-            </div>
-          </div>
+          <ErrorPanel
+            title="Couldn't load API keys"
+            description={
+              <>
+                Retrying automatically. If this persists, check{' '}
+                <code className="font-mono text-code-sm">registry-auth</code>{' '}
+                is reachable.
+              </>
+            }
+          />
         </div>
       ) : isLoading ? (
-        <ApiKeysSkeleton />
+        <div className="p-sm">
+          <TableSkeleton rows={3} widths={[160, 120, 100, 100, 32]} className="border-0 shadow-none" />
+        </div>
       ) : keys.length === 0 ? (
         <ApiKeysEmpty onCreate={() => setCreateOpen(true)} />
       ) : (
@@ -326,43 +329,18 @@ function ApiKeysCard() {
 
 function ApiKeysEmpty({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="p-2xl text-center flex flex-col items-center gap-md">
-      <span
-        aria-hidden="true"
-        className="inline-flex items-center justify-center w-12 h-12 rounded-md bg-primary-soft text-primary"
-      >
-        <KeyRound className="w-6 h-6" />
-      </span>
-      <div className="w-full max-w-prose">
-        <h3 className="text-heading-sm font-semibold text-on-surface">
-          No API keys yet
-        </h3>
-        <p className="mt-xs text-body-sm text-on-surface-muted">
-          Create one to authenticate from CI, scripts, or the registry
-          CLI. You'll see the raw secret exactly once when it's created
-          — copy it somewhere safe.
-        </p>
-      </div>
-      <Button variant="primary" onClick={onCreate}>
-        <Plus className="w-4 h-4" aria-hidden="true" />
-        Create your first key
-      </Button>
-    </div>
-  )
-}
-
-function ApiKeysSkeleton() {
-  return (
-    <div className="divide-y divide-border">
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-md p-lg">
-          <span className="flex-1 h-4 max-w-[160px] rounded-xs bg-surface-muted animate-pulse" />
-          <span className="flex-1 h-4 max-w-[120px] rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-24 h-4 rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-24 h-4 rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-8 h-8 rounded-xs bg-surface-muted animate-pulse" />
-        </div>
-      ))}
+    <div className="p-lg">
+      <EmptyPanel
+        illustration={<ApiKeyIllustration className="w-28 h-28 text-primary" />}
+        title="No API keys yet"
+        description="Create one to authenticate from CI, scripts, or the registry CLI. You'll see the raw secret exactly once when it's created — copy it somewhere safe."
+        action={
+          <Button variant="primary" onClick={onCreate}>
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            Create your first key
+          </Button>
+        }
+      />
     </div>
   )
 }
@@ -469,7 +447,7 @@ function ApiKeysTable({
         id: 'actions',
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-end opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               type="button"
               aria-label={`Revoke API key ${row.original.name}`}
@@ -541,7 +519,7 @@ function ApiKeysTable({
         {table.getRowModel().rows.map((row) => (
           <tr
             key={row.id}
-            className="hover:bg-surface-muted/40 transition-colors"
+            className="group/row hover:bg-surface-muted/40 transition-colors"
           >
             {row.getVisibleCells().map((cell) => (
               <td key={cell.id} className="px-lg py-md align-middle">

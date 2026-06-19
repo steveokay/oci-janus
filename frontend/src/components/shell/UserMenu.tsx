@@ -10,6 +10,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { LogOut, User } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { useAuthStore } from '@/store/authStore'
+import { ThemeToggle } from './ThemeToggle'
 
 export function UserMenu() {
   const user = useAuthStore((s) => s.user)
@@ -59,6 +60,19 @@ export function UserMenu() {
             <User className="w-4 h-4 text-on-surface-muted" aria-hidden="true" />
             Profile
           </DropdownMenu.Item>
+          <DropdownMenu.Separator className="h-px bg-border my-xs" />
+          {/* Theme picker — rendered as a labelled row so the radiogroup
+              ThemeToggle reads as part of the menu rather than a foreign
+              floating widget. We stop event propagation so clicks inside
+              the toggle don't close the dropdown. */}
+          <div
+            className="flex items-center justify-between gap-md px-md py-sm"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <span className="text-body-sm text-on-surface-muted">Theme</span>
+            <ThemeToggle />
+          </div>
           <DropdownMenu.Separator className="h-px bg-border my-xs" />
           <DropdownMenu.Item
             onSelect={() => {

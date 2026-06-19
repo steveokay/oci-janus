@@ -14,9 +14,10 @@
  * stripped-down "empty page" version of the workspace.
  */
 import { useState } from 'react'
-import { Check, Copy, Package, Plus, Terminal } from 'lucide-react'
+import { Check, Copy, Plus, Terminal } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
+import { ReposIllustration } from '@/components/ui/illustrations'
 import { cn } from '@/lib/utils/cn'
 
 const DEV_REGISTRY_HOST = 'registry.localhost:5000'
@@ -45,25 +46,22 @@ export function EmptyState({ onCreate }: EmptyStateProps) {
   }
 
   return (
-    <section
-      className="relative overflow-hidden rounded-lg border border-border bg-surface"
-      style={{
-        // Warm wash to match the dashboard hero — keeps visual continuity
-        // when the user lands on an empty workspace.
-        backgroundImage:
-          'linear-gradient(120deg, oklch(0.97 0.04 60) 0%, oklch(0.98 0.025 350) 55%, oklch(1 0 0) 100%)',
-      }}
-    >
+    <section className="relative overflow-hidden rounded-lg border border-border bg-surface">
+      {/* Warm wash in light mode; flat surface in dark to avoid a pale
+          slab on a dark page. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 dark:hidden"
+        style={{
+          backgroundImage:
+            'linear-gradient(120deg, oklch(0.97 0.04 60) 0%, oklch(0.98 0.025 350) 55%, oklch(1 0 0) 100%)',
+        }}
+      />
       <div className="relative grid grid-cols-1 lg:grid-cols-5 gap-lg p-2xl">
-        {/* Left — pitch + CTA */}
+        {/* Left — illustration + pitch + CTA */}
         <div className="lg:col-span-2 flex flex-col justify-center">
-          <span
-            aria-hidden="true"
-            className="inline-flex items-center justify-center w-12 h-12 rounded-md bg-primary-soft text-primary"
-          >
-            <Package className="w-6 h-6" />
-          </span>
-          <h2 className="mt-lg text-heading-sm font-semibold text-on-surface">
+          <ReposIllustration className="w-28 h-28 text-primary" />
+          <h2 className="mt-md text-heading-sm font-semibold text-on-surface">
             No repositories yet
           </h2>
           <p className="mt-xs max-w-md text-body-sm text-on-surface-muted">

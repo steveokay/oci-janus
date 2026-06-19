@@ -1,40 +1,33 @@
 /**
- * Dashboard — Sprint 1b: live data wiring on top of the Sprint 1a bento.
+ * Dashboard — honest version.
  *
- * Live tiles (from `useStats` → /api/v1/stats):
- *   * Repositories  — total_repos
- *   * Storage       — storage_used_bytes (formatted to the best unit)
+ * What's on the page:
+ *   1. Hero — warm gradient + time-of-day photo (theme-aware: dark
+ *      mode hides the photo and the white veil).
+ *   2. Four stat tiles:
+ *        - Repositories (live, no fake sparkline)
+ *        - Tags        (DEMO — small badge says so)
+ *        - Scans today (DEMO — small badge says so)
+ *        - Storage     (live, no fake sparkline)
+ *   3. PinnedRepos — user-controlled, persisted to localStorage.
+ *      Replaces the previous demo TopRepos panel.
+ *   4. Quickstart — copy-pasteable docker push for first-image flow.
  *
- * Demo tiles (no backend endpoint yet):
- *   * Tags          — needs metadata RPC for tag counts across repos
- *   * Scans today   — needs an audit query for today's scan events
+ * Removed since the last iteration:
+ *   * Demo banner (per-tile badges replace it).
+ *   * Activity feed (was fully demo and clicking links toasted lies).
+ *   * Sparklines on live tiles (no time series available from /stats).
  *
- * Live hero data:
- *   * repoCount     — from /api/v1/stats
- *   * vulnCount     — from /api/v1/stats (total open, not just critical)
- *   * health pill   — derived from vulnerabilityCount + system_health_pct
- *
- * Activity feed and Top Repositories still use demo data — Sprint 2 will
- * wire those once the audit-events query API + per-repo activity stats
- * land in registry-audit and registry-metadata respectively.
- *
- * Error handling: a backend failure on /api/v1/stats degrades to skeletons
- * on the live tiles. We surface a single subtle inline error message
- * rather than a full-page error so demo content remains usable.
+ * Sprint 1f honesty pass — keeps live data visually distinct from demo
+ * data, and stops the page from inventing activity events.
  */
 import { createFileRoute } from '@tanstack/react-router'
 import { TriangleAlert } from 'lucide-react'
-import { ActivityFeed } from '@/components/dashboard/ActivityFeed'
-import { DemoBanner } from '@/components/dashboard/DemoBanner'
 import { HeroCard } from '@/components/dashboard/HeroCard'
+import { PinnedRepos } from '@/components/dashboard/PinnedRepos'
 import { Quickstart } from '@/components/dashboard/Quickstart'
 import { StatCard } from '@/components/dashboard/StatCard'
-import { TopRepos } from '@/components/dashboard/TopRepos'
-import {
-  DEMO_ACTIVITY,
-  DEMO_STATS,
-  DEMO_TOP_REPOS,
-} from '@/lib/demo/dashboardData'
+import { DEMO_STATS } from '@/lib/demo/dashboardData'
 import { useStats } from '@/lib/api/hooks/useStats'
 import { formatBytes } from '@/lib/format/bytes'
 
@@ -46,33 +39,25 @@ export const Route = createFileRoute('/_authenticated/dashboard')({
 function DashboardPage() {
   const { data: stats, isLoading, isError, error } = useStats()
 
-  // Format storage into a sensible unit only when we actually have a
-  // number — during loading we render the skeleton tile, not "0 B".
   const storage = stats ? formatBytes(stats.storage_used_bytes) : undefined
-
-  // The two demo tiles that still need real backend endpoints. Kept as a
-  // tight reference rather than slicing the array so it's obvious which
-  // tiles are placeholders.
-  const demoTagsTile   = DEMO_STATS.find((s) => s.label === 'Tags')!
-  const demoScansTile  = DEMO_STATS.find((s) => s.label === 'Scans today')!
+  const demoTagsTile = DEMO_STATS.find((s) => s.label === 'Tags')!
+  const demoScansTile = DEMO_STATS.find((s) => s.label === 'Scans today')!
 
   return (
     <div className="p-xl space-y-lg">
-      <DemoBanner />
-
       {isError && <StatsErrorNote error={error} />}
 
       <HeroCard
         loading={isLoading}
         repoCount={stats?.total_repos}
-        tagCount={undefined /* no endpoint yet — renders "—" */}
+        tagCount={undefined /* no endpoint yet */}
         vulnerabilityCount={stats?.vulnerability_count}
         systemHealthPct={stats?.system_health_pct}
       />
 
+      {/* Row 1 — stat tiles. Live tiles intentionally render no sparkline
+          / delta; demo tiles keep theirs + carry a small "Demo" chip. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-lg">
-        {/* Row 1 — 4 stat tiles. Repositories + Storage are live; Tags +
-            Scans today still use demo data with trend + delta intact. */}
         <StatCard
           loading={isLoading}
           label="Repositories"
@@ -88,6 +73,7 @@ function DashboardPage() {
           trend={demoTagsTile.trend}
           deltaPct={demoTagsTile.deltaPct}
           unit={demoTagsTile.unit}
+          demo
         />
         <StatCard
           label={demoScansTile.label}
@@ -97,6 +83,7 @@ function DashboardPage() {
           trend={demoScansTile.trend}
           deltaPct={demoScansTile.deltaPct}
           unit={demoScansTile.unit}
+          demo
         />
         <StatCard
           loading={isLoading}
@@ -106,36 +93,20 @@ function DashboardPage() {
           iconKey="storage"
           tone="warning"
         />
-
-        {/* Row 2 — TopRepos on the left, ActivityFeed on the right, equal
-            columns. Both demo for now (no per-repo activity / audit
-            events query yet). */}
-        <div className="sm:col-span-2 lg:col-span-2">
-          <TopRepos repos={DEMO_TOP_REPOS} />
-        </div>
-        <div className="sm:col-span-2 lg:col-span-2">
-          <ActivityFeed items={DEMO_ACTIVITY} />
-        </div>
-
-        {/* Row 3 — full-width Quickstart so its background image gets the
-            whole width to breathe. */}
-        <div className="sm:col-span-2 lg:col-span-4">
-          <Quickstart />
-        </div>
       </div>
+
+      {/* Row 2 — pinned repos (full width). When the user has pins this
+          fills with their selections; when they don't, the empty state
+          carries enough onboarding to be a useful surface on its own. */}
+      <PinnedRepos />
+
+      {/* Row 3 — quickstart, full width. */}
+      <Quickstart />
     </div>
   )
 }
 
-/**
- * Inline error note shown when `/api/v1/stats` fails. We deliberately
- * don't take over the page — demo content is still useful, the user can
- * keep working, and the live tiles fall back to skeletons until the
- * automatic refetch succeeds.
- */
 function StatsErrorNote({ error }: { error: unknown }) {
-  // We don't surface the raw error message — could include sensitive
-  // server output. The user gets a generic message + a hint to retry.
   void error
   return (
     <div className="flex items-center gap-sm px-md py-sm rounded-sm border border-danger-500/30 bg-danger-100 text-danger-500">

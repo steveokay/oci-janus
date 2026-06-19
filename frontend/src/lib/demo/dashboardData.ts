@@ -1,13 +1,12 @@
 /**
- * Demo dashboard data — stand-in until Sprint 1b wires real /api/v1/stats.
+ * Demo dashboard data — stand-in for stat tiles whose backend
+ * endpoints don't exist yet (Tags + Scans today). Live tiles
+ * (Repositories, Storage) come from `useStats`; demo tiles are
+ * tagged with a small "Demo" pill by `StatCard` so the user can
+ * see at a glance which numbers aren't real.
  *
- * Numbers are deliberately plausible (not all 0s, not all huge) so the
- * UI can be designed and reviewed without staring at em-dashes. The
- * `DemoBanner` component at the top of the dashboard tells the user
- * these aren't real.
- *
- * Everything here is a pure constant — no fetch, no random — so visual
- * reviews + screenshots are stable across reloads.
+ * Everything here is a pure constant — no fetch, no random — so
+ * visual reviews + screenshots are stable across reloads.
  */
 
 export interface DemoStat {
@@ -70,39 +69,6 @@ export const DEMO_STATS: DemoStat[] = [
   },
 ]
 
-export type ActivityKind = 'push' | 'scan' | 'invite' | 'create' | 'delete'
-
-export interface DemoActivity {
-  id: string
-  actor: string
-  verb: string
-  object: string
-  /** Human-friendly relative time. Sprint 1b switches to a real timestamp + intl. */
-  when: string
-  kind: ActivityKind
-  /** Optional severity tag — only set on scan results today. */
-  severity?: 'low' | 'medium' | 'high' | 'critical'
-}
-
-export const DEMO_ACTIVITY: DemoActivity[] = [
-  { id: '1', actor: 'admin',   verb: 'pushed',        object: 'webapp:v2.1.3',         when: '2 min ago',  kind: 'push' },
-  { id: '2', actor: 'scanner', verb: 'flagged',       object: '2 CVEs in api-gw:v3',   when: '8 min ago',  kind: 'scan', severity: 'high' },
-  { id: '3', actor: 'admin',   verb: 'invited',       object: 'bob@acme.io',           when: '23 min ago', kind: 'invite' },
-  { id: '4', actor: 'admin',   verb: 'created repo',  object: 'api-gateway',           when: '1 hr ago',   kind: 'create' },
-  { id: '5', actor: 'ci-bot',  verb: 'pushed',        object: 'backend:nightly',       when: '3 hrs ago',  kind: 'push' },
-  { id: '6', actor: 'admin',   verb: 'deleted tag',   object: 'cdn:legacy',            when: '5 hrs ago',  kind: 'delete' },
-]
-
-export interface DemoRepo {
-  name: string
-  tags: number
-  deltaPct: number
-}
-
-export const DEMO_TOP_REPOS: DemoRepo[] = [
-  { name: 'webapp',      tags: 24, deltaPct: 12 },
-  { name: 'api-gateway', tags: 18, deltaPct: 8 },
-  { name: 'backend',     tags: 12, deltaPct: -2 },
-  { name: 'cdn',         tags: 6,  deltaPct: 3 },
-  { name: 'worker',      tags: 4,  deltaPct: 0 },
-]
+// DEMO_ACTIVITY and DEMO_TOP_REPOS were removed in the 1f honesty pass:
+// ActivityFeed and TopRepos panels are gone from the dashboard. Tag
+// counts and scan counts stay as demo for now — see DEMO_STATS above.

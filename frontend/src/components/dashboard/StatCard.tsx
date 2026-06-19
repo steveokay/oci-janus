@@ -19,6 +19,7 @@ import { ArrowDown, ArrowRight, ArrowUp, HardDrive, Package, Tag, Search, Upload
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { Sparkline } from './Sparkline'
+import { AnimatedNumber } from '@/components/ui/AnimatedNumber'
 
 export type StatIconKey =
   | 'package'
@@ -44,6 +45,8 @@ export interface StatCardProps {
   deltaPct?: number
   /** Render a skeleton placeholder instead of data. */
   loading?: boolean
+  /** Tag the tile as placeholder data with a small "Demo" pill. */
+  demo?: boolean
 }
 
 const ICONS: Record<StatIconKey, LucideIcon> = {
@@ -56,12 +59,15 @@ const ICONS: Record<StatIconKey, LucideIcon> = {
   download: Download,
 }
 
-const TONE_STYLES: Record<StatTone, { chip: string; spark: string }> = {
-  primary: { chip: 'bg-primary-soft text-primary',     spark: 'var(--color-primary)' },
-  info:    { chip: 'bg-info-100 text-info-500',        spark: 'var(--color-info-500)' },
-  success: { chip: 'bg-success-100 text-success-500',  spark: 'var(--color-success-500)' },
-  warning: { chip: 'bg-warning-100 text-warning-500',  spark: 'var(--color-warning-500)' },
-  danger:  { chip: 'bg-danger-100 text-danger-500',    spark: 'var(--color-danger-500)' },
+const TONE_STYLES: Record<
+  StatTone,
+  { chip: string; spark: string; accent: string }
+> = {
+  primary: { chip: 'bg-primary-soft text-primary',    spark: 'var(--color-primary)',     accent: 'bg-primary/40' },
+  info:    { chip: 'bg-info-100 text-info-500',       spark: 'var(--color-info-500)',    accent: 'bg-info-500/40' },
+  success: { chip: 'bg-success-100 text-success-500', spark: 'var(--color-success-500)', accent: 'bg-success-500/40' },
+  warning: { chip: 'bg-warning-100 text-warning-500', spark: 'var(--color-warning-500)', accent: 'bg-warning-500/40' },
+  danger:  { chip: 'bg-danger-100 text-danger-500',   spark: 'var(--color-danger-500)',  accent: 'bg-danger-500/40' },
 }
 
 export function StatCard({
@@ -73,6 +79,7 @@ export function StatCard({
   trend,
   deltaPct,
   loading,
+  demo,
 }: StatCardProps) {
   if (loading) {
     return <StatCardSkeleton />
@@ -81,41 +88,71 @@ export function StatCard({
   const Icon = ICONS[iconKey]
   const styles = TONE_STYLES[tone]
   const hasTrend = Array.isArray(trend) && trend.length > 1
+  const hasFooter = hasTrend // future-proof — if we add other footer content
+
+  // Pick the count-up formatter: integers without unit get standard
+  // locale formatting; decimal values keep one decimal place; values
+  // with a unit (Storage) get fixed-1 so the count-up reads naturally.
+  const isInteger = Number.isInteger(value) && !unit
+  const numberFormat = isInteger
+    ? undefined
+    : (n: number) => n.toFixed(1)
 
   return (
-    <div className="flex flex-col gap-md rounded-lg border border-border bg-surface p-lg">
+    <div className="group relative flex flex-col gap-md rounded-lg border border-border bg-surface p-lg transition-shadow hover:shadow-sm">
+      {/* Tone-tinted top edge — a tiny accent line so the four tiles
+          aren't visually identical. */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          'absolute top-0 left-lg right-lg h-px',
+          styles.accent,
+        )}
+      />
+
       <div className="flex items-center justify-between">
         <span
           className={cn(
-            'inline-flex items-center justify-center w-9 h-9 rounded-sm',
+            'inline-flex items-center justify-center w-10 h-10 rounded-md transition-transform group-hover:scale-105',
             styles.chip,
           )}
           aria-hidden="true"
         >
-          <Icon className="w-[18px] h-[18px]" />
+          <Icon className="w-5 h-5" />
         </span>
-        {typeof deltaPct === 'number' && <DeltaBadge deltaPct={deltaPct} />}
+        <div className="flex items-center gap-sm">
+          {demo && (
+            <span
+              className="inline-flex items-center px-sm py-0.5 rounded-full border border-warning-500/30 bg-warning-100 text-warning-500 text-label-sm font-medium"
+              title="Placeholder data — backend endpoint not wired yet"
+            >
+              Demo
+            </span>
+          )}
+          {typeof deltaPct === 'number' && <DeltaBadge deltaPct={deltaPct} />}
+        </div>
       </div>
 
       <div>
         <div className="text-label-sm uppercase tracking-wider text-on-surface-subtle font-semibold">
           {label}
         </div>
-        <div className="mt-xs text-heading-lg font-semibold text-on-surface tabular-nums">
-          {value.toLocaleString()}
+        <div className="mt-sm text-display-lg font-semibold text-on-surface tabular-nums leading-none">
+          <AnimatedNumber value={value} format={numberFormat} />
           {unit && (
-            <span className="ml-xs text-heading-sm font-medium text-on-surface-muted">
+            <span className="ml-xs text-heading-md font-medium text-on-surface-muted">
               {unit}
             </span>
           )}
         </div>
       </div>
 
-      {/* Reserve sparkline space so tiles without trend data still match
-          the vertical rhythm of tiles that have it. */}
-      <div className="h-9">
-        {hasTrend && <Sparkline data={trend!} color={styles.spark} />}
-      </div>
+      {/* Footer slot — sparkline if we have a trend, nothing otherwise. */}
+      {hasFooter && (
+        <div className="h-9">
+          {hasTrend && <Sparkline data={trend!} color={styles.spark} />}
+        </div>
+      )}
     </div>
   )
 }

@@ -18,9 +18,19 @@
  * and the health pill defaults to a neutral "Checking…" state.
  */
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
-import { ArrowUpRight, Plus } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import {
+  ArrowRight,
+  ArrowUpRight,
+  CloudSun,
+  Moon,
+  Plus,
+  Sun,
+  Sunset,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
+import { useLastVisitedRepoStore } from '@/store/lastVisitedRepoStore'
 import { cn } from '@/lib/utils/cn'
 
 export interface HeroCardProps {
@@ -38,39 +48,38 @@ export interface HeroCardProps {
 
 type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night'
 
-/** Per-period configuration: greeting copy, fallback gradient, image path. */
+/** Per-period configuration: greeting copy, fallback gradient, image path, weather glyph. */
 const PERIODS: Record<
   TimeOfDay,
-  { greeting: string; gradient: string; imageUrl: string }
+  { greeting: string; gradient: string; imageUrl: string; Icon: LucideIcon }
 > = {
   morning: {
     greeting: 'Good morning',
-    // Warm dawn — peach + amber fading to almost-white.
     gradient:
       'linear-gradient(105deg, oklch(0.92 0.08 55) 0%, oklch(0.95 0.05 35) 45%, oklch(0.99 0.02 60) 85%)',
     imageUrl: '/hero/morning.png',
+    Icon: Sun,
   },
   afternoon: {
     greeting: 'Good afternoon',
-    // Midday — soft sky blue → bright cream.
     gradient:
       'linear-gradient(105deg, oklch(0.93 0.05 230) 0%, oklch(0.96 0.03 220) 45%, oklch(0.99 0.01 60) 85%)',
     imageUrl: '/hero/afternoon.png',
+    Icon: CloudSun,
   },
   evening: {
     greeting: 'Good evening',
-    // Golden hour — coral + pink fading to soft lavender.
     gradient:
       'linear-gradient(105deg, oklch(0.86 0.10 35) 0%, oklch(0.89 0.08 350) 45%, oklch(0.96 0.03 280) 85%)',
     imageUrl: '/hero/evening.png',
+    Icon: Sunset,
   },
   night: {
     greeting: 'Good evening',
-    // Late night — pale moon-blue / silver lavender. Stays light enough
-    // that dark text on top still reads cleanly.
     gradient:
       'linear-gradient(105deg, oklch(0.83 0.05 260) 0%, oklch(0.88 0.04 280) 45%, oklch(0.95 0.02 240) 85%)',
     imageUrl: '/hero/night.png',
+    Icon: Moon,
   },
 }
 
@@ -83,8 +92,10 @@ export function HeroCard({
 }: HeroCardProps) {
   const navigate = useNavigate()
   const username = useAuthStore((s) => s.user?.username ?? '')
+  const lastVisited = useLastVisitedRepoStore((s) => s.last)
   const period = currentPeriod()
   const config = PERIODS[period]
+  const PeriodIcon = config.Icon
   // If the per-period image is missing or 404s, we drop the <img> and
   // fall back to the gradient alone — no broken-icon glyph in the card.
   const [imageBroken, setImageBroken] = useState(false)
@@ -92,34 +103,43 @@ export function HeroCard({
   return (
     <section
       aria-labelledby="hero-heading"
-      className="relative overflow-hidden rounded-lg border border-border"
+      className="relative overflow-hidden rounded-lg border border-border bg-surface"
       data-period={period}
     >
-      {/* Layer 1: per-period gradient — always visible, the safety net. */}
+      {/* Light-mode layers: warm gradient + photograph + left-fading
+          white veil. All three are hidden in dark mode where the same
+          composition would put a white slab on a dark page. */}
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{ backgroundImage: config.gradient }}
       />
-      {/* Layer 2: per-period photograph, blended at low opacity so even
-          a moody image stays out of the way of the foreground text. */}
       {!imageBroken && (
         <img
           src={config.imageUrl}
           alt=""
           aria-hidden="true"
           onError={() => setImageBroken(true)}
-          className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none"
+          className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none dark:hidden"
         />
       )}
-      {/* Layer 3: left-fading white veil so the text column always has
-          a quiet background regardless of what the image throws at it. */}
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           background:
             'linear-gradient(105deg, oklch(1 0 0 / 0.65), oklch(1 0 0 / 0.25) 55%, transparent 90%)',
+        }}
+      />
+      {/* Dark-mode layer: a single subtle indigo gradient. We don't
+          swap the time-of-day photo here — those images all sit in the
+          warm/light family. Could be revisited with a dark photo set. */}
+      <div
+        aria-hidden="true"
+        className="hidden dark:block absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(105deg, oklch(0.22 0.06 280) 0%, oklch(0.19 0.04 260) 60%, oklch(0.16 0.03 250) 100%)',
         }}
       />
 
@@ -127,14 +147,20 @@ export function HeroCard({
         <div className="flex-1 min-w-0">
           <h2
             id="hero-heading"
-            className="text-heading-md font-semibold text-on-surface tracking-tight"
+            className="flex items-center gap-sm text-heading-md font-semibold text-on-surface tracking-tight"
           >
-            {config.greeting}
-            {username && (
-              <>
-                , <span className="text-primary">{username}</span>
-              </>
-            )}
+            <PeriodIcon
+              className="w-5 h-5 text-on-surface-muted dark:text-primary"
+              aria-hidden="true"
+            />
+            <span>
+              {config.greeting}
+              {username && (
+                <>
+                  , <span className="text-primary">{username}</span>
+                </>
+              )}
+            </span>
           </h2>
           <p className="mt-xs text-body-sm text-on-surface-muted">
             <Stat
@@ -149,6 +175,12 @@ export function HeroCard({
               label={`open ${(vulnerabilityCount ?? 0) === 1 ? 'vulnerability' : 'vulnerabilities'}`}
             />
           </p>
+          <ContextualTip
+            lastVisited={lastVisited}
+            repoCount={repoCount}
+            vulnCount={vulnerabilityCount}
+            loading={loading}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-sm shrink-0">
@@ -179,6 +211,68 @@ export function HeroCard({
         </div>
       </div>
     </section>
+  )
+}
+
+/**
+ * ContextualTip — one-line contextual nudge below the stats summary.
+ *
+ * Waterfall: last-visited link wins → critical-vulns nudge → all-clear
+ * → empty-workspace nudge. Loading state skips the line entirely so
+ * the hero doesn't flash a misleading "All quiet" message before data
+ * lands.
+ */
+function ContextualTip({
+  lastVisited,
+  repoCount,
+  vulnCount,
+  loading,
+}: {
+  lastVisited: { org: string; repo: string } | null
+  repoCount: number | undefined
+  vulnCount: number | undefined
+  loading: boolean | undefined
+}) {
+  if (loading) return null
+
+  if (lastVisited) {
+    return (
+      <p className="mt-md text-body-sm text-on-surface-muted">
+        Pick up where you left off →{' '}
+        <Link
+          to="/repositories/$org/$repo"
+          params={{ org: lastVisited.org, repo: lastVisited.repo }}
+          className="inline-flex items-center gap-xs font-mono text-code-sm text-primary hover:underline"
+        >
+          {lastVisited.org}/{lastVisited.repo}
+          <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+        </Link>
+      </p>
+    )
+  }
+
+  if ((vulnCount ?? 0) > 0) {
+    return (
+      <p className="mt-md text-body-sm text-warning-500">
+        {vulnCount} open{' '}
+        {(vulnCount ?? 0) === 1 ? 'vulnerability' : 'vulnerabilities'} —
+        worth a look.
+      </p>
+    )
+  }
+
+  if ((repoCount ?? 0) === 0) {
+    return (
+      <p className="mt-md text-body-sm text-on-surface-muted">
+        No repositories yet. Push your first image to get started.
+      </p>
+    )
+  }
+
+  return (
+    <p className="mt-md text-body-sm text-on-surface-muted">
+      All quiet on the registry front.
+    </p>
   )
 }
 

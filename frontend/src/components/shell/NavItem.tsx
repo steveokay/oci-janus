@@ -28,8 +28,8 @@ export function NavItem({ label, icon, to, comingSoonNote }: NavItemProps) {
   const active = !!to && (pathname === to || pathname.startsWith(`${to}/`))
 
   const className = cn(
-    'group flex items-center gap-md w-full',
-    'px-md py-sm rounded-sm',
+    'group relative flex items-center gap-md w-full',
+    'pl-[1.125rem] pr-md py-sm rounded-sm',
     'text-body-sm font-medium transition-colors',
     active
       ? 'bg-primary-soft text-primary'
@@ -38,6 +38,13 @@ export function NavItem({ label, icon, to, comingSoonNote }: NavItemProps) {
 
   const content = (
     <>
+      {/* Active state accent bar — 3px primary line on the left edge. */}
+      {active && (
+        <span
+          aria-hidden="true"
+          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-primary"
+        />
+      )}
       <span className="w-4 h-4 flex items-center justify-center shrink-0" aria-hidden="true">
         {icon}
       </span>

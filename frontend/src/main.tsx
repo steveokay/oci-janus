@@ -6,6 +6,9 @@ import { createRoot } from 'react-dom/client'
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from './routeTree.gen'
 import './styles/globals.css'
+// Import for side-effects: reads the persisted theme preference from
+// localStorage and applies the `.dark` class before React first paints.
+import './store/themeStore'
 
 const router = createRouter({
   routeTree,

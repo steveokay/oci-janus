@@ -27,6 +27,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, Globe, Lock, Trash2 } from 'lucide-react'
+import { Avatar } from '@/components/ui/Avatar'
 import { cn } from '@/lib/utils/cn'
 import { formatBytes } from '@/lib/format/bytes'
 import { relativeTime } from '@/lib/format/time'
@@ -69,15 +70,10 @@ export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
                   params: { org, repo },
                 })
               }}
-              className="flex items-center gap-md text-left group"
+              className="flex items-center gap-md text-left group/name"
             >
-              <span
-                aria-hidden="true"
-                className="inline-flex items-center justify-center w-8 h-8 rounded-sm bg-neutral-100 text-on-surface font-mono text-label-md font-semibold shrink-0"
-              >
-                {name.charAt(0).toUpperCase()}
-              </span>
-              <span className="text-body-sm font-medium text-on-surface group-hover:text-primary transition-colors truncate">
+              <Avatar seed={`${org}/${repo}`} size="md" />
+              <span className="text-body-sm font-medium text-on-surface group-hover/name:text-primary transition-colors truncate">
                 {name}
               </span>
             </button>
@@ -101,15 +97,39 @@ export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
           const quota = info.row.original.storage_quota_bytes
           const usedF = formatBytes(used)
           const quotaF = formatBytes(quota)
+          const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 0
+          const tone: 'success' | 'warning' | 'danger' =
+            pct < 50 ? 'success' : pct < 80 ? 'warning' : 'danger'
+          const toneText =
+            tone === 'success'
+              ? 'text-on-surface'
+              : tone === 'warning'
+              ? 'text-warning-500'
+              : 'text-danger-500'
+          const toneBar =
+            tone === 'success'
+              ? 'bg-success-500/70'
+              : tone === 'warning'
+              ? 'bg-warning-500/80'
+              : 'bg-danger-500/80'
           return (
-            <div>
-              <div className="text-body-sm text-on-surface tabular-nums">
+            <div className="min-w-[120px]">
+              <div className={cn('text-body-sm tabular-nums', toneText)}>
                 {usedF.value} {usedF.unit}
               </div>
               {quota > 0 && (
-                <div className="text-label-sm text-on-surface-subtle tabular-nums">
-                  of {quotaF.value} {quotaF.unit}
-                </div>
+                <>
+                  <div className="text-label-sm text-on-surface-subtle tabular-nums">
+                    of {quotaF.value} {quotaF.unit} · {Math.round(pct)}%
+                  </div>
+                  <div className="mt-xs h-1 rounded-full bg-surface-muted overflow-hidden">
+                    <div
+                      className={cn('h-full rounded-full', toneBar)}
+                      style={{ width: `${Math.max(2, pct)}%` }}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </>
               )}
             </div>
           )
@@ -134,7 +154,7 @@ export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
         id: 'actions',
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-end opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               type="button"
               aria-label={`Delete ${row.original.name}`}
@@ -207,7 +227,7 @@ export function RepositoriesTable({ repos, onDelete }: RepositoriesTableProps) {
           {table.getRowModel().rows.map((row) => (
             <tr
               key={row.id}
-              className="hover:bg-surface-muted/40 transition-colors"
+              className="group/row hover:bg-surface-muted/40 transition-colors"
             >
               {row.getVisibleCells().map((cell) => (
                 <td key={cell.id} className="px-lg py-md align-middle">

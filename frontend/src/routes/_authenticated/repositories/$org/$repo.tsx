@@ -28,7 +28,8 @@ import {
   Globe,
   HardDrive,
   Lock,
-  Package,
+  Pin,
+  PinOff,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
@@ -62,6 +63,13 @@ import {
 } from '@/lib/api/hooks/useRepositories'
 import { formatBytes } from '@/lib/format/bytes'
 import { relativeTime } from '@/lib/format/time'
+import { usePinnedReposStore } from '@/store/pinnedReposStore'
+import { useLastVisitedRepoStore } from '@/store/lastVisitedRepoStore'
+import { EmptyPanel } from '@/components/ui/states/EmptyPanel'
+import { ErrorPanel } from '@/components/ui/states/ErrorPanel'
+import { TableSkeleton } from '@/components/ui/states/TableSkeleton'
+import { Avatar } from '@/components/ui/Avatar'
+import { TagsIllustration, NoMatchIllustration } from '@/components/ui/illustrations'
 import { cn } from '@/lib/utils/cn'
 
 export const Route = createFileRoute('/_authenticated/repositories/$org/$repo')({
@@ -73,6 +81,16 @@ function RepositoryDetailPage() {
   const { org, repo } = Route.useParams()
   const fullName = `${org}/${repo}`
   const navigate = useNavigate()
+  const pin = usePinnedReposStore((s) => s.pin)
+  const unpin = usePinnedReposStore((s) => s.unpin)
+  const isPinned = usePinnedReposStore((s) => s.isPinned({ org, repo }))
+  const recordVisit = useLastVisitedRepoStore((s) => s.record)
+
+  // Record the visit so the dashboard hero can offer "pick up where you
+  // left off". Only on mount + param changes; doesn't fire on re-renders.
+  useEffect(() => {
+    recordVisit(org, repo)
+  }, [org, repo, recordVisit])
 
   const { data: repository, isLoading: repoLoading, isError: repoErr } =
     useRepository(org, repo)
@@ -104,6 +122,10 @@ function RepositoryDetailPage() {
         isPublic={repository?.is_public}
         loading={repoLoading}
         notFound={repoErr}
+        pinned={isPinned}
+        onTogglePin={() =>
+          isPinned ? unpin({ org, repo }) : pin({ org, repo })
+        }
         onDelete={() => setDeleteRepoOpen(true)}
       />
 
@@ -206,22 +228,26 @@ function DetailHeader({
   isPublic,
   loading,
   notFound,
+  pinned,
+  onTogglePin,
   onDelete,
 }: {
   fullName: string
   isPublic: boolean | undefined
   loading: boolean
   notFound: boolean
+  pinned: boolean
+  onTogglePin: () => void
   onDelete: () => void
 }) {
   return (
     <section
       aria-labelledby="repo-detail-heading"
-      className="relative overflow-hidden rounded-lg border border-border"
+      className="relative overflow-hidden rounded-lg border border-border bg-surface"
     >
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           backgroundImage:
             'linear-gradient(110deg, oklch(0.95 0.06 50) 0%, oklch(0.96 0.04 30) 45%, oklch(0.99 0.02 60) 90%)',
@@ -234,14 +260,22 @@ function DetailHeader({
         onError={(e) => {
           ;(e.currentTarget as HTMLImageElement).style.display = 'none'
         }}
-        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none"
+        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none dark:hidden"
       />
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           background:
             'linear-gradient(105deg, oklch(1 0 0 / 0.65), oklch(1 0 0 / 0.30) 60%, transparent 90%)',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="hidden dark:block absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(105deg, oklch(0.22 0.06 280) 0%, oklch(0.19 0.04 260) 60%, oklch(0.16 0.03 250) 100%)',
         }}
       />
 
@@ -257,12 +291,7 @@ function DetailHeader({
 
         <div className="mt-md flex flex-col gap-md md:flex-row md:items-end md:justify-between">
           <div className="flex items-start gap-md min-w-0">
-            <span
-              aria-hidden="true"
-              className="inline-flex items-center justify-center w-12 h-12 rounded-md bg-primary-soft text-primary shadow-xs shrink-0"
-            >
-              <Package className="w-6 h-6" />
-            </span>
+            <Avatar seed={fullName} size="xl" />
             <div className="min-w-0">
               <h1
                 id="repo-detail-heading"
@@ -285,10 +314,34 @@ function DetailHeader({
           </div>
 
           {!notFound && (
-            <Button variant="secondary" onClick={onDelete} disabled={loading}>
-              <Trash2 className="w-4 h-4" aria-hidden="true" />
-              Delete repository
-            </Button>
+            <div className="flex items-center gap-sm">
+              <button
+                type="button"
+                onClick={onTogglePin}
+                aria-pressed={pinned}
+                aria-label={pinned ? 'Unpin from dashboard' : 'Pin to dashboard'}
+                title={pinned ? 'Unpin from dashboard' : 'Pin to dashboard'}
+                disabled={loading}
+                className={cn(
+                  'inline-flex items-center gap-xs h-9 px-md rounded-sm border transition-colors',
+                  'text-body-sm font-medium',
+                  pinned
+                    ? 'border-primary bg-primary-soft text-primary'
+                    : 'border-border bg-surface text-on-surface hover:bg-surface-muted hover:border-border-strong',
+                )}
+              >
+                {pinned ? (
+                  <PinOff className="w-4 h-4" aria-hidden="true" />
+                ) : (
+                  <Pin className="w-4 h-4" aria-hidden="true" />
+                )}
+                {pinned ? 'Pinned' : 'Pin'}
+              </button>
+              <Button variant="secondary" onClick={onDelete} disabled={loading}>
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
+                Delete repository
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -445,7 +498,7 @@ function TagsTable({
         id: 'actions',
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
-          <div className="flex items-center justify-end gap-xs">
+          <div className="flex items-center justify-end gap-xs opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity">
             <PullCopyButton fullName={fullName} tag={row.original.name} />
             <button
               type="button"
@@ -519,7 +572,7 @@ function TagsTable({
           {table.getRowModel().rows.map((row) => (
             <tr
               key={row.id}
-              className="hover:bg-surface-muted/40 transition-colors"
+              className="group/row hover:bg-surface-muted/40 transition-colors"
             >
               {row.getVisibleCells().map((cell) => (
                 <td key={cell.id} className="px-lg py-md align-middle">
@@ -592,19 +645,19 @@ function EmptyTagsPanel({ fullName }: { fullName: string }) {
     <section
       aria-labelledby="empty-tags-heading"
       className="relative overflow-hidden rounded-lg border border-border bg-surface"
-      style={{
-        backgroundImage:
-          'linear-gradient(110deg, oklch(0.97 0.04 60) 0%, oklch(0.98 0.025 350) 55%, oklch(1 0 0) 100%)',
-      }}
     >
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-lg p-2xl">
+      {/* Warm wash in light mode only. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 dark:hidden"
+        style={{
+          backgroundImage:
+            'linear-gradient(110deg, oklch(0.97 0.04 60) 0%, oklch(0.98 0.025 350) 55%, oklch(1 0 0) 100%)',
+        }}
+      />
+      <div className="relative grid grid-cols-1 lg:grid-cols-5 gap-lg p-2xl">
         <div className="lg:col-span-2 flex flex-col justify-center">
-          <span
-            aria-hidden="true"
-            className="inline-flex items-center justify-center w-12 h-12 rounded-md bg-primary-soft text-primary"
-          >
-            <TagIcon className="w-6 h-6" />
-          </span>
+          <TagsIllustration className="w-24 h-24 text-primary" />
           <h2
             id="empty-tags-heading"
             className="mt-md text-heading-sm font-semibold text-on-surface"
@@ -659,43 +712,23 @@ function EmptyTagsPanel({ fullName }: { fullName: string }) {
   )
 }
 
-/**
- * Load-error panel — shown when the tags query fails. Proper card with
- * icon + heading + body instead of a thin red banner. The retry note
- * is honest: TanStack Query refetches automatically; we just tell the
- * user that's happening so they don't reload the page themselves.
- */
+/** Load-error panel — `ErrorPanel` with tags-specific copy. */
 function LoadErrorPanel() {
   return (
-    <div className="rounded-lg border border-danger-500/30 bg-danger-100 p-lg">
-      <div className="flex items-start gap-md">
-        <span
-          aria-hidden="true"
-          className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-danger-500/10 text-danger-500 shrink-0"
-        >
-          <TriangleAlert className="w-5 h-5" />
-        </span>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-body-md font-semibold text-danger-500">
-            Couldn't load tags
-          </h3>
-          <p className="mt-xs text-body-sm text-danger-500/80">
-            The list will retry automatically. If this persists, check that{' '}
-            <code className="font-mono text-code-sm">registry-management</code>{' '}
-            is healthy and reachable from the browser.
-          </p>
-        </div>
-      </div>
-    </div>
+    <ErrorPanel
+      title="Couldn't load tags"
+      description={
+        <>
+          The list will retry automatically. If this persists, check that{' '}
+          <code className="font-mono text-code-sm">registry-management</code>{' '}
+          is healthy and reachable from the browser.
+        </>
+      }
+    />
   )
 }
 
-/**
- * No-match panel — shown when the tag filter matches zero rows.
- * Mirrors the empty-tags pattern (icon chip + heading + body) so the
- * page stays visually consistent across states, with a Clear-search
- * action so the user has an obvious one-click way back to the full list.
- */
+/** No-match panel — shared `EmptyPanel` with the magnifier illustration. */
 function NoMatchPanel({
   query,
   onClear,
@@ -704,46 +737,30 @@ function NoMatchPanel({
   onClear: () => void
 }) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-2xl flex flex-col items-center text-center gap-md">
-      <span
-        aria-hidden="true"
-        className="inline-flex items-center justify-center w-12 h-12 rounded-md bg-neutral-100 text-on-surface-muted"
-      >
-        <Search className="w-6 h-6" />
-      </span>
-      <div className="w-full max-w-prose">
-        <h3 className="text-heading-sm font-semibold text-on-surface">
-          No matches
-        </h3>
-        <p className="mt-xs text-body-sm text-on-surface-muted">
+    <EmptyPanel
+      illustration={<NoMatchIllustration className="w-28 h-28 text-on-surface-subtle" />}
+      title="No matches"
+      description={
+        <>
           No tags or digests match{' '}
           <code className="font-mono text-code-sm bg-surface-muted px-xs rounded-xs">
             {query}
           </code>
           .
-        </p>
-      </div>
-      <Button variant="secondary" size="sm" onClick={onClear}>
-        Clear search
-      </Button>
-    </div>
+        </>
+      }
+      action={
+        <Button variant="secondary" size="sm" onClick={onClear}>
+          Clear search
+        </Button>
+      }
+    />
   )
 }
 
-/** Pulsing skeleton placeholder for the tags table. */
+/** Skeleton — uses shared TableSkeleton with tag-specific widths. */
 function TagsTableSkeleton() {
-  return (
-    <div className="rounded-lg border border-border bg-surface divide-y divide-border">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-md p-lg">
-          <span className="flex-1 h-4 max-w-[160px] rounded-xs bg-surface-muted animate-pulse" />
-          <span className="flex-1 h-4 max-w-[240px] rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-24 h-4 rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-8 h-8 rounded-xs bg-surface-muted animate-pulse" />
-        </div>
-      ))}
-    </div>
-  )
+  return <TableSkeleton rows={4} widths={[160, 240, 100, 32]} />
 }
 
 /** Public / Private visibility pill — same component as the list table. */

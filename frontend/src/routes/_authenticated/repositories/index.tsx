@@ -28,6 +28,10 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useRepositories, type VisibilityFilter } from '@/lib/api/hooks/useRepositories'
 import { formatBytes } from '@/lib/format/bytes'
+import { EmptyPanel } from '@/components/ui/states/EmptyPanel'
+import { ErrorPanel } from '@/components/ui/states/ErrorPanel'
+import { TableSkeleton } from '@/components/ui/states/TableSkeleton'
+import { NoMatchIllustration } from '@/components/ui/illustrations'
 import { cn } from '@/lib/utils/cn'
 
 export const Route = createFileRoute('/_authenticated/repositories/')({
@@ -109,19 +113,42 @@ function RepositoriesPage() {
       )}
 
       {isError && (
-        <div className="rounded-sm border border-danger-500/30 bg-danger-100 text-danger-500 px-md py-sm text-label-md font-medium">
-          Couldn't load repositories. The list will retry automatically.
-        </div>
+        <ErrorPanel
+          title="Couldn't load repositories"
+          description={
+            <>
+              The list will retry automatically. If this persists, check
+              that{' '}
+              <code className="font-mono text-code-sm">registry-management</code>{' '}
+              is healthy.
+            </>
+          }
+        />
       )}
 
       {isLoading ? (
-        <LoadingSkeleton />
+        <TableSkeleton rows={5} widths={[32, 160, 80, 80, 100]} />
       ) : !hasRepos ? (
         <EmptyState onCreate={() => setCreateOpen(true)} />
       ) : filteredRepos.length === 0 ? (
-        <div className="rounded-lg border border-border bg-surface p-2xl text-center text-body-sm text-on-surface-muted">
-          No repositories match <strong className="text-on-surface">"{query}"</strong>.
-        </div>
+        <EmptyPanel
+          illustration={<NoMatchIllustration className="w-28 h-28 text-on-surface-subtle" />}
+          title="No matches"
+          description={
+            <>
+              No repositories match{' '}
+              <code className="font-mono text-code-sm bg-surface-muted px-xs rounded-xs">
+                {query}
+              </code>
+              .
+            </>
+          }
+          action={
+            <Button variant="secondary" size="sm" onClick={() => setQuery('')}>
+              Clear search
+            </Button>
+          }
+        />
       ) : (
         <RepositoriesTable repos={filteredRepos} onDelete={setDeleteTarget} />
       )}
@@ -161,35 +188,40 @@ function PageHeader({
   return (
     <section
       aria-labelledby="repos-heading"
-      className="relative overflow-hidden rounded-lg border border-border"
+      className="relative overflow-hidden rounded-lg border border-border bg-surface"
     >
-      {/* Layer 1: fallback gradient — always renders. */}
+      {/* Light-mode triple-layer hero (gradient + photo + white veil). */}
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           backgroundImage:
             'linear-gradient(110deg, oklch(0.95 0.06 50) 0%, oklch(0.96 0.04 30) 45%, oklch(0.99 0.02 60) 90%)',
         }}
       />
-      {/* Layer 2: Higgsfield photograph blended on top of the gradient. */}
       <img
         src="/hero/repositories.png"
         alt=""
         aria-hidden="true"
         onError={(e) => {
-          // Hide gracefully if the asset isn't deployed yet.
           ;(e.currentTarget as HTMLImageElement).style.display = 'none'
         }}
-        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none"
+        className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-overlay pointer-events-none dark:hidden"
       />
-      {/* Layer 3: left-fading white veil for text legibility. */}
       <div
         aria-hidden="true"
-        className="absolute inset-0"
+        className="absolute inset-0 dark:hidden"
         style={{
           background:
             'linear-gradient(105deg, oklch(1 0 0 / 0.65), oklch(1 0 0 / 0.30) 60%, transparent 90%)',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="hidden dark:block absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(105deg, oklch(0.22 0.06 280) 0%, oklch(0.19 0.04 260) 60%, oklch(0.16 0.03 250) 100%)',
         }}
       />
 
@@ -339,19 +371,3 @@ function VisibilityTabs({
   )
 }
 
-/** Skeleton placeholders — 5 rows of pulsing rectangles. */
-function LoadingSkeleton() {
-  return (
-    <div className="rounded-lg border border-border bg-surface divide-y divide-border">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-md p-lg">
-          <span className="w-8 h-8 rounded-sm bg-surface-muted animate-pulse" />
-          <span className="flex-1 h-4 max-w-xs rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-16 h-5 rounded-full bg-surface-muted animate-pulse" />
-          <span className="w-20 h-4 rounded-xs bg-surface-muted animate-pulse" />
-          <span className="w-24 h-4 rounded-xs bg-surface-muted animate-pulse" />
-        </div>
-      ))}
-    </div>
-  )
-}
