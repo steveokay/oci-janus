@@ -35,6 +35,13 @@ type Config struct {
 	// serves every other surface.
 	SignerGRPCAddr string `mapstructure:"SIGNER_GRPC_ADDR"`
 
+	// ScannerGRPCAddr is optional — required only when the FE-API-018
+	// scan policies + FE-API-019 compliance report routes are enabled.
+	// Empty leaves `/api/v1/security/policies` and
+	// `/api/v1/security/reports/*` returning 404 "route disabled" so a
+	// deployment without registry-scanner still serves every other surface.
+	ScannerGRPCAddr string `mapstructure:"SCANNER_GRPC_ADDR"`
+
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 

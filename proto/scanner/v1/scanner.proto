@@ -9,6 +9,31 @@ import "google/protobuf/timestamp.proto";
 service ScannerService {
   rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
   rpc GetScanStatus(GetScanStatusRequest) returns (GetScanStatusResponse);
+
+  // FE-API-018 — scan policies CRUD.
+  //
+  // GetScanPolicy returns the per-tenant scan policy. When no row exists for
+  // the tenant the service returns a zero-valued default policy rather than
+  // NOT_FOUND so the dashboard can render the "no policy yet" state without
+  // a separate code path.
+  rpc GetScanPolicy(GetScanPolicyRequest) returns (ScanPolicy);
+  // UpdateScanPolicy upserts the per-tenant scan policy. Validation is
+  // applied by the gRPC layer; the management BFF performs an additional
+  // RBAC check (admin/owner role) before forwarding.
+  rpc UpdateScanPolicy(UpdateScanPolicyRequest) returns (ScanPolicy);
+
+  // FE-API-019 — compliance reports.
+  //
+  // GenerateComplianceReport kicks off an asynchronous report job and
+  // returns the freshly created report_id immediately. The actual report
+  // (PDF + SPDX JSON SBOM) is produced by a background poller; status is
+  // observed via GetComplianceReport.
+  rpc GenerateComplianceReport(GenerateComplianceReportRequest) returns (GenerateComplianceReportResponse);
+  // GetComplianceReport returns one report row by id. The download_*_url
+  // fields are populated only when status == "succeeded".
+  rpc GetComplianceReport(GetComplianceReportRequest) returns (ComplianceReport);
+  // ListComplianceReports returns recent reports for a tenant, paginated.
+  rpc ListComplianceReports(ListComplianceReportsRequest) returns (ListComplianceReportsResponse);
 }
 
 message TriggerScanRequest {
@@ -30,4 +55,103 @@ message GetScanStatusResponse {
   string status  = 1; // pending|running|complete|failed
   map<string, int32> severity_counts = 2;
   google.protobuf.Timestamp completed_at = 3;
+}
+
+// ----------------------------------------------------------------------------
+// FE-API-018 — scan policies
+// ----------------------------------------------------------------------------
+
+// ScanPolicy is the per-tenant configuration that drives the scanner's
+// automatic scan-on-push behaviour and severity-based push blocking.
+message ScanPolicy {
+  string tenant_id            = 1;
+  // auto_scan_on_push triggers a scan whenever a manifest push completes.
+  bool   auto_scan_on_push    = 2;
+  // block_on_severity is the lowest severity that should block a push; empty
+  // string means "never block". One of: "", CRITICAL, HIGH, MEDIUM, LOW.
+  string block_on_severity    = 3;
+  // exempt_cves are CVE IDs that the policy ignores when deciding whether to
+  // block — useful for known false-positives. Each entry must match
+  // ^CVE-\d{4}-\d{4,7}$ (validated at the BFF).
+  repeated string exempt_cves = 4;
+  // scanner_plugin selects the scanner backend. Allowlist enforced at the
+  // BFF: currently "trivy" or "grype".
+  string scanner_plugin       = 5;
+  // scanner_version_pin pins a specific plugin version for reproducible
+  // scans; empty means "use whatever version the scanner pool launched
+  // with".
+  string scanner_version_pin  = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  // updated_by is the user_id of the last actor; empty for the default
+  // policy returned on a cache miss.
+  string updated_by           = 8;
+}
+
+message GetScanPolicyRequest {
+  string tenant_id = 1;
+}
+
+message UpdateScanPolicyRequest {
+  string tenant_id            = 1;
+  bool   auto_scan_on_push    = 2;
+  string block_on_severity    = 3;
+  repeated string exempt_cves = 4;
+  string scanner_plugin       = 5;
+  string scanner_version_pin  = 6;
+  // updated_by is the caller's user_id, threaded through so the audit
+  // record on the table reflects who made the change.
+  string updated_by           = 7;
+}
+
+// ----------------------------------------------------------------------------
+// FE-API-019 — compliance reports
+// ----------------------------------------------------------------------------
+
+// ComplianceReport is one async report-generation job.
+message ComplianceReport {
+  string report_id     = 1;
+  string tenant_id     = 2;
+  string requested_by  = 3;
+  google.protobuf.Timestamp requested_at  = 4;
+  google.protobuf.Timestamp started_at    = 5;
+  google.protobuf.Timestamp completed_at  = 6;
+  // status is one of: pending | running | succeeded | failed.
+  string status        = 7;
+  string error_message = 8;
+  // download_pdf_url is populated when status == "succeeded". The current
+  // v1 implementation returns an absolute on-disk path; production
+  // deployments should re-front this with object storage + signed URLs.
+  string download_pdf_url  = 9;
+  string download_sbom_url = 10;
+}
+
+message GenerateComplianceReportRequest {
+  string tenant_id    = 1;
+  string requested_by = 2;
+}
+
+message GenerateComplianceReportResponse {
+  string report_id = 1;
+  string status    = 2; // always "pending" at create time
+}
+
+message GetComplianceReportRequest {
+  string tenant_id = 1;
+  string report_id = 2;
+}
+
+message ListComplianceReportsRequest {
+  string tenant_id  = 1;
+  // status filters to one status (pending|running|succeeded|failed); empty
+  // returns all statuses.
+  string status     = 2;
+  // page_size caps the response. Server enforces a hard max of 200.
+  int32  page_size  = 3;
+  // page_token is opaque to the caller. Empty starts at the newest report.
+  string page_token = 4;
+}
+
+message ListComplianceReportsResponse {
+  repeated ComplianceReport reports = 1;
+  string next_page_token = 2;
 }

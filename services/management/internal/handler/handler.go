@@ -24,6 +24,7 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
@@ -52,6 +53,10 @@ type Handler struct {
 	// 404 "route disabled" so the frontend can render the unsigned state
 	// instead of an error.
 	signer signerv1.SignerServiceClient
+	// scanner is optional — wired only when SCANNER_GRPC_ADDR is set.
+	// nil disables the FE-API-018 `/api/v1/security/policies` and
+	// FE-API-019 `/api/v1/security/reports/*` routes (404 "route disabled").
+	scanner scannerv1.ScannerServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
@@ -117,6 +122,23 @@ func (h *Handler) WithSignerClient(c signerv1.SignerServiceClient) *Handler {
 // need outbound webhooks.
 func (h *Handler) WithWebhookClient(c webhookv1.WebhookServiceClient) *Handler {
 	h.webhook = c
+	return h
+}
+
+// WithScannerClient enables the FE-API-018 + FE-API-019 routes:
+//
+//	GET /api/v1/security/policies
+//	PUT /api/v1/security/policies
+//	POST /api/v1/security/reports/generate
+//	GET /api/v1/security/reports
+//	GET /api/v1/security/reports/{id}
+//	GET /api/v1/security/reports/{id}/download/{pdf|sbom}
+//
+// Nil leaves all of the above returning 404 "route disabled" so the
+// dashboard can render the "scanner unavailable" state without a hard
+// error.
+func (h *Handler) WithScannerClient(c scannerv1.ScannerServiceClient) *Handler {
+	h.scanner = c
 	return h
 }
 
@@ -210,6 +232,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
+
+	// Scan policies (FE-API-018) + compliance reports (FE-API-019). Routes
+	// return 404 when SCANNER_GRPC_ADDR is unset.
+	h.RegisterSecurityPolicies(mux, authMW)
+	h.RegisterSecurityReports(mux, authMW)
 
 	// Webhook management — CRUD + deliveries + test + rotate-secret.
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
