@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Tag as TagIcon } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Table,
   TableBody,
@@ -27,6 +27,7 @@ interface TagsPanelProps {
 // Light wrapper around the tags table — keeps the state machine local so
 // switching tabs doesn't re-mount the rest of the page.
 export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
+  const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useTags(org, repo);
 
   if (isError) {
@@ -70,64 +71,64 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
             <SkeletonRows />
           ) : (
             data?.map((t) => {
-              // Pattern: each non-copy cell contains a <Link> filling the cell
-              // padding. This means clicking ANYWHERE in those cells fires a
-              // real <a> click and TanStack Router navigates — no reliance on
-              // <tr> event delegation (which previous attempts proved
-              // unreliable across browsers). The copy column has its own
-              // anchor + a stopPropagation guard on the copy button.
-              const linkProps = {
-                to: "/repositories/$org/$repo/tags/$tag" as const,
-                params: { org, repo, tag: t.name },
-              };
-              // Stretch link across the cell so the whole cell area is the
-              // hit target, not just the text. `before` overlay gives us a
-              // block-level click target inside an inline-flex container.
-              const stretch =
-                "block w-full -my-3 py-3 text-inherit no-underline";
+              // Programmatic navigation on the row's onClick + a parallel
+              // mousedown trigger (some browsers stall the onClick on
+              // <tr> with display:table-row; mousedown always fires). Each
+              // cell's content gets pointer-events:none so clicks fall
+              // through to the row; the CopyButton column re-enables
+              // pointer-events with stopPropagation so it acts on its own.
+              const open = () =>
+                void navigate({
+                  to: "/repositories/$org/$repo/tags/$tag",
+                  params: { org, repo, tag: t.name },
+                });
               return (
                 <TableRow
                   key={`${t.name}-${t.manifest_digest}`}
                   interactive
-                  className="group"
+                  role="link"
+                  tabIndex={0}
+                  onClick={open}
+                  onMouseDown={(e) => {
+                    if (e.button === 0) open();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      open();
+                    }
+                  }}
                 >
-                  <TableCell>
-                    <Link {...linkProps} className={stretch}>
-                      <Badge tone="accent">
-                        <TagIcon className="size-3" /> {t.name}
-                      </Badge>
-                    </Link>
+                  <TableCell className="pointer-events-none">
+                    <Badge tone="accent">
+                      <TagIcon className="size-3" /> {t.name}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Link
-                        {...linkProps}
-                        className="block min-w-0 flex-1 -my-3 py-3 no-underline"
-                        aria-label={`Open tag ${t.name}`}
+                      <code
+                        className="pointer-events-none truncate font-mono text-xs text-[var(--color-fg-muted)]"
+                        title={t.manifest_digest}
                       >
-                        <code
-                          className="block truncate font-mono text-xs text-[var(--color-fg-muted)]"
-                          title={t.manifest_digest}
-                        >
-                          {t.manifest_digest.slice(0, 19)}…
-                        </code>
-                      </Link>
-                      <CopyButton value={t.manifest_digest} iconOnly />
+                        {t.manifest_digest.slice(0, 19)}…
+                      </code>
+                      <span
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <CopyButton value={t.manifest_digest} iconOnly />
+                      </span>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    <Link {...linkProps} className={stretch}>
-                      {t.size_bytes > 0 ? (
-                        formatBytes(t.size_bytes)
-                      ) : (
-                        <span className="text-[var(--color-fg-subtle)]">—</span>
-                      )}
-                    </Link>
+                  <TableCell className="pointer-events-none font-mono text-xs">
+                    {t.size_bytes > 0 ? (
+                      formatBytes(t.size_bytes)
+                    ) : (
+                      <span className="text-[var(--color-fg-subtle)]">—</span>
+                    )}
                   </TableCell>
-                  <TableCell className="hidden text-xs text-[var(--color-fg-muted)] md:table-cell">
-                    <Link {...linkProps} className={stretch}>
-                      {formatRelativeDate(t.updated_at)}
-                    </Link>
+                  <TableCell className="pointer-events-none hidden text-xs text-[var(--color-fg-muted)] md:table-cell">
+                    {formatRelativeDate(t.updated_at)}
                   </TableCell>
                 </TableRow>
               );
