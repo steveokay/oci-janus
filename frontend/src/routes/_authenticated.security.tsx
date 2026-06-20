@@ -18,12 +18,13 @@ import {
 import { ErrorState } from "@/components/ui/error-state";
 import { ComingSoon } from "@/components/common/coming-soon";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "@tanstack/react-router";
 import { useStats } from "@/lib/api/stats";
 import {
   SeverityBar,
   SeverityLegend,
 } from "@/components/security/severity-bar";
+import { VulnerabilitiesTable } from "@/components/security/vulnerabilities-table";
+import { ScanHistoryTable } from "@/components/security/scan-history-table";
 import type { ScanResult } from "@/lib/api/types";
 
 export const Route = createFileRoute("/_authenticated/security")({
@@ -128,45 +129,42 @@ function SecurityPage(): React.ReactElement {
                 {[
                   {
                     label: "Inspect every open CVE across the workspace",
-                    api: "FE-API-014",
+                    tone: "live" as const,
+                    hint: "Vulnerabilities tab",
                   },
                   {
                     label: "Audit recent scan runs and triggers",
-                    api: "FE-API-015",
+                    tone: "live" as const,
+                    hint: "Scans tab",
                   },
                   {
                     label: "Find remediation paths grouped by base image",
-                    api: "FE-API-017",
+                    tone: "deferred" as const,
+                    hint: "FE-API-017",
                   },
                   {
                     label: "Configure block-on-severity scan policies",
-                    api: "FE-API-018",
+                    tone: "deferred" as const,
+                    hint: "FE-API-018",
                   },
                 ].map((row) => (
                   <li
-                    key={row.api}
+                    key={row.label}
                     className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2"
                   >
                     <ArrowRight className="size-3.5 text-[var(--color-accent)]" />
                     <span className="flex-1 text-sm text-[var(--color-fg)]">
                       {row.label}
                     </span>
-                    <Badge tone="accent" className="font-mono">
-                      {row.api}
+                    <Badge
+                      tone={row.tone === "live" ? "success" : "accent"}
+                      className={row.tone === "deferred" ? "font-mono" : ""}
+                    >
+                      {row.hint}
                     </Badge>
                   </li>
                 ))}
               </ul>
-              <p className="mt-4 text-xs text-[var(--color-fg-muted)]">
-                Today: explore per-tag scan results from{" "}
-                <Link
-                  to="/repositories"
-                  className="text-[var(--color-accent)] hover:underline"
-                >
-                  any repository
-                </Link>
-                .
-              </p>
             </CardContent>
           </Card>
         </div>
@@ -220,29 +218,11 @@ function SecurityPage(): React.ReactElement {
         </TabsContent>
 
         <TabsContent value="vulnerabilities">
-          <ComingSoon
-            apiId="FE-API-014"
-            title="Every open CVE, every affected image"
-            description="One row per CVE with severity, primary URL, and the list of (repo, tag, digest) triples it affects. Searchable + filterable by severity, with `affected images` expandable per row."
-            highlights={[
-              "Severity filter chip row (CRITICAL / HIGH / MEDIUM / LOW)",
-              "Expandable affected-images list per CVE",
-              "Direct deep-links into each tag's detail page",
-            ]}
-          />
+          <VulnerabilitiesTable />
         </TabsContent>
 
         <TabsContent value="scans">
-          <ComingSoon
-            apiId="FE-API-015"
-            title="Scan run timeline"
-            description="Every scan run across the workspace, newest first. Group by repo or by trigger (push / manual / scheduled), filter by status, drill into each run."
-            highlights={[
-              "Trigger source — push, manual rescan, or scheduled",
-              "Status filter (complete, running, failed)",
-              "Per-run severity_counts at a glance",
-            ]}
-          />
+          <ScanHistoryTable />
         </TabsContent>
 
         <TabsContent value="remediation">
