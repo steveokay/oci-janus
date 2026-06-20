@@ -294,6 +294,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
 	h.RegisterWebhooks(mux, authMW)
 
+	// Workspace custom-domain CRUD (FE-API-027). Routes return 404 when
+	// h.tenant is nil (TENANT_GRPC_ADDR unset).
+	h.RegisterWorkspaceDomains(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
