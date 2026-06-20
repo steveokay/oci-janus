@@ -57,12 +57,17 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S7A | Profile & API keys | DONE ✅ | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
 | S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
-| S9 | Wire backend-DONE-but-UI-stubbed surfaces | NOT STARTED | `/workspace/domains`, `/activity`, workspace metadata, `/security/vulnerabilities`, `/security/scans`, signing verify-on-demand |
+| S9.1 | Tag-detail signing + supply chain | DONE ✅ (`8a7271f`) | FE-API-025 verify-on-demand, FE-API-026 sign-from-UI dialog, FE-API-033 SBOM download |
+| S9.2 | Workspace metadata + notifications + custom domains | DONE ✅ (`52178b1`) | FE-API-007/009 workspace identity, FE-API-008 notifications topbar bell + `/activity` live feed, FE-API-027 `/workspace/domains` CRUD |
+| S9.3 | Workspace-wide security center | DONE ✅ (`5968bf0`) | FE-API-014 vulnerabilities table, FE-API-015 scan history timeline |
+| S9 | Remaining stubs (S9.4+) | IN PROGRESS | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-030 analytics charts, FE-API-031 storage breakdown, FE-API-032 admin GC, FE-API-034 SSO admin / login |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
 
 ---
 
-## Snapshot (as of 2026-06-20)
+## Snapshot (as of 2026-06-21)
+
+> Sprint 9 sub-passes 9.1/9.2/9.3 landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`). Remaining S9 work (remediation, scan policies CRUD, compliance reports, analytics charts, storage breakdown, admin GC, SSO admin) tracked in S9.4+.
 
 **Routes shipped & wired against real backend (no stubs):**
 
