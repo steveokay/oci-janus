@@ -36,6 +36,19 @@ type Config struct {
 	// single-worker deployments).
 	GCAdvisoryLockDBDSN string `mapstructure:"GC_ADVISORY_LOCK_DB_DSN"`
 
+	// DBDSN is the gc service's own Postgres DSN (FE-API-032). When set,
+	// the service runs goose migrations on startup and persists every
+	// sweep to the gc_runs table. When empty the gc service falls back
+	// to its pre-FE-API-032 behaviour: scheduled sweeps still run, but
+	// no history is recorded and the gRPC GCService surface refuses
+	// every call with FailedPrecondition.
+	DBDSN string `mapstructure:"DB_DSN"`
+	// DBMaxConns caps the connection pool size. Defaults to 10 (the
+	// gc service issues short, bounded queries — far below the
+	// platform default of 20 used by registry-metadata). Typed as
+	// int32 to line up with libs/config/loader.DBConfig.DBMaxConns.
+	DBMaxConns int32 `mapstructure:"DB_MAX_CONNS"`
+
 	// GCMode controls what the collector deletes: dry-run | manifests | blobs | full.
 	GCMode string `mapstructure:"GC_MODE"`
 	// GCRunIntervalHours is the number of hours between automatic GC runs.
@@ -66,6 +79,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("GC_RUN_INTERVAL_HOURS", 24)
 	viper.SetDefault("GC_BLOB_MIN_AGE_HOURS", 1)
 	viper.SetDefault("GC_MANIFEST_MIN_AGE_HOURS", 24)
+	viper.SetDefault("DB_MAX_CONNS", 10)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

@@ -1,0 +1,123 @@
+// FE-API-032 — GC status visibility.
+//
+// Surfaces three RPCs the management BFF wraps as REST endpoints:
+//
+//   - GetStatus  — current/last GC run summary for the dashboard.
+//   - RunNow     — platform-admin trigger for an immediate sweep.
+//   - ListRuns   — paginated history of recent runs.
+//
+// The garbage collector itself runs as a cron loop (registry-gc) and is
+// driven by the existing collector package. This service adds a thin
+// persistence + control plane around it; the GC algorithm is untouched.
+syntax = "proto3";
+
+package registry.gc.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/gc/v1;gcv1";
+
+import "google/protobuf/timestamp.proto";
+
+// GCService exposes the FE-API-032 status surface.
+service GCService {
+  // GetStatus returns a snapshot of the most recent GC run plus a
+  // best-effort hint of when the next scheduled sweep is due. Safe to
+  // return zero-valued fields when no runs have ever completed (e.g. a
+  // freshly bootstrapped service) — the BFF maps that to a "no runs yet"
+  // dashboard card without a separate code path.
+  rpc GetStatus(GetStatusRequest) returns (GCStatus);
+
+  // RunNow enqueues an immediate GC sweep. The call returns as soon as
+  // the row is INSERTed in `gc_runs` with status=queued — actual
+  // execution happens out of band when the GC loop's dispatcher picks
+  // up the new row. Multiple workers coordinate via the existing
+  // per-tenant `pg_try_advisory_lock` from REM-009, so RunNow is safe
+  // to call while a scheduled sweep is in flight.
+  rpc RunNow(RunNowRequest) returns (RunNowResponse);
+
+  // ListRuns returns recent runs ordered by completed_at DESC NULLS LAST
+  // so an in-flight run sits at the top of the list. Pagination is
+  // opaque base64 keyset on (completed_at, run_id).
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+}
+
+// GCStatus describes the latest GC run summary and the next scheduled
+// tick. All `last_run_*` fields are zero/empty when no rows exist yet.
+message GCStatus {
+  // last_run_id is the UUID of the most recent row, empty when no rows
+  // exist yet.
+  string                    last_run_id              = 1;
+  // last_run_mode mirrors the gc_run_mode enum: dry-run | manifests |
+  // blobs | full.
+  string                    last_run_mode            = 2;
+  // last_run_status mirrors the gc_run_status enum: queued | running |
+  // succeeded | failed.
+  string                    last_run_status          = 3;
+  google.protobuf.Timestamp last_run_started_at      = 4;
+  google.protobuf.Timestamp last_run_completed_at    = 5;
+  int64                     last_run_duration_ms     = 6;
+  int64                     last_run_blobs_freed     = 7;
+  int64                     last_run_manifests_deleted = 8;
+  int64                     last_run_bytes_freed     = 9;
+  string                    last_run_error           = 10;
+  // last_run_triggered_by is `cron` for scheduled sweeps or a user_id
+  // (UUID string) for manual `RunNow` invocations.
+  string                    last_run_triggered_by    = 11;
+  // next_scheduled_at is a best-effort projection derived from the
+  // configured GC_RUN_INTERVAL_HOURS and the last completion time. It is
+  // intentionally not authoritative — the cron loop ticks against its
+  // own internal timer, not this field.
+  google.protobuf.Timestamp next_scheduled_at        = 12;
+}
+
+// GCRun is one historical or in-flight sweep row.
+message GCRun {
+  string                    run_id              = 1;
+  string                    mode                = 2;
+  string                    status              = 3;
+  google.protobuf.Timestamp requested_at        = 4;
+  google.protobuf.Timestamp started_at          = 5;
+  google.protobuf.Timestamp completed_at        = 6;
+  int64                     duration_ms         = 7;
+  int64                     blobs_freed         = 8;
+  int64                     manifests_deleted   = 9;
+  int64                     bytes_freed         = 10;
+  string                    error_message       = 11;
+  string                    triggered_by        = 12;
+}
+
+// GetStatusRequest is empty — status is global, not per-tenant. The
+// BFF gates this on platform-admin so callers can't probe other
+// tenants' runs by id either.
+message GetStatusRequest {}
+
+message RunNowRequest {
+  // mode is the requested gc_run_mode. Validated against an allowlist on
+  // the handler.
+  string mode         = 1;
+  // triggered_by is the caller's user_id (UUID string). Logged onto the
+  // `gc_runs.triggered_by` column so the audit trail records who kicked
+  // off each manual sweep.
+  string triggered_by = 2;
+}
+
+message RunNowResponse {
+  string run_id = 1;
+  // status is always `queued` at create time — actual progress is
+  // observed via GetStatus / ListRuns.
+  string status = 2;
+}
+
+message ListRunsRequest {
+  // page_size defaults to 50 on the handler when zero; capped to 200
+  // server-side regardless of caller intent.
+  int32  page_size  = 1;
+  // page_token is opaque to the caller. It is a base64url encoding of
+  // `completed_at|run_id` produced by the previous response. Bad
+  // tokens map to INVALID_ARGUMENT.
+  string page_token = 2;
+}
+
+message ListRunsResponse {
+  repeated GCRun runs            = 1;
+  string         next_page_token = 2;
+}
