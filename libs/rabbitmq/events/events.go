@@ -129,3 +129,21 @@ type RoleRevokedPayload struct {
 	AssignmentID string `json:"assignment_id"`
 	RevokedBy    string `json:"revoked_by"`
 }
+
+// ImageSignedPayload is the payload for image.signed events.
+//
+// Published by registry-management when a user signs a tag from the
+// dashboard (FE-API-026). The signer service does not currently publish
+// this event on its own when a sign succeeds, so management owns the
+// event surface for now. If signer later publishes too, consumers must
+// stay idempotent on (tenant_id, manifest_digest, signer_id, signed_at).
+type ImageSignedPayload struct {
+	TenantID        string `json:"tenant_id"`
+	RepositoryName  string `json:"repository_name"`
+	Tag             string `json:"tag"`
+	ManifestDigest  string `json:"manifest_digest"`
+	SignerID        string `json:"signer_id"`
+	KeyID           string `json:"key_id"`
+	SignatureDigest string `json:"signature_digest"`
+	SignedBy        string `json:"signed_by"` // user_id of the caller
+}

@@ -37,6 +37,14 @@ import (
 // maxBodyBytes caps incoming JSON request bodies to prevent large-payload attacks.
 const maxBodyBytes = 4096
 
+// EventPublisher is the narrow contract the management handler needs from the
+// RabbitMQ publisher. Exported so external tests in the handler_test package
+// can supply a fake without dragging in amqp091. *publisher.Publisher
+// satisfies this interface.
+type EventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
+
 // Handler holds gRPC client dependencies for all management endpoints.
 type Handler struct {
 	auth  authv1.AuthServiceClient
@@ -58,7 +66,9 @@ type Handler struct {
 	// FE-API-019 `/api/v1/security/reports/*` routes (404 "route disabled").
 	scanner scannerv1.ScannerServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
-	pub           *publisher.Publisher
+	// Typed as an interface so tests can substitute a fake without standing up
+	// a real RabbitMQ broker. *publisher.Publisher satisfies the interface.
+	pub           EventPublisher
 	healthClients []healthpb.HealthClient
 	// platformAdminTenantID is the tenant whose admin/owner users can call cross-tenant
 	// platform operations (e.g. setting another tenant's storage quota). Empty disables
@@ -72,6 +82,10 @@ type Handler struct {
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
 // healthClients are optional; when provided they are polled by handleStats to compute SystemHealthPct.
+//
+// pub is typed as a narrow eventPublisher interface so tests may substitute a
+// fake; the production wiring in services/management/internal/server still
+// passes a *publisher.Publisher, which satisfies the interface.
 func New(
 	auth authv1.AuthServiceClient,
 	meta metadatav1.MetadataServiceClient,
@@ -80,14 +94,28 @@ func New(
 	platformAdminTenantID string,
 	healthClients ...healthpb.HealthClient,
 ) *Handler {
-	return &Handler{
+	h := &Handler{
 		auth:                  auth,
 		meta:                  meta,
 		audit:                 audit,
-		pub:                   pub,
 		platformAdminTenantID: platformAdminTenantID,
 		healthClients:         healthClients,
 	}
+	// Guard against the typed-nil-into-interface trap: when callers pass an
+	// untyped nil (tests do this for the scan-trigger paths that don't exercise
+	// the publisher), we want h.pub == nil to be true so downstream gating works.
+	if pub != nil {
+		h.pub = pub
+	}
+	return h
+}
+
+// WithPublisher swaps the event publisher. Used by tests to inject a fake
+// without touching the production New signature. Returns the handler for
+// chained initialization.
+func (h *Handler) WithPublisher(p EventPublisher) *Handler {
+	h.pub = p
+	return h
 }
 
 // WithRateLimiter attaches a per-user rate limiter that runs after RequireAuth
@@ -209,8 +237,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
 
 	// Signing verification for a specific tag (FE-API-003). 404 when
-	// SIGNER_GRPC_ADDR is unset on the BFF.
+	// SIGNER_GRPC_ADDR is unset on the BFF. FE-API-025 layers a
+	// ?verify=true query param on top for opt-in cryptographic verification.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature", authMW(http.HandlerFunc(h.handleGetSignature)))
+
+	// Sign the current manifest of a tag (FE-API-026). 404 when
+	// SIGNER_GRPC_ADDR is unset; 403 unless the caller is repo admin.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/sign", authMW(http.HandlerFunc(h.handleSignManifest)))
 
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
