@@ -73,6 +73,41 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
+	case events.RoutingPushFailed:
+		// FE-API-008: surfaced in the notifications bell so users see a failed
+		// push without tailing logs. Reuses PushCompletedPayload since the
+		// publisher carries the same identifying fields plus an optional reason
+		// in the raw envelope.
+		var p events.PushCompletedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    p.PushedBy,
+			ActorType:  "user",
+			Action:     "push.failed",
+			Resource:   p.RepositoryName + ":" + p.Tag,
+			Outcome:    "failure",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingWebhookFailed:
+		// FE-API-008: webhook delivery failures bubble up to the bell so an
+		// operator can spot a misconfigured endpoint without polling the
+		// webhook deliveries table. The action name aligns with the
+		// dashboard's notification vocabulary ("webhook.delivery_failed")
+		// rather than the routing key so the frontend filter is intuitive.
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "webhook.delivery_failed",
+			Resource:   string(event.Payload),
+			Outcome:    "failure",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
 	case events.RoutingManifestDeleted:
 		return &repository.AuditEvent{
 			TenantID:   tenantID,

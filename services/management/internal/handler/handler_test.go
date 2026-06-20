@@ -238,6 +238,61 @@ func (s *fakeAuditServer) GetDailyPullCount(_ context.Context, _ *auditv1.GetDai
 	return &auditv1.GetDailyPullCountResponse{Count: 7}, nil
 }
 
+// notificationCall captures the parameters passed to one GetNotifications
+// invocation against the fake audit server. Tests inspect lastNotificationCall
+// to verify the handler forwarded the right CSV / cursor / since to the audit
+// service.
+type notificationCall struct {
+	tenantID   string
+	limit      int32
+	pageToken  string
+	eventTypes []string
+	sinceUnix  int64
+}
+
+// lastNotificationCall is set on every GetNotifications invocation.
+var lastNotificationCall *notificationCall
+
+// GetNotifications returns a small canned tenant-wide notifications feed
+// plus an opaque next page token so the handler wire-mapping tests can
+// assert behaviour without the full keyset cursor dance.
+func (s *fakeAuditServer) GetNotifications(_ context.Context, req *auditv1.GetNotificationsRequest) (*auditv1.GetNotificationsResponse, error) {
+	c := &notificationCall{
+		tenantID:   req.GetTenantId(),
+		limit:      req.GetLimit(),
+		pageToken:  req.GetPageToken(),
+		eventTypes: append([]string(nil), req.GetEventTypes()...),
+	}
+	if ts := req.GetSince(); ts != nil {
+		c.sinceUnix = ts.AsTime().Unix()
+	}
+	lastNotificationCall = c
+
+	// Page-2 short-circuit: empty page so tests see the cursor was forwarded.
+	if req.GetPageToken() != "" {
+		return &auditv1.GetNotificationsResponse{}, nil
+	}
+	return &auditv1.GetNotificationsResponse{
+		Notifications: []*auditv1.NotificationEvent{
+			{
+				EventId:    "notif-1",
+				EventType:  "push.image",
+				ActorId:    testUserID,
+				Title:      "Push completed",
+				Summary:    "acme/registry:3.20 pushed",
+				Link:       "/repositories/acme/registry/tags/3.20",
+				OccurredAt: timestamppb.Now(),
+				Metadata: map[string]string{
+					"repo": "acme/registry",
+					"tag":  "3.20",
+				},
+			},
+		},
+		NextPageToken: "next-cursor",
+		UnreadCount:   1,
+	}, nil
+}
+
 // repoActivityCall captures the parameters passed to one GetRepoActivity invocation
 // against the fake audit server. Test cases read activityCalls to assert the
 // handler forwarded the expected fields (event_types, page_token, etc.).
@@ -1140,5 +1195,162 @@ func TestRepoActivity_invalidSince_returns400(t *testing.T) {
 	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?since=not-a-time", adminToken)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/notifications   (FE-API-008)
+// ---------------------------------------------------------------------------
+
+// resetNotificationCall clears lastNotificationCall before/after tests that
+// inspect it so cases don't observe a stale value from a previous run.
+func resetNotificationCall(t *testing.T) {
+	t.Helper()
+	lastNotificationCall = nil
+	t.Cleanup(func() { lastNotificationCall = nil })
+}
+
+func TestNotifications_missingToken_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_adminToken_returnsRenderedFeed(t *testing.T) {
+	resetNotificationCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.NotificationsResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Notifications) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(body.Notifications))
+	}
+	n := body.Notifications[0]
+	if n.Title != "Push completed" {
+		t.Errorf("Title: got %q, want %q", n.Title, "Push completed")
+	}
+	if n.Summary != "acme/registry:3.20 pushed" {
+		t.Errorf("Summary: got %q, want %q", n.Summary, "acme/registry:3.20 pushed")
+	}
+	if n.Link != "/repositories/acme/registry/tags/3.20" {
+		t.Errorf("Link: got %q, want %q", n.Link, "/repositories/acme/registry/tags/3.20")
+	}
+	if body.NextPageToken != "next-cursor" {
+		t.Errorf("NextPageToken: got %q, want next-cursor", body.NextPageToken)
+	}
+	if body.UnreadCount != 1 {
+		t.Errorf("UnreadCount: got %d, want 1", body.UnreadCount)
+	}
+}
+
+func TestNotifications_unknownEventType_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?event_types=push.image,shenanigans", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_eventTypesFilter_forwarded(t *testing.T) {
+	resetNotificationCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?event_types=push.failed,webhook.delivery_failed", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if lastNotificationCall == nil {
+		t.Fatal("expected GetNotifications to be called")
+	}
+	want := []string{"push.failed", "webhook.delivery_failed"}
+	got := lastNotificationCall.eventTypes
+	if len(got) != len(want) {
+		t.Fatalf("eventTypes len: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("eventTypes[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestNotifications_pageTokenForwarded_returnsEmptyPage(t *testing.T) {
+	resetNotificationCall(t)
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?page_token=opaqueCursor123", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if lastNotificationCall == nil || lastNotificationCall.pageToken != "opaqueCursor123" {
+		t.Errorf("expected page_token forwarded; lastCall=%+v", lastNotificationCall)
+	}
+	var body handler.NotificationsResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Notifications) != 0 {
+		t.Errorf("expected empty notifications on page 2, got %d", len(body.Notifications))
+	}
+	if body.NextPageToken != "" {
+		t.Errorf("expected empty next_page_token on terminal page, got %q", body.NextPageToken)
+	}
+}
+
+func TestNotifications_limitOutOfRange_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?limit=99999", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_invalidLimitFormat_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?limit=abc", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_futureSince_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	future := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	resp := env.get(t, "/api/v1/notifications?since="+future, adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_invalidSince_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?since=not-a-time", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_invalidUnreadOnly_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications?unread_only=maybe", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestNotifications_sinceForwardedToAudit(t *testing.T) {
+	resetNotificationCall(t)
+	env := newTestEnv(t)
+	since := time.Now().Add(-24 * time.Hour).Truncate(time.Second).UTC()
+	resp := env.get(t, "/api/v1/notifications?since="+since.Format(time.RFC3339), adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if lastNotificationCall == nil {
+		t.Fatal("expected GetNotifications to be called")
+	}
+	if lastNotificationCall.sinceUnix != since.Unix() {
+		t.Errorf("since: got unix=%d, want unix=%d", lastNotificationCall.sinceUnix, since.Unix())
 	}
 }

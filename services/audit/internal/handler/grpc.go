@@ -25,6 +25,11 @@ import (
 
 // auditRepo is the subset of repository.Repository used by GRPCHandler,
 // defined as an interface so unit tests can inject a fake.
+//
+// The notificationRepo subset (see notifications.go) is embedded here so the
+// production *repository.Repository satisfies a single composite interface.
+// Tests that only exercise GetBuildHistory / GetRepoActivity can leave the
+// GetNotifications method as a stub.
 type auditRepo interface {
 	GetBuildHistory(ctx context.Context, tenantID uuid.UUID, repoID, tag string, limit int) ([]*repository.BuildHistoryRow, error)
 	CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error)
@@ -38,6 +43,15 @@ type auditRepo interface {
 		eventTypes []string,
 		limit int,
 	) ([]*repository.RepoActivityRow, error)
+	GetNotifications(
+		ctx context.Context,
+		tenantID uuid.UUID,
+		since time.Time,
+		cursorTime time.Time,
+		cursorID uuid.UUID,
+		eventTypes []string,
+		limit int,
+	) ([]*repository.NotificationRow, error)
 }
 
 // defaultActivityEventTypes is the operator-facing allowlist applied when the

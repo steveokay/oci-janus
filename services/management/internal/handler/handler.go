@@ -201,6 +201,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// one repo (push, delete, scan, sign). Handler lives in repo_activity.go.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/activity", authMW(http.HandlerFunc(h.handleListRepoActivity)))
 
+	// FE-API-008 tenant-wide notifications feed for the topbar bell. Handler
+	// lives in notifications.go. Polled by the dashboard; no SSE/WebSocket.
+	mux.Handle("GET /api/v1/notifications", authMW(http.HandlerFunc(h.handleListNotifications)))
+
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 

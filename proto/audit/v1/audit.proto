@@ -23,6 +23,19 @@ service AuditService {
   // exposes only a curated handful of fields per event so the full raw
   // payload never crosses the gRPC wire.
   rpc GetRepoActivity(GetRepoActivityRequest) returns (GetRepoActivityResponse);
+
+  // GetNotifications returns recent operator-facing audit events scoped to a
+  // whole tenant (not a single repository) so the management dashboard can
+  // populate the topbar bell + notifications drawer. The allowlist of event
+  // types is the superset of repo-scoped activity events plus webhook delivery
+  // failures, deliberately omitting internal queue/plumbing noise. As with
+  // GetRepoActivity, the raw payload is projected server-side into a small
+  // set of safe fields plus a human-readable title/summary/link.
+  //
+  // FE-API-008. Polled by the dashboard at a fixed interval (see frontend);
+  // there is no per-user "read" state stored on the backend — clients persist
+  // a last_seen_at timestamp locally and compute unread by filtering on it.
+  rpc GetNotifications(GetNotificationsRequest) returns (GetNotificationsResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -125,4 +138,65 @@ message GetRepoActivityResponse {
   repeated RepoActivityEvent events = 1;
   // next_page_token is empty when there is no next page.
   string next_page_token = 2;
+}
+
+// GetNotificationsRequest scopes notifications to a single tenant.
+// Filtering and pagination semantics mirror GetRepoActivityRequest so the same
+// page_token format ("base64URL(RFC3339Nano|event_id)") can be reused on the
+// frontend across both feeds.
+message GetNotificationsRequest {
+  // tenant_id scopes the query to prevent cross-tenant data leakage.
+  string tenant_id = 1;
+  // since lower-bounds occurred_at; zero ⇒ default 7 days ago. Clamped at
+  // 90 days back by the handler to align with partition retention.
+  google.protobuf.Timestamp since = 2;
+  // limit caps the number of rows returned; 0 ⇒ default 50, cap 200.
+  int32 limit = 3;
+  // page_token is the opaque cursor returned by a prior call. Same encoding
+  // as GetRepoActivity — base64URL of "<RFC3339Nano>|<event_id UUID>".
+  string page_token = 4;
+  // event_types optionally restricts the result. Empty ⇒ the operator-facing
+  // notification default set (see notificationRenderer). Unknown values are
+  // rejected by the handler before they reach SQL.
+  repeated string event_types = 5;
+}
+
+// NotificationEvent is one row of the notification feed. Like RepoActivityEvent
+// the raw payload never crosses the wire — only a curated set of fields plus a
+// rendered title/summary/link suitable for direct UI display.
+message NotificationEvent {
+  // event_id is the UUID of the audit_events row.
+  string event_id = 1;
+  // event_type is the audit action column (e.g. "push.image", "scan.completed").
+  string event_type = 2;
+  // occurred_at is the wall-clock time of the event.
+  google.protobuf.Timestamp occurred_at = 3;
+  // actor_id is the user UUID (or "system") that initiated the action.
+  string actor_id = 4;
+  // actor_username is best-effort extracted from event metadata; empty when not present.
+  string actor_username = 5;
+  // title is a short, human-readable heading (e.g. "Push completed").
+  string title = 6;
+  // summary is a one-line body for the notification card.
+  string summary = 7;
+  // link is a relative dashboard path the bell click should route to.
+  string link = 8;
+  // metadata carries a small, hand-picked map of payload fields (repo, tag,
+  // digest, etc.) so the UI can render extra context without parsing the
+  // summary string. Keys are stable; values are plain strings to keep the
+  // wire shape narrow.
+  map<string, string> metadata = 9;
+}
+
+// GetNotificationsResponse carries a page of notifications plus a cursor.
+// unread_count is the number of rows in this page — the backend does not
+// store per-user read state. The frontend persists a last_seen_at locally
+// and may pass it as `since` to compute its own unread count.
+message GetNotificationsResponse {
+  repeated NotificationEvent notifications = 1;
+  // next_page_token is empty when there is no next page.
+  string next_page_token = 2;
+  // unread_count is len(notifications) — see method comment for the
+  // server-side "unread" semantics.
+  int32 unread_count = 3;
 }

@@ -22,6 +22,7 @@ const (
 	AuditService_GetBuildHistory_FullMethodName   = "/registry.audit.v1.AuditService/GetBuildHistory"
 	AuditService_GetDailyPullCount_FullMethodName = "/registry.audit.v1.AuditService/GetDailyPullCount"
 	AuditService_GetRepoActivity_FullMethodName   = "/registry.audit.v1.AuditService/GetRepoActivity"
+	AuditService_GetNotifications_FullMethodName  = "/registry.audit.v1.AuditService/GetNotifications"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -43,6 +44,18 @@ type AuditServiceClient interface {
 	// exposes only a curated handful of fields per event so the full raw
 	// payload never crosses the gRPC wire.
 	GetRepoActivity(ctx context.Context, in *GetRepoActivityRequest, opts ...grpc.CallOption) (*GetRepoActivityResponse, error)
+	// GetNotifications returns recent operator-facing audit events scoped to a
+	// whole tenant (not a single repository) so the management dashboard can
+	// populate the topbar bell + notifications drawer. The allowlist of event
+	// types is the superset of repo-scoped activity events plus webhook delivery
+	// failures, deliberately omitting internal queue/plumbing noise. As with
+	// GetRepoActivity, the raw payload is projected server-side into a small
+	// set of safe fields plus a human-readable title/summary/link.
+	//
+	// FE-API-008. Polled by the dashboard at a fixed interval (see frontend);
+	// there is no per-user "read" state stored on the backend — clients persist
+	// a last_seen_at timestamp locally and compute unread by filtering on it.
+	GetNotifications(ctx context.Context, in *GetNotificationsRequest, opts ...grpc.CallOption) (*GetNotificationsResponse, error)
 }
 
 type auditServiceClient struct {
@@ -83,6 +96,16 @@ func (c *auditServiceClient) GetRepoActivity(ctx context.Context, in *GetRepoAct
 	return out, nil
 }
 
+func (c *auditServiceClient) GetNotifications(ctx context.Context, in *GetNotificationsRequest, opts ...grpc.CallOption) (*GetNotificationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNotificationsResponse)
+	err := c.cc.Invoke(ctx, AuditService_GetNotifications_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -102,6 +125,18 @@ type AuditServiceServer interface {
 	// exposes only a curated handful of fields per event so the full raw
 	// payload never crosses the gRPC wire.
 	GetRepoActivity(context.Context, *GetRepoActivityRequest) (*GetRepoActivityResponse, error)
+	// GetNotifications returns recent operator-facing audit events scoped to a
+	// whole tenant (not a single repository) so the management dashboard can
+	// populate the topbar bell + notifications drawer. The allowlist of event
+	// types is the superset of repo-scoped activity events plus webhook delivery
+	// failures, deliberately omitting internal queue/plumbing noise. As with
+	// GetRepoActivity, the raw payload is projected server-side into a small
+	// set of safe fields plus a human-readable title/summary/link.
+	//
+	// FE-API-008. Polled by the dashboard at a fixed interval (see frontend);
+	// there is no per-user "read" state stored on the backend — clients persist
+	// a last_seen_at timestamp locally and compute unread by filtering on it.
+	GetNotifications(context.Context, *GetNotificationsRequest) (*GetNotificationsResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -116,6 +151,9 @@ func (UnimplementedAuditServiceServer) GetDailyPullCount(context.Context, *GetDa
 }
 func (UnimplementedAuditServiceServer) GetRepoActivity(context.Context, *GetRepoActivityRequest) (*GetRepoActivityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRepoActivity not implemented")
+}
+func (UnimplementedAuditServiceServer) GetNotifications(context.Context, *GetNotificationsRequest) (*GetNotificationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNotifications not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -183,6 +221,24 @@ func _AuditService_GetRepoActivity_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetNotifications_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNotificationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetNotifications(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetNotifications_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetNotifications(ctx, req.(*GetNotificationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -201,6 +257,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRepoActivity",
 			Handler:    _AuditService_GetRepoActivity_Handler,
+		},
+		{
+			MethodName: "GetNotifications",
+			Handler:    _AuditService_GetNotifications_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
