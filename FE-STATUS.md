@@ -57,6 +57,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S7A | Profile & API keys | DONE ✅ | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
 | S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
+| S9 | Wire backend-DONE-but-UI-stubbed surfaces | NOT STARTED | `/workspace/domains`, `/activity`, workspace metadata, `/security/vulnerabilities`, `/security/scans`, signing verify-on-demand |
 
 ---
 
@@ -269,6 +270,64 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [x] Build + typecheck + lint pass
 
 ### S6..S8 — checklist deferred until each sprint kicks off
+
+### S9 — Wire backend-DONE-but-UI-stubbed surfaces
+
+> Several backends shipped per `status.md` that the frontend still renders
+> as ComingSoon panels. This sprint turns stubs into live surfaces — no new
+> backend work needed, just a swap from the placeholder to a real hooks +
+> component pass for each ID. Runs after S8 polish so the live surfaces
+> inherit the polish work straight away rather than needing a second pass.
+
+**FE-API-007 — Custom domains** (today: full ComingSoon panel at `/workspace/domains`)
+- [ ] `useDomains` / `useRegisterDomain` / `useVerifyDomain` / `usePromotePrimary` / `useDeleteDomain` hooks against `GET/POST/DELETE /api/v1/workspace/me/domains` + `POST .../verify` + `PATCH .../{domain}`
+- [ ] `DomainsTable` — domain, primary chip, verified chip, TXT challenge, registered-at
+- [ ] `RegisterDomainDialog` — URL input + display of the returned TXT challenge with copy
+- [ ] `VerifyDomainDialog` — force-poll button, surfaces the verification worker outcome
+- [ ] Set-primary affordance — confirmation dialog (the primary change is what flips `host` for every pull / push)
+- [ ] Replace the Sprint 7B-era ComingSoon panel on `/workspace/domains` with the live surface
+
+**FE-API-008 — Notifications** (today: sketched-preview rows on `/activity`)
+- [ ] `useNotifications` hook — `GET /api/v1/notifications?since&limit&event_types&unread_only`, with `last_seen_at` persisted in `localStorage` so cross-tab unread count stays consistent
+- [ ] **Topbar notifications bell** — badge with unread count, dropdown listing recent events with the synthesized `title` + `summary` + `link`
+- [ ] `/activity` route — replace the sketched preview with a live feed; filter chips for the 8 event types (push.image / push.failed / delete.manifest / delete.tag / scan.completed / scan.policy_blocked / image.signed / webhook.delivery_failed)
+- [ ] Click-through — each event's `link` lands on the right detail page (tag detail / webhook delivery / etc.)
+- [ ] Empty state — "No new events since {last_seen_at}"
+
+**FE-API-009 — Workspace metadata** (today: not surfaced anywhere)
+- [ ] `useWorkspace` hook — `GET /api/v1/workspace/me` returning `{ tenant_id, name, slug, plan, host, host_is_custom, domains[], created_at }`
+- [ ] **Sidebar header swap** — replace the hardcoded "Janus / Registry control" label with the workspace name + plan badge; tenant id stays in the dropdown
+- [ ] **Pull-command card** — drop the hardcoded `registry.localhost` and use `workspace.host` (custom-domain users see their own host immediately once FE-API-007 lands)
+- [ ] **Profile identity card** — surface the tenant name + plan alongside the existing tenant_id chip
+- [ ] **Login footer chip** — append the resolved tenant name when the JWT identifies it (still no leak of full identity)
+
+**FE-API-014 — Workspace vulnerabilities** (today: full ComingSoon at `/security/vulnerabilities` tab)
+- [ ] `useVulnerabilities` infinite query — `GET /api/v1/security/vulnerabilities?severity=&page_token=&limit=`; severity chip row drives the param
+- [ ] **CVE rollup table** — one row per CVE with severity badge, CVE id, title, primary URL, affected-images count
+- [ ] **Affected-images expansion** — click row → expand shows `(repo, tag, digest)` triples each linking to its tag detail page
+- [ ] Severity filter chip row (CRITICAL / HIGH / MEDIUM / LOW) with multi-select; URL search param syncs
+- [ ] Replace the Sprint 3 ComingSoon panel on the `/security/vulnerabilities` tab with the live table
+
+**FE-API-015 — Scan history** (today: full ComingSoon at `/security/scans` tab)
+- [ ] `useScanHistory` infinite query — `GET /api/v1/security/scans?since&limit&page_token`; keyset cursor over `(completed_at, scan_id)`
+- [ ] **Scan timeline** — vertical timeline of recent scans across the workspace; status pill + severity bar + scanner version + duration + `triggered_by` per entry
+- [ ] **Trigger filter** — chip row for `push / manual / scheduled` (FE-API-015 already plumbs the field; rows populated as scanner updates land)
+- [ ] **Status filter** — chip row for `complete / running / failed`
+- [ ] Click-through to the tag-detail Security tab for the underlying scan
+- [ ] Replace the Sprint 3 ComingSoon panel on the `/security/scans` tab
+
+**FE-API-025 — Verify-on-demand for signing** (just shipped backend-side, marked DONE in status.md)
+- [ ] Enable the disabled "Verify now" button on `SigningPanel` (added as ComingSoon hint earlier)
+- [ ] On click: refetch the signature endpoint with `?verify=true` so each `signatureRecord` gains `verified` + optional `failure_reason`
+- [ ] Per-signature `Verified` / `Failed` badge on the SignatureCard
+- [ ] Failed-with-reason error block on each signature card when verification returned `verified: false`
+- [ ] Surface the per-signature verification status above the SignatureCard cluster ("3 verified, 1 failed")
+- [ ] Remove the FE-API-025 ComingSoonHint footer copy
+
+**Verification**
+- [ ] Build / typecheck / lint pass
+- [ ] Backend connectivity verified end-to-end against the docker-compose stack
+- [ ] FE-STATUS.md ticked + S9 marked DONE in the sprint table at the top
 
 ---
 
