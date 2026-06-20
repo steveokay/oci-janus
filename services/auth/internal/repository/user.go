@@ -134,6 +134,18 @@ func (r *UserRepository) LockUntil(ctx context.Context, id uuid.UUID, until time
 	return err
 }
 
+// CountByTenant returns the number of user rows in the tenant (FE-API-028).
+// The count intentionally includes inactive users so the platform-admin
+// dashboard surfaces the total headcount, not just currently-active sessions.
+func (r *UserRepository) CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	const q = `SELECT COUNT(*) FROM users WHERE tenant_id = $1`
+	var n int64
+	if err := r.pool.QueryRow(ctx, q, tenantID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count tenant users: %w", err)
+	}
+	return n, nil
+}
+
 // ResetFailedLogins clears failed_logins and locked_until and records the login time.
 // Called on every successful authentication.
 func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) error {

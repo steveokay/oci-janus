@@ -257,6 +257,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))
 
+	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
+	// sufficient — the SBOM is equivalent to what a reader could derive by
+	// pulling the image themselves. ?format=spdx-json (default) is the only
+	// implemented format; cyclonedx-json returns 400.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/sbom", authMW(http.HandlerFunc(h.handleGetTagSBOM)))
+
 	// Build / audit history — returns empty list until registry-audit query API is ready.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
 
@@ -267,6 +273,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// FE-API-008 tenant-wide notifications feed for the topbar bell. Handler
 	// lives in notifications.go. Polled by the dashboard; no SSE/WebSocket.
 	mux.Handle("GET /api/v1/notifications", authMW(http.HandlerFunc(h.handleListNotifications)))
+
+	// FE-API-030 pull/push analytics time-series. Per-repo + tenant-wide
+	// routes share bucket sizing + metric mapping in analytics_repo.go.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/analytics", authMW(http.HandlerFunc(h.handleGetRepoAnalytics)))
+	mux.Handle("GET /api/v1/stats/analytics", authMW(http.HandlerFunc(h.handleGetTenantAnalytics)))
 
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
@@ -283,6 +294,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
 	h.RegisterWebhooks(mux, authMW)
 
+	// Workspace custom-domain CRUD (FE-API-027). Routes return 404 when
+	// h.tenant is nil (TENANT_GRPC_ADDR unset).
+	h.RegisterWorkspaceDomains(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
@@ -295,6 +310,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
 	mux.Handle("GET /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminGetTenant)))
 	mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
+	// FE-API-029: rename + plan change. Patch body accepts optional name/plan
+	// fields; emits tenant.renamed / tenant.plan_changed RabbitMQ events.
+	mux.Handle("PATCH /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminUpdateTenant)))
 }
 
 // ---------------------------------------------------------------------------

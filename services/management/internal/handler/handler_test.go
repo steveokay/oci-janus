@@ -192,7 +192,15 @@ func (s *fakeMetaServer) ListTags(req *metadatav1.ListTagsRequest, stream metada
 	return nil
 }
 
+// getTagErr lets FE-API-033 tests force a "tag not found" response from
+// GetTag without redefining the whole fake. Set in a test, the global hook
+// is consumed once and reset by the test's own cleanup.
+var getTagErr error
+
 func (s *fakeMetaServer) GetTag(_ context.Context, req *metadatav1.GetTagRequest) (*metadatav1.Tag, error) {
+	if getTagErr != nil {
+		return nil, getTagErr
+	}
 	return &metadatav1.Tag{
 		Name:           req.GetName(),
 		ManifestDigest: "sha256:abc123",
@@ -222,6 +230,28 @@ func (s *fakeMetaServer) GetScanResult(_ context.Context, _ *metadatav1.GetScanR
 		ScanId:      "scan-1",
 		Status:      "complete",
 		ScannerName: "trivy",
+	}, nil
+}
+
+// scanSBOMOverride lets FE-API-033 tests inject a specific SBOM payload or
+// force a NotFound. Default behaviour (override == nil and error == nil) is
+// a small SPDX 2.3 JSON blob so the happy-path test has concrete bytes to
+// assert on.
+var (
+	scanSBOMOverride *metadatav1.GetScanSBOMResponse
+	scanSBOMErr      error
+)
+
+func (s *fakeMetaServer) GetScanSBOM(_ context.Context, _ *metadatav1.GetScanSBOMRequest) (*metadatav1.GetScanSBOMResponse, error) {
+	if scanSBOMErr != nil {
+		return nil, scanSBOMErr
+	}
+	if scanSBOMOverride != nil {
+		return scanSBOMOverride, nil
+	}
+	return &metadatav1.GetScanSBOMResponse{
+		Format:   "spdx-json",
+		SbomJson: []byte(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT"}`),
 	}, nil
 }
 
@@ -468,6 +498,54 @@ func (s *fakeAuditServer) GetRepoActivity(_ context.Context, req *auditv1.GetRep
 			},
 		},
 		NextPageToken: "next-cursor",
+	}, nil
+}
+
+// analyticsCall captures parameters of a single fake GetAnalytics call so
+// FE-API-030 tests can assert the BFF forwarded the right scope, action and
+// bucket sizing without rebuilding the full keyset cursor dance.
+type analyticsCall struct {
+	tenantID   string
+	scopeType  string
+	repoID     string
+	action     string
+	rangeSecs  int64
+	bucketSecs int64
+}
+
+// lastAnalyticsCall is set on every fake GetAnalytics invocation. Tests
+// reset via t.Cleanup so cases stay isolated.
+var lastAnalyticsCall *analyticsCall
+
+// analyticsResponseOverride lets a test stub out the canned response so
+// bucket-alignment / total assertions are deterministic.
+var analyticsResponseOverride *auditv1.GetAnalyticsResponse
+
+// GetAnalytics is the fake FE-API-030 RPC. By default it echoes the
+// (scope, action, range) on the call recorder and returns a single populated
+// bucket so the BFF's pre-allocation merge path is exercised.
+func (s *fakeAuditServer) GetAnalytics(_ context.Context, req *auditv1.GetAnalyticsRequest) (*auditv1.GetAnalyticsResponse, error) {
+	lastAnalyticsCall = &analyticsCall{
+		tenantID:   req.GetTenantId(),
+		scopeType:  req.GetScopeType(),
+		repoID:     req.GetRepoId(),
+		action:     req.GetAction(),
+		rangeSecs:  req.GetRangeSecs(),
+		bucketSecs: req.GetBucketSecs(),
+	}
+	if analyticsResponseOverride != nil {
+		return analyticsResponseOverride, nil
+	}
+	// Default canned response: one bucket of count=7 at "now" truncated to the
+	// nearest bucket boundary, so the BFF's pre-allocated grid can merge it.
+	now := time.Now().UTC()
+	rangeStart := time.Unix(((now.Unix()-req.GetRangeSecs())/req.GetBucketSecs())*req.GetBucketSecs(), 0).UTC()
+	return &auditv1.GetAnalyticsResponse{
+		Buckets: []*auditv1.AnalyticsBucket{
+			{BucketStart: timestamppb.New(rangeStart), Count: 7},
+		},
+		Total:      7,
+		RangeStart: timestamppb.New(rangeStart),
 	}, nil
 }
 

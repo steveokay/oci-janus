@@ -314,6 +314,31 @@ func (r *Repository) ListDeliveries(ctx context.Context, endpointID, tenantID uu
 	return out, rows.Err()
 }
 
+// GetDelivery returns one delivery row (FE-API-035). Same tenant + endpoint
+// scoping rule as ListDeliveries: a delivery_id from another tenant returns
+// pgx.ErrNoRows, never the row itself, so existence is not leakable across
+// tenants. signature_header + response_body are not stored today — surfaced
+// as empty strings so the wire shape is forward-compatible.
+func (r *Repository) GetDelivery(ctx context.Context, endpointID, deliveryID, tenantID uuid.UUID) (*DeliveryRecord, error) {
+	var rec DeliveryRecord
+	err := r.pool.QueryRow(ctx,
+		`SELECT d.id, d.endpoint_id, d.tenant_id, d.event_type, d.payload, d.status,
+		        d.attempts, d.max_attempts, d.next_attempt_at, COALESCE(d.last_error,''),
+		        d.created_at, COALESCE(d.delivered_at, 'epoch'::timestamptz)
+		 FROM webhook_deliveries d
+		 WHERE d.id          = $1
+		   AND d.endpoint_id = $2
+		   AND d.tenant_id   = $3`,
+		deliveryID, endpointID, tenantID,
+	).Scan(&rec.ID, &rec.EndpointID, &rec.TenantID, &rec.EventType, &rec.Payload,
+		&rec.Status, &rec.Attempts, &rec.MaxAttempts, &rec.NextAttemptAt, &rec.LastError,
+		&rec.CreatedAt, &rec.DeliveredAt)
+	if err != nil {
+		return nil, fmt.Errorf("GetDelivery: %w", err)
+	}
+	return &rec, nil
+}
+
 // nilTime returns nil when t is the zero value so the caller can express
 // "no since filter" in SQL via IS NULL rather than a synthetic epoch.
 func nilTime(t time.Time) any {

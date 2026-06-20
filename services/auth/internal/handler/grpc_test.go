@@ -304,6 +304,65 @@ func TestScopesToProto_emptyScopes_returnsNil(t *testing.T) {
 	}
 }
 
+// ── CountTenantUsers (FE-API-028) ─────────────────────────────────────────────
+
+// TestCountTenantUsers_emptyTenant_returnsZero verifies that a tenant with no
+// registered users yields a zero count rather than NotFound or an error.
+func TestCountTenantUsers_emptyTenant_returnsZero(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+	resp, err := h.CountTenantUsers(context.Background(), &authv1.CountTenantUsersRequest{
+		TenantId: uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("CountTenantUsers: %v", err)
+	}
+	if resp.GetCount() != 0 {
+		t.Errorf("Count: got %d, want 0", resp.GetCount())
+	}
+}
+
+// TestCountTenantUsers_withUsers_returnsCount verifies that registered users
+// contribute to the returned count. The shared fakeUserRepo counts every user
+// regardless of tenant — that's fine for this assertion since each test runs
+// against a fresh repo via buildGRPCHandler.
+func TestCountTenantUsers_withUsers_returnsCount(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	tenantID := uuid.New()
+	// Register three users so the count reflects "more than zero".
+	registerTestUser(t, tc.svc, tenantID, "u1", "Str0ng!Password123")
+	registerTestUser(t, tc.svc, tenantID, "u2", "Str0ng!Password123")
+	registerTestUser(t, tc.svc, tenantID, "u3", "Str0ng!Password123")
+
+	resp, err := h.CountTenantUsers(context.Background(), &authv1.CountTenantUsersRequest{
+		TenantId: tenantID.String(),
+	})
+	if err != nil {
+		t.Fatalf("CountTenantUsers: %v", err)
+	}
+	if resp.GetCount() != 3 {
+		t.Errorf("Count: got %d, want 3", resp.GetCount())
+	}
+}
+
+// TestCountTenantUsers_invalidTenantID_returnsInvalidArgument verifies that a
+// garbage tenant_id is rejected before reaching the DB.
+func TestCountTenantUsers_invalidTenantID_returnsInvalidArgument(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+	_, err := h.CountTenantUsers(context.Background(), &authv1.CountTenantUsersRequest{
+		TenantId: "not-a-uuid",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status, got %T: %v", err, err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("code: got %v, want InvalidArgument", st.Code())
+	}
+}
+
 // TestScopesToProto_withScopes_wrapsAsWildcardAccess verifies that a non-empty
 // scope list is wrapped as a single wildcard RepositoryAccess entry.
 func TestScopesToProto_withScopes_wrapsAsWildcardAccess(t *testing.T) {

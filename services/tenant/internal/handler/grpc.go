@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,6 +26,11 @@ import (
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
+
+// txtLookup is the DNS TXT lookup function used by VerifyDomainNow. Indirected
+// through a package-level variable so tests can substitute a fake without
+// hitting real DNS. Defaults to net.LookupTXT.
+var txtLookup = net.LookupTXT
 
 // domainRE matches RFC 1123 fully-qualified domain names.
 // Used to reject non-hostname values before they reach the DB, DNS lookup, or Redis key.
@@ -149,6 +156,89 @@ func (h *GRPCHandler) ListTenants(ctx context.Context, req *tenantv1.ListTenants
 	}, nil
 }
 
+// UpdateTenant mutates a tenant's name and/or plan (FE-API-029).
+//
+// Authorization is the caller's responsibility — this RPC is reachable only
+// over the internal mTLS gRPC port and registry-management gates the REST
+// endpoint behind the platform-admin marker grant.
+//
+// Validation:
+//   - tenant_id must parse as UUID.
+//   - Name (when set) must match tenantNameRE so we never store an invalid
+//     subdomain-ready slug seed.
+//   - Plan (when set) must be one of "free"|"pro"|"enterprise" (kept in step
+//     with the management-layer body validator so internal callers don't
+//     drift from the REST contract).
+//   - At least one of name/plan must be supplied — empty patches return
+//     InvalidArgument so callers don't silently no-op.
+//
+// Slug recompute happens inside repo.UpdateTenant so the row is never
+// observable with a name-and-slug mismatch. Duplicate-name attempts surface
+// as AlreadyExists via the same pgconn 23505 mapping used by CreateTenant.
+func (h *GRPCHandler) UpdateTenant(ctx context.Context, req *tenantv1.UpdateTenantRequest) (*tenantv1.Tenant, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+
+	// Pull pointer values via the generated getters. proto3 `optional` emits
+	// `*T` plus `HasX()` so we can tell "field not present" from "empty value".
+	var namePtr, planPtr *string
+	if req.Name != nil {
+		n := req.GetName()
+		// Reject the empty string up front so the repo never has to defend
+		// against "name = ''" reaching the DB.
+		if n == "" {
+			return nil, status.Error(codes.InvalidArgument, "name must not be empty")
+		}
+		if !tenantNameRE.MatchString(n) {
+			return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
+		}
+		namePtr = &n
+	}
+	if req.Plan != nil {
+		p := req.GetPlan()
+		if !validTenantPlan(p) {
+			return nil, status.Errorf(codes.InvalidArgument, "plan must be one of free, pro, enterprise")
+		}
+		planPtr = &p
+	}
+	if namePtr == nil && planPtr == nil {
+		return nil, status.Error(codes.InvalidArgument, "at least one of name or plan is required")
+	}
+
+	rec, err := h.repo.UpdateTenant(ctx, tenantID, namePtr, planPtr)
+	if err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, status.Errorf(codes.AlreadyExists, "tenant name already in use")
+		}
+		return nil, errcodes.MapDBError(err, "update tenant")
+	}
+	if rec == nil {
+		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
+	}
+
+	// Refresh domains so the response carries the live host-selection state —
+	// changes to slug ripple into the wildcard fallback host.
+	domains, err := h.repo.ListDomainsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list tenant domains")
+	}
+	return h.buildTenantProto(rec, domains), nil
+}
+
+// validTenantPlan is the allowlist applied to incoming plan values. Keep this
+// in lockstep with the REST body validator in services/management; drifting
+// the two leaves a hole where internal gRPC callers could write a plan the
+// dashboard rejects.
+func validTenantPlan(p string) bool {
+	switch p {
+	case "free", "pro", "enterprise":
+		return true
+	}
+	return false
+}
+
 // DeleteTenant removes a tenant.
 func (h *GRPCHandler) DeleteTenant(ctx context.Context, req *tenantv1.DeleteTenantRequest) (*emptypb.Empty, error) {
 	tenantID, err := uuid.Parse(req.TenantId)
@@ -209,6 +299,12 @@ func (h *GRPCHandler) RegisterDomain(ctx context.Context, req *tenantv1.Register
 	if !domainRE.MatchString(req.Domain) {
 		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.Domain)
 	}
+	// FE-API-027 platform-wildcard guard: prevent tenants from claiming any
+	// hostname that already belongs to the wildcard zone. Without this a tenant
+	// could register `other-tenant-slug.<base>` and hijack the wildcard host.
+	if err := h.checkPlatformWildcard(req.Domain); err != nil {
+		return nil, err
+	}
 
 	token, err := generateToken()
 	if err != nil {
@@ -220,6 +316,24 @@ func (h *GRPCHandler) RegisterDomain(ctx context.Context, req *tenantv1.Register
 	}
 
 	return &tenantv1.RegisterDomainResponse{VerificationToken: token}, nil
+}
+
+// checkPlatformWildcard rejects any domain ending in `.<PlatformBaseDomain>`.
+// The wildcard zone is reserved for the auto-assigned `<slug>.<base>` host —
+// allowing arbitrary registrations would let tenants squat on each other's
+// auto-hostnames. When the base domain is empty (tests / misconfig) the check
+// is a no-op so unit tests don't have to set the field.
+func (h *GRPCHandler) checkPlatformWildcard(domain string) error {
+	base := strings.ToLower(strings.TrimSpace(h.platformBaseDomain))
+	if base == "" {
+		return nil
+	}
+	d := strings.ToLower(domain)
+	if d == base || strings.HasSuffix(d, "."+base) {
+		return status.Errorf(codes.InvalidArgument,
+			"cannot register domain within the platform-managed wildcard space")
+	}
+	return nil
 }
 
 // GetTenantPolicy returns a tenant's scan/signing/quota policy.
@@ -258,6 +372,144 @@ func (h *GRPCHandler) UpdateTenantPolicy(ctx context.Context, req *tenantv1.Upda
 	return policyToProto(p), nil
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FE-API-027 — custom domain CRUD RPCs
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ListTenantDomains returns every tenant_domains row for the requested tenant.
+// Authorization is enforced by the management BFF — this RPC is reachable only
+// over the internal mTLS port, so any caller has already been gated.
+func (h *GRPCHandler) ListTenantDomains(ctx context.Context, req *tenantv1.ListTenantDomainsRequest) (*tenantv1.ListTenantDomainsResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	recs, err := h.repo.ListDomainsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list tenant domains")
+	}
+	out := make([]*tenantv1.DomainEntry, 0, len(recs))
+	for i := range recs {
+		out = append(out, domainRecordToProto(&recs[i]))
+	}
+	return &tenantv1.ListTenantDomainsResponse{Domains: out}, nil
+}
+
+// VerifyDomainNow re-runs the DNS TXT challenge inline. This is the
+// dashboard-driven "I just published the record, check now" path — option (a)
+// of the FE-API-027 spec. The worker still polls on its own cadence, so a
+// quietly-failing inline check doesn't block eventual verification.
+//
+// On success we delegate to repository.MarkDomainVerified which atomically
+// flips verified=true and promotes the row to primary when no other primary
+// exists. The response carries the freshly-updated row so the caller sees the
+// state change without an extra GET.
+func (h *GRPCHandler) VerifyDomainNow(ctx context.Context, req *tenantv1.VerifyDomainNowRequest) (*tenantv1.DomainEntry, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	if !domainRE.MatchString(req.GetDomain()) {
+		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.GetDomain())
+	}
+
+	rec, err := h.repo.GetDomain(ctx, tenantID, req.GetDomain())
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			return nil, status.Errorf(codes.NotFound, "domain not registered for this tenant")
+		}
+		return nil, errcodes.MapDBError(err, "get domain")
+	}
+
+	// Skip DNS for already-verified rows — the inline check is purely a
+	// best-effort accelerator on top of the worker; once verified, the worker
+	// also stops polling and there's nothing useful to do here.
+	if !rec.Verified {
+		target := "_registry-verify." + rec.Domain
+		records, lookupErr := txtLookup(target)
+		if lookupErr != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "DNS TXT lookup failed for %s", target)
+		}
+		matched := false
+		for _, r := range records {
+			if r == rec.VerificationToken {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"verification token not found in TXT records for %s", target)
+		}
+		if err := h.repo.MarkDomainVerified(ctx, rec.ID); err != nil {
+			return nil, errcodes.MapDBError(err, "mark domain verified")
+		}
+		// Re-fetch so the response reflects the post-update state (verified +
+		// maybe is_primary). The repo call only mutates a couple of fields so a
+		// second SELECT is the simplest way to get a consistent row.
+		rec, err = h.repo.GetDomain(ctx, tenantID, req.GetDomain())
+		if err != nil {
+			return nil, errcodes.MapDBError(err, "reload domain")
+		}
+	}
+	return domainRecordToProto(rec), nil
+}
+
+// SetPrimaryDomain promotes the named domain to primary, demoting the prior
+// primary (if any) in the same transaction. Returns FailedPrecondition when
+// the target is unverified — the management BFF maps that to HTTP 409.
+func (h *GRPCHandler) SetPrimaryDomain(ctx context.Context, req *tenantv1.SetPrimaryDomainRequest) (*tenantv1.DomainEntry, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	if !domainRE.MatchString(req.GetDomain()) {
+		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.GetDomain())
+	}
+	rec, err := h.repo.SetPrimaryDomain(ctx, tenantID, req.GetDomain())
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrDomainNotFound):
+			return nil, status.Errorf(codes.NotFound, "domain not registered for this tenant")
+		case errors.Is(err, repository.ErrDomainNotVerified):
+			return nil, status.Errorf(codes.FailedPrecondition, "cannot set unverified domain as primary")
+		default:
+			return nil, errcodes.MapDBError(err, "set primary domain")
+		}
+	}
+	return domainRecordToProto(rec), nil
+}
+
+// DeleteDomain removes a tenant domain. The was-primary signal travels back
+// to the management layer via gRPC metadata so the HTTP response can carry
+// the X-Janus-Warning header without polluting the proto schema with a
+// purely UI-facing field.
+func (h *GRPCHandler) DeleteDomain(ctx context.Context, req *tenantv1.DeleteDomainRequest) (*emptypb.Empty, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	if !domainRE.MatchString(req.GetDomain()) {
+		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.GetDomain())
+	}
+	wasPrimary, err := h.repo.DeleteDomainByName(ctx, tenantID, req.GetDomain())
+	if err != nil {
+		if errors.Is(err, repository.ErrDomainNotFound) {
+			return nil, status.Errorf(codes.NotFound, "domain not registered for this tenant")
+		}
+		return nil, errcodes.MapDBError(err, "delete domain")
+	}
+	if wasPrimary {
+		// Send a server-side response header so the BFF can flip its own
+		// X-Janus-Warning header. grpc.SetHeader is the canonical way to
+		// surface side-channel state without a schema change. Errors are
+		// swallowed because the only failure mode is "stream already
+		// terminated" which is benign for this advisory metadata.
+		_ = grpc.SetHeader(ctx, metadata.Pairs("x-janus-was-primary", "true"))
+	}
+	return &emptypb.Empty{}, nil
+}
+
 // tenantToProto remains for tests and any caller that needs the bare 1-4
 // field shape. Real handler paths go through buildTenantProto so they pick
 // up slug / host / domains (FE-API-007).
@@ -292,12 +544,8 @@ func (h *GRPCHandler) buildTenantProto(rec *repository.TenantRecord, domains []r
 	// Surface every domain so the BFF can render verification status — the
 	// dashboard's domain settings page needs the full list, not just the host.
 	out.Domains = make([]*tenantv1.DomainEntry, 0, len(domains))
-	for _, d := range domains {
-		out.Domains = append(out.Domains, &tenantv1.DomainEntry{
-			Domain:    d.Domain,
-			Verified:  d.Verified,
-			IsPrimary: d.IsPrimary,
-		})
+	for i := range domains {
+		out.Domains = append(out.Domains, domainRecordToProto(&domains[i]))
 	}
 
 	// Host selection — primary verified domain wins over the wildcard fallback.
@@ -318,6 +566,34 @@ func (h *GRPCHandler) buildTenantProto(rec *repository.TenantRecord, domains []r
 		out.Host = slug + "." + h.platformBaseDomain
 	} else {
 		out.Host = slug
+	}
+	return out
+}
+
+// domainRecordToProto converts a repository.DomainRecord to its proto
+// representation including the FE-API-027 metadata fields. Used by the
+// list endpoint, the verify-now path, and the primary-swap response so
+// every callsite emits a consistent shape.
+//
+// Note: verification_token is intentionally populated on the wire because
+// internal callers (gateway / cache pre-warm) need it; the management BFF
+// strips the field before responding to API clients.
+func domainRecordToProto(d *repository.DomainRecord) *tenantv1.DomainEntry {
+	out := &tenantv1.DomainEntry{
+		Domain:            d.Domain,
+		Verified:          d.Verified,
+		IsPrimary:         d.IsPrimary,
+		VerificationToken: d.VerificationToken,
+		RegisteredAt:      timestamppb.New(d.RegisteredAt),
+		NextPollAfter:     timestamppb.New(d.NextPollAfter),
+		Notified_24H:      d.Notified24h,
+		Notified_48H:      d.Notified48h,
+	}
+	// verified_at is a SQL NULL until the DNS TXT challenge succeeds. Emit it
+	// only when populated so the field round-trips as JSON `null` rather than
+	// the zero time string `0001-01-01T00:00:00Z`.
+	if d.VerifiedAt != nil {
+		out.VerifiedAt = timestamppb.New(*d.VerifiedAt)
 	}
 	return out
 }

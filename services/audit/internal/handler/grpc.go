@@ -52,6 +52,24 @@ type auditRepo interface {
 		eventTypes []string,
 		limit int,
 	) ([]*repository.NotificationRow, error)
+	// GetAnalytics is the time-series count grouped by date_bin — see
+	// analytics.go for the FE-API-030 RPC. Lives on this composite
+	// interface so production *repository.Repository satisfies a single
+	// dependency.
+	GetAnalytics(
+		ctx context.Context,
+		tenantID uuid.UUID,
+		scope repository.AnalyticsScope,
+		action string,
+		rangeStart time.Time,
+		rangeEnd time.Time,
+		bucketSecs int64,
+	) ([]*repository.AnalyticsBucketRow, error)
+	// GetLastTenantPush returns the timestamp of the latest push.image audit
+	// event for the tenant (FE-API-028). The bool return is `false` when the
+	// tenant has no recorded pushes — handlers must materialise that into
+	// last_push_at = null on the wire.
+	GetLastTenantPush(ctx context.Context, tenantID uuid.UUID) (time.Time, bool, error)
 }
 
 // defaultActivityEventTypes is the operator-facing allowlist applied when the
@@ -156,6 +174,30 @@ func (h *GRPCHandler) GetDailyPullCount(ctx context.Context, req *auditv1.GetDai
 		return nil, errcodes.MapDBError(err, "failed to count pull events")
 	}
 	return &auditv1.GetDailyPullCountResponse{Count: count}, nil
+}
+
+// GetLastTenantPush returns the timestamp of the most recent push.image
+// audit event for the tenant (FE-API-028). When the tenant has never pushed,
+// the response carries an unset (nil) timestamp so JSON consumers can
+// distinguish "never pushed" from "pushed at Unix epoch".
+func (h *GRPCHandler) GetLastTenantPush(ctx context.Context, req *auditv1.GetLastTenantPushRequest) (*auditv1.GetLastTenantPushResponse, error) {
+	tenantUUID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	t, found, err := h.repo.GetLastTenantPush(ctx, tenantUUID)
+	if err != nil {
+		slog.ErrorContext(ctx, "GetLastTenantPush query failed",
+			"tenant_id", req.GetTenantId(),
+			"error", err,
+		)
+		return nil, errcodes.MapDBError(err, "failed to query last tenant push")
+	}
+	resp := &auditv1.GetLastTenantPushResponse{}
+	if found {
+		resp.LastPushAt = timestamppb.New(t)
+	}
+	return resp, nil
 }
 
 // GetRepoActivity returns operator-facing audit events for a single repository.

@@ -16,6 +16,28 @@ service TenantService {
   rpc RegisterDomain(RegisterDomainRequest) returns (RegisterDomainResponse);
   rpc GetTenantPolicy(GetTenantPolicyRequest) returns (TenantPolicy);
   rpc UpdateTenantPolicy(UpdateTenantPolicyRequest) returns (TenantPolicy);
+  // UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+  // both of `name` / `plan` may be supplied; absence means "do not change this
+  // field". When the name changes the slug is recomputed atomically inside the
+  // same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+  // on the very next GetTenant.
+  rpc UpdateTenant(UpdateTenantRequest) returns (Tenant);
+
+  // FE-API-027 custom-domain CRUD. ListTenantDomains returns every domain row
+  // for a tenant with verification + scheduling metadata so the dashboard can
+  // render the domain settings page in a single round trip.
+  rpc ListTenantDomains(ListTenantDomainsRequest) returns (ListTenantDomainsResponse);
+  // VerifyDomainNow re-runs the DNS TXT check inline (the worker normally
+  // schedules it on a 5–20 minute cadence). On success the domain is marked
+  // verified + promoted to primary when no other primary exists.
+  rpc VerifyDomainNow(VerifyDomainNowRequest) returns (DomainEntry);
+  // SetPrimaryDomain demotes the current primary (if any) and promotes the
+  // target domain in the same transaction. The target must already be
+  // verified — unverified targets return FailedPrecondition.
+  rpc SetPrimaryDomain(SetPrimaryDomainRequest) returns (DomainEntry);
+  // DeleteDomain removes a tenant domain. The response payload is empty; the
+  // management layer surfaces "was this the primary" out-of-band via a header.
+  rpc DeleteDomain(DeleteDomainRequest) returns (google.protobuf.Empty);
 }
 
 message Tenant {
@@ -48,6 +70,15 @@ message DomainEntry {
   string domain      = 1;
   bool   verified    = 2;
   bool   is_primary  = 3;
+  // FE-API-027 fields. Appended (4..9) so existing readers (FE-API-007) keep
+  // working unchanged. verification_token MUST never be returned to API
+  // callers — the management BFF strips it before serialising the JSON.
+  string verification_token             = 4;
+  google.protobuf.Timestamp registered_at    = 5;
+  google.protobuf.Timestamp verified_at      = 6;
+  google.protobuf.Timestamp next_poll_after  = 7;
+  bool   notified_24h = 8;
+  bool   notified_48h = 9;
 }
 
 message TenantPolicy {
@@ -89,6 +120,25 @@ message RegisterDomainRequest {
 message RegisterDomainResponse {
   string verification_token = 1; // add as TXT record at _registry-verify.<domain>
 }
+
+// UpdateTenantRequest carries the optional fields to mutate. Both `name` and
+// `plan` are `optional` so absence is distinguishable from the empty string —
+// callers may explicitly pass an empty value, but in practice the management
+// layer rejects empty names before reaching the gRPC server.
+message UpdateTenantRequest {
+  string tenant_id        = 1;
+  optional string name    = 2;
+  optional string plan    = 3;
+}
+
+// FE-API-027 request envelopes. Every domain mutation requires both the
+// tenant_id (drawn from the JWT in the management BFF — never a body field)
+// and the domain string, so each request carries both as identity.
+message ListTenantDomainsRequest  { string tenant_id = 1; }
+message ListTenantDomainsResponse { repeated DomainEntry domains = 1; }
+message VerifyDomainNowRequest    { string tenant_id = 1; string domain = 2; }
+message SetPrimaryDomainRequest   { string tenant_id = 1; string domain = 2; }
+message DeleteDomainRequest       { string tenant_id = 1; string domain = 2; }
 
 message GetTenantPolicyRequest    { string tenant_id = 1; }
 message UpdateTenantPolicyRequest {

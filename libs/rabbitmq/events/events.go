@@ -25,6 +25,8 @@ const (
 	RoutingImageSigned          = "image.signed"
 	RoutingTenantCreated        = "tenant.created"
 	RoutingTenantDeleted        = "tenant.deleted"
+	RoutingTenantRenamed        = "tenant.renamed"       // FE-API-029
+	RoutingTenantPlanChanged    = "tenant.plan_changed"  // FE-API-029
 	RoutingTenantDomainVerified = "tenant.domain.verified"
 	RoutingStoreQueued          = "store.queued" // proxy background store
 	// RBAC audit events — consumed by registry-audit to record membership changes.

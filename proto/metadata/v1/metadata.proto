@@ -44,6 +44,17 @@ service MetadataService {
   rpc UpdateScanStatus(UpdateScanStatusRequest) returns (google.protobuf.Empty);
   rpc GetScanResult(GetScanResultRequest) returns (ScanResult);
 
+  // Per-tag SBOM storage (FE-API-033). The SBOM is persisted on the
+  // scan_results row keyed by (tenant_id, manifest_digest); the management
+  // BFF exposes a tag-scoped download route on top.
+  //
+  // UpsertScanSBOM is the scanner-side write seam — even when the scanner
+  // hasn't been wired to call it yet, tests can pre-seed an SBOM through it.
+  // GetScanSBOM returns NotFound when the manifest has no scan row or the
+  // sbom_json column is NULL.
+  rpc UpsertScanSBOM(UpsertScanSBOMRequest) returns (google.protobuf.Empty);
+  rpc GetScanSBOM(GetScanSBOMRequest) returns (GetScanSBOMResponse);
+
   // Vulnerability aggregate
   rpc GetTenantVulnerabilityCount(GetTenantVulnerabilityCountRequest) returns (VulnerabilityCountResponse);
 
@@ -76,6 +87,17 @@ service MetadataService {
   // plus the tenant-wide total. Backs GET /api/v1/stats/storage on
   // registry-management.
   rpc GetTenantStorageBreakdown(GetTenantStorageBreakdownRequest) returns (GetTenantStorageBreakdownResponse);
+
+  // GetTenantUsage (FE-API-028) — single-shot aggregate covering the
+  // metadata-owned pieces of the admin tenant-detail card: storage usage and
+  // cap, repository count, organisation count. Computed via one CTE so the
+  // admin endpoint never fans out across multiple metadata RPCs.
+  //
+  // Tenants whose row does not yet exist in metadata (lazy creation via the
+  // UpdateTenantQuota UPSERT pattern, FE-API-031) return all-zero counts +
+  // quota_bytes=0 rather than NotFound, so the management layer can stitch
+  // the response together for newly-created tenants without push activity.
+  rpc GetTenantUsage(GetTenantUsageRequest) returns (TenantUsage);
 }
 
 message Repository {
@@ -199,6 +221,33 @@ message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 // Scan requests
 message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
 message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }
+
+// ─── FE-API-033: per-tag SBOM storage ────────────────────────────────────────
+
+// UpsertScanSBOMRequest persists an SBOM blob on the latest scan_results row
+// for (tenant_id, manifest_digest). `format` is one of "spdx-json" or
+// "cyclonedx-json"; only "spdx-json" is implemented in v1, but the field is
+// stored verbatim so future formats can land without a schema bump.
+message UpsertScanSBOMRequest {
+  string tenant_id        = 1;
+  string manifest_digest  = 2;
+  string format           = 3; // "spdx-json" (v1) or "cyclonedx-json" (future)
+  bytes  sbom_json        = 4;
+}
+
+// GetScanSBOMRequest fetches the SBOM bytes for the latest scan of a manifest.
+message GetScanSBOMRequest {
+  string tenant_id        = 1;
+  string manifest_digest  = 2;
+}
+
+// GetScanSBOMResponse returns the stored SBOM bytes + format. Servers return
+// gRPC NotFound when either no scan row exists for the manifest in the
+// tenant, or the row exists but has no SBOM persisted yet (sbom_json IS NULL).
+message GetScanSBOMResponse {
+  string format    = 1; // "spdx-json" | "cyclonedx-json"
+  bytes  sbom_json = 2;
+}
 
 // Vulnerability count requests
 message GetTenantVulnerabilityCountRequest { string tenant_id = 1; }
@@ -398,4 +447,20 @@ message GetTenantStorageBreakdownRequest {
 message GetTenantStorageBreakdownResponse {
   int64                           tenant_storage_used_bytes = 1;
   repeated RepositoryStorageEntry repositories              = 2;
+}
+
+// ─── FE-API-028: tenant usage aggregate ─────────────────────────────────────
+
+message GetTenantUsageRequest { string tenant_id = 1; }
+
+// TenantUsage aggregates the metadata-owned slice of the admin tenant-detail
+// response. user_count is intentionally NOT here — it lives in
+// services/auth's CountTenantUsers. Storage values mirror QuotaUsage so the
+// dashboard can fall back on this RPC alone when it does not need the full
+// tenant-detail composition.
+message TenantUsage {
+  int64 storage_used_bytes  = 1;
+  int64 storage_quota_bytes = 2;
+  int64 repository_count    = 3;
+  int64 organization_count  = 4;
 }

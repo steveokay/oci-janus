@@ -5,10 +5,12 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -346,6 +348,123 @@ func (r *Repository) GetNotifications(
 	return out, rows.Err()
 }
 
+// AnalyticsBucketRow is one row returned by GetAnalytics — a (bucket_start,
+// count) pair. The repository layer never invents zero-count buckets; the
+// caller pre-allocates the empty series and merges these in.
+type AnalyticsBucketRow struct {
+	// BucketStart is the inclusive lower bound of the bucket (UTC).
+	BucketStart time.Time
+	// Count is the number of audit events of the requested action that fell
+	// inside this bucket.
+	Count int64
+}
+
+// AnalyticsScope identifies whether GetAnalytics counts tenant-wide rows or
+// rows scoped to a single repository. The repo_id is matched against the
+// audit event metadata.raw.repo_id field — the same convention used by
+// GetBuildHistory — so we can ride the existing (tenant_id, occurred_at)
+// index without a LIKE scan over the resource column.
+type AnalyticsScope struct {
+	// TenantWide is true when the query should count every event for the
+	// tenant regardless of repository. When TenantWide is false RepoID must
+	// be non-empty.
+	TenantWide bool
+	// RepoID is the repository UUID matched against metadata.raw.repo_id.
+	// Ignored when TenantWide is true.
+	RepoID string
+}
+
+// GetAnalytics returns a time-bucketed series of audit-event counts. The query
+// rides idx_audit_events_tenant_occurred — date_bin is a non-key expression
+// but the underlying scan is bounded by the (tenant_id, occurred_at) range so
+// the planner picks the right index even for a 30-day window.
+//
+// FE-API-030. The caller (registry-management) picks bucketSecs and aligns
+// rangeStart to a bucket boundary before calling — we just bin to that
+// boundary. Empty buckets are NOT padded out in this layer; the caller
+// merges these rows into a pre-allocated zero-filled grid so the wire
+// payload stays compact even for sparse 30-day series.
+//
+// action is bound as a parameter so it cannot be used to smuggle SQL, but
+// the handler still validates it against an allowlist before reaching here
+// — defence in depth.
+func (r *Repository) GetAnalytics(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	scope AnalyticsScope,
+	action string,
+	rangeStart time.Time,
+	rangeEnd time.Time,
+	bucketSecs int64,
+) ([]*AnalyticsBucketRow, error) {
+	if bucketSecs <= 0 {
+		return nil, fmt.Errorf("audit GetAnalytics: bucketSecs must be positive")
+	}
+	if rangeEnd.Before(rangeStart) {
+		return nil, fmt.Errorf("audit GetAnalytics: rangeEnd before rangeStart")
+	}
+
+	// date_bin takes an interval; pgx binds time.Duration as INTERVAL, so we
+	// can express the bucket width without string interpolation. The
+	// origin (rangeStart) anchors the bins so the first bucket boundary is
+	// exactly rangeStart — caller-side pre-allocation lines up 1:1.
+	bucketInterval := time.Duration(bucketSecs) * time.Second
+
+	// Repo-scoped queries add an extra predicate; tenant-wide queries skip
+	// it. We branch the SQL rather than using an OR / coalesce because the
+	// optimiser picks a much tighter plan when the metadata->>'repo_id'
+	// JSON deref is absent.
+	if !scope.TenantWide && scope.RepoID == "" {
+		return nil, fmt.Errorf("audit GetAnalytics: repo_id required for repo scope")
+	}
+
+	const tenantSQL = `SELECT date_bin($1::interval, occurred_at, $2::timestamptz) AS bucket, COUNT(*)
+		 FROM audit_events
+		 WHERE tenant_id = $3
+		   AND action    = $4
+		   AND occurred_at >= $2
+		   AND occurred_at <  $5
+		 GROUP BY bucket
+		 ORDER BY bucket ASC`
+	const repoSQL = `SELECT date_bin($1::interval, occurred_at, $2::timestamptz) AS bucket, COUNT(*)
+		 FROM audit_events
+		 WHERE tenant_id = $3
+		   AND action    = $4
+		   AND occurred_at >= $2
+		   AND occurred_at <  $5
+		   AND metadata->'raw'->>'repo_id' = $6
+		 GROUP BY bucket
+		 ORDER BY bucket ASC`
+
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if scope.TenantWide {
+		rows, err = r.pool.Query(ctx, tenantSQL,
+			bucketInterval, rangeStart, tenantID, action, rangeEnd,
+		)
+	} else {
+		rows, err = r.pool.Query(ctx, repoSQL,
+			bucketInterval, rangeStart, tenantID, action, rangeEnd, scope.RepoID,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("audit GetAnalytics: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*AnalyticsBucketRow
+	for rows.Next() {
+		b := &AnalyticsBucketRow{}
+		if err := rows.Scan(&b.BucketStart, &b.Count); err != nil {
+			return nil, fmt.Errorf("audit GetAnalytics scan: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // CountPulls returns the number of pull.image audit events for a tenant since the given time.
 func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error) {
 	var count int64
@@ -361,6 +480,35 @@ func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since t
 		return 0, fmt.Errorf("audit CountPulls: %w", err)
 	}
 	return count, nil
+}
+
+// GetLastTenantPush returns the timestamp of the most recent push.image
+// audit event for the tenant (FE-API-028). The second return value is `false`
+// when no push has ever been recorded — callers should distinguish that
+// case (`last_push_at = null` in the API response) from the zero time alone,
+// which Postgres also reports for genuinely-recorded events at the Unix epoch
+// (the index covers occurred_at DESC so this is a single index probe).
+func (r *Repository) GetLastTenantPush(ctx context.Context, tenantID uuid.UUID) (time.Time, bool, error) {
+	var t time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT occurred_at
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND action    = 'push.image'
+		 ORDER BY occurred_at DESC
+		 LIMIT 1`,
+		tenantID,
+	).Scan(&t)
+	if err != nil {
+		// Distinguish "no rows" from a real error — the tenant simply hasn't
+		// recorded a push yet, which is normal for freshly created tenants
+		// and must surface as last_push_at = null upstream.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("audit GetLastTenantPush: %w", err)
+	}
+	return t, true, nil
 }
 
 // PurgeOlderThan deletes audit events older than cutoff. This is the only

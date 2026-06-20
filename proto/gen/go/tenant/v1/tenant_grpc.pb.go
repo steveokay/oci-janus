@@ -28,6 +28,11 @@ const (
 	TenantService_RegisterDomain_FullMethodName     = "/registry.tenant.v1.TenantService/RegisterDomain"
 	TenantService_GetTenantPolicy_FullMethodName    = "/registry.tenant.v1.TenantService/GetTenantPolicy"
 	TenantService_UpdateTenantPolicy_FullMethodName = "/registry.tenant.v1.TenantService/UpdateTenantPolicy"
+	TenantService_UpdateTenant_FullMethodName       = "/registry.tenant.v1.TenantService/UpdateTenant"
+	TenantService_ListTenantDomains_FullMethodName  = "/registry.tenant.v1.TenantService/ListTenantDomains"
+	TenantService_VerifyDomainNow_FullMethodName    = "/registry.tenant.v1.TenantService/VerifyDomainNow"
+	TenantService_SetPrimaryDomain_FullMethodName   = "/registry.tenant.v1.TenantService/SetPrimaryDomain"
+	TenantService_DeleteDomain_FullMethodName       = "/registry.tenant.v1.TenantService/DeleteDomain"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -42,6 +47,27 @@ type TenantServiceClient interface {
 	RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error)
 	GetTenantPolicy(ctx context.Context, in *GetTenantPolicyRequest, opts ...grpc.CallOption) (*TenantPolicy, error)
 	UpdateTenantPolicy(ctx context.Context, in *UpdateTenantPolicyRequest, opts ...grpc.CallOption) (*TenantPolicy, error)
+	// UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+	// both of `name` / `plan` may be supplied; absence means "do not change this
+	// field". When the name changes the slug is recomputed atomically inside the
+	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+	// on the very next GetTenant.
+	UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
+	// FE-API-027 custom-domain CRUD. ListTenantDomains returns every domain row
+	// for a tenant with verification + scheduling metadata so the dashboard can
+	// render the domain settings page in a single round trip.
+	ListTenantDomains(ctx context.Context, in *ListTenantDomainsRequest, opts ...grpc.CallOption) (*ListTenantDomainsResponse, error)
+	// VerifyDomainNow re-runs the DNS TXT check inline (the worker normally
+	// schedules it on a 5–20 minute cadence). On success the domain is marked
+	// verified + promoted to primary when no other primary exists.
+	VerifyDomainNow(ctx context.Context, in *VerifyDomainNowRequest, opts ...grpc.CallOption) (*DomainEntry, error)
+	// SetPrimaryDomain demotes the current primary (if any) and promotes the
+	// target domain in the same transaction. The target must already be
+	// verified — unverified targets return FailedPrecondition.
+	SetPrimaryDomain(ctx context.Context, in *SetPrimaryDomainRequest, opts ...grpc.CallOption) (*DomainEntry, error)
+	// DeleteDomain removes a tenant domain. The response payload is empty; the
+	// management layer surfaces "was this the primary" out-of-band via a header.
+	DeleteDomain(ctx context.Context, in *DeleteDomainRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type tenantServiceClient struct {
@@ -132,6 +158,56 @@ func (c *tenantServiceClient) UpdateTenantPolicy(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *tenantServiceClient) UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Tenant)
+	err := c.cc.Invoke(ctx, TenantService_UpdateTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) ListTenantDomains(ctx context.Context, in *ListTenantDomainsRequest, opts ...grpc.CallOption) (*ListTenantDomainsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantDomainsResponse)
+	err := c.cc.Invoke(ctx, TenantService_ListTenantDomains_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) VerifyDomainNow(ctx context.Context, in *VerifyDomainNowRequest, opts ...grpc.CallOption) (*DomainEntry, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DomainEntry)
+	err := c.cc.Invoke(ctx, TenantService_VerifyDomainNow_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) SetPrimaryDomain(ctx context.Context, in *SetPrimaryDomainRequest, opts ...grpc.CallOption) (*DomainEntry, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DomainEntry)
+	err := c.cc.Invoke(ctx, TenantService_SetPrimaryDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) DeleteDomain(ctx context.Context, in *DeleteDomainRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, TenantService_DeleteDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantServiceServer is the server API for TenantService service.
 // All implementations should embed UnimplementedTenantServiceServer
 // for forward compatibility
@@ -144,6 +220,27 @@ type TenantServiceServer interface {
 	RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error)
 	GetTenantPolicy(context.Context, *GetTenantPolicyRequest) (*TenantPolicy, error)
 	UpdateTenantPolicy(context.Context, *UpdateTenantPolicyRequest) (*TenantPolicy, error)
+	// UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+	// both of `name` / `plan` may be supplied; absence means "do not change this
+	// field". When the name changes the slug is recomputed atomically inside the
+	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+	// on the very next GetTenant.
+	UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error)
+	// FE-API-027 custom-domain CRUD. ListTenantDomains returns every domain row
+	// for a tenant with verification + scheduling metadata so the dashboard can
+	// render the domain settings page in a single round trip.
+	ListTenantDomains(context.Context, *ListTenantDomainsRequest) (*ListTenantDomainsResponse, error)
+	// VerifyDomainNow re-runs the DNS TXT check inline (the worker normally
+	// schedules it on a 5–20 minute cadence). On success the domain is marked
+	// verified + promoted to primary when no other primary exists.
+	VerifyDomainNow(context.Context, *VerifyDomainNowRequest) (*DomainEntry, error)
+	// SetPrimaryDomain demotes the current primary (if any) and promotes the
+	// target domain in the same transaction. The target must already be
+	// verified — unverified targets return FailedPrecondition.
+	SetPrimaryDomain(context.Context, *SetPrimaryDomainRequest) (*DomainEntry, error)
+	// DeleteDomain removes a tenant domain. The response payload is empty; the
+	// management layer surfaces "was this the primary" out-of-band via a header.
+	DeleteDomain(context.Context, *DeleteDomainRequest) (*emptypb.Empty, error)
 }
 
 // UnimplementedTenantServiceServer should be embedded to have forward compatible implementations.
@@ -173,6 +270,21 @@ func (UnimplementedTenantServiceServer) GetTenantPolicy(context.Context, *GetTen
 }
 func (UnimplementedTenantServiceServer) UpdateTenantPolicy(context.Context, *UpdateTenantPolicyRequest) (*TenantPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenantPolicy not implemented")
+}
+func (UnimplementedTenantServiceServer) UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) ListTenantDomains(context.Context, *ListTenantDomainsRequest) (*ListTenantDomainsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenantDomains not implemented")
+}
+func (UnimplementedTenantServiceServer) VerifyDomainNow(context.Context, *VerifyDomainNowRequest) (*DomainEntry, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method VerifyDomainNow not implemented")
+}
+func (UnimplementedTenantServiceServer) SetPrimaryDomain(context.Context, *SetPrimaryDomainRequest) (*DomainEntry, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetPrimaryDomain not implemented")
+}
+func (UnimplementedTenantServiceServer) DeleteDomain(context.Context, *DeleteDomainRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteDomain not implemented")
 }
 
 // UnsafeTenantServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -330,6 +442,96 @@ func _TenantService_UpdateTenantPolicy_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantService_UpdateTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).UpdateTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_UpdateTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).UpdateTenant(ctx, req.(*UpdateTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_ListTenantDomains_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantDomainsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).ListTenantDomains(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_ListTenantDomains_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).ListTenantDomains(ctx, req.(*ListTenantDomainsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_VerifyDomainNow_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyDomainNowRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).VerifyDomainNow(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_VerifyDomainNow_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).VerifyDomainNow(ctx, req.(*VerifyDomainNowRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_SetPrimaryDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPrimaryDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).SetPrimaryDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_SetPrimaryDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).SetPrimaryDomain(ctx, req.(*SetPrimaryDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_DeleteDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).DeleteDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_DeleteDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).DeleteDomain(ctx, req.(*DeleteDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantService_ServiceDesc is the grpc.ServiceDesc for TenantService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -368,6 +570,26 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateTenantPolicy",
 			Handler:    _TenantService_UpdateTenantPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateTenant",
+			Handler:    _TenantService_UpdateTenant_Handler,
+		},
+		{
+			MethodName: "ListTenantDomains",
+			Handler:    _TenantService_ListTenantDomains_Handler,
+		},
+		{
+			MethodName: "VerifyDomainNow",
+			Handler:    _TenantService_VerifyDomainNow_Handler,
+		},
+		{
+			MethodName: "SetPrimaryDomain",
+			Handler:    _TenantService_SetPrimaryDomain_Handler,
+		},
+		{
+			MethodName: "DeleteDomain",
+			Handler:    _TenantService_DeleteDomain_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

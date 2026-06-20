@@ -355,6 +355,23 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 	return &authv1.ListMembersResponse{Members: members}, nil
 }
 
+// CountTenantUsers returns the number of users in the tenant (FE-API-028).
+// Used by registry-management to populate the admin tenant-detail card.
+// Errors from the underlying DB query map to Internal via MapDBError so the
+// management layer can log + return a generic 500 without leaking driver
+// detail to the caller.
+func (h *GRPCHandler) CountTenantUsers(ctx context.Context, req *authv1.CountTenantUsersRequest) (*authv1.CountTenantUsersResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	n, err := h.svc.CountTenantUsers(ctx, tenantID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "count tenant users")
+	}
+	return &authv1.CountTenantUsersResponse{Count: n}, nil
+}
+
 // scopesToProto wraps a flat scope list as a single wildcard RepositoryAccess.
 // This is a Sprint 1 simplification; full scope-to-access mapping comes later.
 func scopesToProto(scopes []string) []*authv1.RepositoryAccess {

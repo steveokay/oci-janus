@@ -47,6 +47,10 @@ type fakeRepo struct {
 	listDeliveriesRecs []*repository.DeliveryRecord
 	listDeliveriesErr  error
 
+	// GetDelivery (FE-API-035) — single-row variant.
+	getDeliveryRec *repository.DeliveryRecord
+	getDeliveryErr error
+
 	// Recorded arguments for assertion
 	lastCreateURL    string
 	lastCreateEvents []string
@@ -82,6 +86,10 @@ func (f *fakeRepo) RotateSecret(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ s
 
 func (f *fakeRepo) ListDeliveries(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ time.Time, _ int) ([]*repository.DeliveryRecord, error) {
 	return f.listDeliveriesRecs, f.listDeliveriesErr
+}
+
+func (f *fakeRepo) GetDelivery(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) (*repository.DeliveryRecord, error) {
+	return f.getDeliveryRec, f.getDeliveryErr
 }
 
 // fakeDispatcher implements testDispatcher with a configurable result.

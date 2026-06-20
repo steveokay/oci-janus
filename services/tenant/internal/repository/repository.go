@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,6 +13,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrDomainNotFound is returned by domain-mutation repository helpers when the
+// (tenant_id, domain) pair is unknown. Mapped to gRPC NotFound by the handler.
+// Sentinel error so callers can branch on errors.Is without coupling to pgx.
+var ErrDomainNotFound = errors.New("tenant domain not found")
+
+// ErrDomainNotVerified is returned when a caller tries to promote a domain to
+// primary before its DNS TXT challenge has succeeded. Mapped to gRPC
+// FailedPrecondition by the handler.
+var ErrDomainNotVerified = errors.New("tenant domain is not verified")
 
 // TenantRecord is a row from the tenants table.
 // Slug is populated by 20260620000001_add_tenant_slug.sql; older code paths
@@ -220,6 +231,55 @@ func (r *Repository) DeleteTenant(ctx context.Context, tenantID uuid.UUID) error
 	return err
 }
 
+// UpdateTenant patches name and/or plan on an existing tenant (FE-API-029).
+// `name` and `plan` are pointers so the caller can distinguish "no change"
+// (nil) from "set to empty string" (non-nil pointer to ""). When `name`
+// changes, the slug is recomputed via NormalizeSlug inside the same
+// transaction so the wildcard host (`<slug>.<base>`) updates atomically —
+// no observable state where the new name carries the old slug.
+//
+// Returns the updated tenant. ErrNotFound semantics: the caller observes
+// pgx.ErrNoRows mapped via the standard error chain — there is no sentinel
+// here because the gRPC handler maps NotFound separately.
+func (r *Repository) UpdateTenant(ctx context.Context, tenantID uuid.UUID, name, plan *string) (*TenantRecord, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// COALESCE keeps the existing column value when the parameter is NULL,
+	// so callers that want to mutate only one column never trample the
+	// other. Slug is recomputed inline when a new name is supplied; the
+	// empty-slug fallback to the tenant id mirrors CreateTenant so the
+	// wildcard host never collapses to `.<base>`.
+	var rec TenantRecord
+	var newSlug *string
+	if name != nil {
+		s := NormalizeSlug(*name)
+		if s == "" {
+			s = tenantID.String()
+		}
+		newSlug = &s
+	}
+	err = tx.QueryRow(ctx,
+		`UPDATE tenants
+		 SET    name = COALESCE($2, name),
+		        slug = COALESCE($3, slug),
+		        plan = COALESCE($4, plan)
+		 WHERE  id = $1
+		 RETURNING id, name, plan, slug, created_at`,
+		tenantID, name, newSlug, plan,
+	).Scan(&rec.ID, &rec.Name, &rec.Plan, &rec.Slug, &rec.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("UpdateTenant: %w", err)
+	}
+	return &rec, tx.Commit(ctx)
+}
+
 // GetPolicy returns the tenant policy.
 func (r *Repository) GetPolicy(ctx context.Context, tenantID uuid.UUID) (*PolicyRecord, error) {
 	var rec PolicyRecord
@@ -399,4 +459,123 @@ func (r *Repository) UpdateNextPollAfter(ctx context.Context, domainID uuid.UUID
 		next, domainID,
 	)
 	return err
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FE-API-027 — custom domain CRUD helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GetDomain returns the single tenant_domains row for (tenant_id, domain).
+// Returns ErrDomainNotFound when the row does not exist or belongs to a
+// different tenant — both cases collapse so the gRPC handler always emits
+// NotFound without leaking cross-tenant existence information.
+func (r *Repository) GetDomain(ctx context.Context, tenantID uuid.UUID, domain string) (*DomainRecord, error) {
+	var rec DomainRecord
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, tenant_id, domain, verification_token, verified, registered_at, verified_at,
+		        notified_24h, notified_48h, next_poll_after, is_primary
+		 FROM tenant_domains
+		 WHERE tenant_id = $1 AND domain = $2`,
+		tenantID, domain,
+	).Scan(&rec.ID, &rec.TenantID, &rec.Domain, &rec.VerificationToken,
+		&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt,
+		&rec.Notified24h, &rec.Notified48h, &rec.NextPollAfter, &rec.IsPrimary)
+	if err == pgx.ErrNoRows {
+		return nil, ErrDomainNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetDomain: %w", err)
+	}
+	return &rec, nil
+}
+
+// SetPrimaryDomain atomically demotes the current primary (if any) and
+// promotes the named domain in a single transaction. The target row must be
+// verified — unverified targets return ErrDomainNotVerified and ErrDomainNotFound
+// is returned when the (tenant, domain) pair doesn't exist.
+//
+// The two-step UPDATE pattern (clear then set) cooperates with the partial
+// unique index `idx_tenant_domains_one_primary` so we never temporarily hold
+// two primary rows. The "clear" step touches at most one row, the "set" step
+// exactly one, both inside the same transaction.
+func (r *Repository) SetPrimaryDomain(ctx context.Context, tenantID uuid.UUID, domain string) (*DomainRecord, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Existence + verified check first — refuses to mutate any rows when the
+	// target isn't ready, so a failed call leaves the previous primary intact.
+	var verified bool
+	err = tx.QueryRow(ctx,
+		`SELECT verified FROM tenant_domains WHERE tenant_id = $1 AND domain = $2`,
+		tenantID, domain,
+	).Scan(&verified)
+	if err == pgx.ErrNoRows {
+		return nil, ErrDomainNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("SetPrimaryDomain check: %w", err)
+	}
+	if !verified {
+		return nil, ErrDomainNotVerified
+	}
+
+	// Demote any existing primary on this tenant. The WHERE on is_primary keeps
+	// this a no-op when the target is already primary, so a second call doesn't
+	// thrash the row.
+	if _, err := tx.Exec(ctx,
+		`UPDATE tenant_domains SET is_primary = FALSE
+		 WHERE tenant_id = $1 AND is_primary = TRUE`,
+		tenantID,
+	); err != nil {
+		return nil, fmt.Errorf("SetPrimaryDomain demote: %w", err)
+	}
+
+	// Promote target. RETURNING captures the full row shape so we can hand it
+	// back to the gRPC handler without a follow-up SELECT.
+	var rec DomainRecord
+	err = tx.QueryRow(ctx,
+		`UPDATE tenant_domains
+		 SET is_primary = TRUE
+		 WHERE tenant_id = $1 AND domain = $2
+		 RETURNING id, tenant_id, domain, verification_token, verified, registered_at, verified_at,
+		           notified_24h, notified_48h, next_poll_after, is_primary`,
+		tenantID, domain,
+	).Scan(&rec.ID, &rec.TenantID, &rec.Domain, &rec.VerificationToken,
+		&rec.Verified, &rec.RegisteredAt, &rec.VerifiedAt,
+		&rec.Notified24h, &rec.Notified48h, &rec.NextPollAfter, &rec.IsPrimary)
+	if err != nil {
+		return nil, fmt.Errorf("SetPrimaryDomain promote: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("SetPrimaryDomain commit: %w", err)
+	}
+	return &rec, nil
+}
+
+// DeleteDomainByName removes the (tenant_id, domain) row and reports whether
+// it was the tenant's primary at delete-time. The bool drives the
+// X-Janus-Warning header in the management layer so the UI can toast about
+// the tenant losing its custom host.
+//
+// Returns ErrDomainNotFound when nothing matched — gRPC NotFound semantics.
+func (r *Repository) DeleteDomainByName(ctx context.Context, tenantID uuid.UUID, domain string) (wasPrimary bool, err error) {
+	// RETURNING lets us discover the is_primary state in the same round-trip
+	// as the DELETE — no SELECT-then-DELETE race.
+	err = r.pool.QueryRow(ctx,
+		`DELETE FROM tenant_domains
+		 WHERE tenant_id = $1 AND domain = $2
+		 RETURNING is_primary`,
+		tenantID, domain,
+	).Scan(&wasPrimary)
+	if err == pgx.ErrNoRows {
+		return false, ErrDomainNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("DeleteDomainByName: %w", err)
+	}
+	return wasPrimary, nil
 }
