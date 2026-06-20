@@ -33,6 +33,7 @@ type webhookRepo interface {
 	UpdateEndpoint(ctx context.Context, endpointID, tenantID uuid.UUID, url *string, events []string, active *bool) (*repository.EndpointRecord, error)
 	RotateSecret(ctx context.Context, endpointID, tenantID uuid.UUID, secretEnc string) error
 	ListDeliveries(ctx context.Context, endpointID, tenantID uuid.UUID, since time.Time, limit int) ([]*repository.DeliveryRecord, error)
+	GetDelivery(ctx context.Context, endpointID, deliveryID, tenantID uuid.UUID) (*repository.DeliveryRecord, error)
 }
 
 // testDispatcher is the subset of *delivery.Dispatcher used by TestDispatch.
@@ -372,4 +373,43 @@ func decryptSecret(hexCT string, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 	return pt, nil
+}
+
+// GetDelivery (FE-API-035) returns one delivery row plus the JSON payload,
+// signature header, and response body. The list-deliveries stream
+// deliberately omits the payload to keep responses bounded; this single-row
+// variant is the debugging companion behind an explicit click.
+//
+// Tenant + endpoint scoping is enforced in repository.GetDelivery — a row
+// belonging to another tenant returns pgx.ErrNoRows, which we surface as
+// gRPC NotFound. We never echo back the queried delivery_id with a
+// "wrong tenant" error because that leaks existence.
+func (h *GRPCHandler) GetDelivery(ctx context.Context, req *webhookv1.GetDeliveryRequest) (*webhookv1.DeliveryDetail, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	endpointID, err := uuid.Parse(req.GetEndpointId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "endpoint_id must be a UUID")
+	}
+	deliveryID, err := uuid.Parse(req.GetDeliveryId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "delivery_id must be a UUID")
+	}
+
+	rec, err := h.repo.GetDelivery(ctx, endpointID, deliveryID, tenantID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "delivery not found")
+		}
+		return nil, status.Error(codes.Internal, "failed to load delivery")
+	}
+
+	return &webhookv1.DeliveryDetail{
+		Delivery:        deliveryToProto(rec),
+		PayloadJson:     string(rec.Payload),
+		SignatureHeader: "", // not currently stored; surface as empty
+		ResponseBody:    "", // not currently stored; surface as empty
+	}, nil
 }

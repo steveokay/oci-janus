@@ -100,6 +100,7 @@ func (h *Handler) RegisterWebhooks(mux *http.ServeMux, authMW func(http.Handler)
 	mux.Handle("PATCH /api/v1/webhooks/{id}", authMW(http.HandlerFunc(h.handleUpdateWebhook)))
 	mux.Handle("DELETE /api/v1/webhooks/{id}", authMW(http.HandlerFunc(h.handleDeleteWebhook)))
 	mux.Handle("GET /api/v1/webhooks/{id}/deliveries", authMW(http.HandlerFunc(h.handleListWebhookDeliveries)))
+	mux.Handle("GET /api/v1/webhooks/{id}/deliveries/{delivery_id}", authMW(http.HandlerFunc(h.handleGetDelivery)))
 	mux.Handle("POST /api/v1/webhooks/{id}/test", authMW(http.HandlerFunc(h.handleTestWebhook)))
 	mux.Handle("POST /api/v1/webhooks/{id}/rotate-secret", authMW(http.HandlerFunc(h.handleRotateWebhookSecret)))
 }

@@ -27,6 +27,7 @@ const (
 	WebhookService_RotateEndpointSecret_FullMethodName = "/registry.webhook.v1.WebhookService/RotateEndpointSecret"
 	WebhookService_ListDeliveries_FullMethodName       = "/registry.webhook.v1.WebhookService/ListDeliveries"
 	WebhookService_TestDispatch_FullMethodName         = "/registry.webhook.v1.WebhookService/TestDispatch"
+	WebhookService_GetDelivery_FullMethodName          = "/registry.webhook.v1.WebhookService/GetDelivery"
 )
 
 // WebhookServiceClient is the client API for WebhookService service.
@@ -47,6 +48,13 @@ type WebhookServiceClient interface {
 	// TestDispatch sends a synthetic `webhook.test` event to the configured URL
 	// and returns the response code + duration synchronously (FE-API-023).
 	TestDispatch(ctx context.Context, in *TestDispatchRequest, opts ...grpc.CallOption) (*TestDispatchResponse, error)
+	// GetDelivery returns the full delivery row including the JSON payload
+	// (FE-API-035). The list-deliveries route deliberately omits the payload
+	// to keep responses bounded; this single-row variant is the debugging
+	// companion. signature_header + response_body are returned as empty
+	// strings when the underlying schema doesn't capture them yet — a
+	// follow-up migration can populate them without changing the wire shape.
+	GetDelivery(ctx context.Context, in *GetDeliveryRequest, opts ...grpc.CallOption) (*DeliveryDetail, error)
 }
 
 type webhookServiceClient struct {
@@ -173,6 +181,16 @@ func (c *webhookServiceClient) TestDispatch(ctx context.Context, in *TestDispatc
 	return out, nil
 }
 
+func (c *webhookServiceClient) GetDelivery(ctx context.Context, in *GetDeliveryRequest, opts ...grpc.CallOption) (*DeliveryDetail, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeliveryDetail)
+	err := c.cc.Invoke(ctx, WebhookService_GetDelivery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WebhookServiceServer is the server API for WebhookService service.
 // All implementations should embed UnimplementedWebhookServiceServer
 // for forward compatibility
@@ -191,6 +209,13 @@ type WebhookServiceServer interface {
 	// TestDispatch sends a synthetic `webhook.test` event to the configured URL
 	// and returns the response code + duration synchronously (FE-API-023).
 	TestDispatch(context.Context, *TestDispatchRequest) (*TestDispatchResponse, error)
+	// GetDelivery returns the full delivery row including the JSON payload
+	// (FE-API-035). The list-deliveries route deliberately omits the payload
+	// to keep responses bounded; this single-row variant is the debugging
+	// companion. signature_header + response_body are returned as empty
+	// strings when the underlying schema doesn't capture them yet — a
+	// follow-up migration can populate them without changing the wire shape.
+	GetDelivery(context.Context, *GetDeliveryRequest) (*DeliveryDetail, error)
 }
 
 // UnimplementedWebhookServiceServer should be embedded to have forward compatible implementations.
@@ -217,6 +242,9 @@ func (UnimplementedWebhookServiceServer) ListDeliveries(*ListDeliveriesRequest, 
 }
 func (UnimplementedWebhookServiceServer) TestDispatch(context.Context, *TestDispatchRequest) (*TestDispatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TestDispatch not implemented")
+}
+func (UnimplementedWebhookServiceServer) GetDelivery(context.Context, *GetDeliveryRequest) (*DeliveryDetail, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetDelivery not implemented")
 }
 
 // UnsafeWebhookServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -362,6 +390,24 @@ func _WebhookService_TestDispatch_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WebhookService_GetDelivery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDeliveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WebhookServiceServer).GetDelivery(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WebhookService_GetDelivery_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WebhookServiceServer).GetDelivery(ctx, req.(*GetDeliveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WebhookService_ServiceDesc is the grpc.ServiceDesc for WebhookService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -388,6 +434,10 @@ var WebhookService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TestDispatch",
 			Handler:    _WebhookService_TestDispatch_Handler,
+		},
+		{
+			MethodName: "GetDelivery",
+			Handler:    _WebhookService_GetDelivery_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
