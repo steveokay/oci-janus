@@ -1,5 +1,7 @@
 # Project Status
 
+> Last audited: 2026-06-21 (full doc audit — verified every OPEN/NOT STARTED row against the codebase; pruned stale Beacon-rebuild rows; marked Round-3 pentest items resolved where verified).
+>
 > Last updated: 2026-06-21 (night — **FE-API-034 SAML completion landed** (`df39d13`). New `services/auth/internal/saml` package wraps `crewjam/saml` bare `ServiceProvider`, bypassing samlsp.Middleware cookie/session machinery (auth_login_sessions + JWT issuer cover those). startSAML captures AuthnRequest.ID into the unused pkce_verifier column so callbackSAML can pass it to ParseResponse as InResponseTo. Email attribute walk (ADFS URN → LDAP OID → short names → NameID fallback). New SAML_SP_CERT_PATH + SAML_SP_KEY_PATH config (both-or-neither; unset → 501 NOTCONFIGURED so the cluster still boots). Metadata parsed per-request (admin PATCH effective immediately). 9 new SAML tests including happy E2E via in-process crewjam IdentityProvider + replay rejection. **🎉 ALL 36 BACKEND FE-API ITEMS NOW FULLY DONE** — no remaining deferrals.).
 >
 > Previous: 2026-06-21 (late evening — FE-API-034 OAuth closed via merge `4e3d939`. Hand-rolled net/http (no x/oauth2 dep), PKCE S256, single-use state, constant-time compare, open-redirect guard, email_verified check, per-tenant admin CRUD with AES-256-GCM-encrypted client_secret.).
@@ -263,13 +265,13 @@ All decisions resolved. No blockers.
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| **PENTEST-027 (HIGH)** — Restrict webhook list + list-deliveries to admin; scrub credentials from `last_error` | `services/management`, `services/webhook` | OPEN | Any authenticated tenant user can list webhook URLs (potentially containing embedded auth tokens) and read `Delivery.last_error` strings that contain the failing URL. Gate behind `requireWebhookAdmin` (or a new `requireWebhookReader`) and sanitise the URL before storing in `last_error` inside `DeliverWithResult`. |
-| **PENTEST-028 (HIGH)** — Replace 00004 backfill with a paginated post-migration job | `services/metadata` | OPEN | The PL/pgSQL `DO` loop in `00004_manifest_image_size.sql` is a single-transaction full-table scan. On large tenants this stalls startup, blocks autovacuum, and risks backend OOM. Split into (a) column-add migration and (b) batched backfill job (LIMIT 1000/COMMIT). Document migration cost in `infra/runbooks/manifest-backfill.md`. |
-| PENTEST-029 (MEDIUM) — Cap manifest `raw_json` size at the metadata gRPC layer + element-count guard in `parseImageSize` | `services/metadata` | OPEN | OCI core enforces 4 MiB; metadata gRPC does not (defence in depth). Add `MaxRecvMsgSize` server option + `len(doc.Layers) <= 1024` early-return in the parser. |
-| PENTEST-030 (MEDIUM) — Add per-endpoint test-dispatch throttle (Redis-keyed) | `services/management` / `services/webhook` | OPEN | Test-dispatch shares the 20 rps per-user limit but can be used to amplify against a single victim URL. Add `(tenant_id, endpoint_id)` Redis throttle (1/10s) + per-tenant daily budget. |
-| PENTEST-031 (MEDIUM) — Don't passthrough gRPC `InvalidArgument` text in webhook HTTP error mapping | `services/management` | OPEN | `mapWebhookGRPCError` echoes `st.Message()` for `InvalidArgument`, leaking SSRF-guard internals like the blocked IP. Replace with a fixed string, log original server-side. |
-| PENTEST-032 (LOW) — Re-validate stored webhook URL on every PATCH | `services/webhook` | OPEN | Defence-in-depth: if the URL's DNS now resolves to RFC1918, refuse the update so operators see the regression at edit time (runtime dialer still blocks at delivery). |
-| PENTEST-033 (LOW) — Move dev passwords out of Postman collection bodies into env vars | `docs/postman` | OPEN | `Admin1234!dev` and `NewUser1234!` are inlined; should be `{{adminPassword}}` env vars with empty default + secret type. Same for the dev tenant UUID. |
+| **PENTEST-027 (HIGH)** — Restrict webhook list + list-deliveries to admin; scrub credentials from `last_error` | `services/management`, `services/webhook` | DONE ✅ | 2026-06-21 audit: verified `services/management/internal/handler/webhooks.go:122` (list) and `:284` (deliveries) both gate via `requireWebhookAdmin`; `services/webhook/internal/delivery/dispatcher.go:29` defines `sanitizeURLForError` (strips userinfo/query/fragment) and `:154` wraps the dispatcher error with it. |
+| **PENTEST-028 (HIGH)** — Replace 00004 backfill with a paginated post-migration job | `services/metadata` | DONE ✅ | 2026-06-21 audit: verified `services/metadata/migrations/00004_manifest_image_size.sql` now only does `ALTER TABLE ADD COLUMN … DEFAULT 0` (instant metadata-only change on PG 11+). Batched backfill moved to `infra/runbooks/manifest-image-size-backfill.md`. |
+| PENTEST-029 (MEDIUM) — Cap manifest `raw_json` size at the metadata gRPC layer + element-count guard in `parseImageSize` | `services/metadata` | DONE ✅ | 2026-06-21 audit: verified `services/metadata/internal/handler/grpc.go:220` defines `maxManifestJSONBytes = 4 << 20` with explicit length check in `PutManifest` (returns `InvalidArgument`); `services/metadata/internal/repository/repository.go:397` defines `maxManifestEntries = 1000` and `parseImageSize` truncates Layers/Manifests to that cap. |
+| PENTEST-030 (MEDIUM) — Add per-endpoint test-dispatch throttle (Redis-keyed) | `services/management` / `services/webhook` | OPEN | 2026-06-21 audit: confirmed still missing — `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards; no `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. |
+| PENTEST-031 (MEDIUM) — Don't passthrough gRPC `InvalidArgument` text in webhook HTTP error mapping | `services/management` | DONE ✅ | 2026-06-21 audit: verified `services/management/internal/handler/webhooks.go:477` `mapWebhookGRPCError` now logs `st.Message()` server-side at `slog.Warn` and returns the fixed string `"invalid request"` to the client. Covered by `webhooks_test.go:145`. |
+| PENTEST-032 (LOW) — Re-validate stored webhook URL on every PATCH | `services/webhook` | DONE ✅ | 2026-06-21 audit: verified `services/webhook/internal/handler/grpc.go:179-202` — when `req.Url == nil`, `UpdateEndpoint` fetches the existing record via `GetEndpointForTenant` and runs `delivery.ValidateURL` against the stored URL; refuses the update with `InvalidArgument "stored webhook URL is no longer valid"` on regression. |
+| PENTEST-033 (LOW) — Move dev passwords out of Postman collection bodies into env vars | `docs/postman` | PARTIAL | 2026-06-21 audit: login uses `{{password}}` env var (now `type: secret`) — first half done. Still open: (a) `NewUser1234!` baked into the `createUser` request body at `registry-management.postman_collection.json:114`, (b) the dev tenant UUID `98dbe36b-…` defaulted in `registry-management.postman_environment.json:6`. |
 
 #### Backend correctness — HIGH
 
@@ -299,8 +301,8 @@ All decisions resolved. No blockers.
 
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Fix `useUserIsAdmin` localStorage read — token is memory-only | `frontend/` | NOT STARTED | `dashboard/index.tsx:22` reads `localStorage.getItem('auth_token')` which is never written anywhere. Function always returns `false`, so admins never see delete buttons. Read from `useAuthStore` instead. **Backend prerequisite (roles claim) is now DONE — see row below.** |
-| Add `roles` claim to JWT (or expose `/api/v1/me` permissions endpoint) | `services/auth`, `frontend/` | DONE ✅ (backend) | `Roles []string` added to `Claims`; `Login` loads `GetUserRoles` and embeds the deduped role-name list in the JWT. `ValidateTokenResponse` proto has a new `roles` field (#7); gRPC handler returns the claim verbatim. Docker `/auth/token` path still issues OCI-scoped tokens without roles (Docker clients don't use them). Frontend wiring (`payload.roles` read after JWT decode) tracked separately in Frontend UX. |
+| Fix `useUserIsAdmin` localStorage read — token is memory-only | `frontend/` | DONE ✅ | Superseded by Beacon rebuild (`PENTEST-015` resolution); current `useUserIsAdmin` reads `roles` from `useAuthStore`. The legacy `dashboard/index.tsx:22` no longer exists. |
+| Add `roles` claim to JWT (or expose `/api/v1/me` permissions endpoint) | `services/auth`, `frontend/` | DONE ✅ | `Roles []string` added to `Claims`; `Login` loads `GetUserRoles` and embeds the deduped role-name list in the JWT. `ValidateTokenResponse` proto has a new `roles` field (#7); gRPC handler returns the claim verbatim. Docker `/auth/token` path still issues OCI-scoped tokens without roles (Docker clients don't use them). Frontend reads `payload.roles` after JWT decode in Beacon `authStore`. |
 
 #### Backend polish — MEDIUM
 
@@ -319,13 +321,11 @@ All decisions resolved. No blockers.
 
 #### Frontend structure — LOW
 
+> 2026-06-21 audit: legacy rows for "Repositories vs Images", "Add dark mode", "Skeleton tile height parity", and "Unify error UX" have been removed — the Beacon rebuild (PR #14, merged 2026-06-19) ships full dark-mode parity, uses the "Repositories" naming only, has skeleton geometry-matched primitives, and uses sonner toasts + inline error states (FE-STATUS.md S0–S6). Remaining real follow-up:
+
 | Task | Service | Status | Notes |
 |---|---|---|---|
-| Consolidate or relabel "Repositories" vs "Images" sidebar items | `frontend/` | NOT STARTED | In an OCI registry these are nearly synonymous; users get confused. Suggest "Repositories" + "Tags" pairing. |
-| Add tenant switcher to top nav | `frontend/` | NOT STARTED | Required if a single user belongs to multiple orgs. |
-| Add dark mode (MD3 tokens already support it) | `frontend/` | NOT STARTED | Cheap given the existing palette system. |
-| Fix skeleton tile height parity to remove layout shift | `frontend/` | NOT STARTED | `h-24` skeleton then real card expands taller. |
-| Unify error UX — toast + inline rather than mixed "Failed to load" / "—" patterns | `frontend/` | NOT STARTED | Currently inconsistent across StatsCards / FeaturedRepositories / etc. |
+| Add tenant switcher to top nav | `frontend/` | NOT STARTED | Required if a single user belongs to multiple orgs. Backend already exposes per-tenant context via `tenant_id` claim; the UI gap is the switcher widget + `tenant_id` swap-on-select. |
 
 #### Frontend rebuild — API gaps surfaced by Sprint 1d+ — MEDIUM
 
