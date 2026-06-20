@@ -44,6 +44,8 @@ const (
 	MetadataService_DecrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
 	MetadataService_UpdateScanStatus_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
 	MetadataService_GetScanResult_FullMethodName               = "/registry.metadata.v1.MetadataService/GetScanResult"
+	MetadataService_UpsertScanSBOM_FullMethodName              = "/registry.metadata.v1.MetadataService/UpsertScanSBOM"
+	MetadataService_GetScanSBOM_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetScanSBOM"
 	MetadataService_GetTenantVulnerabilityCount_FullMethodName = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
 	MetadataService_CountRepositories_FullMethodName           = "/registry.metadata.v1.MetadataService/CountRepositories"
 	MetadataService_GetSecurityOverview_FullMethodName         = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
@@ -87,6 +89,16 @@ type MetadataServiceClient interface {
 	// Scan status
 	UpdateScanStatus(ctx context.Context, in *UpdateScanStatusRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetScanResult(ctx context.Context, in *GetScanResultRequest, opts ...grpc.CallOption) (*ScanResult, error)
+	// Per-tag SBOM storage (FE-API-033). The SBOM is persisted on the
+	// scan_results row keyed by (tenant_id, manifest_digest); the management
+	// BFF exposes a tag-scoped download route on top.
+	//
+	// UpsertScanSBOM is the scanner-side write seam — even when the scanner
+	// hasn't been wired to call it yet, tests can pre-seed an SBOM through it.
+	// GetScanSBOM returns NotFound when the manifest has no scan row or the
+	// sbom_json column is NULL.
+	UpsertScanSBOM(ctx context.Context, in *UpsertScanSBOMRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetScanSBOM(ctx context.Context, in *GetScanSBOMRequest, opts ...grpc.CallOption) (*GetScanSBOMResponse, error)
 	// Vulnerability aggregate
 	GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error)
 	// Repository count — efficient alternative to draining ListRepositories for stats.
@@ -455,6 +467,26 @@ func (c *metadataServiceClient) GetScanResult(ctx context.Context, in *GetScanRe
 	return out, nil
 }
 
+func (c *metadataServiceClient) UpsertScanSBOM(ctx context.Context, in *UpsertScanSBOMRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_UpsertScanSBOM_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetScanSBOM(ctx context.Context, in *GetScanSBOMRequest, opts ...grpc.CallOption) (*GetScanSBOMResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetScanSBOMResponse)
+	err := c.cc.Invoke(ctx, MetadataService_GetScanSBOM_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) GetTenantVulnerabilityCount(ctx context.Context, in *GetTenantVulnerabilityCountRequest, opts ...grpc.CallOption) (*VulnerabilityCountResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VulnerabilityCountResponse)
@@ -559,6 +591,16 @@ type MetadataServiceServer interface {
 	// Scan status
 	UpdateScanStatus(context.Context, *UpdateScanStatusRequest) (*emptypb.Empty, error)
 	GetScanResult(context.Context, *GetScanResultRequest) (*ScanResult, error)
+	// Per-tag SBOM storage (FE-API-033). The SBOM is persisted on the
+	// scan_results row keyed by (tenant_id, manifest_digest); the management
+	// BFF exposes a tag-scoped download route on top.
+	//
+	// UpsertScanSBOM is the scanner-side write seam — even when the scanner
+	// hasn't been wired to call it yet, tests can pre-seed an SBOM through it.
+	// GetScanSBOM returns NotFound when the manifest has no scan row or the
+	// sbom_json column is NULL.
+	UpsertScanSBOM(context.Context, *UpsertScanSBOMRequest) (*emptypb.Empty, error)
+	GetScanSBOM(context.Context, *GetScanSBOMRequest) (*GetScanSBOMResponse, error)
 	// Vulnerability aggregate
 	GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error)
 	// Repository count — efficient alternative to draining ListRepositories for stats.
@@ -662,6 +704,12 @@ func (UnimplementedMetadataServiceServer) UpdateScanStatus(context.Context, *Upd
 }
 func (UnimplementedMetadataServiceServer) GetScanResult(context.Context, *GetScanResultRequest) (*ScanResult, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetScanResult not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpsertScanSBOM(context.Context, *UpsertScanSBOMRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertScanSBOM not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetScanSBOM(context.Context, *GetScanSBOMRequest) (*GetScanSBOMResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetScanSBOM not implemented")
 }
 func (UnimplementedMetadataServiceServer) GetTenantVulnerabilityCount(context.Context, *GetTenantVulnerabilityCountRequest) (*VulnerabilityCountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantVulnerabilityCount not implemented")
@@ -1140,6 +1188,42 @@ func _MetadataService_GetScanResult_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_UpsertScanSBOM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertScanSBOMRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpsertScanSBOM(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpsertScanSBOM_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpsertScanSBOM(ctx, req.(*UpsertScanSBOMRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetScanSBOM_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetScanSBOMRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetScanSBOM(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetScanSBOM_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetScanSBOM(ctx, req.(*GetScanSBOMRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_GetTenantVulnerabilityCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetTenantVulnerabilityCountRequest)
 	if err := dec(in); err != nil {
@@ -1352,6 +1436,14 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetScanResult",
 			Handler:    _MetadataService_GetScanResult_Handler,
+		},
+		{
+			MethodName: "UpsertScanSBOM",
+			Handler:    _MetadataService_UpsertScanSBOM_Handler,
+		},
+		{
+			MethodName: "GetScanSBOM",
+			Handler:    _MetadataService_GetScanSBOM_Handler,
 		},
 		{
 			MethodName: "GetTenantVulnerabilityCount",

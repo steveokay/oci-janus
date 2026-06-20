@@ -56,6 +56,10 @@ type metadataRepo interface {
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
+	// Per-tag SBOM (FE-API-033) — keyed on the latest scan_results row for the
+	// (tenant_id, manifest_digest) pair.
+	UpsertScanSBOM(ctx context.Context, tenantID, manifestDigest, format string, sbomJSON []byte) error
+	GetScanSBOM(ctx context.Context, tenantID, manifestDigest string) (*repository.SBOMResult, error)
 	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error)
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	GetSecurityOverview(ctx context.Context, tenantID string) (*repository.SecurityOverview, error)
@@ -312,6 +316,62 @@ func (h *MetadataHandler) UpdateScanStatus(ctx context.Context, req *metadatav1.
 func (h *MetadataHandler) GetScanResult(ctx context.Context, req *metadatav1.GetScanResultRequest) (*metadatav1.ScanResult, error) {
 	sr, err := h.repo.GetScanResult(ctx, req.TenantId, req.ManifestDigest)
 	return sr, mapErr(err)
+}
+
+// ── SBOM (FE-API-033) ────────────────────────────────────────────────────────
+
+// validSBOMFormats lists the SBOM wire formats accepted by UpsertScanSBOM. Held
+// as a small map (not a slice + linear scan) so future formats are added with
+// a single line. "spdx-json" is the only one the scanner emits today;
+// "cyclonedx-json" is reserved so the schema doesn't need to change when it
+// lands. Anything else is rejected as InvalidArgument so a typo from a
+// future caller surfaces immediately rather than silently writing garbage.
+var validSBOMFormats = map[string]bool{
+	"spdx-json":      true,
+	"cyclonedx-json": true,
+}
+
+// UpsertScanSBOM persists the SBOM blob produced for the latest scan of a
+// manifest. Returns InvalidArgument on missing/unknown fields, NotFound when
+// no scan_results row exists for the (tenant, manifest_digest) pair.
+func (h *MetadataHandler) UpsertScanSBOM(ctx context.Context, req *metadatav1.UpsertScanSBOMRequest) (*emptypb.Empty, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetManifestDigest() == "" {
+		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
+	}
+	if !validSBOMFormats[req.GetFormat()] {
+		// Don't echo the format value back — the response body is a candidate
+		// for log injection if the caller is hostile and the message is rendered
+		// without escaping. A generic message is sufficient.
+		return nil, status.Error(codes.InvalidArgument, "unsupported sbom format")
+	}
+	if len(req.GetSbomJson()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sbom_json is required")
+	}
+	err := h.repo.UpsertScanSBOM(ctx, req.GetTenantId(), req.GetManifestDigest(), req.GetFormat(), req.GetSbomJson())
+	return &emptypb.Empty{}, mapErr(err)
+}
+
+// GetScanSBOM returns the stored SBOM bytes + format for the latest scan of a
+// manifest. NotFound covers both "never scanned" and "scanned but no SBOM
+// recorded" — the management BFF maps either case to the same 404 response.
+func (h *MetadataHandler) GetScanSBOM(ctx context.Context, req *metadatav1.GetScanSBOMRequest) (*metadatav1.GetScanSBOMResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetManifestDigest() == "" {
+		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
+	}
+	res, err := h.repo.GetScanSBOM(ctx, req.GetTenantId(), req.GetManifestDigest())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.GetScanSBOMResponse{
+		Format:   res.Format,
+		SbomJson: res.SBOMJSON,
+	}, nil
 }
 
 // GetTenantVulnerabilityCount returns the aggregated CRITICAL+HIGH vulnerability

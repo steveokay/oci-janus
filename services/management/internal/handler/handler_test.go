@@ -192,7 +192,15 @@ func (s *fakeMetaServer) ListTags(req *metadatav1.ListTagsRequest, stream metada
 	return nil
 }
 
+// getTagErr lets FE-API-033 tests force a "tag not found" response from
+// GetTag without redefining the whole fake. Set in a test, the global hook
+// is consumed once and reset by the test's own cleanup.
+var getTagErr error
+
 func (s *fakeMetaServer) GetTag(_ context.Context, req *metadatav1.GetTagRequest) (*metadatav1.Tag, error) {
+	if getTagErr != nil {
+		return nil, getTagErr
+	}
 	return &metadatav1.Tag{
 		Name:           req.GetName(),
 		ManifestDigest: "sha256:abc123",
@@ -222,6 +230,28 @@ func (s *fakeMetaServer) GetScanResult(_ context.Context, _ *metadatav1.GetScanR
 		ScanId:      "scan-1",
 		Status:      "complete",
 		ScannerName: "trivy",
+	}, nil
+}
+
+// scanSBOMOverride lets FE-API-033 tests inject a specific SBOM payload or
+// force a NotFound. Default behaviour (override == nil and error == nil) is
+// a small SPDX 2.3 JSON blob so the happy-path test has concrete bytes to
+// assert on.
+var (
+	scanSBOMOverride *metadatav1.GetScanSBOMResponse
+	scanSBOMErr      error
+)
+
+func (s *fakeMetaServer) GetScanSBOM(_ context.Context, _ *metadatav1.GetScanSBOMRequest) (*metadatav1.GetScanSBOMResponse, error) {
+	if scanSBOMErr != nil {
+		return nil, scanSBOMErr
+	}
+	if scanSBOMOverride != nil {
+		return scanSBOMOverride, nil
+	}
+	return &metadatav1.GetScanSBOMResponse{
+		Format:   "spdx-json",
+		SbomJson: []byte(`{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT"}`),
 	}, nil
 }
 

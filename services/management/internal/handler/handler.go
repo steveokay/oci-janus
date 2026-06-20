@@ -257,6 +257,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))
 
+	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
+	// sufficient — the SBOM is equivalent to what a reader could derive by
+	// pulling the image themselves. ?format=spdx-json (default) is the only
+	// implemented format; cyclonedx-json returns 400.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/sbom", authMW(http.HandlerFunc(h.handleGetTagSBOM)))
+
 	// Build / audit history — returns empty list until registry-audit query API is ready.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds", authMW(http.HandlerFunc(h.handleListBuilds)))
 

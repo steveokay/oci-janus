@@ -843,6 +843,91 @@ func (r *Repository) GetScanResult(ctx context.Context, tenantID, manifestDigest
 	return &sr, nil
 }
 
+// ── SBOM (FE-API-033) ────────────────────────────────────────────────────────
+
+// SBOMResult is the value type returned by GetScanSBOM. Kept in the repository
+// layer so the handler maps directly to the proto message without dragging
+// repository types into protos.
+type SBOMResult struct {
+	Format   string // "spdx-json" | "cyclonedx-json"
+	SBOMJSON []byte
+}
+
+// UpsertScanSBOM persists the SBOM bytes + format on the latest scan_results
+// row for (tenant_id, manifest_digest). Returns ErrNotFound when no scan row
+// exists yet — the scanner is expected to create the row via
+// CreatePendingScanResult / UpsertScanResult before calling this.
+//
+// "Latest" matches GetScanResult's selection (ORDER BY created_at DESC LIMIT 1)
+// so writers and readers always agree on which row carries the SBOM.
+func (r *Repository) UpsertScanSBOM(ctx context.Context, tenantID, manifestDigest, format string, sbomJSON []byte) error {
+	// Two-step: pick the most recent row, then update it. A single UPDATE … FROM
+	// would work too, but the SELECT keeps the row identification identical to
+	// GetScanResult's contract.
+	const selectQ = `
+		SELECT id
+		FROM   scan_results
+		WHERE  tenant_id = $1 AND manifest_digest = $2
+		ORDER  BY created_at DESC
+		LIMIT  1`
+
+	var rowID string
+	if err := r.pool.QueryRow(ctx, selectQ, tenantID, manifestDigest).Scan(&rowID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("select scan_results for sbom upsert: %w", err)
+	}
+
+	const updateQ = `
+		UPDATE scan_results
+		SET    sbom_format = $1,
+		       sbom_json   = $2
+		WHERE  id = $3 AND tenant_id = $4`
+
+	tag, err := r.pool.Exec(ctx, updateQ, format, sbomJSON, rowID, tenantID)
+	if err != nil {
+		return fmt.Errorf("update scan_results sbom: %w", err)
+	}
+	// The row was just selected; a 0-RowsAffected here means a concurrent
+	// delete or a tenant_id mismatch, both of which fail closed as NotFound.
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetScanSBOM returns the SBOM bytes + format for the latest scan of
+// (tenant_id, manifest_digest). Returns ErrNotFound when no scan row exists
+// OR when the row exists but has no SBOM persisted yet (sbom_json IS NULL) —
+// the caller cannot distinguish these cases, but the management BFF only
+// needs the "no SBOM available" branch to render the same 404 either way.
+func (r *Repository) GetScanSBOM(ctx context.Context, tenantID, manifestDigest string) (*SBOMResult, error) {
+	const q = `
+		SELECT sbom_format, sbom_json
+		FROM   scan_results
+		WHERE  tenant_id = $1 AND manifest_digest = $2
+		ORDER  BY created_at DESC
+		LIMIT  1`
+
+	var format *string
+	var sbom []byte
+	err := r.pool.QueryRow(ctx, q, tenantID, manifestDigest).Scan(&format, &sbom)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get scan sbom: %w", err)
+	}
+	// NULL columns ⇒ row exists but SBOM not yet generated. Surface as
+	// NotFound so the BFF renders the same "no SBOM recorded" message for
+	// "never scanned" and "scanned but no SBOM" alike.
+	if format == nil || len(sbom) == 0 {
+		return nil, ErrNotFound
+	}
+	return &SBOMResult{Format: *format, SBOMJSON: sbom}, nil
+}
+
 // GetTenantVulnerabilityCount aggregates CRITICAL and HIGH vulnerability counts
 // across all completed scan_results for a tenant. The total is the sum of both.
 func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (int64, error) {
