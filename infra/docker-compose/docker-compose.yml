@@ -649,6 +649,9 @@ services:
       # WEBHOOK_GRPC_ADDR enables the /api/v1/webhooks family (FE-API-021..024).
       # Empty disables those routes with 404 "route disabled".
       WEBHOOK_GRPC_ADDR: registry-webhook:50051
+      # SIGNER_GRPC_ADDR enables FE-API-003 /api/v1/.../signature. Empty leaves
+      # the route at 404 "route disabled" — frontend renders the unsigned state.
+      SIGNER_GRPC_ADDR: registry-signer:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.

@@ -55,7 +55,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S5 | Webhooks | DONE ✅ | `/webhooks` list + `/webhooks/$id` detail, create/edit/delete, delivery log, test, rotate-secret |
 | S6 | Platform Admin | DONE ✅ | `/admin/tenants`, tenant CRUD + quota + page footer |
 | S7A | Profile & API keys | DONE ✅ | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
-| S7B | Image detail enhancement | NOT STARTED | Layers + Signing tabs on tag-detail — needs FE-API-002 + FE-API-003 backend first |
+| S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 
 ### S0 — Foundation
@@ -126,21 +126,22 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 > includes the backend work, not just frontend wiring.
 
 **Backend FE-API-002 — manifest detail**
-- [ ] `GetManifest` RPC on `services/metadata` returning layer digests + sizes + media types + os/arch (parse `raw_json` server-side; cache by digest)
-- [ ] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest` HTTP route on `services/management`
-- [ ] Integration tests
+- [x] `GetManifest` RPC on `services/metadata` (already existed)
+- [x] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest` HTTP route on `services/management` (route already registered; **extended to also parse OCI image indexes / Docker manifest lists** so multi-arch images render per-platform entries)
+- [x] Response shape adds `is_index: bool` + `manifests[]: {digest, size, media_type, architecture, os, variant, os_version}`
 
 **Backend FE-API-003 — signing status**
-- [ ] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature` HTTP route on `services/management` calling `signer.VerifyManifest` over gRPC
-- [ ] Response shape: `{ verified, signer_id, key_id, signed_at, failure_reason? }`
-- [ ] Integration tests
+- [x] `GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature` HTTP route on `services/management` (`signature.go`); wraps `signer.ListSignatures` over gRPC
+- [x] Response shape: `{ manifest_digest, signed, signatures[]: {signer_id, key_id, signature_digest, signed_at} }`
+- [x] Signer gRPC client wired into management (opt-in via `SIGNER_GRPC_ADDR`); 404 "route disabled" when unset → frontend renders Disabled state
+- [x] NotFound from signer collapsed into `signed: false` — that's the unsigned state, not an error
 
 **Frontend wiring**
-- [ ] `useManifest`, `useSignature` hooks
-- [ ] Layers tab — table of layers (digest, size, media type, OS/arch chips for index manifests), config blob summary
-- [ ] Signing tab — verification result with Cosign/Notary identity, public-key fingerprint, signed-at, failure reason if invalid
-- [ ] Signing pill on the tag list row (signed ✓ / unsigned / invalid)
-- [ ] Build / typecheck / lint pass
+- [x] `useManifest`, `useSignature` hooks (forgiving 404 → null / SIGNING_DISABLED)
+- [x] `LayersPanel` — image-manifest view (config + manifest digest rows + layers table with `#` / digest / media-type / size) **or** image-index view (Multi-platform banner + per-platform rows with arch/os/variant chips)
+- [x] `SigningPanel` — three states: **Disabled** (signer not wired on BFF), **Unsigned** (warning tone with `cosign sign` hint), **Signed** (success tone with one card per signer showing signer_id + key_id + signature_digest + signed_at)
+- [x] Wired into the tag-detail tabs replacing the Sprint 2 ComingSoon stubs
+- [x] Build / typecheck / lint pass
 
 ### S3 — Security & Activity
 

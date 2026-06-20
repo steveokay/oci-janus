@@ -1,7 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Layers, FileSignature } from "lucide-react";
 import { useTags } from "@/lib/api/tags";
 import { useScan, useTriggerScan } from "@/lib/api/scan";
 import { useBuilds } from "@/lib/api/builds";
@@ -10,6 +9,8 @@ import { PullCommandCard } from "@/components/repositories/pull-command-card";
 import { ScanPanel } from "@/components/security/scan-panel";
 import { BuildTimeline } from "@/components/builds/build-timeline";
 import { DeleteTagDialog } from "@/components/tags/delete-tag-dialog";
+import { LayersPanel } from "@/components/tags/layers-panel";
+import { SigningPanel } from "@/components/tags/signing-panel";
 import {
   Tabs,
   TabsContent,
@@ -134,19 +135,11 @@ function TagDetail(): React.ReactElement {
         </TabsContent>
 
         <TabsContent value="layers">
-          <EmptyState
-            icon={<Layers className="size-5" />}
-            title="Layer detail arrives with FE-API-002"
-            description="The per-tag manifest endpoint is tracked in status.md. Once it lands we'll surface every layer with its digest, size, media type, and OS / arch breakdown here."
-          />
+          <LayersPanel org={org} repo={repo} tag={tag} />
         </TabsContent>
 
         <TabsContent value="signing">
-          <EmptyState
-            icon={<FileSignature className="size-5" />}
-            title="Signing verification arrives with FE-API-003"
-            description="Cosign + Notary v2 verification is exposed over gRPC today; the HTTP surface is the missing piece. When it ships, the signer identity and verification result land here."
-          />
+          <SigningPanel org={org} repo={repo} tag={tag} />
         </TabsContent>
       </Tabs>
 

@@ -24,6 +24,7 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -46,6 +47,11 @@ type Handler struct {
 	// webhook is optional — wired only when WEBHOOK_GRPC_ADDR is set. nil
 	// disables the `/api/v1/webhooks` family (they return 404 "route disabled").
 	webhook webhookv1.WebhookServiceClient
+	// signer is optional — wired only when SIGNER_GRPC_ADDR is set. nil
+	// disables the `/api/v1/.../signature` route (FE-API-003); it returns
+	// 404 "route disabled" so the frontend can render the unsigned state
+	// instead of an error.
+	signer signerv1.SignerServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	pub           *publisher.Publisher
 	healthClients []healthpb.HealthClient
@@ -93,6 +99,15 @@ func (h *Handler) WithRateLimiter(l *middleware.PerUserRateLimiter) *Handler {
 // when PLATFORM_ADMIN_TENANT_ID is unset.
 func (h *Handler) WithTenantClient(c tenantv1.TenantServiceClient) *Handler {
 	h.tenant = c
+	return h
+}
+
+// WithSignerClient enables the `/api/v1/.../signature` route (FE-API-003).
+// Nil leaves the route returning 404 "route disabled" so management can
+// deploy without registry-signer in environments that don't run image
+// signing.
+func (h *Handler) WithSignerClient(c signerv1.SignerServiceClient) *Handler {
+	h.signer = c
 	return h
 }
 
@@ -170,6 +185,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Manifest detail for a specific tag (FE-API-002).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
+
+	// Signing verification for a specific tag (FE-API-003). 404 when
+	// SIGNER_GRPC_ADDR is unset on the BFF.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature", authMW(http.HandlerFunc(h.handleGetSignature)))
 
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
@@ -1020,16 +1039,25 @@ type manifestConfig struct {
 }
 
 // ManifestResponse is the JSON body for GET …/tags/{tag}/manifest.
+//
+// For single-arch image manifests `Config` + `Layers` carry the detail.
+// For OCI image indexes / Docker manifest lists `Manifests` is populated
+// and `Config` + `Layers` are empty. `IsIndex` is the one explicit signal
+// the client can branch on without sniffing media types.
 type ManifestResponse struct {
-	Digest    string         `json:"digest"`
-	MediaType string         `json:"media_type"`
-	SizeBytes int64          `json:"size_bytes"`
-	CreatedAt time.Time      `json:"created_at"`
-	Config    manifestConfig `json:"config"`
+	Digest    string          `json:"digest"`
+	MediaType string          `json:"media_type"`
+	SizeBytes int64           `json:"size_bytes"`
+	CreatedAt time.Time       `json:"created_at"`
+	IsIndex   bool            `json:"is_index"`
+	Config    manifestConfig  `json:"config"`
 	Layers    []manifestLayer `json:"layers"`
+	Manifests []manifestEntry `json:"manifests"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
+// Covers both single-arch image manifests (config + layers) and image
+// indexes / Docker manifest lists (manifests[] with per-platform entries).
 type rawManifest struct {
 	Config struct {
 		Digest    string `json:"digest"`
@@ -1041,6 +1069,33 @@ type rawManifest struct {
 		Size      int64  `json:"size"`
 		MediaType string `json:"mediaType"`
 	} `json:"layers"`
+	// Manifests is populated for OCI image indexes
+	// (application/vnd.oci.image.index.v1+json) and Docker manifest lists
+	// (application/vnd.docker.distribution.manifest.list.v2+json). Each
+	// entry points at a per-platform child manifest.
+	Manifests []struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+		Platform  struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+			Variant      string `json:"variant"`
+			OSVersion    string `json:"os.version"`
+		} `json:"platform"`
+	} `json:"manifests"`
+}
+
+// manifestEntry surfaces a single child manifest of an OCI index — what the
+// dashboard renders as a per-platform row.
+type manifestEntry struct {
+	Digest       string `json:"digest"`
+	Size         int64  `json:"size"`
+	MediaType    string `json:"media_type"`
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Variant      string `json:"variant,omitempty"`
+	OSVersion    string `json:"os_version,omitempty"`
 }
 
 func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
@@ -1093,6 +1148,7 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		SizeBytes: m.GetSizeBytes(),
 		CreatedAt: m.GetCreatedAt().AsTime(),
 		Layers:    []manifestLayer{},
+		Manifests: []manifestEntry{},
 	}
 
 	var raw rawManifest
@@ -1109,6 +1165,22 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 				MediaType: l.MediaType,
 			})
 		}
+		// Index manifests / Docker manifest lists — populate per-platform
+		// entries so the UI can render an arch/os table. `IsIndex` is true
+		// when the manifest reports any child entries; we don't gate on
+		// mediaType alone because Docker and OCI use different strings.
+		for _, entry := range raw.Manifests {
+			resp.Manifests = append(resp.Manifests, manifestEntry{
+				Digest:       entry.Digest,
+				Size:         entry.Size,
+				MediaType:    entry.MediaType,
+				Architecture: entry.Platform.Architecture,
+				OS:           entry.Platform.OS,
+				Variant:      entry.Platform.Variant,
+				OSVersion:    entry.Platform.OSVersion,
+			})
+		}
+		resp.IsIndex = len(resp.Manifests) > 0
 	}
 
 	writeJSON(w, http.StatusOK, resp)
