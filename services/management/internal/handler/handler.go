@@ -1190,12 +1190,31 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/workspace/me   (FE-API-009)
 // ---------------------------------------------------------------------------
 
+// WorkspaceDomainEntry mirrors tenantv1.DomainEntry in the REST shape. Carries
+// just enough state for the dashboard's domain settings page: the hostname,
+// whether the DNS TXT challenge succeeded, and which one is the canonical
+// registry hostname (FE-API-007).
+type WorkspaceDomainEntry struct {
+	Domain    string `json:"domain"`
+	Verified  bool   `json:"verified"`
+	IsPrimary bool   `json:"is_primary"`
+}
+
 // WorkspaceResponse is the JSON body for GET /api/v1/workspace/me.
+//
+// FE-API-009 expanded shape: Slug + Host + HostIsCustom + Domains. Host is the
+// resolved registry hostname for `docker login` / `docker push`; HostIsCustom
+// distinguishes a verified custom domain from the wildcard fallback so the
+// dashboard can label the source.
 type WorkspaceResponse struct {
-	TenantID  string    `json:"tenant_id"`
-	Name      string    `json:"name"`
-	Plan      string    `json:"plan"`
-	CreatedAt time.Time `json:"created_at"`
+	TenantID     string                 `json:"tenant_id"`
+	Name         string                 `json:"name"`
+	Slug         string                 `json:"slug"`
+	Plan         string                 `json:"plan"`
+	Host         string                 `json:"host"`
+	HostIsCustom bool                   `json:"host_is_custom"`
+	Domains      []WorkspaceDomainEntry `json:"domains"`
+	CreatedAt    time.Time              `json:"created_at"`
 }
 
 func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -1212,11 +1231,27 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to fetch workspace")
 		return
 	}
+
+	// Translate proto domains to the REST shape. Always emit a non-nil slice so
+	// the frontend doesn't have to guard against null.
+	domains := make([]WorkspaceDomainEntry, 0, len(t.GetDomains()))
+	for _, d := range t.GetDomains() {
+		domains = append(domains, WorkspaceDomainEntry{
+			Domain:    d.GetDomain(),
+			Verified:  d.GetVerified(),
+			IsPrimary: d.GetIsPrimary(),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, WorkspaceResponse{
-		TenantID:  t.GetTenantId(),
-		Name:      t.GetName(),
-		Plan:      t.GetPlan(),
-		CreatedAt: t.GetCreatedAt().AsTime(),
+		TenantID:     t.GetTenantId(),
+		Name:         t.GetName(),
+		Slug:         t.GetSlug(),
+		Plan:         t.GetPlan(),
+		Host:         t.GetHost(),
+		HostIsCustom: t.GetHostIsCustom(),
+		Domains:      domains,
+		CreatedAt:    t.GetCreatedAt().AsTime(),
 	})
 }
 
