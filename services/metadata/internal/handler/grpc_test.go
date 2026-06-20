@@ -55,6 +55,10 @@ type fakeRepo struct {
 	updateQuotaResult *metadatav1.Repository
 	updateQuotaErr    error
 
+	// GetTenantStorageBreakdown (FE-API-031)
+	storageBreakdownResp *metadatav1.GetTenantStorageBreakdownResponse
+	storageBreakdownErr  error
+
 	// PutTag
 	putTagResult *metadatav1.Tag
 	putTagErr    error
@@ -241,6 +245,10 @@ func (f *fakeRepo) UnlinkBlob(_ context.Context, _, _ string) error {
 
 func (f *fakeRepo) ListOrphanedBlobs(_ context.Context) ([]*metadatav1.BlobRef, error) {
 	return f.listOrphanedResult, f.listOrphanedErr
+}
+
+func (f *fakeRepo) GetTenantStorageBreakdown(_ context.Context, _ string) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	return f.storageBreakdownResp, f.storageBreakdownErr
 }
 
 func (f *fakeRepo) GetTenantQuotaUsage(_ context.Context, _ string) (*metadatav1.QuotaUsage, error) {

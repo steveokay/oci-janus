@@ -233,6 +233,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleListTags)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}", authMW(http.HandlerFunc(h.handleDeleteTag)))
 
+	// Bulk tag delete (FE-API-036). DELETE with body of tag names; per-tag
+	// result returned so partial successes are visible to the UI.
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleBulkDeleteTags)))
+
+	// Per-repo storage breakdown (FE-API-031). Top-50 repos by storage_used
+	// plus the tenant total, in one call.
+	mux.Handle("GET /api/v1/stats/storage", authMW(http.HandlerFunc(h.handleGetStorageBreakdown)))
+
 	// Manifest detail for a specific tag (FE-API-002).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
 
