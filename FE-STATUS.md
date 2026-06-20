@@ -58,6 +58,81 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 
+---
+
+## Snapshot (as of 2026-06-20)
+
+**Routes shipped & wired against real backend (no stubs):**
+
+| Route | Backing endpoints | Notes |
+|---|---|---|
+| `/login` | `POST /api/v1/login` + SSO buttons (stubbed) | Vague-error UX; tenant from `VITE_DEFAULT_TENANT_ID` |
+| `/` (dashboard) | `GET /api/v1/stats` | KPI grid, storage quota progress, system health, mini severity bar, quick actions |
+| `/repositories` | `GET /api/v1/repositories` + create/delete | Cursor pagination, search, visibility filter, create dialog (with description), type-to-confirm delete |
+| `/repositories/:org/:repo` | `GET /api/v1/repositories/{org}/{repo}` + tags + members | Header card, pull-command, DescriptionCard (FE-API-006), Tabs: Tags / Members / Settings |
+| `/repositories/:org/:repo/tags/:tag` | manifest + scan + builds + signature + delete | Tabs: Security / Push history / Layers (FE-API-002) / Signing (FE-API-003) — all wired |
+| `/security` | `GET /api/v1/stats` for severity (FE-API-016) | 5-tab inner surface; Overview shipped real, others honest ComingSoon panels keyed to FE-API ids |
+| `/activity` | (none yet — FE-API-008 stub) | Sketched preview rows showing the intended event shape |
+| `/members` | derived from `GET /api/v1/repositories` | Workspace org-selector card grid |
+| `/orgs/:org/members` | `GET/POST/DELETE /api/v1/orgs/{org}/members` | Add member dialog (UUID input, radio-card role picker), revoke confirmation |
+| `/webhooks` | `GET /api/v1/webhooks` | Table with URL + events chips + Active/Paused pill + relative date |
+| `/webhooks/:id` | full webhook surface | Test dispatch, deliveries timeline, rotate-secret, edit, delete |
+| `/admin/tenants` | `GET/POST/DELETE /api/v1/admin/tenants` + quota | `beforeLoad` gate redirects non-admins; platform-admin banner; plan breakdown tiles; quota in GB/TB |
+| `/profile` | `GET/PATCH /api/v1/users/me` + apikeys CRUD + password | Inline-edit identity, live policy checklist, API keys with show-once secret |
+
+**Cross-cutting primitives** delivered across the sprints:
+
+- **Beacon design system** — light + dark OKLCH tokens, teal accent (`#0D9488`), amber highlight, severity scale; Fraunces serif heros, Inter UI, JetBrains Mono code
+- **State coverage** — every list / detail surface ships skeleton + empty + error + loaded states (no `—` fallbacks anywhere)
+- **Motion** — `AnimatedNumber` (framer-motion count-up), scan-pulse, quota bar fill, card stagger-fade
+- **Page footer** — persistent status bar (brand + live `/healthz` poll + docs/GitHub links)
+- **Theme toggle** — light / dark / system tri-state, persisted in localStorage
+- **Single-flight refresh** in axios interceptor — silent JWT refresh 60s before expiry, concurrent 401s share one round-trip
+
+**Reusable secret-handling primitive** — `SecretRevealDialog` (Sprint 5): masked-by-default, reveal toggle, copy works either way, locked escape/outside-click so secret can't be dismissed unread. Reused for webhook create + rotate AND API key create.
+
+**Reusable destructive flow** — type-to-confirm dialogs across repo delete, tag delete, webhook delete, tenant delete (cascade soft-delete). API key revoke uses a lighter single-click confirm since revocation is reversible.
+
+## Backend wave landed on the frontend's behalf
+
+| FE-API | Description | Status |
+|---|---|---|
+| 001 | Tag `size_bytes` on `ListTags` | DONE — surfaced in repo detail Tags table |
+| 002 | Per-tag manifest detail | DONE (Sprint 7B) — extended for index manifests |
+| 003 | Per-tag signing status | DONE (Sprint 7B) — `signer.ListSignatures` wrapped, signer gRPC client wired in management |
+| 004 | Repo-scoped activity feed | DONE — handler `repo_activity.go` |
+| 006 | Repository description | DONE — rendered on detail + accepted on create |
+| 010 | Org name on `RepoResponse` | DONE — empty-org rendering fix shipped client-side |
+| 011/012/013 | `/users/me` GET / PATCH / password | DONE (Sprint 7A) — profile fully wired |
+| 016 | Severity counts in `/stats` | DONE — dashboard mini bar + `/security` overview |
+| 020 | Tenant security overview snapshot | DONE — handler `security.go` |
+| 021..024 | Webhook CRUD + deliveries + test + rotate | DONE — full Sprint 5 wiring |
+
+**Still NOT STARTED backend-side (UI surfaces honest stubs):**
+
+- FE-API-005 (per-repo members) — DONE per status.md, untested from this UI
+- FE-API-007 / 009 (per-tenant registry hostname / workspace metadata)
+- FE-API-008 (notifications / activity stream)
+- FE-API-014 / 015 / 017 / 018 / 019 (security overview / vuln list / scan history / remediation / policies / reports)
+
+## Sprint 8 — Polish pass (remaining)
+
+- [ ] Dark-mode parity sweep — toggle every route, log any contrast / token gaps
+- [ ] Responsive QA — sub-`lg` sidebar behaviour, table horizontal scroll, dialog widths on mobile
+- [ ] A11y audit — keyboard nav across every interactive surface, focus rings, aria-labels on icon-only buttons, color contrast vs WCAG AA
+- [ ] Motion review — confirm count-up timing, severity-pulse cadence, route transitions feel intentional not fidgety
+- [ ] Loading-state geometry parity — skeleton tiles should match real card heights to remove layout shift
+- [ ] Empty-state copy review — every empty pane should name a concrete next action
+- [ ] Network-error UX — verify retry recoveries across every query
+
+## Known UI bugs fixed in flight (this branch)
+
+- **Tag row click did nothing** (this turn) — the `<Link>` + `stopPropagation()` pattern was eating clicks in some browsers. Replaced with whole-row `onClick` + `tabIndex=0` + Enter/Space keyboard handler; copy button stops propagation locally.
+- **Table column alignment broken across every table** — `position:relative` + `::before` on `<tr>` collapsed table layout in some browsers. Replaced with inset box-shadow; fix landed at the primitive level.
+- **Empty `org` rendering** — older dev rows render as `alpine`, not `/alpine`.
+- **User-menu literal "User"** — falls back to `sub` initial + truncated UUID when JWT carries no username.
+- **Tenants-table name pushed to top border** — copy button was sharing the line with the UUID; moved to its own centerline + added `py-3`.
+
 ### S0 — Foundation
 
 - [x] `frontend/package.json` + lockfile
