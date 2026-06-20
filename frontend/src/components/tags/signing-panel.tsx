@@ -5,9 +5,9 @@ import {
   ShieldQuestion,
   FileSignature,
   CheckCircle2,
+  CircleX,
   PenLine,
 } from "lucide-react";
-import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -20,13 +20,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
-import { ComingSoonHint } from "@/components/common/coming-soon-hint";
+import { SignManifestDialog } from "./sign-manifest-dialog";
 import {
   useSignature,
   SIGNING_DISABLED,
   type SignatureRecord,
 } from "@/lib/api/signature";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 interface SigningPanelProps {
   org: string;
@@ -47,7 +48,18 @@ export function SigningPanel({
   repo,
   tag,
 }: SigningPanelProps): React.ReactElement {
-  const { data, isLoading, isError, refetch } = useSignature(org, repo, tag);
+  // verifyOn flips when the operator clicks "Verify now". We pass it to
+  // useSignature so the query key changes — that triggers a fresh fetch
+  // with ?verify=true and stores the verified state in a separate cache
+  // entry (the cheap default path stays shared across tabs).
+  const [verifyOn, setVerifyOn] = React.useState(false);
+  const [signOpen, setSignOpen] = React.useState(false);
+  const { data, isLoading, isError, refetch, isFetching } = useSignature(
+    org,
+    repo,
+    tag,
+    { verify: verifyOn },
+  );
 
   if (isError) {
     return (
@@ -91,71 +103,99 @@ export function SigningPanel({
     return (
       <div className="space-y-4">
         <UnsignedCard digest={data.manifest_digest} />
-        <PendingCapabilities signed={false} />
+        <ActionRibbon
+          signed={false}
+          verifyOn={verifyOn}
+          verifying={isFetching && verifyOn}
+          onVerify={() => setVerifyOn(true)}
+          onSign={() => setSignOpen(true)}
+        />
+        <SignManifestDialog
+          open={signOpen}
+          onOpenChange={setSignOpen}
+          org={org}
+          repo={repo}
+          tag={tag}
+        />
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <SignedCard digest={data.manifest_digest} signatures={data.signatures} />
-      <PendingCapabilities signed />
+      <SignedCard
+        digest={data.manifest_digest}
+        signatures={data.signatures}
+        verifyOn={verifyOn}
+      />
+      <ActionRibbon
+        signed
+        verifyOn={verifyOn}
+        verifying={isFetching && verifyOn}
+        onVerify={() => setVerifyOn(true)}
+        onSign={() => setSignOpen(true)}
+      />
+      <SignManifestDialog
+        open={signOpen}
+        onOpenChange={setSignOpen}
+        org={org}
+        repo={repo}
+        tag={tag}
+      />
     </div>
   );
 }
 
-// PendingCapabilities — small "what's next" card on the SigningPanel.
-// Surfaces FE-API-025 (verify-on-demand) + FE-API-026 (sign-from-UI) as
-// disabled buttons that explain the action they'll perform when the
-// backend lands. Toasts on click so the affordance acknowledges the user.
-function PendingCapabilities({ signed }: { signed: boolean }): React.ReactElement {
+// ActionRibbon — replaces the Sprint-7B `PendingCapabilities` ComingSoon
+// card now that both FE-API-025 and FE-API-026 are live backend-side.
+// Verify-now flips the parent's verifyOn state so the signature query
+// refetches with ?verify=true. Sign-with opens SignManifestDialog.
+interface ActionRibbonProps {
+  signed: boolean;
+  verifyOn: boolean;
+  verifying: boolean;
+  onVerify: () => void;
+  onSign: () => void;
+}
+
+function ActionRibbon({
+  signed,
+  verifyOn,
+  verifying,
+  onVerify,
+  onSign,
+}: ActionRibbonProps): React.ReactElement {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-          Pending capabilities
+          Actions
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            onClick={() =>
-              toast.message("Cryptographic verify lands with FE-API-025.")
-            }
-          >
+      <CardContent className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onVerify}
+          disabled={!signed || verifying || verifyOn}
+          loading={verifying}
+        >
+          {!verifying && (verifyOn ? (
+            <CheckCircle2 className="size-4 text-[var(--color-success)]" />
+          ) : (
             <CheckCircle2 className="size-4" />
-            {signed ? "Verify now" : "Verify when signed"}
-          </Button>
-          <ComingSoonHint apiId="FE-API-025">
-            Runs <code className="font-mono">signer.VerifyManifest</code> against
-            every recorded signature on demand. Cheap default route stays
-            list-only; <code className="font-mono">?verify=true</code> opts into
-            the expensive cryptographic check.
-          </ComingSoonHint>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            onClick={() =>
-              toast.message("Sign-from-UI lands with FE-API-026.")
-            }
-          >
-            <PenLine className="size-4" />
-            Sign manifest
-          </Button>
-          <ComingSoonHint apiId="FE-API-026">
-            <code className="font-mono">POST .../sign</code> with a chosen{" "}
-            <code className="font-mono">signer_id</code> — key material stays in{" "}
-            <code className="font-mono">services/signer</code>'s vault backend;
-            UI never sees it. Auth gate: repo <code className="font-mono">admin</code>.
-          </ComingSoonHint>
-        </div>
+          ))}
+          {verifying ? "Verifying" : verifyOn ? "Verified" : signed ? "Verify now" : "Verify when signed"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onSign}>
+          <PenLine className="size-4" />
+          {signed ? "Add signature" : "Sign manifest"}
+        </Button>
+        <span className="text-xs text-[var(--color-fg-subtle)]">
+          {signed
+            ? "Verify runs signer.VerifyManifest against every recorded signature in parallel (capped at 16)."
+            : "Sign with a configured signer to record a Cosign / Notary signature for this digest."}
+        </span>
       </CardContent>
     </Card>
   );
@@ -228,21 +268,49 @@ function UnsignedCard({ digest }: { digest: string }): React.ReactElement {
 function SignedCard({
   digest,
   signatures,
+  verifyOn,
 }: {
   digest: string;
   signatures: SignatureRecord[];
+  verifyOn: boolean;
 }): React.ReactElement {
+  // FE-API-025 — when verifyOn flips, every signature carries a `verified`
+  // bool. Roll up the counts so the header reads "3 verified, 1 failed"
+  // instead of forcing operators to scan every card.
+  const verifiedCount = signatures.filter((s) => s.verified === true).length;
+  const failedCount = signatures.filter((s) => s.verified === false).length;
+  // accentBar mirrors the worst outcome so the header colour reflects risk
+  // at a glance: any failure → danger; all verified → success; default →
+  // success (signed without verify).
+  const accentBar =
+    verifyOn && failedCount > 0
+      ? ("danger" as const)
+      : ("success" as const);
   return (
     <div className="space-y-4">
-      <Card accentBar="success">
+      <Card accentBar={accentBar}>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
               Signing
             </CardDescription>
-            <Badge tone="success">
-              <ShieldCheck className="size-3" /> Signed
-            </Badge>
+            <div className="flex items-center gap-2">
+              {verifyOn ? (
+                failedCount === 0 ? (
+                  <Badge tone="success">
+                    <ShieldCheck className="size-3" /> Verified ({verifiedCount}/{signatures.length})
+                  </Badge>
+                ) : (
+                  <Badge tone="danger">
+                    <CircleX className="size-3" /> Verify failed ({failedCount}/{signatures.length})
+                  </Badge>
+                )
+              ) : (
+                <Badge tone="success">
+                  <ShieldCheck className="size-3" /> Signed
+                </Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -250,11 +318,11 @@ function SignedCard({
             {signatures.length === 1
               ? "This manifest carries one signature."
               : `This manifest carries ${signatures.length} signatures.`}{" "}
-            Verify locally with{" "}
-            <code className="font-mono text-[var(--color-fg)]">
-              cosign verify
-            </code>{" "}
-            against the listed keys before trusting at scale.
+            {verifyOn
+              ? failedCount === 0
+                ? "All cryptographic verifications passed against the recorded keys."
+                : `${failedCount} of ${signatures.length} signature(s) failed verification — inspect the cards below.`
+              : "Hit Verify now to run cryptographic verify against every signer, or verify locally with cosign verify."}
           </p>
           <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2">
             <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
@@ -287,8 +355,21 @@ function SignatureCard({
 }: {
   signature: SignatureRecord;
 }): React.ReactElement {
+  // FE-API-025 — verified is tri-state on the wire:
+  //   undefined → caller didn't opt into ?verify=true
+  //   true      → signer.VerifyManifest passed
+  //   false     → signer.VerifyManifest failed (failure_reason should be set)
+  const verifyState = signature.verified;
   return (
-    <Card>
+    <Card
+      accentBar={
+        verifyState === false
+          ? "danger"
+          : verifyState === true
+            ? "success"
+            : "neutral"
+      }
+    >
       <CardContent className="space-y-3 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -299,6 +380,15 @@ function SignatureCard({
             <code className="font-mono text-xs text-[var(--color-fg)]">
               {signature.signer_id}
             </code>
+            {verifyState === true ? (
+              <Badge tone="success">
+                <ShieldCheck className="size-3" /> Verified
+              </Badge>
+            ) : verifyState === false ? (
+              <Badge tone="danger">
+                <CircleX className="size-3" /> Failed
+              </Badge>
+            ) : null}
           </div>
           <span
             className="text-xs text-[var(--color-fg-muted)]"
@@ -310,6 +400,22 @@ function SignatureCard({
 
         <Row label="Key ID" value={signature.key_id} />
         <Row label="Signature digest" value={signature.signature_digest} />
+
+        {verifyState === false && signature.failure_reason ? (
+          <div
+            className={cn(
+              "mt-2 rounded-md border border-[var(--color-danger)]/30",
+              "bg-[var(--color-danger)]/5 px-3 py-2",
+            )}
+          >
+            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-danger)]">
+              Failure reason
+            </div>
+            <div className="mt-0.5 break-words font-mono text-xs text-[var(--color-fg)]">
+              {signature.failure_reason}
+            </div>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

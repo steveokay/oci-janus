@@ -317,18 +317,35 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [ ] Click-through to the tag-detail Security tab for the underlying scan
 - [ ] Replace the Sprint 3 ComingSoon panel on the `/security/scans` tab
 
-**FE-API-025 — Verify-on-demand for signing** (just shipped backend-side, marked DONE in status.md)
-- [ ] Enable the disabled "Verify now" button on `SigningPanel` (added as ComingSoon hint earlier)
-- [ ] On click: refetch the signature endpoint with `?verify=true` so each `signatureRecord` gains `verified` + optional `failure_reason`
-- [ ] Per-signature `Verified` / `Failed` badge on the SignatureCard
-- [ ] Failed-with-reason error block on each signature card when verification returned `verified: false`
-- [ ] Surface the per-signature verification status above the SignatureCard cluster ("3 verified, 1 failed")
-- [ ] Remove the FE-API-025 ComingSoonHint footer copy
+**S9.1 — Tag-detail signing + supply chain** (DONE ✅ — first S9 sub-pass)
+
+**FE-API-025 — Verify-on-demand for signing**
+- [x] Enable the disabled "Verify now" button on `SigningPanel`
+- [x] On click: refetch the signature endpoint with `?verify=true` via `useSignature(_, _, _, { verify: true })`; separate query key so the cheap default path stays shared across tabs
+- [x] Per-signature `Verified` / `Failed` badge on the SignatureCard (tri-state on the wire: `undefined` / `true` / `false`)
+- [x] Failed-with-reason error block on each signature card when verification returned `verified: false`
+- [x] Roll-up badge in the SignedCard header ("Verified (3/3)" / "Verify failed (1/3)") + accentBar shifts danger on any failure
+- [x] Per-signature accentBar (success / danger / neutral) when verify completed
+- [x] PendingCapabilities ComingSoon copy removed (replaced by live ActionRibbon)
+
+**FE-API-026 — Sign manifest from UI**
+- [x] `useSignManifest` mutation hook
+- [x] `SignManifestDialog` — single-field `signer_id` form, zod regex matching backend's ASCII-printable rule, default `registry-signer` (dev Vault key)
+- [x] Action ribbon on `SigningPanel` exposes Sign / Add-signature button
+- [x] Distinct toast mapping per status: 403 (admin required), 409 (already signed by this signer), 404 (route disabled — SIGNER_GRPC_ADDR), 400 (signer rejected)
+- [x] Mutation `onSuccess` invalidates the signature query — both verify + non-verify cache entries refresh
+
+**FE-API-033 — Per-tag SBOM download**
+- [x] `useDownloadSbom` mutation hook (binary blob → object URL → transient `<a download>` click → revoke after 1s)
+- [x] Live `SbomPanel` on `LayersPanel`; format chooser pill row (SPDX active, CycloneDX disabled with "coming soon" tooltip)
+- [x] Distinct error mapping: 404 → "no SBOM recorded — run a scan first"; 400 → "format not supported yet"; default → generic
+- [x] Filename auto-derived: `{repo}-{tag}.spdx.json`
+- [x] ComingSoonHint footer copy removed (replaced by live download flow)
 
 **Verification**
-- [ ] Build / typecheck / lint pass
+- [x] Build / typecheck / lint pass
 - [ ] Backend connectivity verified end-to-end against the docker-compose stack
-- [ ] FE-STATUS.md ticked + S9 marked DONE in the sprint table at the top
+- [ ] S9.1 commit pushed; remaining S9 sub-passes (workspace identity, security center, admin niceties) queued
 
 ### S10 — Documentation surface
 
