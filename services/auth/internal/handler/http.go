@@ -14,9 +14,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
+	"github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
+
+// SSOEventPublisher is the narrow contract the SSO admin handlers need from
+// the RabbitMQ publisher. Lets tests substitute a no-op without standing up
+// a broker; *publisher.Publisher satisfies the interface.
+type SSOEventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
 
 // trustedProxyCIDRs holds the parsed CIDR ranges that are allowed to set
 // X-Forwarded-For. Populated from TRUSTED_PROXY_CIDRS at process startup.
@@ -63,6 +72,18 @@ func isTrustedProxy(ip net.IP) bool {
 type HTTPHandler struct {
 	svc              *service.Service
 	devDefaultTenant uuid.UUID // zero when not set; only used in local dev
+	// sso is the optional SSO sub-service (FE-API-034). nil disables the SSO
+	// routes; set via WithSSO.
+	sso *service.SSO
+	// ssoBaseURL is the public origin used to build the OAuth redirect_uri
+	// (must match what the IdP has registered). Configured via SSO_BASE_URL.
+	ssoBaseURL string
+	// eventPublisher is the optional RabbitMQ publisher used by the SSO admin
+	// CRUD audit events. nil silently skips the publish.
+	eventPublisher SSOEventPublisher
+	// samlConfig is the optional SAML SP signing keypair (FE-API-034). nil
+	// disables SAML support — the /auth/saml/... routes return 501.
+	samlConfig *saml.SPConfig
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
@@ -77,6 +98,30 @@ func NewHTTPHandler(svc *service.Service, devDefaultTenantID uuid.UUID) *HTTPHan
 		slog.Warn("TRUSTED_PROXY_CIDRS not set — IP rate limiting uses TCP peer address (degraded when behind a proxy)")
 	}
 	return &HTTPHandler{svc: svc, devDefaultTenant: devDefaultTenantID}
+}
+
+// WithSSO attaches the SSO sub-service and the base URL used to build OAuth
+// redirect URIs. Returns the handler so callers can chain. Optional —
+// without WithSSO the SSO routes are never registered.
+func (h *HTTPHandler) WithSSO(sso *service.SSO, baseURL string) *HTTPHandler {
+	h.sso = sso
+	h.ssoBaseURL = strings.TrimRight(baseURL, "/")
+	return h
+}
+
+// WithEventPublisher wires the RabbitMQ publisher used by the SSO admin
+// CRUD audit events. Optional; nil publisher silently skips publishes.
+func (h *HTTPHandler) WithEventPublisher(p SSOEventPublisher) *HTTPHandler {
+	h.eventPublisher = p
+	return h
+}
+
+// WithSAMLConfig attaches the SP signing keypair used by the SAML routes.
+// Optional — without it the /auth/saml/... routes return 501. Returns the
+// handler so callers can chain.
+func (h *HTTPHandler) WithSAMLConfig(cfg *saml.SPConfig) *HTTPHandler {
+	h.samlConfig = cfg
+	return h
 }
 
 // Register mounts all auth routes onto mux.
@@ -96,6 +141,10 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/me", h.getCurrentUser)
 	mux.HandleFunc("PATCH /api/v1/users/me", h.updateCurrentUser)
 	mux.HandleFunc("POST /api/v1/users/me/password", h.changeCurrentUserPassword)
+	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
+	// call no-ops when WithSSO() was not invoked, so dev deployments without
+	// SSO_CREDENTIAL_KEY simply skip these routes.
+	h.RegisterSSO(mux)
 }
 
 // ── Docker token endpoint ─────────────────────────────────────────────────────

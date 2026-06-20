@@ -27,6 +27,21 @@ export interface AdminTenant {
   created_at: string;
 }
 
+// FE-API-028 — strict superset of AdminTenant with composed usage stats.
+// `last_push_at` is null when the tenant has never recorded a push (BFF
+// guarantees this is null rather than Unix epoch).
+export interface AdminTenantDetail extends AdminTenant {
+  slug: string;
+  host: string;
+  host_is_custom: boolean;
+  storage_used_bytes: number;
+  storage_quota_bytes: number;
+  repository_count: number;
+  organization_count: number;
+  user_count: number;
+  last_push_at: string | null;
+}
+
 interface ListTenantsResponse {
   tenants: AdminTenant[];
   next_page_token?: string;
@@ -37,6 +52,16 @@ export interface SetQuotaResponse {
   used_bytes: number;
   quota_bytes: number;
 }
+
+// FE-API-029 — at least one of name / plan must be set.
+export interface UpdateTenantBody {
+  name?: string;
+  plan?: string;
+}
+
+export const TENANT_PLANS = ["free", "pro", "enterprise"] as const;
+export type TenantPlan = (typeof TENANT_PLANS)[number];
+export const TENANT_NAME_REGEX = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 // ── Key factory ─────────────────────────────────────────────────────────────
 
@@ -111,8 +136,56 @@ export function useSetTenantQuota() {
       );
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       void qc.invalidateQueries({ queryKey: adminTenantKeys.list() });
+      void qc.invalidateQueries({
+        queryKey: adminTenantKeys.detail(vars.tenantId),
+      });
+    },
+  });
+}
+
+// FE-API-028 — composed tenant detail (storage + repo / org / user
+// counts + last push). Enabled flag lets the drawer mount-and-disable
+// while waiting for the row click to set the active tenant.
+export function useAdminTenantDetail(tenantId: string | undefined) {
+  return useQuery({
+    queryKey: adminTenantKeys.detail(tenantId ?? ""),
+    enabled: Boolean(tenantId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<AdminTenantDetail>(
+        `/admin/tenants/${encodeURIComponent(tenantId as string)}`,
+      );
+      return data;
+    },
+    staleTime: 30_000,
+  });
+}
+
+// FE-API-029 — rename + plan change. On success we invalidate both the
+// list (PlanBadge / name column may have shifted) and the detail key for
+// this specific tenant.
+export function useUpdateTenant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      tenantId,
+      body,
+    }: {
+      tenantId: string;
+      body: UpdateTenantBody;
+    }) => {
+      const { data } = await apiClient.patch<AdminTenantDetail>(
+        `/admin/tenants/${encodeURIComponent(tenantId)}`,
+        body,
+      );
+      return data;
+    },
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: adminTenantKeys.list() });
+      void qc.invalidateQueries({
+        queryKey: adminTenantKeys.detail(vars.tenantId),
+      });
     },
   });
 }

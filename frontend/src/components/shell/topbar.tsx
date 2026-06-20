@@ -4,6 +4,7 @@ import { LogOut, User as UserIcon, ChevronDown } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { toast } from "sonner";
 import { ThemeToggle } from "./theme-toggle";
+import { NotificationsBell } from "./notifications-bell";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth/store";
 import { logout } from "@/lib/api/auth";
@@ -38,6 +39,7 @@ export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 px-6 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">{breadcrumb}</div>
       <div className="flex items-center gap-1">
+        <NotificationsBell />
         <ThemeToggle />
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>

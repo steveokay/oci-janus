@@ -21,8 +21,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
@@ -65,6 +69,11 @@ type Handler struct {
 	// nil disables the FE-API-018 `/api/v1/security/policies` and
 	// FE-API-019 `/api/v1/security/reports/*` routes (404 "route disabled").
 	scanner scannerv1.ScannerServiceClient
+	// gc is optional — wired only when GC_GRPC_ADDR is set. nil
+	// disables the FE-API-032 `/api/v1/admin/gc/*` routes (404 "route
+	// disabled") so deployments running registry-gc in cron-only mode
+	// continue to serve every other surface.
+	gc gcv1.GCServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	// Typed as an interface so tests can substitute a fake without standing up
 	// a real RabbitMQ broker. *publisher.Publisher satisfies the interface.
@@ -150,6 +159,20 @@ func (h *Handler) WithSignerClient(c signerv1.SignerServiceClient) *Handler {
 // need outbound webhooks.
 func (h *Handler) WithWebhookClient(c webhookv1.WebhookServiceClient) *Handler {
 	h.webhook = c
+	return h
+}
+
+// WithGCClient enables the FE-API-032 GC status routes:
+//
+//	GET  /api/v1/admin/gc/status
+//	GET  /api/v1/admin/gc/runs
+//	POST /api/v1/admin/gc/run
+//
+// Nil leaves the routes returning 404 "route disabled". All three are
+// also gated by the platform-admin marker grant (org=*, admin) so a
+// regular tenant admin cannot inspect or trigger GC sweeps.
+func (h *Handler) WithGCClient(c gcv1.GCServiceClient) *Handler {
+	h.gc = c
 	return h
 }
 
@@ -313,6 +336,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// FE-API-029: rename + plan change. Patch body accepts optional name/plan
 	// fields; emits tenant.renamed / tenant.plan_changed RabbitMQ events.
 	mux.Handle("PATCH /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminUpdateTenant)))
+
+	// FE-API-032 — GC status visibility. Status + runs history are
+	// read-only; the trigger requires the platform-admin marker. All
+	// three routes return 404 "route disabled" when GC_GRPC_ADDR is unset.
+	mux.Handle("GET /api/v1/admin/gc/status", authMW(http.HandlerFunc(h.handleAdminGCStatus)))
+	mux.Handle("GET /api/v1/admin/gc/runs", authMW(http.HandlerFunc(h.handleAdminGCRuns)))
+	mux.Handle("POST /api/v1/admin/gc/run", authMW(http.HandlerFunc(h.handleAdminGCRun)))
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +854,14 @@ func (h *Handler) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		TenantId:       tenantID,
 	})
 	if err != nil {
+		// No scan recorded yet is the normal "operator hasn't triggered a
+		// scan" state — surface as 404 so the dashboard renders its
+		// "Trigger scan" CTA instead of an error banner. Anything else is
+		// a real failure worth a 500.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
+			writeError(w, http.StatusNotFound, "no scan recorded")
+			return
+		}
 		slog.Error("GetScanResult", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to fetch scan result")
 		return

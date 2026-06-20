@@ -1,5 +1,5 @@
 import * as React from "react";
-import { HardDrive, Trash2 } from "lucide-react";
+import { HardDrive, Trash2, Eye } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -18,6 +18,7 @@ import type { AdminTenant } from "@/lib/api/admin-tenants";
 interface TenantsTableProps {
   tenants: AdminTenant[];
   loading?: boolean;
+  onView: (tenant: AdminTenant) => void;
   onSetQuota: (tenant: AdminTenant) => void;
   onDelete: (tenant: AdminTenant) => void;
 }
@@ -25,6 +26,7 @@ interface TenantsTableProps {
 export function TenantsTable({
   tenants,
   loading,
+  onView,
   onSetQuota,
   onDelete,
 }: TenantsTableProps): React.ReactElement {
@@ -36,7 +38,7 @@ export function TenantsTable({
             <TableHead>Tenant</TableHead>
             <TableHead>Plan</TableHead>
             <TableHead className="hidden lg:table-cell">Created</TableHead>
-            <TableHead className="w-[180px] text-right">
+            <TableHead className="w-[260px] text-right">
               <span className="sr-only">Actions</span>
             </TableHead>
           </TableRow>
@@ -74,6 +76,15 @@ export function TenantsTable({
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onView(t)}
+                      className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                    >
+                      <Eye className="size-3.5" />
+                      View
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -148,6 +159,7 @@ function SkeletonRows(): React.ReactElement {
           </TableCell>
           <TableCell>
             <div className="flex justify-end gap-1">
+              <Skeleton className="h-7 w-16 rounded-md" />
               <Skeleton className="h-7 w-20 rounded-md" />
               <Skeleton className="h-7 w-20 rounded-md" />
             </div>

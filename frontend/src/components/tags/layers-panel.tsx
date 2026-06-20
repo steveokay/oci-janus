@@ -21,9 +21,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
-import { ComingSoonHint } from "@/components/common/coming-soon-hint";
+import {
+  useDownloadSbom,
+  SBOM_FORMATS,
+  type SbomFormat,
+} from "@/lib/api/sbom";
 import { useManifest, type ManifestDetail } from "@/lib/api/manifest";
 import { formatBytes } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 interface LayersPanelProps {
   org: string;
@@ -72,15 +77,43 @@ export function LayersPanel({
   return (
     <div className="space-y-4">
       {data.is_index ? <IndexView manifest={data} /> : <ImageView manifest={data} />}
-      <SbomPanel />
+      <SbomPanel org={org} repo={repo} tag={tag} />
     </div>
   );
 }
 
-// SbomPanel — disabled "Download SBOM" affordance for FE-API-033.
-// Format chooser is rendered as text-only chips so the user can see what
-// will be available once the route lands.
-function SbomPanel(): React.ReactElement {
+interface SbomPanelProps {
+  org: string;
+  repo: string;
+  tag: string;
+}
+
+// SbomPanel — FE-API-033 live wiring.
+//
+// Picks a default format (SPDX, the only one the scanner emits today). The
+// CycloneDX chip is rendered as a disabled "coming soon" hint rather than
+// hiding it — operators planning their SBOM tooling can see which format
+// they're picking AND which one is on the roadmap.
+function SbomPanel({ org, repo, tag }: SbomPanelProps): React.ReactElement {
+  const [format, setFormat] = React.useState<SbomFormat>("spdx-json");
+  const download = useDownloadSbom();
+
+  async function handleDownload() {
+    try {
+      await download.mutateAsync({ org, repo, tag, format });
+      toast.success("SBOM download started.");
+    } catch (e) {
+      const err = e as { status?: string; message?: string };
+      if (err.status === "no-sbom") {
+        toast.error(err.message ?? "No SBOM recorded.");
+      } else if (err.status === "format-unsupported") {
+        toast.error(err.message ?? "Format not supported yet.");
+      } else {
+        toast.error(err.message ?? "SBOM download failed.");
+      }
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -93,28 +126,40 @@ function SbomPanel(): React.ReactElement {
           <Button
             variant="outline"
             size="sm"
-            disabled
-            onClick={() => toast.message("SBOM download lands with FE-API-033.")}
+            onClick={() => void handleDownload()}
+            loading={download.isPending}
+            disabled={download.isPending}
           >
             <Download className="size-4" />
             Download SBOM
           </Button>
-          <span className="text-xs text-[var(--color-fg-subtle)]">
-            Formats planned:
-          </span>
-          <Badge tone="neutral" className="font-mono">
-            spdx-json
-          </Badge>
-          <Badge tone="neutral" className="font-mono">
-            cyclonedx-json
-          </Badge>
+          <span className="text-xs text-[var(--color-fg-subtle)]">Format:</span>
+          {SBOM_FORMATS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => f.available && setFormat(f.key)}
+              disabled={!f.available}
+              aria-pressed={format === f.key}
+              className={cn(
+                "rounded-full border px-2 py-0.5 font-mono text-[11px]",
+                f.available
+                  ? format === f.key
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+                    : "border-[var(--color-border-strong)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                  : "cursor-not-allowed border-[var(--color-border)] text-[var(--color-fg-subtle)]",
+              )}
+              title={f.available ? "" : "Coming soon"}
+            >
+              {f.label}
+            </button>
+          ))}
         </div>
-        <ComingSoonHint apiId="FE-API-033">
-          Surfaces the Trivy-generated SBOM persisted alongside the latest
-          scan_result for this digest. 404{" "}
-          <code className="font-mono">no-sbom</code> when the tag was never
-          scanned.
-        </ComingSoonHint>
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          Surfaces the SBOM persisted alongside the latest scan result for this
+          digest. If you see "no SBOM recorded", trigger a scan on the Security
+          tab and try again.
+        </p>
       </CardContent>
     </Card>
   );

@@ -33,6 +33,30 @@ type Config struct {
 	// RabbitMQURL is the AMQP connection URL for publishing RBAC audit events.
 	// Required so that GrantRole / RevokeRole changes are traceable via registry-audit.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
+
+	// FE-API-034 — SSO config.
+	//
+	// SSOCredentialKeyHex is the 64-character (32-byte) hex AES-256 key used
+	// to encrypt OAuth client_secret values at rest. When empty, SSO routes
+	// are not registered and the dashboard's SSO buttons fall back to "coming
+	// soon". Required in production.
+	SSOCredentialKeyHex string `mapstructure:"SSO_CREDENTIAL_KEY_HEX"`
+
+	// SSOBaseURL is the public origin used to compose OAuth redirect_uri
+	// values (e.g. "https://registry.example.com"). Must match what the IdP
+	// has registered for the application.
+	SSOBaseURL string `mapstructure:"SSO_BASE_URL"`
+
+	// SAMLSPCertPath is the filesystem path to the PEM-encoded X.509 cert
+	// the SP presents when signing SAML AuthnRequests. Paired with
+	// SAMLSPKeyPath. When either is empty, SAML support is disabled — the
+	// /auth/saml/... routes return 501.
+	SAMLSPCertPath string `mapstructure:"SAML_SP_CERT_PATH"`
+
+	// SAMLSPKeyPath is the filesystem path to the PEM-encoded RSA private
+	// key paired with SAMLSPCertPath. Permissions should be chmod 600
+	// (CLAUDE.md §7 — Cert key file permissions).
+	SAMLSPKeyPath string `mapstructure:"SAML_SP_KEY_PATH"`
 }
 
 // Load binds environment variables into Config and validates required fields.

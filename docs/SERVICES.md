@@ -53,17 +53,32 @@
 
 **Purpose:** Docker token auth service. Issues JWT access tokens. Manages API keys. Validates credentials.
 
-**Endpoints (HTTP, called by Docker clients and gateway):**
+**Endpoints (HTTP, called by Docker clients, gateway, and the BFF):**
 
 ```
 POST /auth/token          # Docker token endpoint (RFC 7235 flow)
-POST /api/v1/users        # Create user
+POST /api/v1/users        # Create user (admin-only — see PENTEST-003)
 POST /api/v1/login        # Issue long-lived session token
 POST /api/v1/apikeys      # Create API key (robot accounts)
 DELETE /api/v1/apikeys/:id
 GET  /api/v1/apikeys      # List API keys for current user
 POST /api/v1/logout
+POST /api/v1/token/refresh   # Silent JWT refresh (60s before expiry — Sprint 5)
+GET  /api/v1/users/me        # Current user metadata (FE-API-011)
+PATCH /api/v1/users/me       # Update display name + email (FE-API-012)
+POST /api/v1/users/me/password  # Change password (FE-API-013, argon2id + JTI revocation)
 GET  /.well-known/jwks.json  # Public key set for JWT verification
+
+# SSO — FE-API-034 (OAuth + SAML)
+GET  /api/v1/auth/sso/providers          # List enabled SSO providers for tenant
+GET  /api/v1/auth/oauth/start            # Begin OAuth (PKCE S256 + single-use state)
+GET  /api/v1/auth/oauth/callback         # OAuth callback → 302 with sso_token
+GET  /api/v1/auth/saml/start             # Begin SAML AuthnRequest
+POST /api/v1/auth/saml/acs               # SAML AssertionConsumerService
+GET  /api/v1/admin/sso/providers         # Per-tenant admin CRUD (list)
+POST /api/v1/admin/sso/providers         # Create provider (client_secret AES-GCM-encrypted before persist)
+PATCH /api/v1/admin/sso/providers/:id    # Update
+DELETE /api/v1/admin/sso/providers/:id   # Delete
 ```
 
 **JWT Structure:**
@@ -107,8 +122,17 @@ service AuthService {
   rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
   rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  // FE-API-028 — used by the platform-admin tenant-detail view
+  rpc CountTenantUsers(CountTenantUsersRequest) returns (CountTenantUsersResponse);
 }
 ```
+
+**Auth schema additions for FE-API-034 (SSO):**
+- `auth_providers(id, tenant_id, type, display_name, enabled, oauth_client_id, oauth_client_secret_encrypted, oauth_issuer_url, oauth_scopes, saml_entity_id, saml_audience, saml_idp_metadata_xml, …)` — `type` enum: `google` | `github` | `microsoft` | `oidc` | `saml`; canonical-type providers (Google/GitHub/Microsoft) have a per-tenant unique constraint.
+- `auth_login_sessions(state PK, tenant_id, provider_id, redirect_uri, pkce_verifier, created_at, expires_at)` — 10-minute TTL; single-use via `DELETE ... RETURNING`. SAML reuses `pkce_verifier` to store the `AuthnRequest.ID` so the callback can pass it to `ParseResponse` as the only permitted `InResponseTo`.
+- `users.sso_provider_id` — points back to the provider when a user was auto-provisioned. Local-auth users have NULL.
+
+Audit routing keys published by the SSO admin handler (not yet typed in `libs/rabbitmq/events`): `auth.provider_created`, `auth.provider_updated`, `auth.provider_deleted`, plus `auth.user_sso_provisioned` from the OAuth/SAML callback path.
 
 **RBAC role model (implemented in `services/auth/migrations/20260614000001_create_rbac.sql`):**
 
@@ -256,19 +280,43 @@ STORAGE_FILESYSTEM_ROOT=/data    # required, absolute path
 
 **This service owns the PostgreSQL database.** All other services that need metadata go through this service's gRPC API — they do not connect to PostgreSQL directly.
 
-**gRPC service:** `MetadataService` in `proto/metadata/v1/metadata.proto`. Covers repositories, tags, manifests, blobs, quota, and scan status. Notable RPCs:
+**gRPC service:** `MetadataService` in `proto/metadata/v1/metadata.proto`. Covers repositories, tags, manifests, blobs, quota, scan status, and the FE-API security-center surfaces.
+
+Notable RPCs:
 - `GetRepositoryByName(tenant_id, "org/repo")` — direct lookup, used by registry-management to avoid O(n) stream scans.
+- `GetManifestByTag(tenant_id, repo_id, tag)` — used by the BFF's per-tag manifest detail route (FE-API-002).
 - `ListRepositories`, `ListTags`, `ListOrphanedBlobs` — route to read replica when `DB_DSN_REPLICA` is set.
+- `CountRepositories(tenant_id)` — replaces the previous O(n) `ListRepositories` stream drain in `/stats`.
+- `UpdateRepository(tenant_id, repo_id, description, …)` — used by the BFF to surface description / visibility edits (FE-API-006).
+- **Security center (FE-API-014/015/016/017/020):**
+  - `GetTenantVulnerabilityCount` + extended `severity_counts` (critical/high/medium/low/negligible) for the `/stats` mini bar.
+  - `GetSecurityOverview(tenant_id)` — single 3-CTE query: vuln rollup + scan coverage + recency.
+  - `ListTenantVulnerabilities(tenant_id, severity, page_token, limit)` — DISTINCT ON CTE rolls findings per `cve_id` with deduped `affected[]`.
+  - `ListScanHistory(tenant_id, since, page_token, limit)` — keyset cursor on `(completed_at, scan_id)`; uses the new `00006_scan_results_trigger.sql` `trigger` column (`push` / `manual` / `scheduled`).
+  - `ListTenantRemediations(tenant_id, page_token, limit)` — groups by `(package, from_version, to_version)`; capped 10 per group with `affected_count` reporting true total.
+- **Tenant admin (FE-API-028/031):**
+  - `GetTenantUsage(tenant_id)` — storage/repository/organization counts.
+  - `GetTenantStorageBreakdown(tenant_id)` — tenant total + top-50 repos with `percent_of_tenant` materialised server-side.
+- **SBOM (FE-API-033):**
+  - `UpsertScanSBOM(scan_id, format, sbom_json)` / `GetScanSBOM(scan_id)` — write path is the metadata RPC itself today (scanner integration deferred).
 
 **Database schema:** Canonical source is `services/metadata/migrations/`. Core tables:
 - `tenants(id, name, created_at)`
 - `organizations(id, tenant_id, name)`
-- `repositories(id, org_id, tenant_id, name, is_public, storage_quota, storage_used)`
-- `manifests(id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes)`
+- `repositories(id, org_id, tenant_id, name, is_public, storage_quota, storage_used, description)`
+- `manifests(id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes)`
 - `tags(id, repo_id, tenant_id, name, manifest_digest, updated_at)`
 - `blobs(digest PRIMARY KEY, size_bytes, storage_key)`
 - `blob_links(repo_id, blob_digest)` — deduplication
-- `scan_results(id, manifest_digest, repo_id, tenant_id, scanner_name, status, severity_counts, findings)`
+- `scan_results(id, manifest_digest, repo_id, tenant_id, scanner_name, status, severity_counts, findings, trigger, sbom_format, sbom_json, completed_at)`
+
+Migrations of note:
+- `00004_manifest_image_size.sql` — column add only (per PENTEST-028); operator-run batched backfill in `infra/runbooks/manifest-image-size-backfill.md`.
+- `00005_repo_description.sql` — FE-API-006.
+- `00006_scan_results_trigger.sql` — FE-API-015 (`trigger` ∈ `{push, manual, scheduled}`).
+- `00007_scan_results_sbom.sql` — FE-API-033 (`sbom_format` + `sbom_json BYTEA`).
+
+`PutManifest` enforces `maxManifestJSONBytes = 4 << 20` (PENTEST-029); `parseImageSize` truncates `Layers`/`Manifests` at `maxManifestEntries = 1000`.
 
 All tables have `tenant_id UUID NOT NULL` and matching RLS policies (see CLAUDE.md §9).
 
@@ -371,22 +419,35 @@ Response (from stdout):
 - Each job has a timeout (`SCANNER_JOB_TIMEOUT_SECONDS`, default: 600)
 - Dead-letter queue for failed jobs after 3 retries
 
-**Scan policy (per tenant, stored in `registry-tenant`):**
+**Scan policy & compliance reports (FE-API-018 / FE-API-019):**
 
-```go
-type ScanPolicy struct {
-    ScanOnPush          bool
-    BlockOnSeverity     string // "CRITICAL" | "HIGH" | "MEDIUM" | "" (disabled)
-    AllowUnscanned      bool   // if false, block pull of unscanned images
-    ExemptRepositories  []string
-}
-```
+> Bootstrap note: `services/scanner` previously had no DB. As of 2026-06-20 (`f40365f`) it owns its own Postgres database with goose migrations under `services/scanner/migrations/`. `DB_DSN` + `DB_MAX_CONNS` are required config; `goose.Up` runs at startup before serving traffic.
+
+Tables (canonical source `services/scanner/migrations/20260620000001_scan_policies_and_reports.sql`):
+- `scan_policies(tenant_id PK, scan_on_push, block_on_severity, scanner_plugin, allow_unscanned, exempt_repositories[], exempt_cves[])` — `GetScanPolicy` returns a default policy when no row exists (no 404). Validation: `block_on_severity ∈ {"", CRITICAL, HIGH, MEDIUM, LOW}`, `scanner_plugin ∈ {trivy, grype}`, `exempt_cves` each matches `^CVE-\d{4}-\d{4,7}$`.
+- `compliance_reports(id, tenant_id, status, format, requested_by, requested_at, completed_at, output_path, error)` — `report_status` enum (`pending` | `running` | `succeeded` | `failed`), composite index `(tenant_id, status, requested_at)`. The report worker (`internal/reportworker`) polls every 5 s and claims via `FOR UPDATE SKIP LOCKED LIMIT 1` so the job is safe across multiple scanner replicas.
+
+Renderers:
+- **SPDX JSON 2.3** — minimal `SPDXVersion / dataLicense / SPDXID / documentName / packages` from findings.
+- **PDF** — hand-crafted `%PDF-1.4` header + single page + Helvetica Type1; no 3rd-party PDF library.
+
+Files land under `REPORT_OUTPUT_DIR/<tenant>/<id>.{pdf,spdx.json}` with `safeJoin` guarding path traversal. Real PDF layout / branding and object-storage with signed URLs are deferred (documented in code).
+
+Scanner gRPC additions:
+- `GetScanPolicy(tenant_id)` / `UpdateScanPolicy(tenant_id, …)`
+- `GenerateComplianceReport(tenant_id, format)` → `{report_id, status:"pending"}` (async)
+- `GetComplianceReport(tenant_id, report_id)` / `ListComplianceReports(tenant_id)`
 
 ---
 
 ## 8. registry-signer
 
 **Purpose:** Image signing and verification using Cosign (Sigstore) and Notary v2.
+
+> **Canonical reference:** end-to-end signing flow, key lifecycle, dashboard
+> + CLI verification paths, threat model — see [`docs/SIGNING.md`](SIGNING.md).
+> This section covers the proto / gRPC contract; the SIGNING doc covers
+> where the keys live and how they're used in operations.
 
 **Cosign integration:**
 - Signatures stored as OCI artifacts in `registry-core` (standard Cosign behaviour)
@@ -444,7 +505,16 @@ Signatures are persisted in PostgreSQL (`signatures` table) with a write-through
 - Signature in `X-Registry-Signature: sha256=<hex>` header
 - Validate destination URL is not a private IP range (SSRF protection): block 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, ::1, metadata endpoints (169.254.169.254)
 - Enforce HTTPS-only webhook endpoints (reject HTTP)
+- Dispatcher errors are sanitised via `sanitizeURLForError` so persisted `last_error` strings never carry URL-embedded tokens (PENTEST-027)
+- `UpdateEndpoint` re-runs `ValidateURL` against the stored URL when the caller omits `req.Url` (PENTEST-032)
 - Never include auth tokens or credentials in webhook payload
+
+**gRPC service:** `WebhookService` in `proto/webhook/v1/webhook.proto`. RPCs:
+- `CreateEndpoint`, `UpdateEndpoint` (with `optional` URL/events/active), `DeleteEndpoint`, `ListEndpoints`
+- `RotateEndpointSecret` — generates a new HMAC secret; returns plaintext once
+- `ListDeliveries(endpoint_id, tenant_id, since, limit)` — newest-first, cap 200
+- `GetDelivery(endpoint_id, delivery_id, tenant_id)` — `DeliveryDetail` summary + `payload_json` + `signature_header` + `response_body` (FE-API-035; `signature_header` and `response_body` reserved on the wire, populated by a follow-up migration + dispatcher patch)
+- `TestDispatch(endpoint_id, tenant_id)` — synchronous; reuses the same `delivery.Dispatcher` (SSRF guard + timeouts); not recorded in `webhook_deliveries`
 
 ---
 
@@ -487,6 +557,14 @@ type AuditEvent struct {
 - Actor IP extracted from `X-Forwarded-For` only if request came through trusted gateway IP. Otherwise use direct TCP peer.
 - Never log passwords, tokens, API keys, or secret values in `metadata`.
 - Retain audit logs for minimum 90 days (configurable, default 365 days).
+
+**gRPC service:** `AuditService` in `proto/audit/v1/audit.proto`. RPCs:
+- `GetBuildHistory(tenant_id, repo_id, tag, …)` — used by the BFF `builds` route
+- `GetDailyPullCount(tenant_id, repo_id)`
+- `GetRepoActivity(tenant_id, org, repo, since, limit, page_token, event_types)` — FE-API-004; 8-action allowlist (`push.completed/failed`, `manifest.deleted`, `tag.deleted`, `scan.completed`, `scan.policy_blocked`, `image.signed`); keyset cursor over `(tenant_id, occurred_at DESC)`
+- `GetNotifications(tenant_id, since, limit, page_token, event_types, unread_only)` — FE-API-008; renderer synthesises `title` + `summary` + `link` per event type
+- `GetAnalytics(tenant_id, scope_type, repo_id, range_secs, bucket_secs)` — FE-API-030; PG14 `date_bin` time-series; BFF pre-allocates empty buckets so quiet periods return `count=0`
+- `GetLastTenantPush(tenant_id)` — FE-API-028; serialised as JSON `null` when no push activity yet
 
 ---
 
@@ -536,6 +614,20 @@ Phase 3 — Update quota:
 - GC is scheduled, not triggered by push events — run nightly by default (configurable cron)
 - GC must be idempotent: safe to run multiple times
 
+**GC status visibility (FE-API-032):**
+
+> Bootstrap note: `services/gc` previously had neither a gRPC server nor a DB. As of 2026-06-21 (`92e6028`) it owns its own Postgres database with goose migrations under `services/gc/migrations/`. When `DB_DSN` is unset, the legacy in-process `runLoop` still works — the new persistence path is opt-in.
+
+Table (canonical source `services/gc/migrations/20260621000001_gc_runs.sql`):
+- `gc_runs(id, tenant_id NULL, mode, status, triggered_by, queued_at, started_at, completed_at, …)` — `status` ∈ `{queued, running, succeeded, failed}`; `mode` ∈ `{dry-run, manifests, blobs, full}`; `tenant_id` is NULL for cross-tenant cron sweeps; `triggered_by` is `cron` or a user_id.
+
+gRPC service: `GCService` in `proto/gc/v1/gc.proto`:
+- `GetStatus()` → `last_completed_at`, `last_status`, `next_scheduled_at` (best-effort: `last_completed_at + GC_RUN_INTERVAL_HOURS`)
+- `RunNow(mode, tenant_id?)` — async: INSERTs a `queued` row + non-blocking send on a buffered channel, returns immediately with `{run_id, status: "queued"}`
+- `ListRuns(page_token, limit)` — newest-first
+
+Cron loop drains queued rows between ticks via `PersistedRunner.ClaimNextQueued` (`FOR UPDATE SKIP LOCKED`). Existing REM-009 per-tenant advisory locks still arbitrate concurrent sweeps.
+
 ---
 
 ## 12. registry-tenant
@@ -563,6 +655,26 @@ Phase 3 — Update quota:
 - 24h notification logged when age ≥ 24h; 48h failure notification at age ≥ 47h
 - Exponential poll backoff: <1h → 5min, 1h–12h → 10min, >12h → 20min
 - `next_poll_after` column + index; `ListUnverifiedDomains` filters `next_poll_after <= now()`
+
+**FE-API-007 / 009 / 027 / 028 / 029 additions:**
+
+Migrations:
+- `20260620000001_add_tenant_slug.sql` — `tenants.slug TEXT NOT NULL` (backfilled via `regexp_replace + trim`; unique index).
+- `20260620000002_add_domain_is_primary.sql` — `tenant_domains.is_primary BOOLEAN`; partial unique index `WHERE is_primary`; backfill picks the oldest verified per tenant.
+
+`Tenant` proto extended: `slug` (5), `host` (6), `host_is_custom` (7), `domains[]` (8) — append-only field numbers preserved. Host algorithm in `GRPCHandler.buildTenantProto`: primary verified domain wins → `host = domain`, `host_is_custom = true`; otherwise `host = <slug>.<PLATFORM_BASE_DOMAIN>`. `MarkDomainVerified` auto-promotes the first verified domain in the same tx.
+
+New gRPC RPCs:
+- `ListTenants(page_size, page_token)` — base64url(`created_at|id`) cursor for stable ordering.
+- `UpdateTenant(id, name?, plan?)` — FE-API-029; rename cascade recomputes slug **atomically inside the same tx** so no observable state has new-name with old-slug. Validation: name regex `^[a-z0-9][a-z0-9-]{1,63}$`, plan ∈ `{free, pro, enterprise}`. Per-field events `tenant.renamed` + `tenant.plan_changed` (patching both fires two events).
+- `ListTenantDomains(tenant_id)` — `verification_token` stripped from FE responses (PII).
+- `VerifyDomainNow(tenant_id, domain)` — synchronous re-check via swappable `txtLookup` package var.
+- `SetPrimaryDomain(tenant_id, domain)` — atomic SELECT verified → demote-all → promote-target RETURNING.
+- `DeleteDomain(tenant_id, domain)` — returns `X-Janus-Warning: primary-domain-removed` when removing the primary (warning lives on the management response).
+
+PATCH `is_primary:false` → 400 with `"is_primary must be true; delete the domain to clear primary"` — silently demoting would orphan the host onto the wildcard fallback.
+
+`PLATFORM_BASE_DOMAIN` env var (default `registry.localhost`) — wildcard-platform guard rejects any domain ending in `.<PLATFORM_BASE_DOMAIN>`.
 
 ---
 
@@ -603,7 +715,60 @@ GET    /api/v1/repositories/:org/:repo/members                 # List repo membe
 POST   /api/v1/repositories/:org/:repo/members                 # Grant role to user in repo (admin+ only)
 DELETE /api/v1/repositories/:org/:repo/members/:assignmentID   # Revoke repo role assignment (admin+ only)
 
-# Future — webhooks, API keys, tenant settings, audit queries (added as needed)
+# Webhooks (FE-API-021..024, 035)
+GET    /api/v1/webhooks                                # List endpoints (admin-only — PENTEST-027)
+POST   /api/v1/webhooks                                # Create — secret returned once
+PATCH  /api/v1/webhooks/:id                            # Edit URL / events / active
+DELETE /api/v1/webhooks/:id
+GET    /api/v1/webhooks/:id/deliveries                 # Delivery log (admin-only)
+GET    /api/v1/webhooks/:id/deliveries/:delivery_id    # Single delivery detail (payload, signature, response_body)
+POST   /api/v1/webhooks/:id/test                       # Synchronous test dispatch (15s deadline)
+POST   /api/v1/webhooks/:id/rotate-secret              # New HMAC secret — returned once
+
+# Workspace (FE-API-009, 027)
+GET    /api/v1/workspace/me                            # Tenant identity (slug, host, host_is_custom, domains[])
+GET    /api/v1/workspace/me/domains                    # Custom domain list (verification_token stripped)
+POST   /api/v1/workspace/me/domains                    # Register — returns DNS TXT challenge
+POST   /api/v1/workspace/me/domains/:domain/verify     # Re-run DNS TXT check synchronously
+PATCH  /api/v1/workspace/me/domains/:domain            # Set is_primary=true (false → 400)
+DELETE /api/v1/workspace/me/domains/:domain            # X-Janus-Warning header if removing primary
+
+# Notifications / analytics (FE-API-008, 030)
+GET    /api/v1/notifications                           # Poll-based notifications (since, event_types, unread_only)
+GET    /api/v1/repositories/:org/:repo/analytics       # Repo-scoped time-series
+GET    /api/v1/stats/analytics                         # Tenant-wide analytics
+GET    /api/v1/stats/storage                           # Per-repo storage breakdown (FE-API-031)
+
+# Security center (FE-API-014..020)
+GET    /api/v1/security/overview                       # Open vulns + scan coverage + recency
+GET    /api/v1/security/vulnerabilities                # CVE rollup with affected[]
+GET    /api/v1/security/scans                          # Scan history (trigger field)
+GET    /api/v1/security/remediation                    # Upgrade groups
+PUT    /api/v1/security/policy                         # Update scan policy (admin)
+GET    /api/v1/security/policy
+POST   /api/v1/security/reports/generate               # Compliance report job
+GET    /api/v1/security/reports
+GET    /api/v1/security/reports/:id
+GET    /api/v1/security/reports/:id/download/:format   # pdf | sbom
+
+# Per-tag manifest / signing / SBOM (FE-API-002 / 003 / 025 / 026 / 033)
+GET    /api/v1/repositories/:org/:repo/tags/:tag/manifest
+GET    /api/v1/repositories/:org/:repo/tags/:tag/signature[?verify=true]
+POST   /api/v1/repositories/:org/:repo/tags/:tag/sign
+GET    /api/v1/repositories/:org/:repo/tags/:tag/sbom?format=spdx-json
+GET    /api/v1/repositories/:org/:repo/activity        # FE-API-004
+DELETE /api/v1/repositories/:org/:repo/tags            # Bulk tag delete (FE-API-036; body {tag_names[]})
+
+# Platform admin (FE-API-028 / 029 / 032)
+GET    /api/v1/admin/tenants                           # platform-admin marker (org=*, admin)
+POST   /api/v1/admin/tenants
+GET    /api/v1/admin/tenants/:id                       # Composition: tenant + usage + user count + last push
+PATCH  /api/v1/admin/tenants/:id                       # Rename + plan change
+DELETE /api/v1/admin/tenants/:id
+PUT    /api/v1/admin/tenants/:id/quota
+GET    /api/v1/admin/gc/status                         # FE-API-032
+GET    /api/v1/admin/gc/runs
+POST   /api/v1/admin/gc/run
 ```
 
 **Rules:**
@@ -616,9 +781,16 @@ DELETE /api/v1/repositories/:org/:repo/members/:assignmentID   # Revoke repo rol
 - RBAC DELETE routes (delete repo, delete tag) require caller to hold at least `writer` role. Member grant/revoke endpoints require `admin` or `owner`. Checked via `GetUserPermissions` before the operation proceeds.
 
 **gRPC calls made by this service:**
-- `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`
-- `registry-metadata`: `ListRepositories`, `GetRepository`, `GetRepositoryByName`, `CreateRepository`, `DeleteRepository`, `ListTags`, `DeleteTag`, `GetScanResult`, `GetTenantQuotaUsage`
-- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`
+- `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`, `CountTenantUsers`
+- `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5
+- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`
+- `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`, `ListTenantDomains`, `VerifyDomainNow`, `SetPrimaryDomain`, `DeleteDomain`
+- `registry-signer` (opt-in via `SIGNER_GRPC_ADDR`): `ListSignatures`, `SignManifest`, `VerifyManifest`
+- `registry-scanner` (opt-in via `SCANNER_GRPC_ADDR`): scan-policy + compliance-report RPCs
+- `registry-webhook` (opt-in via `WEBHOOK_GRPC_ADDR`): endpoint CRUD + deliveries + test/rotate
+- `registry-gc` (opt-in via `GC_GRPC_ADDR`): `GetStatus`, `RunNow`, `ListRuns`
+
+When a downstream service's gRPC address is unset, the BFF returns `404 "route disabled"` on the corresponding routes rather than failing the whole service.
 
 **Environment variables:**
 ```
@@ -626,7 +798,12 @@ HTTP_ADDR=:8085
 AUTH_GRPC_ADDR=                  # required
 METADATA_GRPC_ADDR=              # required
 AUDIT_GRPC_ADDR=                 # required
-RABBITMQ_URL=                    # required (for scan.queued events)
+TENANT_GRPC_ADDR=                # required for admin tenant routes + /workspace/me
+SIGNER_GRPC_ADDR=                # optional — FE-API-003/025/026
+SCANNER_GRPC_ADDR=               # optional — FE-API-018/019
+WEBHOOK_GRPC_ADDR=               # optional — FE-API-021..024/035
+GC_GRPC_ADDR=                    # optional — FE-API-032
+RABBITMQ_URL=                    # required (scan.queued + image.signed publishes)
 CORS_ALLOWED_ORIGIN=             # required in production; default http://localhost:5173 in dev
 MTLS_CA_CERT_PATH=               # required in production
 MTLS_CERT_PATH=                  # required in production

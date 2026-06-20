@@ -15,7 +15,7 @@ docker-compose.test.yml      # Integration test environment
 - RabbitMQ 3.13 (management plugin enabled)
 - MinIO (default storage driver for local dev)
 - Jaeger + otel-collector + Prometheus (default OTEL backend for local dev)
-- HashiCorp Vault in dev mode (for signer key storage)
+- HashiCorp Vault in dev mode (for signer key storage — see [`SIGNING.md`](SIGNING.md) for the full key-lifecycle reference)
 
 ## Kubernetes (`infra/helm/`)
 

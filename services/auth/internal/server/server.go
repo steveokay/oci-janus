@@ -3,10 +3,12 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +32,7 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
 	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
+	authsaml "github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
@@ -107,7 +110,65 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		w.WriteHeader(http.StatusOK)
 	})
 	devTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
-	handler.NewHTTPHandler(svc, devTenantID).Register(mux)
+	httpH := handler.NewHTTPHandler(svc, devTenantID)
+
+	// ── 5a. SSO sub-service (FE-API-034) ─────────────────────────────────
+	// SSO is opt-in: without SSO_CREDENTIAL_KEY_HEX the routes are not
+	// registered and the dashboard's SSO buttons keep their "coming soon"
+	// behaviour. With it, the OAuth flow + admin CRUD endpoints come online.
+	if cfg.SSOCredentialKeyHex != "" {
+		key, err := hex.DecodeString(cfg.SSOCredentialKeyHex)
+		if err != nil || len(key) != 32 {
+			return fmt.Errorf("SSO_CREDENTIAL_KEY_HEX must be a 64-character hex string (32 bytes)")
+		}
+		ssoSvc, err := service.NewSSO(
+			svc,
+			repository.NewAuthProviderRepository(pool),
+			repository.NewLoginSessionRepository(pool),
+			key,
+		)
+		if err != nil {
+			return fmt.Errorf("init sso service: %w", err)
+		}
+		httpH = httpH.WithSSO(ssoSvc, cfg.SSOBaseURL)
+		if pub != nil {
+			httpH = httpH.WithEventPublisher(pub)
+		}
+
+		// SAML SP cert/key are independent of OAuth — operators can run with
+		// only OAuth (cert paths empty) or both. Both paths must be set
+		// together; one without the other is a config error.
+		switch {
+		case cfg.SAMLSPCertPath != "" && cfg.SAMLSPKeyPath != "":
+			certPEM, err := os.ReadFile(cfg.SAMLSPCertPath)
+			if err != nil {
+				return fmt.Errorf("read SAML_SP_CERT_PATH: %w", err)
+			}
+			keyPEM, err := os.ReadFile(cfg.SAMLSPKeyPath)
+			if err != nil {
+				return fmt.Errorf("read SAML_SP_KEY_PATH: %w", err)
+			}
+			spCfg, err := authsaml.LoadSPConfig(certPEM, keyPEM)
+			if err != nil {
+				return fmt.Errorf("load SAML SP config: %w", err)
+			}
+			httpH = httpH.WithSAMLConfig(spCfg)
+			slog.Info("SAML SP keypair loaded — /auth/saml/... routes active")
+		case cfg.SAMLSPCertPath != "" || cfg.SAMLSPKeyPath != "":
+			return fmt.Errorf("SAML_SP_CERT_PATH and SAML_SP_KEY_PATH must both be set or both empty")
+		default:
+			slog.Info("SAML SP keypair not configured — /auth/saml/... routes return 501")
+		}
+
+		// Background cleanup: drop expired login sessions every minute so
+		// the auth_login_sessions table never grows beyond the active set.
+		go runLoginSessionCleanup(ctx, ssoSvc)
+		slog.Info("SSO routes registered", "base_url", cfg.SSOBaseURL)
+	} else {
+		slog.Warn("SSO_CREDENTIAL_KEY_HEX not set — SSO routes are disabled (dev only)")
+	}
+
+	httpH.Register(mux)
 
 	// ReadHeaderTimeout prevents Slowloris attacks where a client holds connections
 	// open by sending HTTP headers one byte at a time.
@@ -215,4 +276,31 @@ func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
 
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	metrics.Handler().ServeHTTP(w, r)
+}
+
+// runLoginSessionCleanup periodically drops expired SSO login sessions so
+// the auth_login_sessions table never grows beyond the active redirect
+// dances. 60 seconds is a sweet spot — short enough that an attacker who
+// captures a state token has at most ~1 minute of extra lifetime past the
+// 10-minute hard TTL, long enough that the load on the DB is trivial.
+func runLoginSessionCleanup(ctx context.Context, sso *service.SSO) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			deleted, err := sso.Sessions().DeleteExpired(cctx)
+			cancel()
+			if err != nil {
+				slog.Warn("sso cleanup: DeleteExpired", "err", err)
+				continue
+			}
+			if deleted > 0 {
+				slog.Debug("sso cleanup: dropped expired sessions", "n", deleted)
+			}
+		}
+	}
 }

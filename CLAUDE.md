@@ -43,11 +43,12 @@ A production-grade, multi-tenant OCI-compliant Docker registry platform built in
 - Full OCI Distribution Spec v1.1 compliance (push, pull, delete, list, referrers)
 - Multi-tenant with per-tenant custom domains
 - JWT (RS256) + API key authentication; mTLS between all internal services
+- Per-tenant SSO: OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP (auto-provisioning, AES-256-GCM-encrypted client secrets) — see [`docs/SAML.md`](docs/SAML.md)
 - Pluggable storage: MinIO, AWS S3, GCP Cloud Storage, Azure Blob
-- Pluggable vulnerability scanner interface (external-process JSON-RPC)
-- Image signing via Cosign (Sigstore) and Notary v2
+- Pluggable vulnerability scanner interface (external-process JSON-RPC) with per-tenant scan policies + compliance reports (SPDX SBOM + PDF)
+- Image signing via Cosign (Sigstore) and Notary v2 — see [`docs/SIGNING.md`](docs/SIGNING.md)
 - Pull-through proxy cache for upstream registries
-- RBAC at org / repo level (owner / admin / writer / reader)
+- RBAC at org / repo level (owner / admin / writer / reader); platform-admin marker scope `(admin, org, *)`
 - Webhook delivery with retries and HMAC signing
 - Full append-only audit trail (Postgres RLS + low-privilege role)
 - Pluggable observability: OpenTelemetry → Jaeger, Grafana Tempo, or Datadog
@@ -157,18 +158,18 @@ github.com/steveokay/oci-janus/
 | # | Service | Purpose | Owns | Notable |
 |---|---|---|---|---|
 | 1 | `registry-gateway` | TLS termination + host-based tenant resolution + rate limit | — | Traefik v3 |
-| 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks | Postgres (auth schema) | RS256, 300s TTL, JTI revocation in Redis |
+| 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks, per-tenant SSO (OAuth + SAML) | Postgres (auth schema — incl. `auth_providers`, `auth_login_sessions`, `users.sso_provider_id`) | RS256, 300s TTL, JTI revocation in Redis; PKCE S256 OAuth; SAML SP via `crewjam/saml` |
 | 3 | `registry-core` | OCI Distribution Spec v1.1 — `/v2/` API | — | Streams blobs, checkAccess on every handler |
 | 4 | `registry-storage` | Pluggable blob storage abstraction | Object store backend | MinIO/S3/GCS/Azure/filesystem |
-| 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing |
+| 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans/SBOMs | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing; per-tag SBOM columns |
 | 6 | `registry-proxy` | Pull-through cache for upstream registries | Postgres (proxy schema) | Upstream creds AES-256-GCM; `store.queued` retry |
-| 7 | `registry-scanner` | Vulnerability scan orchestration + plugin host | — | External-process JSON-RPC; checksum-validated binary |
+| 7 | `registry-scanner` | Vulnerability scan orchestration + plugin host + scan policies + compliance reports | Postgres (scanner schema — `scan_policies`, `compliance_reports`) | External-process JSON-RPC; checksum-validated binary; async report worker with `FOR UPDATE SKIP LOCKED`; SPDX JSON 2.3 + hand-crafted PDF renderer |
 | 8 | `registry-signer` | Cosign + Notary v2 signing/verification | Postgres (signatures table) | Vault dev mode locally; KMS in prod |
-| 9 | `registry-webhook` | Reliable webhook delivery with retries + HMAC | Postgres (webhook schema) | SSRF block-list; HTTPS-only |
-| 10 | `registry-audit` | Immutable audit log | Postgres (audit schema) | `FORCE ROW LEVEL SECURITY`, `registry_audit_app` role |
-| 11 | `registry-gc` | Mark-sweep garbage collection | — | `pg_try_advisory_lock`; FNV-64a key per tenant |
-| 12 | `registry-tenant` | Tenant CRUD + custom domain verification | Postgres (tenant schema) | DNS TXT challenge; 24h/48h notification |
-| 13 | `registry-management` | REST BFF for the dashboard (and CLI/Terraform) | — | No gRPC server; translates HTTP → gRPC |
+| 9 | `registry-webhook` | Reliable webhook delivery with retries + HMAC + delivery payload retrieval | Postgres (webhook schema) | SSRF block-list; HTTPS-only; `GetDelivery` for FE inspection |
+| 10 | `registry-audit` | Immutable audit log + analytics + notifications | Postgres (audit schema) | `FORCE ROW LEVEL SECURITY`, `registry_audit_app` role; PG14 `date_bin` time-series |
+| 11 | `registry-gc` | Mark-sweep garbage collection + GC status visibility | Postgres (`gc_runs` table) | `pg_try_advisory_lock`; FNV-64a key per tenant; async `RunNow` queues a row + drains via `FOR UPDATE SKIP LOCKED` |
+| 12 | `registry-tenant` | Tenant CRUD (incl. rename + plan), custom domain CRUD + verification | Postgres (tenant schema — `tenants.slug`, `tenant_domains.is_primary`) | DNS TXT challenge; 24h/48h notification; atomic primary swap |
+| 13 | `registry-management` | REST BFF for the dashboard (and CLI/Terraform) | — | No gRPC server; translates HTTP → gRPC; mounts SSO + signer + scanner + gc routes when their gRPC addrs are set |
 
 ---
 
@@ -560,9 +561,14 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 11 | No presigned URLs to clients | Prevents storage credential exposure; all blob traffic proxied for audit and rate limiting | Initial |
 | 12 | PostgreSQL RLS as second layer | Defence in depth for tenant isolation; application bug cannot leak cross-tenant data | Initial |
 | 13 | Trivy as default scanner plugin | Active maintenance + good CVE coverage + permissive license | 2026-06-09 |
-| 14 | Vault dev mode as local KMS | Same `SIGNER_KEY_BACKEND=vault` path as production; no special dev-only code path | 2026-06-09 |
+| 14 | Vault dev mode as local KMS | Same `SIGNER_KEY_BACKEND=vault` path as production; no special dev-only code path. **Full doc: [`docs/SIGNING.md`](docs/SIGNING.md)** | 2026-06-09 |
 | 15 | Audit table FORCE RLS + low-privilege `registry_audit_app` role | Application bug cannot tamper with audit records | 2026-06-09 |
 | 16 | GC advisory locks via `pg_try_advisory_lock` (FNV-64a key) | Non-blocking GC across multiple workers; clean lock release via deferred unlock | 2026-06-09 |
+| 17 | `services/scanner` gets its own DB for scan policies + compliance reports (FE-API-018/019) | Previously DB-less; scan policies belong with the scanner (not metadata) so policy edits stay close to enforcement; compliance reports are async + multi-replica so `FOR UPDATE SKIP LOCKED` job claim needs Postgres | 2026-06-20 |
+| 18 | `services/gc` gets its own DB for GC run status (FE-API-032) | Previously DB-less; `gc_runs` table makes status visibility + `RunNow` async — `RunNow` INSERTs a queued row + non-blocking channel send, drained by the cron loop via `ClaimNextQueued` (`FOR UPDATE SKIP LOCKED`) so the legacy in-process runner still works when `DB_DSN` is unset | 2026-06-21 |
+| 19 | Per-tenant SSO model (FE-API-034) — OAuth (PKCE S256) and SAML 2.0 SP | OAuth and SAML both live on `services/auth` since `auth_providers` + `auth_login_sessions` belong with the user table. Hand-rolled OAuth (no `x/oauth2`) for explicit PKCE control; SAML wraps `crewjam/saml` bare `ServiceProvider` (bypasses `samlsp.Middleware` because JWT issuer covers session). `client_secret` AES-256-GCM-encrypted before persistence | 2026-06-21 |
+| 20 | Custom-domain primary mutex on `tenant_domains.is_primary` (FE-API-007/027) | Partial unique index `WHERE is_primary`; `MarkDomainVerified` auto-promotes the first verified domain; primary swap is one atomic tx (`SELECT verified → demote-all → promote-target RETURNING`) so no observable state has two primaries | 2026-06-20 |
+| 21 | Generic `GetAnalytics` RPC over `services/audit` with BFF-supplied bucket origin (FE-API-030) | Audit is already the system of record for `push.image` etc.; PG14 `date_bin` aligns buckets across replicas; BFF owns the range→bucket mapping (24h→1h×24, 7d→6h×28, 30d→1d×30) and pre-allocates empty buckets so quiet periods report `count=0` rather than gaps | 2026-06-21 |
 
 ---
 

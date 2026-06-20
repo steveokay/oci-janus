@@ -178,6 +178,32 @@ func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ s
 	return nil, nil
 }
 
+// SSO methods — FE-API-034. Existing handler tests don't exercise these; SSO
+// tests live in sso_test.go and use a dedicated fake.
+func (f *handlerFakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && u.Email == email {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
+	u := &repository.User{
+		ID:        uuid.New(),
+		TenantID:  req.TenantID,
+		Username:  req.Username,
+		Email:     req.Email,
+		IsActive:  true,
+		CreatedAt: time.Now(),
+	}
+	f.users[u.Username] = u
+	return u, nil
+}
+
+func (f *handlerFakeUserRepo) TouchLastLogin(_ context.Context, _ uuid.UUID) error { return nil }
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey

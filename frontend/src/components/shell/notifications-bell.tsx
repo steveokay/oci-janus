@@ -1,0 +1,196 @@
+import * as React from "react";
+import { Link } from "@tanstack/react-router";
+import {
+  Bell,
+  CheckCircle2,
+  Inbox,
+  ArrowRight,
+} from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  countUnread,
+  loadLastSeen,
+  useMarkAllSeen,
+  useNotifications,
+  type Notification,
+} from "@/lib/api/notifications";
+import { useAuthStore } from "@/lib/auth/store";
+import { formatRelativeDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+// NotificationsBell — topbar widget surfacing recent tenant events.
+//
+// Polls /notifications every 60s (see hook). Unread count is derived from a
+// localStorage `last_seen_at` cursor, so the bell instantly reflects "marked
+// as read" without a server write. "Mark all seen" bumps the cursor + fires
+// a cache invalidation so the badge resets.
+//
+// Dropdown lists the most recent 10 events; "View all" links to /activity
+// for the full filterable feed.
+export function NotificationsBell(): React.ReactElement {
+  const tenantID = useAuthStore((s) => s.claims?.tenant_id);
+  const { data } = useNotifications({ limit: 10 });
+  // The "last seen" cursor is a free localStorage read. We intentionally
+  // re-read whenever the notifications page updates so a "Mark all seen"
+  // anywhere in the app refreshes the badge here. `data` looks "unused"
+  // to the linter but is the signal that triggers the re-read.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const lastSeenAt = React.useMemo(() => loadLastSeen(tenantID), [tenantID, data]);
+  const markAllSeen = useMarkAllSeen(tenantID);
+  const unread = countUnread(data, lastSeenAt);
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={
+            unread > 0
+              ? `Notifications — ${unread} unread`
+              : "Notifications"
+          }
+          className="relative"
+        >
+          <Bell className="size-4" />
+          {unread > 0 ? (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute -right-0.5 -top-0.5 grid min-w-[16px] place-items-center rounded-full",
+                "bg-[var(--color-highlight)] px-1 text-[10px] font-semibold leading-[16px] text-white",
+              )}
+            >
+              {unread > 99 ? "99+" : unread}
+            </span>
+          ) : null}
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 w-[360px] overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[var(--shadow-floating)]"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+                Notifications
+              </span>
+              {unread > 0 ? (
+                <Badge tone="warning" className="!py-0">
+                  {unread} unread
+                </Badge>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => markAllSeen.mutate()}
+              disabled={unread === 0 || markAllSeen.isPending}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px]",
+                unread === 0
+                  ? "cursor-not-allowed text-[var(--color-fg-subtle)]"
+                  : "text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]",
+              )}
+            >
+              <CheckCircle2 className="size-3" />
+              Mark all seen
+            </button>
+          </div>
+
+          {/* List */}
+          <div className="max-h-[400px] overflow-y-auto">
+            {!data ? (
+              <div className="grid place-items-center px-3 py-8 text-xs text-[var(--color-fg-muted)]">
+                Loading…
+              </div>
+            ) : data.notifications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
+                <Inbox className="size-5 text-[var(--color-fg-subtle)]" />
+                <div className="text-sm font-medium text-[var(--color-fg)]">
+                  All caught up
+                </div>
+                <div className="text-xs text-[var(--color-fg-muted)]">
+                  Recent tenant events will surface here.
+                </div>
+              </div>
+            ) : (
+              <ul>
+                {data.notifications.map((n) => (
+                  <NotificationRow
+                    key={n.event_id}
+                    n={n}
+                    isUnread={
+                      !lastSeenAt || Date.parse(n.occurred_at) > Date.parse(lastSeenAt)
+                    }
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Footer */}
+          <Link
+            to="/activity"
+            className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]"
+          >
+            View all activity
+            <ArrowRight className="size-3" />
+          </Link>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function NotificationRow({
+  n,
+  isUnread,
+}: {
+  n: Notification;
+  isUnread: boolean;
+}): React.ReactElement {
+  // Row renders as an anchor when there's a link, plain div when not.
+  // Each click navigates to the synthesized deep-link from the backend
+  // (e.g. /repositories/dev/alpine/tags/3.20).
+  const inner = (
+    <div className="flex items-start gap-3 px-3 py-2.5">
+      <span
+        aria-hidden
+        className={cn(
+          "mt-1.5 size-1.5 shrink-0 rounded-full",
+          isUnread ? "bg-[var(--color-highlight)]" : "bg-[var(--color-border-strong)]",
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-[var(--color-fg)]">
+          {n.title}
+        </div>
+        <div className="truncate text-xs text-[var(--color-fg-muted)]">
+          {n.summary}
+        </div>
+        <div className="mt-0.5 text-[11px] text-[var(--color-fg-subtle)]">
+          {n.actor_username || n.actor_id || "system"} ·{" "}
+          {formatRelativeDate(n.occurred_at)}
+        </div>
+      </div>
+    </div>
+  );
+  if (n.link) {
+    return (
+      <li>
+        <Link
+          to={n.link}
+          className="block hover:bg-[var(--color-surface-sunken)]"
+        >
+          {inner}
+        </Link>
+      </li>
+    );
+  }
+  return <li>{inner}</li>;
+}

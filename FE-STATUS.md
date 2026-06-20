@@ -57,12 +57,18 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S7A | Profile & API keys | DONE ✅ | `/profile` real wiring (identity, password change, API keys CRUD) — backend FE-API-011/012/013 ready |
 | S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
-| S9 | Wire backend-DONE-but-UI-stubbed surfaces | NOT STARTED | `/workspace/domains`, `/activity`, workspace metadata, `/security/vulnerabilities`, `/security/scans`, signing verify-on-demand |
+| S9.1 | Tag-detail signing + supply chain | DONE ✅ (`8a7271f`) | FE-API-025 verify-on-demand, FE-API-026 sign-from-UI dialog, FE-API-033 SBOM download |
+| S9.2 | Workspace metadata + notifications + custom domains | DONE ✅ (`52178b1`) | FE-API-007/009 workspace identity, FE-API-008 notifications topbar bell + `/activity` live feed, FE-API-027 `/workspace/domains` CRUD |
+| S9.3 | Workspace-wide security center | DONE ✅ (`5968bf0`) | FE-API-014 vulnerabilities table, FE-API-015 scan history timeline |
+| S9 | Remaining stubs (S9.4+) | IN PROGRESS | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-030 analytics charts, FE-API-031 storage breakdown, FE-API-032 admin GC, FE-API-034 SSO admin / login |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
+| S11 | Retention policies | NOT STARTED | per-repo "Retention" tab on repo-detail (FE-API-037 CRUD + FE-API-038 dry-run + FE-API-043 activity rule); per-org "Default retention" section on org page (FE-API-039); "Pending deletion" badges on tag rows; gc admin "Retention" tile (FE-API-040 housekeeping summary). **RBAC**: repo `admin`/`owner` writes per-repo policy; org `admin`/`owner` writes org default; readers see "(inherited from org default)" labelling — never platform-admin tier. |
 
 ---
 
-## Snapshot (as of 2026-06-20)
+## Snapshot (as of 2026-06-21)
+
+> Sprint 9 sub-passes 9.1/9.2/9.3 landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`). Remaining S9 work (remediation, scan policies CRUD, compliance reports, analytics charts, storage breakdown, admin GC, SSO admin) tracked in S9.4+.
 
 **Routes shipped & wired against real backend (no stubs):**
 
@@ -317,18 +323,35 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [ ] Click-through to the tag-detail Security tab for the underlying scan
 - [ ] Replace the Sprint 3 ComingSoon panel on the `/security/scans` tab
 
-**FE-API-025 — Verify-on-demand for signing** (just shipped backend-side, marked DONE in status.md)
-- [ ] Enable the disabled "Verify now" button on `SigningPanel` (added as ComingSoon hint earlier)
-- [ ] On click: refetch the signature endpoint with `?verify=true` so each `signatureRecord` gains `verified` + optional `failure_reason`
-- [ ] Per-signature `Verified` / `Failed` badge on the SignatureCard
-- [ ] Failed-with-reason error block on each signature card when verification returned `verified: false`
-- [ ] Surface the per-signature verification status above the SignatureCard cluster ("3 verified, 1 failed")
-- [ ] Remove the FE-API-025 ComingSoonHint footer copy
+**S9.1 — Tag-detail signing + supply chain** (DONE ✅ — first S9 sub-pass)
+
+**FE-API-025 — Verify-on-demand for signing**
+- [x] Enable the disabled "Verify now" button on `SigningPanel`
+- [x] On click: refetch the signature endpoint with `?verify=true` via `useSignature(_, _, _, { verify: true })`; separate query key so the cheap default path stays shared across tabs
+- [x] Per-signature `Verified` / `Failed` badge on the SignatureCard (tri-state on the wire: `undefined` / `true` / `false`)
+- [x] Failed-with-reason error block on each signature card when verification returned `verified: false`
+- [x] Roll-up badge in the SignedCard header ("Verified (3/3)" / "Verify failed (1/3)") + accentBar shifts danger on any failure
+- [x] Per-signature accentBar (success / danger / neutral) when verify completed
+- [x] PendingCapabilities ComingSoon copy removed (replaced by live ActionRibbon)
+
+**FE-API-026 — Sign manifest from UI**
+- [x] `useSignManifest` mutation hook
+- [x] `SignManifestDialog` — single-field `signer_id` form, zod regex matching backend's ASCII-printable rule, default `registry-signer` (dev Vault key)
+- [x] Action ribbon on `SigningPanel` exposes Sign / Add-signature button
+- [x] Distinct toast mapping per status: 403 (admin required), 409 (already signed by this signer), 404 (route disabled — SIGNER_GRPC_ADDR), 400 (signer rejected)
+- [x] Mutation `onSuccess` invalidates the signature query — both verify + non-verify cache entries refresh
+
+**FE-API-033 — Per-tag SBOM download**
+- [x] `useDownloadSbom` mutation hook (binary blob → object URL → transient `<a download>` click → revoke after 1s)
+- [x] Live `SbomPanel` on `LayersPanel`; format chooser pill row (SPDX active, CycloneDX disabled with "coming soon" tooltip)
+- [x] Distinct error mapping: 404 → "no SBOM recorded — run a scan first"; 400 → "format not supported yet"; default → generic
+- [x] Filename auto-derived: `{repo}-{tag}.spdx.json`
+- [x] ComingSoonHint footer copy removed (replaced by live download flow)
 
 **Verification**
-- [ ] Build / typecheck / lint pass
+- [x] Build / typecheck / lint pass
 - [ ] Backend connectivity verified end-to-end against the docker-compose stack
-- [ ] FE-STATUS.md ticked + S9 marked DONE in the sprint table at the top
+- [ ] S9.1 commit pushed; remaining S9 sub-passes (workspace identity, security center, admin niceties) queued
 
 ### S10 — Documentation surface
 
@@ -359,6 +382,66 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [ ] Every link in `/docs/*` resolves; no `TODO` placeholders left
 - [ ] Topbar Docs button opens the right URL in dev (`VITE_DOCS_URL` set) and prod
 - [ ] Mobile (sub-`md`) — Docs button collapses to icon-only without overflowing the topbar
+- [ ] Build / typecheck / lint pass
+
+### S11 — Retention policies
+
+> Per-repo image lifecycle policies (delete after X days / X total / X
+> GB / N days no activity). Lives on the **repo detail** page next to
+> Tags / Members / Settings — NOT under `/admin/*`. RBAC-gated: repo
+> `admin` or `owner` writes per-repo; org `admin` or `owner` writes
+> org default; readers see inherited values labelled
+> "(inherited from org default)". Mirrors the Members + Webhooks
+> ownership model — never platform-admin tier.
+
+**Backend dependencies** (in order)
+- FE-API-037: per-repo retention CRUD (`GET/PUT/DELETE /api/v1/repositories/{org}/{repo}/policies/retention`)
+- FE-API-038: dry-run + 24h preview window
+- FE-API-039: per-org default + inheritance (`GET/PUT /api/v1/orgs/{org}/policies/retention`)
+- FE-API-040: executor (gc mode `retention` + soft-delete + 7-day grace)
+- FE-API-041: `retention.evaluated` / `retention.applied` / `retention.grace_completed` audit + webhook events
+- FE-API-042: pull-activity tracking (also closes the FE-API-030 caveat)
+- FE-API-043: activity-based rule (depends on 042)
+
+**Repo detail — new "Retention" tab**
+- [ ] Tab added next to Tags / Members / Settings; visible to everyone with repo read access; CTAs disabled-with-tooltip for sub-admin roles
+- [ ] **Rule editor** — chip-based UI for the rule kinds: `max_age_days` / `max_count` / `max_size_bytes` / `dangling_grace_days` (and `max_idle_days` once FE-API-043 lands). Each chip carries the numeric input + a remove button
+- [ ] **Protected tag patterns** — chip input pre-seeded with `latest`, `stable`, `^v?\d+(\.\d+){0,2}$`; operators can add/remove
+- [ ] **"Inherited from org default"** read-only view when no per-repo policy exists; CTA "Override default for this repo" promotes to editor
+- [ ] **Dry-run dialog** — clicking "Preview impact" before Save POSTs to FE-API-038 and renders the would-delete table (tag, digest, pushed_at, size, reason) with a total at the bottom; explicit "Cancel" / "Save policy" buttons; preview is mandatory before first save
+- [ ] **Preview-window banner** — after Save, shows "Policy is in preview for 24h — no deletions will run yet. Showing what WILL be deleted on …" with a countdown
+- [ ] **History panel** — last 10 runs from `gc_runs WHERE mode='retention'`: triggered_by + counts + bytes_freed + status
+- [ ] **Pending-deletion badges** — Tags tab gains a "🗑 deletes in N days" pill on each tag that's in the soft-delete window; clicking the badge opens an "Undo" dialog (clears `retention_pending_delete_at` for that manifest)
+
+**Org page — new "Default retention" section**
+- [ ] Located on the existing `/orgs/{org}/members` page as a new sub-tab (or new route `/orgs/{org}/settings` — pick during build)
+- [ ] Same rule editor + protected-pattern chips as the per-repo editor
+- [ ] Dry-run preview shows aggregate impact across every repo in the org that DOESN'T have its own override
+- [ ] List of repos that override the default + a quick-link to each repo's Retention tab
+- [ ] Save fires `retention.evaluated` event so audit picks up who configured the default
+
+**Dashboard — Storage breakdown enhancement**
+- [ ] Reuse FE-API-031 storage breakdown card; add a column "Retention" showing the rule summary ("max 50 manifests" / "30 days" / "inherited") with a link to the repo Retention tab
+- [ ] Optional: bar segment shading for "pending deletion" portion of each repo's storage so operators can see what would clear after grace
+
+**Admin — Housekeeping card grows a Retention tile**
+- [ ] FE-API-032 admin GC page (already planned) gains a "Retention" tile next to "GC" — same shape but mode-scoped to `retention`. Counts of pending-delete + grace_completed runs in the last 24h / 7d
+- [ ] Recent runs table filterable by mode (`gc` / `retention` / `retention_grace`)
+
+**Notifications + audit**
+- [ ] Topbar notification bell consumes `retention.evaluated` events with summary copy "Retention policy on acme/api would delete 12 manifests in 24h"
+- [ ] `/activity` route shows `retention.applied` rows with link to the affected repo
+- [ ] Webhook delivery panel surfaces `retention.*` event types in the routing-key chip list
+
+**Inline help / docs**
+- [ ] First-time tab visit shows a 1-screen explainer ("How retention works on Janus") with link to `docs/retention.md`
+- [ ] Rule chips have tooltip explanations ("Removes manifests pushed more than N days ago; tag-pattern protection applies first")
+
+**Verification**
+- [ ] RBAC: writer cannot save; admin can; reader sees inherited label
+- [ ] Dry-run output matches a hand-computed deletion list for a seeded fixture
+- [ ] Preview-window countdown clears at the right time + executor switches to real deletes
+- [ ] Soft-delete badges appear / disappear correctly on the Tags tab
 - [ ] Build / typecheck / lint pass
 
 ---

@@ -41,3 +41,49 @@ export function useDeleteTag() {
     },
   });
 }
+
+// FE-API-036 — bulk tag delete.
+//
+// The BFF performs per-tag sub-transactions and returns a per-tag result
+// (deleted: bool, reason?: string) so we can show "deleted 47/50, 3
+// failed" instead of an all-or-nothing toast. Capped 100 tags per
+// request server-side; we mirror that on the client so the UI never
+// builds a request the server will reject up front.
+
+export interface BulkDeleteResult {
+  tag_name: string;
+  deleted: boolean;
+  reason?: string;
+}
+
+interface BulkDeleteResponse {
+  results: BulkDeleteResult[];
+}
+
+interface BulkDeleteArgs {
+  org: string;
+  repo: string;
+  tagNames: string[];
+}
+
+export const BULK_DELETE_MAX = 100;
+
+export function useBulkDeleteTags() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      org,
+      repo,
+      tagNames,
+    }: BulkDeleteArgs): Promise<BulkDeleteResult[]> => {
+      const { data } = await apiClient.delete<BulkDeleteResponse>(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags`,
+        { data: { tag_names: tagNames } },
+      );
+      return data.results;
+    },
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: tagKeys.list(org, repo) });
+    },
+  });
+}

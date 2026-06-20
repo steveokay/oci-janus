@@ -1,4 +1,10 @@
 // Package server wires the GC service and starts a cron-based collection loop.
+//
+// FE-API-032 added a gRPC GCService surface plus persistent gc_runs
+// state. The cron loop still ticks on the same interval but it now
+// flows through a PersistedRunner so every sweep gets recorded in
+// `gc_runs`, and the new RunNow RPC enqueues ad-hoc sweeps that the
+// same loop drains between ticks.
 package server
 
 import (
@@ -9,7 +15,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,17 +26,24 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
 	"github.com/steveokay/oci-janus/services/gc/internal/config"
+	"github.com/steveokay/oci-janus/services/gc/internal/handler"
+	"github.com/steveokay/oci-janus/services/gc/internal/repository"
+	"github.com/steveokay/oci-janus/services/gc/internal/runner"
+	gcmigrations "github.com/steveokay/oci-janus/services/gc/migrations"
 )
 
-// Run initialises all dependencies, starts the GC cron loop, and serves health/metrics.
+// Run initialises all dependencies, starts the GC cron loop, and serves
+// gRPC + health + metrics endpoints.
 func Run(ctx context.Context, cfg *config.Config) error {
 	creds := clientCreds(cfg)
 	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, creds)
@@ -69,8 +85,55 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		cfg.ManifestMinAgeHours,
 	)
 
-	// Start GC loop — runs immediately then every GCRunIntervalHours.
-	go runLoop(ctx, col, time.Duration(cfg.GCRunIntervalHours)*time.Hour)
+	// FE-API-032: optional persistence pool + repository. When DB_DSN
+	// is unset the gRPC service still starts but every RPC returns
+	// FailedPrecondition. This keeps backwards compatibility with the
+	// pre-FE-API-032 deployment model where gc was purely cron-driven.
+	var (
+		dbPool   *pgxpool.Pool
+		repo     *repository.Repository
+		runRequests chan uuid.UUID
+		persisted *runner.PersistedRunner
+	)
+	if cfg.DBDSN != "" {
+		tmpDB := &loader.DBConfig{
+			DBDSN:       cfg.DBDSN,
+			DBMaxConns:  cfg.DBMaxConns,
+			Environment: cfg.OTELEnvironment,
+		}
+		poolCfg, err := tmpDB.PoolConfig()
+		if err != nil {
+			return fmt.Errorf("build pool config: %w", err)
+		}
+		dbPool, err = pgxpool.NewWithConfig(ctx, poolCfg)
+		if err != nil {
+			return fmt.Errorf("pgxpool.New: %w", err)
+		}
+		defer dbPool.Close()
+
+		if err := runMigrations(ctx, cfg.DBDSN); err != nil {
+			return fmt.Errorf("run gc migrations: %w", err)
+		}
+		repo = repository.New(dbPool)
+		// Buffered channel — the dispatcher drains queued rows in
+		// bursts, so a single buffered slot is enough to debounce
+		// rapid back-to-back RunNow calls without dropping the hint.
+		runRequests = make(chan uuid.UUID, 16)
+		persisted = runner.New(col, repo, cfg.GCMode)
+		slog.Info("gc persistence enabled — sweeps will be recorded in gc_runs")
+	} else {
+		slog.Warn("DB_DSN not set — gc sweeps will not be persisted; GCService gRPC surface disabled")
+	}
+
+	// Cron loop: persisted path goes through runner so every sweep
+	// records a gc_runs row; the legacy path keeps the old in-memory
+	// behaviour for deployments that haven't enabled DB_DSN yet.
+	interval := time.Duration(cfg.GCRunIntervalHours) * time.Hour
+	if persisted != nil {
+		go persisted.CronLoop(ctx, interval, runRequests)
+	} else {
+		go runLoop(ctx, col, interval)
+	}
 
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {
@@ -80,6 +143,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+
+	// Register the GCService handler. When persistence is disabled we
+	// register with a nil repository so every RPC returns
+	// FailedPrecondition rather than crashing. The schedule hint is
+	// derived from the configured cron interval.
+	var grpcRepo handler.Repository
+	if repo != nil {
+		grpcRepo = repo
+	}
+	var dispatchCh chan<- uuid.UUID
+	if runRequests != nil {
+		dispatchCh = runRequests
+	}
+	gcv1.RegisterGCServiceServer(grpcSrv, handler.New(grpcRepo, dispatchCh, interval))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -177,7 +254,9 @@ func clientCreds(cfg *config.Config) grpc.DialOption {
 	return grpc.WithTransportCredentials(insecure.NewCredentials())
 }
 
-// runLoop runs one GC pass immediately, then repeats every interval until ctx is cancelled.
+// runLoop is the legacy non-persisted cron loop kept for deployments
+// where DB_DSN is not set. Runs one GC pass immediately, then repeats
+// every interval until ctx is cancelled.
 func runLoop(ctx context.Context, col *collector.Collector, interval time.Duration) {
 	run := func() {
 		res, err := col.Run(ctx)
@@ -203,4 +282,25 @@ func runLoop(ctx context.Context, col *collector.Collector, interval time.Durati
 			run()
 		}
 	}
+}
+
+// runMigrations applies the gc service's SQL migrations to the DB at
+// startup. Mirrors the pattern used by the scanner service in
+// FE-API-018: goose with embed.FS, distinct DB pool because goose
+// expects a database/sql driver.
+func runMigrations(ctx context.Context, dsn string) error {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
+
+	goose.SetBaseFS(gcmigrations.FS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+	return goose.Up(db, ".")
 }

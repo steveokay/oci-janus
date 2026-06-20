@@ -16,6 +16,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
@@ -119,6 +120,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		scannerClient = scannerv1.NewScannerServiceClient(scannerConn)
 	}
 
+	// FE-API-032 gc gRPC client. Optional — wired only when
+	// GC_GRPC_ADDR is set. Nil leaves the `/api/v1/admin/gc/*` routes
+	// returning 404 "route disabled" so deployments with gc still in
+	// cron-only mode continue to serve every other surface.
+	var gcClient gcv1.GCServiceClient
+	if cfg.GCGRPCAddr != "" {
+		gcConn, err := grpc.NewClient(cfg.GCGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		if err != nil {
+			return fmt.Errorf("dial gc grpc: %w", err)
+		}
+		defer gcConn.Close()
+		gcClient = gcv1.NewGCServiceClient(gcConn)
+	}
+
 	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
@@ -128,6 +143,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	h = h.WithWebhookClient(webhookClient)
 	h = h.WithSignerClient(signerClient)
 	h = h.WithScannerClient(scannerClient)
+	h = h.WithGCClient(gcClient)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
 	// interactive dashboard while blocking a runaway script.
 	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))
