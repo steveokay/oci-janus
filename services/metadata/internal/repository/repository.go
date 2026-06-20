@@ -606,6 +606,81 @@ func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (
 	return &usage, nil
 }
 
+// GetTenantStorageBreakdown returns the tenant's total storage usage and the
+// top-50 repositories by storage_used. Backs FE-API-031 /api/v1/stats/storage.
+//
+// One query, one round-trip: a CTE computes the tenant sum, then the outer
+// query orders the per-repo rows by storage_used DESC and joins the tenant
+// total so percent_of_tenant is materialised server-side (so every UI surface
+// renders identical numbers and the math stays in one place).
+//
+// Capped at 50 rows. The top-N is itself the answer; pagination is intentionally
+// not exposed for v1.
+func (r *Repository) GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	const q = `
+		WITH total AS (
+		    SELECT COALESCE(SUM(storage_used), 0)::BIGINT AS bytes
+		    FROM   repositories
+		    WHERE  tenant_id = $1
+		)
+		SELECT r.id::text,
+		       o.name                                                                AS org,
+		       r.name                                                                AS name,
+		       r.storage_used,
+		       CASE WHEN total.bytes = 0 THEN 0.0
+		            ELSE 100.0 * (r.storage_used::DOUBLE PRECISION / total.bytes::DOUBLE PRECISION)
+		       END                                                                   AS percent_of_tenant,
+		       total.bytes                                                           AS tenant_total
+		FROM   repositories r
+		JOIN   organizations o ON o.id = r.org_id
+		CROSS  JOIN total
+		WHERE  r.tenant_id = $1
+		ORDER  BY r.storage_used DESC, r.name ASC
+		LIMIT  50`
+
+	rows, err := r.reader().Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("storage breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	resp := &metadatav1.GetTenantStorageBreakdownResponse{
+		Repositories: make([]*metadatav1.RepositoryStorageEntry, 0, 50),
+	}
+	for rows.Next() {
+		entry := &metadatav1.RepositoryStorageEntry{}
+		var tenantTotal int64
+		if err := rows.Scan(
+			&entry.RepoId,
+			&entry.Org,
+			&entry.Name,
+			&entry.StorageUsedBytes,
+			&entry.PercentOfTenant,
+			&tenantTotal,
+		); err != nil {
+			return nil, fmt.Errorf("storage breakdown scan: %w", err)
+		}
+		// tenant_total is identical across all rows; capture it once.
+		resp.TenantStorageUsedBytes = tenantTotal
+		resp.Repositories = append(resp.Repositories, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage breakdown rows: %w", err)
+	}
+
+	// Zero-repo tenant: the CTE still resolves total=0; we need a separate
+	// guard for the response struct since no rows means no tenantTotal was
+	// captured. Re-query the total in that edge case. Cheap: one COALESCE
+	// SELECT against an indexed tenant_id.
+	if len(resp.Repositories) == 0 {
+		const zeroQuery = `SELECT COALESCE(SUM(storage_used), 0)::BIGINT FROM repositories WHERE tenant_id = $1`
+		if err := r.reader().QueryRow(ctx, zeroQuery, tenantID).Scan(&resp.TenantStorageUsedBytes); err != nil {
+			return nil, fmt.Errorf("storage breakdown total: %w", err)
+		}
+	}
+	return resp, nil
+}
+
 // UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
 // API's super-admin quota route to bump quotas for large customers.
 //

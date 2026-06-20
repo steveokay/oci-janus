@@ -71,6 +71,11 @@ service MetadataService {
   // (tenant, repo, manifest_digest). Backs GET /api/v1/security/remediation
   // on registry-management.
   rpc ListTenantRemediations(ListTenantRemediationsRequest) returns (ListTenantRemediationsResponse);
+
+  // GetTenantStorageBreakdown (FE-API-031) — top-50 repos by storage,
+  // plus the tenant-wide total. Backs GET /api/v1/stats/storage on
+  // registry-management.
+  rpc GetTenantStorageBreakdown(GetTenantStorageBreakdownRequest) returns (GetTenantStorageBreakdownResponse);
 }
 
 message Repository {
@@ -366,4 +371,31 @@ message ListTenantRemediationsRequest {
 message ListTenantRemediationsResponse {
   repeated Remediation remediations    = 1;
   string               next_page_token = 2;
+}
+
+// ─── FE-API-031: per-repo storage breakdown ─────────────────────────────────
+
+// RepositoryStorageEntry is one row in GetTenantStorageBreakdownResponse.
+// `percent_of_tenant` is 100 * storage_used_bytes / tenant_storage_used_bytes
+// (0.0 when tenant total is 0). Always materialised server-side so
+// clients render identical numbers across all surfaces.
+message RepositoryStorageEntry {
+  string repo_id            = 1;
+  string org                = 2;
+  string name               = 3;
+  int64  storage_used_bytes = 4;
+  double percent_of_tenant  = 5;
+}
+
+message GetTenantStorageBreakdownRequest {
+  string tenant_id = 1;
+}
+
+// GetTenantStorageBreakdownResponse returns the tenant's total storage and
+// the top-50 repos by storage usage. Capped server-side; no pagination —
+// the top-N is itself the answer to the "where is my storage going" UI
+// question. Add pagination later if a use case emerges.
+message GetTenantStorageBreakdownResponse {
+  int64                           tenant_storage_used_bytes = 1;
+  repeated RepositoryStorageEntry repositories              = 2;
 }

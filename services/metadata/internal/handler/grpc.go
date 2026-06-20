@@ -51,6 +51,8 @@ type metadataRepo interface {
 	UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error)
 	IncrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
 	DecrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
+	// Storage breakdown (FE-API-031) — top-50 repos + tenant total.
+	GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error)
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
@@ -536,6 +538,19 @@ func (h *MetadataHandler) ListTenantRemediations(ctx context.Context, req *metad
 		})
 	}
 	return out, nil
+}
+
+// GetTenantStorageBreakdown returns the tenant's total storage usage plus the
+// top-50 repositories sorted by storage_used DESC. Backs FE-API-031.
+func (h *MetadataHandler) GetTenantStorageBreakdown(ctx context.Context, req *metadatav1.GetTenantStorageBreakdownRequest) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	resp, err := h.repo.GetTenantStorageBreakdown(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return resp, nil
 }
 
 // CountRepositories returns the number of repositories owned by the tenant.

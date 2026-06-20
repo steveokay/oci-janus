@@ -6,13 +6,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -111,6 +114,22 @@ func (s *fakeMetaServer) GetTenantQuotaUsage(_ context.Context, _ *metadatav1.Ge
 	return &metadatav1.QuotaUsage{UsedBytes: 1024, QuotaBytes: 10737418240}, nil
 }
 
+// storageBreakdownOverride lets FE-API-031 tests inject specific row sets.
+var storageBreakdownOverride *metadatav1.GetTenantStorageBreakdownResponse
+
+func (s *fakeMetaServer) GetTenantStorageBreakdown(_ context.Context, _ *metadatav1.GetTenantStorageBreakdownRequest) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	if storageBreakdownOverride != nil {
+		return storageBreakdownOverride, nil
+	}
+	return &metadatav1.GetTenantStorageBreakdownResponse{
+		TenantStorageUsedBytes: 1500,
+		Repositories: []*metadatav1.RepositoryStorageEntry{
+			{RepoId: "r1", Org: "acme", Name: "api", StorageUsedBytes: 1000, PercentOfTenant: 66.66666666666667},
+			{RepoId: "r2", Org: "acme", Name: "web", StorageUsedBytes: 500, PercentOfTenant: 33.333333333333336},
+		},
+	}, nil
+}
+
 func (s *fakeMetaServer) GetTenantVulnerabilityCount(_ context.Context, _ *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
 	return &metadatav1.VulnerabilityCountResponse{Total: 3}, nil
 }
@@ -182,7 +201,19 @@ func (s *fakeMetaServer) GetTag(_ context.Context, req *metadatav1.GetTagRequest
 	}, nil
 }
 
-func (s *fakeMetaServer) DeleteTag(_ context.Context, _ *metadatav1.DeleteTagRequest) (*emptypb.Empty, error) {
+// deleteTagOverride lets bulk-delete tests inject per-call results — the
+// global is keyed by tag name so a single fake instance can return success
+// for some tags and a stipulated gRPC error for others.
+var (
+	deleteTagOverride map[string]error
+	deleteTagCalls    []string // ordered record of which tags were attempted
+)
+
+func (s *fakeMetaServer) DeleteTag(_ context.Context, req *metadatav1.DeleteTagRequest) (*emptypb.Empty, error) {
+	deleteTagCalls = append(deleteTagCalls, req.GetName())
+	if err, ok := deleteTagOverride[req.GetName()]; ok && err != nil {
+		return nil, err
+	}
 	return &emptypb.Empty{}, nil
 }
 
@@ -1661,5 +1692,188 @@ func TestListRemediations_noAuth_returns401(t *testing.T) {
 	resp := env.get(t, "/api/v1/security/remediation", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/stats/storage   (FE-API-031)
+// ---------------------------------------------------------------------------
+
+func TestStorageBreakdown_adminToken_returns200(t *testing.T) {
+	t.Cleanup(func() { storageBreakdownOverride = nil })
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/stats/storage", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.StorageBreakdownResponse
+	decodeJSON(t, resp, &body)
+	if body.TenantStorageUsedBytes != 1500 {
+		t.Errorf("tenant total: got %d, want 1500", body.TenantStorageUsedBytes)
+	}
+	if len(body.Repositories) != 2 {
+		t.Fatalf("repositories len: got %d, want 2", len(body.Repositories))
+	}
+	if body.Repositories[0].Name != "api" || body.Repositories[0].StorageUsedBytes != 1000 {
+		t.Errorf("repo[0]: got %+v", body.Repositories[0])
+	}
+	if body.Repositories[0].PercentOfTenant < 66.66 || body.Repositories[0].PercentOfTenant > 66.67 {
+		t.Errorf("percent[0]: got %v, want ~66.667", body.Repositories[0].PercentOfTenant)
+	}
+}
+
+func TestStorageBreakdown_zeroRepos_returnsEmptyArray(t *testing.T) {
+	t.Cleanup(func() { storageBreakdownOverride = nil })
+	storageBreakdownOverride = &metadatav1.GetTenantStorageBreakdownResponse{
+		TenantStorageUsedBytes: 0,
+		Repositories:           nil,
+	}
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/stats/storage", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.StorageBreakdownResponse
+	decodeJSON(t, resp, &body)
+	if body.TenantStorageUsedBytes != 0 {
+		t.Errorf("tenant total: got %d, want 0", body.TenantStorageUsedBytes)
+	}
+	if body.Repositories == nil {
+		t.Error("repositories must be empty array, not null (stable JSON shape)")
+	}
+	if len(body.Repositories) != 0 {
+		t.Errorf("expected 0 repositories, got %d", len(body.Repositories))
+	}
+}
+
+func TestStorageBreakdown_noAuth_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/stats/storage", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/repositories/{org}/{repo}/tags   (FE-API-036)
+// ---------------------------------------------------------------------------
+
+// delBody sends a DELETE with a JSON body and returns the response.
+func (e *testEnv) delBody(t *testing.T, path, token, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, e.srv.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", path, err)
+	}
+	return resp
+}
+
+func resetBulkDeleteFakes(t *testing.T) {
+	t.Helper()
+	deleteTagOverride = nil
+	deleteTagCalls = nil
+	t.Cleanup(func() {
+		deleteTagOverride = nil
+		deleteTagCalls = nil
+	})
+}
+
+func TestBulkDeleteTags_writer_mixedResults_returns200(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	deleteTagOverride = map[string]error{
+		"v1.1": status.Error(codes.NotFound, "tag not found"),
+	}
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", writerToken,
+		`{"tag_names":["v1.0","v1.1","v1.2"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Results []struct {
+			TagName string `json:"tag_name"`
+			Deleted bool   `json:"deleted"`
+			Reason  string `json:"reason,omitempty"`
+		} `json:"results"`
+	}
+	decodeJSON(t, resp, &body)
+	if len(body.Results) != 3 {
+		t.Fatalf("results len: got %d, want 3", len(body.Results))
+	}
+	if !body.Results[0].Deleted || body.Results[0].TagName != "v1.0" {
+		t.Errorf("result[0]: %+v", body.Results[0])
+	}
+	if body.Results[1].Deleted || body.Results[1].Reason != "tag not found" {
+		t.Errorf("result[1]: %+v", body.Results[1])
+	}
+	if !body.Results[2].Deleted {
+		t.Errorf("result[2]: %+v", body.Results[2])
+	}
+	if len(deleteTagCalls) != 3 {
+		t.Errorf("expected 3 DeleteTag calls, got %d", len(deleteTagCalls))
+	}
+}
+
+func TestBulkDeleteTags_emptyArray_returns400(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", writerToken, `{"tag_names":[]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestBulkDeleteTags_over100_returns400(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	names := make([]string, 0, 101)
+	for i := 0; i < 101; i++ {
+		names = append(names, "tag"+strconv.Itoa(i))
+	}
+	body := `{"tag_names":["` + strings.Join(names, `","`) + `"]}`
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", writerToken, body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestBulkDeleteTags_duplicatesDeduped(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", writerToken,
+		`{"tag_names":["v1.0","v1.0","v1.0"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(deleteTagCalls) != 1 {
+		t.Errorf("dedupe: expected 1 call, got %d", len(deleteTagCalls))
+	}
+}
+
+func TestBulkDeleteTags_invalidTagName_returns400(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", writerToken,
+		`{"tag_names":["v1.0","!! bad name"]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+	if len(deleteTagCalls) != 0 {
+		t.Errorf("no DeleteTag calls should fire on validation failure, got %d", len(deleteTagCalls))
+	}
+}
+
+func TestBulkDeleteTags_reader_returns403(t *testing.T) {
+	resetBulkDeleteFakes(t)
+	env := newTestEnv(t)
+	resp := env.delBody(t, "/api/v1/repositories/myorg/myrepo/tags", readerToken,
+		`{"tag_names":["v1.0"]}`)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", resp.StatusCode)
 	}
 }
