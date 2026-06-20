@@ -23,6 +23,7 @@ const (
 	AuditService_GetDailyPullCount_FullMethodName = "/registry.audit.v1.AuditService/GetDailyPullCount"
 	AuditService_GetRepoActivity_FullMethodName   = "/registry.audit.v1.AuditService/GetRepoActivity"
 	AuditService_GetNotifications_FullMethodName  = "/registry.audit.v1.AuditService/GetNotifications"
+	AuditService_GetLastTenantPush_FullMethodName = "/registry.audit.v1.AuditService/GetLastTenantPush"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -56,6 +57,11 @@ type AuditServiceClient interface {
 	// there is no per-user "read" state stored on the backend — clients persist
 	// a last_seen_at timestamp locally and compute unread by filtering on it.
 	GetNotifications(ctx context.Context, in *GetNotificationsRequest, opts ...grpc.CallOption) (*GetNotificationsResponse, error)
+	// GetLastTenantPush (FE-API-028) returns the most recent push.image
+	// audit event for the tenant. last_push_at is unset (zero timestamp) when
+	// the tenant has never recorded a push. Backs the "last activity" line on
+	// the admin tenant-detail card.
+	GetLastTenantPush(ctx context.Context, in *GetLastTenantPushRequest, opts ...grpc.CallOption) (*GetLastTenantPushResponse, error)
 }
 
 type auditServiceClient struct {
@@ -106,6 +112,16 @@ func (c *auditServiceClient) GetNotifications(ctx context.Context, in *GetNotifi
 	return out, nil
 }
 
+func (c *auditServiceClient) GetLastTenantPush(ctx context.Context, in *GetLastTenantPushRequest, opts ...grpc.CallOption) (*GetLastTenantPushResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLastTenantPushResponse)
+	err := c.cc.Invoke(ctx, AuditService_GetLastTenantPush_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -137,6 +153,11 @@ type AuditServiceServer interface {
 	// there is no per-user "read" state stored on the backend — clients persist
 	// a last_seen_at timestamp locally and compute unread by filtering on it.
 	GetNotifications(context.Context, *GetNotificationsRequest) (*GetNotificationsResponse, error)
+	// GetLastTenantPush (FE-API-028) returns the most recent push.image
+	// audit event for the tenant. last_push_at is unset (zero timestamp) when
+	// the tenant has never recorded a push. Backs the "last activity" line on
+	// the admin tenant-detail card.
+	GetLastTenantPush(context.Context, *GetLastTenantPushRequest) (*GetLastTenantPushResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -154,6 +175,9 @@ func (UnimplementedAuditServiceServer) GetRepoActivity(context.Context, *GetRepo
 }
 func (UnimplementedAuditServiceServer) GetNotifications(context.Context, *GetNotificationsRequest) (*GetNotificationsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetNotifications not implemented")
+}
+func (UnimplementedAuditServiceServer) GetLastTenantPush(context.Context, *GetLastTenantPushRequest) (*GetLastTenantPushResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLastTenantPush not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -239,6 +263,24 @@ func _AuditService_GetNotifications_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetLastTenantPush_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLastTenantPushRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetLastTenantPush(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetLastTenantPush_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetLastTenantPush(ctx, req.(*GetLastTenantPushRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -261,6 +303,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNotifications",
 			Handler:    _AuditService_GetNotifications_Handler,
+		},
+		{
+			MethodName: "GetLastTenantPush",
+			Handler:    _AuditService_GetLastTenantPush_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

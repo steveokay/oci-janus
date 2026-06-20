@@ -121,6 +121,33 @@ func (f *fakeTenantRepo) UpdatePolicy(_ context.Context, p *repository.PolicyRec
 	return nil
 }
 
+// UpdateTenant mirrors the real repo's signature so the testable handler can
+// drive it. The fake honours nil-pointer "leave unchanged" semantics so we
+// can exercise name-only / plan-only / both paths without DB plumbing.
+func (f *fakeTenantRepo) UpdateTenant(_ context.Context, tenantID uuid.UUID, name, plan *string) (*repository.TenantRecord, error) {
+	if f.dupKeyOnCreate {
+		return nil, &pgconn.PgError{Code: "23505"}
+	}
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	rec, ok := f.tenants[tenantID]
+	if !ok {
+		return nil, nil
+	}
+	if name != nil {
+		rec.Name = *name
+		rec.Slug = repository.NormalizeSlug(*name)
+		if rec.Slug == "" {
+			rec.Slug = tenantID.String()
+		}
+	}
+	if plan != nil {
+		rec.Plan = *plan
+	}
+	return rec, nil
+}
+
 // ── Adapter ──────────────────────────────────────────────────────────────────
 // GRPCHandler embeds *repository.Repository directly, so we need a way to
 // inject a fake without changing the production code. We achieve this by
@@ -147,6 +174,7 @@ type tenantRepo interface {
 	RegisterDomain(ctx context.Context, tenantID uuid.UUID, domain, token string) (*repository.DomainRecord, error)
 	GetPolicy(ctx context.Context, tenantID uuid.UUID) (*repository.PolicyRecord, error)
 	UpdatePolicy(ctx context.Context, p *repository.PolicyRecord) error
+	UpdateTenant(ctx context.Context, tenantID uuid.UUID, name, plan *string) (*repository.TenantRecord, error)
 }
 
 // testableHandler is a local variant of GRPCHandler that uses the interface
@@ -246,6 +274,48 @@ func (h *testableHandler) RegisterDomain(ctx context.Context, req *tenantv1.Regi
 		return nil, status.Errorf(codes.Internal, "register domain: %v", err)
 	}
 	return &tenantv1.RegisterDomainResponse{VerificationToken: token}, nil
+}
+
+// UpdateTenant mirrors the production handler's validation rules so the test
+// covers the same branches. The fake repo provides the "atomic name+slug"
+// recompute via NormalizeSlug, matching the real SQL path.
+func (h *testableHandler) UpdateTenant(ctx context.Context, req *tenantv1.UpdateTenantRequest) (*tenantv1.Tenant, error) {
+	tenantID, err := uuid.Parse(req.TenantId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	var namePtr, planPtr *string
+	if req.Name != nil {
+		n := req.GetName()
+		if n == "" {
+			return nil, status.Error(codes.InvalidArgument, "name must not be empty")
+		}
+		if !tenantNameRE.MatchString(n) {
+			return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
+		}
+		namePtr = &n
+	}
+	if req.Plan != nil {
+		p := req.GetPlan()
+		if !validTenantPlan(p) {
+			return nil, status.Errorf(codes.InvalidArgument, "plan must be one of free, pro, enterprise")
+		}
+		planPtr = &p
+	}
+	if namePtr == nil && planPtr == nil {
+		return nil, status.Error(codes.InvalidArgument, "at least one of name or plan is required")
+	}
+	rec, err := h.repo.UpdateTenant(ctx, tenantID, namePtr, planPtr)
+	if err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, status.Errorf(codes.AlreadyExists, "tenant name already in use")
+		}
+		return nil, status.Errorf(codes.Internal, "update tenant: %v", err)
+	}
+	if rec == nil {
+		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
+	}
+	return tenantToProto(rec), nil
 }
 
 func (h *testableHandler) GetPolicy(ctx context.Context, req *tenantv1.GetTenantPolicyRequest) (*tenantv1.TenantPolicy, error) {
@@ -680,6 +750,154 @@ func TestDomainRE_InvalidHostnames_DoNotMatch(t *testing.T) {
 	for _, d := range invalid {
 		if domainRE.MatchString(d) {
 			t.Errorf("domainRE unexpectedly matched invalid hostname %q", d)
+		}
+	}
+}
+
+// ── UpdateTenant tests (FE-API-029) ──────────────────────────────────────────
+
+// ptr is a tiny helper that returns a pointer to a string literal — the proto
+// `optional` fields are `*string`, so every UpdateTenant test that wants to
+// set a value needs an addressable copy.
+func ptr(s string) *string { return &s }
+
+func TestUpdateTenant_NameOnly_UpdatesNameAndSlug(t *testing.T) {
+	repo := newFakeTenantRepo()
+	id := uuid.New()
+	repo.tenants[id] = &repository.TenantRecord{ID: id, Name: "acme", Plan: "free", Slug: "acme"}
+	h := newTestable(repo)
+
+	got, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: id.String(),
+		Name:     ptr("acme-corp"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "acme-corp" {
+		t.Errorf("name: got %q, want acme-corp", got.Name)
+	}
+	if got.Slug != "acme-corp" {
+		t.Errorf("slug: got %q, want acme-corp (auto-derived)", got.Slug)
+	}
+	if got.Plan != "free" {
+		t.Errorf("plan: got %q, want free (unchanged)", got.Plan)
+	}
+}
+
+func TestUpdateTenant_PlanOnly_UpdatesPlanLeavesNameAlone(t *testing.T) {
+	repo := newFakeTenantRepo()
+	id := uuid.New()
+	repo.tenants[id] = &repository.TenantRecord{ID: id, Name: "acme", Plan: "free", Slug: "acme"}
+	h := newTestable(repo)
+
+	got, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: id.String(),
+		Plan:     ptr("enterprise"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Plan != "enterprise" {
+		t.Errorf("plan: got %q, want enterprise", got.Plan)
+	}
+	if got.Name != "acme" {
+		t.Errorf("name: got %q, want acme (unchanged)", got.Name)
+	}
+}
+
+func TestUpdateTenant_BothFields_UpdatesBoth(t *testing.T) {
+	repo := newFakeTenantRepo()
+	id := uuid.New()
+	repo.tenants[id] = &repository.TenantRecord{ID: id, Name: "acme", Plan: "free", Slug: "acme"}
+	h := newTestable(repo)
+
+	got, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: id.String(),
+		Name:     ptr("new-name"),
+		Plan:     ptr("pro"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "new-name" || got.Plan != "pro" {
+		t.Errorf("got name=%q plan=%q, want new-name + pro", got.Name, got.Plan)
+	}
+}
+
+func TestUpdateTenant_NeitherField_ReturnsInvalidArgument(t *testing.T) {
+	h := newTestable(newFakeTenantRepo())
+	_, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: uuid.New().String(),
+	})
+	if grpcCode(err) != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
+	}
+}
+
+func TestUpdateTenant_InvalidPlan_ReturnsInvalidArgument(t *testing.T) {
+	h := newTestable(newFakeTenantRepo())
+	_, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: uuid.New().String(),
+		Plan:     ptr("gold"),
+	})
+	if grpcCode(err) != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
+	}
+}
+
+func TestUpdateTenant_InvalidName_ReturnsInvalidArgument(t *testing.T) {
+	h := newTestable(newFakeTenantRepo())
+	_, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: uuid.New().String(),
+		Name:     ptr("UPPERCASE"),
+	})
+	if grpcCode(err) != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
+	}
+}
+
+func TestUpdateTenant_DuplicateName_ReturnsAlreadyExists(t *testing.T) {
+	repo := newFakeTenantRepo()
+	id := uuid.New()
+	repo.tenants[id] = &repository.TenantRecord{ID: id, Name: "acme", Plan: "free", Slug: "acme"}
+	repo.dupKeyOnCreate = true // reused as "next mutation collides"
+	h := newTestable(repo)
+
+	_, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: id.String(),
+		Name:     ptr("other-name"),
+	})
+	if grpcCode(err) != codes.AlreadyExists {
+		t.Errorf("code = %v, want AlreadyExists", grpcCode(err))
+	}
+}
+
+func TestUpdateTenant_NotFound_ReturnsNotFound(t *testing.T) {
+	h := newTestable(newFakeTenantRepo())
+	_, err := h.UpdateTenant(context.Background(), &tenantv1.UpdateTenantRequest{
+		TenantId: uuid.New().String(),
+		Plan:     ptr("pro"),
+	})
+	if grpcCode(err) != codes.NotFound {
+		t.Errorf("code = %v, want NotFound", grpcCode(err))
+	}
+}
+
+// TestNormalizeSlug_RenameDerivesValidHandle confirms the helper used by the
+// real UPDATE path produces DNS-safe slugs for the rename cases above. This is
+// a fast regression guard for the cascade rule when names contain mixed
+// separators or trailing whitespace-equivalents.
+func TestNormalizeSlug_RenameDerivesValidHandle(t *testing.T) {
+	cases := map[string]string{
+		"acme corp":  "acme-corp",
+		"acme_corp":  "acme-corp",
+		"acme--corp": "acme-corp",
+		"---acme---": "acme",
+	}
+	for in, want := range cases {
+		if got := repository.NormalizeSlug(in); got != want {
+			t.Errorf("NormalizeSlug(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

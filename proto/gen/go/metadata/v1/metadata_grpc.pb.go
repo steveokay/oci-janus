@@ -51,6 +51,7 @@ const (
 	MetadataService_ListScanHistory_FullMethodName             = "/registry.metadata.v1.MetadataService/ListScanHistory"
 	MetadataService_ListTenantRemediations_FullMethodName      = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
 	MetadataService_GetTenantStorageBreakdown_FullMethodName   = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
+	MetadataService_GetTenantUsage_FullMethodName              = "/registry.metadata.v1.MetadataService/GetTenantUsage"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -113,6 +114,16 @@ type MetadataServiceClient interface {
 	// plus the tenant-wide total. Backs GET /api/v1/stats/storage on
 	// registry-management.
 	GetTenantStorageBreakdown(ctx context.Context, in *GetTenantStorageBreakdownRequest, opts ...grpc.CallOption) (*GetTenantStorageBreakdownResponse, error)
+	// GetTenantUsage (FE-API-028) — single-shot aggregate covering the
+	// metadata-owned pieces of the admin tenant-detail card: storage usage and
+	// cap, repository count, organisation count. Computed via one CTE so the
+	// admin endpoint never fans out across multiple metadata RPCs.
+	//
+	// Tenants whose row does not yet exist in metadata (lazy creation via the
+	// UpdateTenantQuota UPSERT pattern, FE-API-031) return all-zero counts +
+	// quota_bytes=0 rather than NotFound, so the management layer can stitch
+	// the response together for newly-created tenants without push activity.
+	GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*TenantUsage, error)
 }
 
 type metadataServiceClient struct {
@@ -525,6 +536,16 @@ func (c *metadataServiceClient) GetTenantStorageBreakdown(ctx context.Context, i
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*TenantUsage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantUsage)
+	err := c.cc.Invoke(ctx, MetadataService_GetTenantUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -585,6 +606,16 @@ type MetadataServiceServer interface {
 	// plus the tenant-wide total. Backs GET /api/v1/stats/storage on
 	// registry-management.
 	GetTenantStorageBreakdown(context.Context, *GetTenantStorageBreakdownRequest) (*GetTenantStorageBreakdownResponse, error)
+	// GetTenantUsage (FE-API-028) — single-shot aggregate covering the
+	// metadata-owned pieces of the admin tenant-detail card: storage usage and
+	// cap, repository count, organisation count. Computed via one CTE so the
+	// admin endpoint never fans out across multiple metadata RPCs.
+	//
+	// Tenants whose row does not yet exist in metadata (lazy creation via the
+	// UpdateTenantQuota UPSERT pattern, FE-API-031) return all-zero counts +
+	// quota_bytes=0 rather than NotFound, so the management layer can stitch
+	// the response together for newly-created tenants without push activity.
+	GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -683,6 +714,9 @@ func (UnimplementedMetadataServiceServer) ListTenantRemediations(context.Context
 }
 func (UnimplementedMetadataServiceServer) GetTenantStorageBreakdown(context.Context, *GetTenantStorageBreakdownRequest) (*GetTenantStorageBreakdownResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantStorageBreakdown not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTenantUsage not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1266,6 +1300,24 @@ func _MetadataService_GetTenantStorageBreakdown_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetTenantUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetTenantUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetTenantUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetTenantUsage(ctx, req.(*GetTenantUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1380,6 +1432,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantStorageBreakdown",
 			Handler:    _MetadataService_GetTenantStorageBreakdown_Handler,
+		},
+		{
+			MethodName: "GetTenantUsage",
+			Handler:    _MetadataService_GetTenantUsage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

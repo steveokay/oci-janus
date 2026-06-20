@@ -149,6 +149,89 @@ func (h *GRPCHandler) ListTenants(ctx context.Context, req *tenantv1.ListTenants
 	}, nil
 }
 
+// UpdateTenant mutates a tenant's name and/or plan (FE-API-029).
+//
+// Authorization is the caller's responsibility — this RPC is reachable only
+// over the internal mTLS gRPC port and registry-management gates the REST
+// endpoint behind the platform-admin marker grant.
+//
+// Validation:
+//   - tenant_id must parse as UUID.
+//   - Name (when set) must match tenantNameRE so we never store an invalid
+//     subdomain-ready slug seed.
+//   - Plan (when set) must be one of "free"|"pro"|"enterprise" (kept in step
+//     with the management-layer body validator so internal callers don't
+//     drift from the REST contract).
+//   - At least one of name/plan must be supplied — empty patches return
+//     InvalidArgument so callers don't silently no-op.
+//
+// Slug recompute happens inside repo.UpdateTenant so the row is never
+// observable with a name-and-slug mismatch. Duplicate-name attempts surface
+// as AlreadyExists via the same pgconn 23505 mapping used by CreateTenant.
+func (h *GRPCHandler) UpdateTenant(ctx context.Context, req *tenantv1.UpdateTenantRequest) (*tenantv1.Tenant, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+
+	// Pull pointer values via the generated getters. proto3 `optional` emits
+	// `*T` plus `HasX()` so we can tell "field not present" from "empty value".
+	var namePtr, planPtr *string
+	if req.Name != nil {
+		n := req.GetName()
+		// Reject the empty string up front so the repo never has to defend
+		// against "name = ''" reaching the DB.
+		if n == "" {
+			return nil, status.Error(codes.InvalidArgument, "name must not be empty")
+		}
+		if !tenantNameRE.MatchString(n) {
+			return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
+		}
+		namePtr = &n
+	}
+	if req.Plan != nil {
+		p := req.GetPlan()
+		if !validTenantPlan(p) {
+			return nil, status.Errorf(codes.InvalidArgument, "plan must be one of free, pro, enterprise")
+		}
+		planPtr = &p
+	}
+	if namePtr == nil && planPtr == nil {
+		return nil, status.Error(codes.InvalidArgument, "at least one of name or plan is required")
+	}
+
+	rec, err := h.repo.UpdateTenant(ctx, tenantID, namePtr, planPtr)
+	if err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, status.Errorf(codes.AlreadyExists, "tenant name already in use")
+		}
+		return nil, errcodes.MapDBError(err, "update tenant")
+	}
+	if rec == nil {
+		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
+	}
+
+	// Refresh domains so the response carries the live host-selection state —
+	// changes to slug ripple into the wildcard fallback host.
+	domains, err := h.repo.ListDomainsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list tenant domains")
+	}
+	return h.buildTenantProto(rec, domains), nil
+}
+
+// validTenantPlan is the allowlist applied to incoming plan values. Keep this
+// in lockstep with the REST body validator in services/management; drifting
+// the two leaves a hole where internal gRPC callers could write a plan the
+// dashboard rejects.
+func validTenantPlan(p string) bool {
+	switch p {
+	case "free", "pro", "enterprise":
+		return true
+	}
+	return false
+}
+
 // DeleteTenant removes a tenant.
 func (h *GRPCHandler) DeleteTenant(ctx context.Context, req *tenantv1.DeleteTenantRequest) (*emptypb.Empty, error) {
 	tenantID, err := uuid.Parse(req.TenantId)

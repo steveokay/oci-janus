@@ -59,6 +59,10 @@ type fakeRepo struct {
 	storageBreakdownResp *metadatav1.GetTenantStorageBreakdownResponse
 	storageBreakdownErr  error
 
+	// GetTenantUsage (FE-API-028)
+	tenantUsageResp *metadatav1.TenantUsage
+	tenantUsageErr  error
+
 	// PutTag
 	putTagResult *metadatav1.Tag
 	putTagErr    error
@@ -249,6 +253,10 @@ func (f *fakeRepo) ListOrphanedBlobs(_ context.Context) ([]*metadatav1.BlobRef, 
 
 func (f *fakeRepo) GetTenantStorageBreakdown(_ context.Context, _ string) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
 	return f.storageBreakdownResp, f.storageBreakdownErr
+}
+
+func (f *fakeRepo) GetTenantUsage(_ context.Context, _ string) (*metadatav1.TenantUsage, error) {
+	return f.tenantUsageResp, f.tenantUsageErr
 }
 
 func (f *fakeRepo) GetTenantQuotaUsage(_ context.Context, _ string) (*metadatav1.QuotaUsage, error) {
@@ -1755,4 +1763,69 @@ func TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument(t *testin
 		TenantId: "t1", PageToken: "***",
 	})
 	requireCode(t, err, codes.InvalidArgument)
+}
+
+// ── GetTenantUsage (FE-API-028) ──────────────────────────────────────────────
+
+// TestGetTenantUsage_happyPath_returnsAggregate ensures the handler simply
+// forwards the repo's response. The CTE arithmetic is tested in the
+// repository layer (integration test); here we just check the wire mapping.
+func TestGetTenantUsage_happyPath_returnsAggregate(t *testing.T) {
+	want := &metadatav1.TenantUsage{
+		StorageUsedBytes:  4096,
+		StorageQuotaBytes: 10 << 30,
+		RepositoryCount:   3,
+		OrganizationCount: 2,
+	}
+	h := newHandler(&fakeRepo{tenantUsageResp: want})
+	got, err := h.GetTenantUsage(context.Background(), &metadatav1.GetTenantUsageRequest{
+		TenantId: "00000000-0000-0000-0000-000000000001",
+	})
+	requireNoErr(t, err)
+	if got.GetStorageUsedBytes() != want.StorageUsedBytes ||
+		got.GetStorageQuotaBytes() != want.StorageQuotaBytes ||
+		got.GetRepositoryCount() != want.RepositoryCount ||
+		got.GetOrganizationCount() != want.OrganizationCount {
+		t.Errorf("usage mismatch: got %+v, want %+v", got, want)
+	}
+}
+
+// TestGetTenantUsage_emptyTenantID_returnsInvalidArgument verifies the
+// handler-level shape check fires before the repo is touched.
+func TestGetTenantUsage_emptyTenantID_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetTenantUsage(context.Background(), &metadatav1.GetTenantUsageRequest{TenantId: ""})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestGetTenantUsage_repoError_returnsInternal verifies the repo error path —
+// we expect a non-InvalidArgument code (the exact mapping is MapDBError's
+// concern; we just check the InvalidArgument did not slip through).
+func TestGetTenantUsage_repoError_returnsInternal(t *testing.T) {
+	h := newHandler(&fakeRepo{tenantUsageErr: errors.New("db down")})
+	_, err := h.GetTenantUsage(context.Background(), &metadatav1.GetTenantUsageRequest{
+		TenantId: "00000000-0000-0000-0000-000000000001",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() == codes.InvalidArgument {
+		t.Errorf("repo error must not surface as InvalidArgument: %v", err)
+	}
+}
+
+// TestGetTenantUsage_lazyMissingTenant_returnsZero verifies the documented
+// behaviour for tenants without a metadata row yet — the repo returns an
+// all-zero proto and the handler forwards it verbatim.
+func TestGetTenantUsage_lazyMissingTenant_returnsZero(t *testing.T) {
+	h := newHandler(&fakeRepo{tenantUsageResp: &metadatav1.TenantUsage{}})
+	got, err := h.GetTenantUsage(context.Background(), &metadatav1.GetTenantUsageRequest{
+		TenantId: "00000000-0000-0000-0000-000000000999",
+	})
+	requireNoErr(t, err)
+	if got.GetStorageUsedBytes() != 0 || got.GetStorageQuotaBytes() != 0 ||
+		got.GetRepositoryCount() != 0 || got.GetOrganizationCount() != 0 {
+		t.Errorf("expected all zeros for lazy tenant, got %+v", got)
+	}
 }

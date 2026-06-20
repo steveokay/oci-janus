@@ -30,6 +30,8 @@ type userRepo interface {
 	RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error
 	RevokeRoleScoped(ctx context.Context, assignmentID, tenantID uuid.UUID, expectedScopeType, expectedScopeValue string) error
 	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error)
+	// CountByTenant returns the user count for a tenant (FE-API-028).
+	CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

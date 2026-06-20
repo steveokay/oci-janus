@@ -295,6 +295,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
 	mux.Handle("GET /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminGetTenant)))
 	mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
+	// FE-API-029: rename + plan change. Patch body accepts optional name/plan
+	// fields; emits tenant.renamed / tenant.plan_changed RabbitMQ events.
+	mux.Handle("PATCH /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminUpdateTenant)))
 }
 
 // ---------------------------------------------------------------------------

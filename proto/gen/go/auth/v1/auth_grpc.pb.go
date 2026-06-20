@@ -26,6 +26,7 @@ const (
 	AuthService_GrantRole_FullMethodName          = "/registry.auth.v1.AuthService/GrantRole"
 	AuthService_RevokeRole_FullMethodName         = "/registry.auth.v1.AuthService/RevokeRole"
 	AuthService_ListMembers_FullMethodName        = "/registry.auth.v1.AuthService/ListMembers"
+	AuthService_CountTenantUsers_FullMethodName   = "/registry.auth.v1.AuthService/CountTenantUsers"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -41,6 +42,11 @@ type AuthServiceClient interface {
 	GrantRole(ctx context.Context, in *GrantRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ListMembers(ctx context.Context, in *ListMembersRequest, opts ...grpc.CallOption) (*ListMembersResponse, error)
+	// CountTenantUsers (FE-API-028) returns the number of distinct user accounts
+	// belonging to the tenant. Used by the admin tenant-detail composition; the
+	// count includes inactive users intentionally (operators want to see total
+	// headcount, not just currently-active sessions).
+	CountTenantUsers(ctx context.Context, in *CountTenantUsersRequest, opts ...grpc.CallOption) (*CountTenantUsersResponse, error)
 }
 
 type authServiceClient struct {
@@ -111,6 +117,16 @@ func (c *authServiceClient) ListMembers(ctx context.Context, in *ListMembersRequ
 	return out, nil
 }
 
+func (c *authServiceClient) CountTenantUsers(ctx context.Context, in *CountTenantUsersRequest, opts ...grpc.CallOption) (*CountTenantUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CountTenantUsersResponse)
+	err := c.cc.Invoke(ctx, AuthService_CountTenantUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -124,6 +140,11 @@ type AuthServiceServer interface {
 	GrantRole(context.Context, *GrantRoleRequest) (*emptypb.Empty, error)
 	RevokeRole(context.Context, *RevokeRoleRequest) (*emptypb.Empty, error)
 	ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error)
+	// CountTenantUsers (FE-API-028) returns the number of distinct user accounts
+	// belonging to the tenant. Used by the admin tenant-detail composition; the
+	// count includes inactive users intentionally (operators want to see total
+	// headcount, not just currently-active sessions).
+	CountTenantUsers(context.Context, *CountTenantUsersRequest) (*CountTenantUsersResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -147,6 +168,9 @@ func (UnimplementedAuthServiceServer) RevokeRole(context.Context, *RevokeRoleReq
 }
 func (UnimplementedAuthServiceServer) ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMembers not implemented")
+}
+func (UnimplementedAuthServiceServer) CountTenantUsers(context.Context, *CountTenantUsersRequest) (*CountTenantUsersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CountTenantUsers not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -268,6 +292,24 @@ func _AuthService_ListMembers_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_CountTenantUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CountTenantUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).CountTenantUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_CountTenantUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).CountTenantUsers(ctx, req.(*CountTenantUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -298,6 +340,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMembers",
 			Handler:    _AuthService_ListMembers_Handler,
+		},
+		{
+			MethodName: "CountTenantUsers",
+			Handler:    _AuthService_CountTenantUsers_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

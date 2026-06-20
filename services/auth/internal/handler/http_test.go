@@ -170,6 +170,10 @@ func (f *handlerFakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) erro
 func (f *handlerFakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }
+func (f *handlerFakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
+	return int64(len(f.users)), nil
+}
+
 func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
 	return nil, nil
 }

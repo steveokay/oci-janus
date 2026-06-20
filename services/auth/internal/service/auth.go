@@ -430,6 +430,13 @@ func (s *Service) GetUserByID(ctx context.Context, id uuid.UUID) (*repository.Us
 	return s.users.GetByID(ctx, id)
 }
 
+// CountTenantUsers returns the number of users in the tenant (FE-API-028).
+// Surfaced on the platform-admin tenant-detail card. Inactive accounts are
+// included on purpose — operators want total headcount, not concurrent users.
+func (s *Service) CountTenantUsers(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	return s.users.CountByTenant(ctx, tenantID)
+}
+
 // GetUserRoles returns all role assignments for a user within a tenant.
 func (s *Service) GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
 	return s.users.GetUserRoles(ctx, userID, tenantID)

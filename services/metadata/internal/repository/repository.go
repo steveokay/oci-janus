@@ -681,6 +681,57 @@ func (r *Repository) GetTenantStorageBreakdown(ctx context.Context, tenantID str
 	return resp, nil
 }
 
+// GetTenantUsage returns the storage + count aggregates that back the
+// admin tenant-detail endpoint (FE-API-028). One CTE produces every value so
+// the management layer does not fan out across three RPCs for one page.
+//
+// Tenants whose tenants row does not yet exist in metadata (lazy creation via
+// UpdateTenantQuota's UPSERT) report all-zero counts and zero quota — never
+// an error — so the BFF can stitch a sensible "fresh tenant" response for
+// tenants created in registry-tenant that have not yet seen push activity.
+func (r *Repository) GetTenantUsage(ctx context.Context, tenantID string) (*metadatav1.TenantUsage, error) {
+	// LEFT JOIN against tenants is intentional: we want NULL → 0 for newly
+	// created tenants that haven't been registered in the metadata DB yet.
+	// COALESCE returns 0 in the absence of repository rows too. SUM/COUNT
+	// against an empty filter yield NULL by default, so wrap both.
+	const q = `
+		WITH usage AS (
+		    SELECT
+		        COALESCE(SUM(storage_used), 0)::BIGINT  AS used_bytes,
+		        COUNT(*)::BIGINT                        AS repo_count
+		    FROM repositories
+		    WHERE tenant_id = $1
+		),
+		orgs AS (
+		    SELECT COUNT(*)::BIGINT AS org_count
+		    FROM organizations
+		    WHERE tenant_id = $1
+		),
+		tenant AS (
+		    SELECT storage_quota
+		    FROM tenants
+		    WHERE id = $1
+		)
+		SELECT usage.used_bytes,
+		       COALESCE(tenant.storage_quota, 0)::BIGINT,
+		       usage.repo_count,
+		       orgs.org_count
+		FROM usage
+		CROSS JOIN orgs
+		LEFT JOIN tenant ON true`
+
+	var u metadatav1.TenantUsage
+	if err := r.pool.QueryRow(ctx, q, tenantID).Scan(
+		&u.StorageUsedBytes,
+		&u.StorageQuotaBytes,
+		&u.RepositoryCount,
+		&u.OrganizationCount,
+	); err != nil {
+		return nil, fmt.Errorf("get tenant usage: %w", err)
+	}
+	return &u, nil
+}
+
 // UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
 // API's super-admin quota route to bump quotas for large customers.
 //
