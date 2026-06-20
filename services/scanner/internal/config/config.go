@@ -1,3 +1,9 @@
+// Package config loads runtime configuration for registry-scanner.
+//
+// Until FE-API-018 the scanner had no DB of its own. Scan policies (FE-API-018)
+// and compliance reports (FE-API-019) require durable per-tenant state, so the
+// service now owns a small Postgres schema and reads DB_DSN from the
+// environment alongside its existing RabbitMQ + plugin configuration.
 package config
 
 import (
@@ -8,10 +14,10 @@ import (
 
 // Config holds all runtime configuration for the scanner service.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	LogLevel  string `mapstructure:"LOG_LEVEL"`
+	LogFormat string `mapstructure:"LOG_FORMAT"`
+	GRPCAddr  string `mapstructure:"GRPC_ADDR"`
+	HTTPAddr  string `mapstructure:"HTTP_ADDR"`
 	// MetricsAddr is the dedicated Prometheus scrape port (SEC-025).
 	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
@@ -35,6 +41,24 @@ type Config struct {
 
 	WorkerCount    int `mapstructure:"SCANNER_WORKER_COUNT"`
 	JobTimeoutSecs int `mapstructure:"SCANNER_JOB_TIMEOUT_SECS"`
+
+	// DBDSN is the Postgres connection string for the scanner's own DB
+	// (FE-API-018 scan policies + FE-API-019 compliance reports). Required.
+	DBDSN string `mapstructure:"DB_DSN"`
+	// DBMaxConns caps the pool size; default 20 matches the platform
+	// convention used by every other service.
+	DBMaxConns int32 `mapstructure:"DB_MAX_CONNS"`
+
+	// ReportOutputDir is the on-disk directory the compliance-report
+	// background worker writes PDF + SPDX JSON outputs to. Defaults to
+	// /tmp/reports — production deployments should swap this for object
+	// storage and front the download routes with signed URLs.
+	ReportOutputDir string `mapstructure:"REPORT_OUTPUT_DIR"`
+
+	// ReportPollIntervalSecs is how often the compliance-report worker
+	// scans for pending jobs. Five seconds gives a generous safety margin
+	// for tests + dev seeds; production may want shorter.
+	ReportPollIntervalSecs int `mapstructure:"REPORT_POLL_INTERVAL_SECS"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -49,6 +73,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
 	viper.SetDefault("SCANNER_WORKER_COUNT", 4)
 	viper.SetDefault("SCANNER_JOB_TIMEOUT_SECS", 600)
+	viper.SetDefault("DB_MAX_CONNS", 20)
+	viper.SetDefault("REPORT_OUTPUT_DIR", "/tmp/reports")
+	viper.SetDefault("REPORT_POLL_INTERVAL_SECS", 5)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
@@ -62,14 +89,15 @@ func Load() (*Config, error) {
 
 func validate(cfg *Config) error {
 	required := map[string]string{
-		"MTLS_CA_CERT_PATH":    cfg.MTLSCACertPath,
-		"MTLS_CERT_PATH":       cfg.MTLSCertPath,
-		"MTLS_KEY_PATH":        cfg.MTLSKeyPath,
-		"RABBITMQ_URL":         cfg.RabbitMQURL,
-		"METADATA_GRPC_ADDR":   cfg.MetadataGRPCAddr,
-		"STORAGE_GRPC_ADDR":    cfg.StorageGRPCAddr,
-		"SCANNER_PLUGIN_PATH":  cfg.PluginPath,
+		"MTLS_CA_CERT_PATH":       cfg.MTLSCACertPath,
+		"MTLS_CERT_PATH":          cfg.MTLSCertPath,
+		"MTLS_KEY_PATH":           cfg.MTLSKeyPath,
+		"RABBITMQ_URL":            cfg.RabbitMQURL,
+		"METADATA_GRPC_ADDR":      cfg.MetadataGRPCAddr,
+		"STORAGE_GRPC_ADDR":       cfg.StorageGRPCAddr,
+		"SCANNER_PLUGIN_PATH":     cfg.PluginPath,
 		"SCANNER_PLUGIN_CHECKSUM": cfg.PluginChecksum,
+		"DB_DSN":                  cfg.DBDSN,
 	}
 	for k, v := range required {
 		if v == "" {
