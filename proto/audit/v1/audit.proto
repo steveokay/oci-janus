@@ -53,6 +53,12 @@ service AuditService {
   // gRPC API generic means a future per-org or per-tag analytics route can
   // reuse the same RPC without a new proto round trip.
   rpc GetAnalytics(GetAnalyticsRequest) returns (GetAnalyticsResponse);
+
+  // GetLastTenantPush (FE-API-028) returns the most recent push.image
+  // audit event for the tenant. last_push_at is unset (zero timestamp) when
+  // the tenant has never recorded a push. Backs the "last activity" line on
+  // the admin tenant-detail card.
+  rpc GetLastTenantPush(GetLastTenantPushRequest) returns (GetLastTenantPushResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -273,4 +279,19 @@ message GetAnalyticsResponse {
   // bucket alignment. Echoed so the caller can sanity-check its own
   // pre-allocation grid against what the server actually bucketed against.
   google.protobuf.Timestamp range_start = 3;
+}
+
+// ─── FE-API-028: last tenant push ───────────────────────────────────────────
+
+// GetLastTenantPushRequest scopes the query to a single tenant.
+message GetLastTenantPushRequest {
+  string tenant_id = 1;
+}
+
+// GetLastTenantPushResponse carries the most recent push.image timestamp for
+// the tenant. last_push_at is the zero timestamp when the tenant has never
+// pushed an image. Callers MUST distinguish via timestamppb.AsTime().IsZero()
+// rather than relying on absence of the field.
+message GetLastTenantPushResponse {
+  google.protobuf.Timestamp last_push_at = 1;
 }

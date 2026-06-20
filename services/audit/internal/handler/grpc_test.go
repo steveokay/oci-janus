@@ -62,6 +62,11 @@ type fakeRepo struct {
 	// behaviour so a test can return different rows depending on the
 	// scope / action / range.
 	analyticsResponder func(call analyticsCall) ([]*repository.AnalyticsBucketRow, error)
+
+	// lastPush state for the GetLastTenantPush RPC (FE-API-028). lastPushFor
+	// keys by tenant so tests can assert per-tenant isolation in one fake.
+	lastPushFor map[uuid.UUID]time.Time
+	lastPushErr error
 }
 
 // analyticsCall captures the parameters passed to one GetAnalytics call.
@@ -175,6 +180,14 @@ func (f *fakeRepo) GetAnalytics(
 		return f.analyticsResponder(call)
 	}
 	return f.analytics, f.analyticsErr
+}
+
+func (f *fakeRepo) GetLastTenantPush(_ context.Context, tenantID uuid.UUID) (time.Time, bool, error) {
+	if f.lastPushErr != nil {
+		return time.Time{}, false, f.lastPushErr
+	}
+	t, ok := f.lastPushFor[tenantID]
+	return t, ok, nil
 }
 
 func newHandler(repo auditRepo) *GRPCHandler {
@@ -1016,5 +1029,93 @@ func TestGetNotifications_pagination_emitsTokenAndAcceptsIt(t *testing.T) {
 	}
 	if second.GetNextPageToken() != "" {
 		t.Errorf("page 2: expected empty next_page_token, got %q", second.GetNextPageToken())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetLastTenantPush (FE-API-028)
+// ---------------------------------------------------------------------------
+
+// TestGetLastTenantPush_noEvents_returnsNilTimestamp covers the freshly created
+// tenant case: no push.image rows yet, so the wire timestamp must be nil. The
+// management layer translates that into `last_push_at: null` in the JSON.
+func TestGetLastTenantPush_noEvents_returnsNilTimestamp(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	resp, err := h.GetLastTenantPush(context.Background(), &auditv1.GetLastTenantPushRequest{
+		TenantId: uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetLastPushAt() != nil {
+		t.Errorf("expected nil LastPushAt, got %v", resp.GetLastPushAt())
+	}
+}
+
+// TestGetLastTenantPush_withEvents_returnsLatestTimestamp covers the happy path
+// — the most recent push.image timestamp surfaces on the wire.
+func TestGetLastTenantPush_withEvents_returnsLatestTimestamp(t *testing.T) {
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	older := now.Add(-7 * 24 * time.Hour)
+	fake := &fakeRepo{
+		lastPushFor: map[uuid.UUID]time.Time{
+			tenantA: now,
+			tenantB: older,
+		},
+	}
+	h := newHandler(fake)
+
+	resp, err := h.GetLastTenantPush(context.Background(), &auditv1.GetLastTenantPushRequest{
+		TenantId: tenantA.String(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ts := resp.GetLastPushAt(); ts == nil {
+		t.Fatal("expected non-nil LastPushAt")
+	} else if !ts.AsTime().Equal(now) {
+		t.Errorf("LastPushAt: got %v, want %v", ts.AsTime(), now)
+	}
+
+	// And verify the per-tenant isolation: tenantB sees the older timestamp.
+	resp2, err := h.GetLastTenantPush(context.Background(), &auditv1.GetLastTenantPushRequest{
+		TenantId: tenantB.String(),
+	})
+	if err != nil {
+		t.Fatalf("tenant B: unexpected error: %v", err)
+	}
+	if !resp2.GetLastPushAt().AsTime().Equal(older) {
+		t.Errorf("tenant B: got %v, want %v", resp2.GetLastPushAt().AsTime(), older)
+	}
+}
+
+// TestGetLastTenantPush_invalidTenantID_returnsInvalidArgument verifies the
+// shape check fires before any DB call.
+func TestGetLastTenantPush_invalidTenantID_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetLastTenantPush(context.Background(), &auditv1.GetLastTenantPushRequest{
+		TenantId: "not-a-uuid",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+}
+
+// TestGetLastTenantPush_repoError_returnsInternal verifies that an underlying
+// DB error gets mapped to a non-InvalidArgument status (the exact code is
+// chosen by MapDBError; we only check it's not InvalidArgument so a future
+// reclassification doesn't break this case).
+func TestGetLastTenantPush_repoError_returnsInternal(t *testing.T) {
+	h := newHandler(&fakeRepo{lastPushErr: errors.New("db down")})
+	_, err := h.GetLastTenantPush(context.Background(), &auditv1.GetLastTenantPushRequest{
+		TenantId: uuid.New().String(),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) == codes.InvalidArgument {
+		t.Errorf("did not expect InvalidArgument for repo error, got %v", err)
 	}
 }

@@ -16,6 +16,11 @@ service AuthService {
   rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
   rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  // CountTenantUsers (FE-API-028) returns the number of distinct user accounts
+  // belonging to the tenant. Used by the admin tenant-detail composition; the
+  // count includes inactive users intentionally (operators want to see total
+  // headcount, not just currently-active sessions).
+  rpc CountTenantUsers(CountTenantUsersRequest) returns (CountTenantUsersResponse);
 }
 
 message ValidateTokenRequest {
@@ -111,4 +116,14 @@ message ListMembersRequest {
 // ListMembersResponse contains all role assignments for the requested scope.
 message ListMembersResponse {
   repeated RoleAssignment members = 1;
+}
+
+// CountTenantUsersRequest scopes the user count to a single tenant.
+message CountTenantUsersRequest {
+  string tenant_id = 1;
+}
+
+// CountTenantUsersResponse carries the integer user count for the tenant.
+message CountTenantUsersResponse {
+  int64 count = 1;
 }

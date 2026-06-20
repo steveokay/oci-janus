@@ -220,6 +220,55 @@ func (r *Repository) DeleteTenant(ctx context.Context, tenantID uuid.UUID) error
 	return err
 }
 
+// UpdateTenant patches name and/or plan on an existing tenant (FE-API-029).
+// `name` and `plan` are pointers so the caller can distinguish "no change"
+// (nil) from "set to empty string" (non-nil pointer to ""). When `name`
+// changes, the slug is recomputed via NormalizeSlug inside the same
+// transaction so the wildcard host (`<slug>.<base>`) updates atomically —
+// no observable state where the new name carries the old slug.
+//
+// Returns the updated tenant. ErrNotFound semantics: the caller observes
+// pgx.ErrNoRows mapped via the standard error chain — there is no sentinel
+// here because the gRPC handler maps NotFound separately.
+func (r *Repository) UpdateTenant(ctx context.Context, tenantID uuid.UUID, name, plan *string) (*TenantRecord, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// COALESCE keeps the existing column value when the parameter is NULL,
+	// so callers that want to mutate only one column never trample the
+	// other. Slug is recomputed inline when a new name is supplied; the
+	// empty-slug fallback to the tenant id mirrors CreateTenant so the
+	// wildcard host never collapses to `.<base>`.
+	var rec TenantRecord
+	var newSlug *string
+	if name != nil {
+		s := NormalizeSlug(*name)
+		if s == "" {
+			s = tenantID.String()
+		}
+		newSlug = &s
+	}
+	err = tx.QueryRow(ctx,
+		`UPDATE tenants
+		 SET    name = COALESCE($2, name),
+		        slug = COALESCE($3, slug),
+		        plan = COALESCE($4, plan)
+		 WHERE  id = $1
+		 RETURNING id, name, plan, slug, created_at`,
+		tenantID, name, newSlug, plan,
+	).Scan(&rec.ID, &rec.Name, &rec.Plan, &rec.Slug, &rec.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("UpdateTenant: %w", err)
+	}
+	return &rec, tx.Commit(ctx)
+}
+
 // GetPolicy returns the tenant policy.
 func (r *Repository) GetPolicy(ctx context.Context, tenantID uuid.UUID) (*PolicyRecord, error) {
 	var rec PolicyRecord

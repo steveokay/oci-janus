@@ -53,6 +53,8 @@ type metadataRepo interface {
 	DecrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
 	// Storage breakdown (FE-API-031) — top-50 repos + tenant total.
 	GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error)
+	// Tenant usage aggregate (FE-API-028) — storage + repo + org counts.
+	GetTenantUsage(ctx context.Context, tenantID string) (*metadatav1.TenantUsage, error)
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
@@ -611,6 +613,21 @@ func (h *MetadataHandler) GetTenantStorageBreakdown(ctx context.Context, req *me
 		return nil, mapErr(err)
 	}
 	return resp, nil
+}
+
+// GetTenantUsage returns the metadata-owned slice of FE-API-028's admin
+// tenant-detail card: storage_used / storage_quota / repository_count /
+// organization_count. A missing tenants row (lazy creation) returns zero
+// values rather than NotFound so newly created tenants render cleanly.
+func (h *MetadataHandler) GetTenantUsage(ctx context.Context, req *metadatav1.GetTenantUsageRequest) (*metadatav1.TenantUsage, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	usage, err := h.repo.GetTenantUsage(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return usage, nil
 }
 
 // CountRepositories returns the number of repositories owned by the tenant.

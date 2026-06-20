@@ -16,6 +16,12 @@ service TenantService {
   rpc RegisterDomain(RegisterDomainRequest) returns (RegisterDomainResponse);
   rpc GetTenantPolicy(GetTenantPolicyRequest) returns (TenantPolicy);
   rpc UpdateTenantPolicy(UpdateTenantPolicyRequest) returns (TenantPolicy);
+  // UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+  // both of `name` / `plan` may be supplied; absence means "do not change this
+  // field". When the name changes the slug is recomputed atomically inside the
+  // same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+  // on the very next GetTenant.
+  rpc UpdateTenant(UpdateTenantRequest) returns (Tenant);
 }
 
 message Tenant {
@@ -88,6 +94,16 @@ message RegisterDomainRequest {
 }
 message RegisterDomainResponse {
   string verification_token = 1; // add as TXT record at _registry-verify.<domain>
+}
+
+// UpdateTenantRequest carries the optional fields to mutate. Both `name` and
+// `plan` are `optional` so absence is distinguishable from the empty string —
+// callers may explicitly pass an empty value, but in practice the management
+// layer rejects empty names before reaching the gRPC server.
+message UpdateTenantRequest {
+  string tenant_id        = 1;
+  optional string name    = 2;
+  optional string plan    = 3;
 }
 
 message GetTenantPolicyRequest    { string tenant_id = 1; }

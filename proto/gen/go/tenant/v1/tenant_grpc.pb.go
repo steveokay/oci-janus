@@ -28,6 +28,7 @@ const (
 	TenantService_RegisterDomain_FullMethodName     = "/registry.tenant.v1.TenantService/RegisterDomain"
 	TenantService_GetTenantPolicy_FullMethodName    = "/registry.tenant.v1.TenantService/GetTenantPolicy"
 	TenantService_UpdateTenantPolicy_FullMethodName = "/registry.tenant.v1.TenantService/UpdateTenantPolicy"
+	TenantService_UpdateTenant_FullMethodName       = "/registry.tenant.v1.TenantService/UpdateTenant"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -42,6 +43,12 @@ type TenantServiceClient interface {
 	RegisterDomain(ctx context.Context, in *RegisterDomainRequest, opts ...grpc.CallOption) (*RegisterDomainResponse, error)
 	GetTenantPolicy(ctx context.Context, in *GetTenantPolicyRequest, opts ...grpc.CallOption) (*TenantPolicy, error)
 	UpdateTenantPolicy(ctx context.Context, in *UpdateTenantPolicyRequest, opts ...grpc.CallOption) (*TenantPolicy, error)
+	// UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+	// both of `name` / `plan` may be supplied; absence means "do not change this
+	// field". When the name changes the slug is recomputed atomically inside the
+	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+	// on the very next GetTenant.
+	UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
 }
 
 type tenantServiceClient struct {
@@ -132,6 +139,16 @@ func (c *tenantServiceClient) UpdateTenantPolicy(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *tenantServiceClient) UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Tenant)
+	err := c.cc.Invoke(ctx, TenantService_UpdateTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantServiceServer is the server API for TenantService service.
 // All implementations should embed UnimplementedTenantServiceServer
 // for forward compatibility
@@ -144,6 +161,12 @@ type TenantServiceServer interface {
 	RegisterDomain(context.Context, *RegisterDomainRequest) (*RegisterDomainResponse, error)
 	GetTenantPolicy(context.Context, *GetTenantPolicyRequest) (*TenantPolicy, error)
 	UpdateTenantPolicy(context.Context, *UpdateTenantPolicyRequest) (*TenantPolicy, error)
+	// UpdateTenant (FE-API-029) mutates the tenant's name and/or plan. Either or
+	// both of `name` / `plan` may be supplied; absence means "do not change this
+	// field". When the name changes the slug is recomputed atomically inside the
+	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
+	// on the very next GetTenant.
+	UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error)
 }
 
 // UnimplementedTenantServiceServer should be embedded to have forward compatible implementations.
@@ -173,6 +196,9 @@ func (UnimplementedTenantServiceServer) GetTenantPolicy(context.Context, *GetTen
 }
 func (UnimplementedTenantServiceServer) UpdateTenantPolicy(context.Context, *UpdateTenantPolicyRequest) (*TenantPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenantPolicy not implemented")
+}
+func (UnimplementedTenantServiceServer) UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenant not implemented")
 }
 
 // UnsafeTenantServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -330,6 +356,24 @@ func _TenantService_UpdateTenantPolicy_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantService_UpdateTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).UpdateTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_UpdateTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).UpdateTenant(ctx, req.(*UpdateTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantService_ServiceDesc is the grpc.ServiceDesc for TenantService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -368,6 +412,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateTenantPolicy",
 			Handler:    _TenantService_UpdateTenantPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateTenant",
+			Handler:    _TenantService_UpdateTenant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

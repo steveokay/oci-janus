@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -479,6 +480,35 @@ func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since t
 		return 0, fmt.Errorf("audit CountPulls: %w", err)
 	}
 	return count, nil
+}
+
+// GetLastTenantPush returns the timestamp of the most recent push.image
+// audit event for the tenant (FE-API-028). The second return value is `false`
+// when no push has ever been recorded — callers should distinguish that
+// case (`last_push_at = null` in the API response) from the zero time alone,
+// which Postgres also reports for genuinely-recorded events at the Unix epoch
+// (the index covers occurred_at DESC so this is a single index probe).
+func (r *Repository) GetLastTenantPush(ctx context.Context, tenantID uuid.UUID) (time.Time, bool, error) {
+	var t time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT occurred_at
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND action    = 'push.image'
+		 ORDER BY occurred_at DESC
+		 LIMIT 1`,
+		tenantID,
+	).Scan(&t)
+	if err != nil {
+		// Distinguish "no rows" from a real error — the tenant simply hasn't
+		// recorded a push yet, which is normal for freshly created tenants
+		// and must surface as last_push_at = null upstream.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("audit GetLastTenantPush: %w", err)
+	}
+	return t, true, nil
 }
 
 // PurgeOlderThan deletes audit events older than cutoff. This is the only
