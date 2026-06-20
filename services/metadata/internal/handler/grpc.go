@@ -6,10 +6,12 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
@@ -49,12 +51,22 @@ type metadataRepo interface {
 	UpdateTenantQuota(ctx context.Context, tenantID string, quotaBytes int64) (*metadatav1.QuotaUsage, error)
 	IncrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
 	DecrementTenantStorage(ctx context.Context, tenantID string, bytes int64) error
+	// Storage breakdown (FE-API-031) — top-50 repos + tenant total.
+	GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error)
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
 	GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error)
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	GetSecurityOverview(ctx context.Context, tenantID string) (*repository.SecurityOverview, error)
+	// Vulnerability list (FE-API-014) — paginated CVE rollup across the
+	// latest scan per (repo, tag).
+	ListTenantVulnerabilities(ctx context.Context, tenantID, severityFilter, pageToken string, limit int) ([]repository.VulnerabilityRow, string, error)
+	// Scan history (FE-API-015) — paginated flat feed ordered by completed_at DESC.
+	ListScanHistory(ctx context.Context, tenantID string, since time.Time, pageToken string, limit int) ([]repository.ScanHistoryRow, string, error)
+	// Remediation suggestions (FE-API-017) — paginated upgrade groupings
+	// derived from the latest complete scan per (tenant, repo, tag).
+	ListTenantRemediations(ctx context.Context, tenantID, pageToken string, limit int) ([]repository.RemediationRow, string, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
@@ -351,6 +363,194 @@ func (h *MetadataHandler) GetSecurityOverview(ctx context.Context, req *metadata
 		RecentScans_24H:    ov.RecentScans24h,
 		DaysSinceLastScan:  ov.DaysSinceLastScan,
 	}, nil
+}
+
+// validSeverityFilter accepts only the canonical upper-case severity names.
+// Empty string is allowed and signals "no filter". Kept in this package so
+// the handler can return InvalidArgument before the gRPC call reaches the
+// repository layer.
+func validSeverityFilter(s string) bool {
+	switch s {
+	case "", "CRITICAL", "HIGH", "MEDIUM", "LOW", "NEGLIGIBLE":
+		return true
+	}
+	return false
+}
+
+// ListTenantVulnerabilities (FE-API-014) returns the workspace-wide
+// vulnerability list. Tenant isolation is enforced in the repository SQL;
+// the handler validates inputs and maps repository rows to proto messages.
+func (h *MetadataHandler) ListTenantVulnerabilities(ctx context.Context, req *metadatav1.ListTenantVulnerabilitiesRequest) (*metadatav1.ListTenantVulnerabilitiesResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	sev := strings.ToUpper(req.GetSeverity())
+	if !validSeverityFilter(sev) {
+		return nil, status.Error(codes.InvalidArgument, "invalid severity filter")
+	}
+	rows, next, err := h.repo.ListTenantVulnerabilities(ctx, req.GetTenantId(), sev, req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		// Bad cursor / bad severity surfaces as InvalidArgument so the BFF
+		// can return a 400. Anything else is internal.
+		if strings.Contains(err.Error(), "page_token") || strings.Contains(err.Error(), "decode") {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
+		return nil, mapErr(err)
+	}
+	out := &metadatav1.ListTenantVulnerabilitiesResponse{
+		Vulnerabilities: make([]*metadatav1.TenantVulnerability, 0, len(rows)),
+		NextPageToken:   next,
+	}
+	for _, v := range rows {
+		// Build the affected-tag slice once per CVE — n is small (the
+		// number of tags affected by this specific CVE).
+		affected := make([]*metadatav1.AffectedTag, 0, len(v.Affected))
+		for _, a := range v.Affected {
+			affected = append(affected, &metadatav1.AffectedTag{
+				Repo:   a.Repo,
+				Tag:    a.Tag,
+				Digest: a.Digest,
+			})
+		}
+		var first, last *timestamppb.Timestamp
+		if !v.FirstSeen.IsZero() {
+			first = timestamppb.New(v.FirstSeen)
+		}
+		if !v.LastSeen.IsZero() {
+			last = timestamppb.New(v.LastSeen)
+		}
+		out.Vulnerabilities = append(out.Vulnerabilities, &metadatav1.TenantVulnerability{
+			CveId:          v.CVE,
+			Severity:       v.Severity,
+			Title:          v.Title,
+			Description:    v.Description,
+			FixedIn:        v.FixedIn,
+			PackageName:    v.PackageName,
+			PackageVersion: v.PackageVersion,
+			Affected:       affected,
+			FirstSeen:      first,
+			LastSeen:       last,
+		})
+	}
+	return out, nil
+}
+
+// ListScanHistory (FE-API-015) returns the flat scan-history feed for the
+// tenant ordered by completed_at DESC. `since` defaults to 30 days ago when
+// unset, matching the dashboard's default time window.
+func (h *MetadataHandler) ListScanHistory(ctx context.Context, req *metadatav1.ListScanHistoryRequest) (*metadatav1.ListScanHistoryResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	since := time.Now().Add(-30 * 24 * time.Hour)
+	if ts := req.GetSince(); ts != nil && ts.IsValid() {
+		since = ts.AsTime()
+	}
+	rows, next, err := h.repo.ListScanHistory(ctx, req.GetTenantId(), since, req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		if strings.Contains(err.Error(), "page_token") || strings.Contains(err.Error(), "decode") {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
+		return nil, mapErr(err)
+	}
+	out := &metadatav1.ListScanHistoryResponse{
+		Scans:         make([]*metadatav1.ScanHistoryEntry, 0, len(rows)),
+		NextPageToken: next,
+	}
+	for _, r := range rows {
+		var started, completed *timestamppb.Timestamp
+		if !r.StartedAt.IsZero() {
+			started = timestamppb.New(r.StartedAt)
+		}
+		if !r.CompletedAt.IsZero() {
+			completed = timestamppb.New(r.CompletedAt)
+		}
+		// Translate the repository's "complete" status to the proto string
+		// used by the dashboard: "completed". Other statuses map 1:1.
+		st := r.Status
+		if st == "complete" {
+			st = "completed"
+		}
+		out.Scans = append(out.Scans, &metadatav1.ScanHistoryEntry{
+			ScanId:         r.ScanID,
+			Repo:           r.Repo,
+			Tag:            r.Tag,
+			ManifestDigest: r.ManifestDigest,
+			Scanner:        r.Scanner,
+			StartedAt:      started,
+			CompletedAt:    completed,
+			Status:         st,
+			SeverityCounts: &metadatav1.SecurityCounts{
+				Critical:   r.Critical,
+				High:       r.High,
+				Medium:     r.Medium,
+				Low:        r.Low,
+				Negligible: r.Negligible,
+			},
+			Trigger: r.Trigger,
+		})
+	}
+	return out, nil
+}
+
+// ListTenantRemediations (FE-API-017) returns actionable upgrade groupings
+// for the tenant — "upgrade package X from A to B fixes N CVEs across M
+// (repo, tag) tuples." Tenant isolation is enforced in the repository SQL;
+// the handler validates inputs and maps repository rows to proto messages.
+func (h *MetadataHandler) ListTenantRemediations(ctx context.Context, req *metadatav1.ListTenantRemediationsRequest) (*metadatav1.ListTenantRemediationsResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	rows, next, err := h.repo.ListTenantRemediations(ctx, req.GetTenantId(), req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		// Malformed cursor surfaces as InvalidArgument so the BFF can return
+		// a 400 rather than a 500. Anything else is internal.
+		if strings.Contains(err.Error(), "page_token") || strings.Contains(err.Error(), "decode") {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
+		return nil, mapErr(err)
+	}
+	out := &metadatav1.ListTenantRemediationsResponse{
+		Remediations:  make([]*metadatav1.Remediation, 0, len(rows)),
+		NextPageToken: next,
+	}
+	for _, r := range rows {
+		// Allocate (not append-nil) so the wire shape is always a JSON array
+		// even when the group has zero entries — the dashboard relies on
+		// stable shape for serde.
+		affected := make([]*metadatav1.RemediationAffected, 0, len(r.Affected))
+		for _, a := range r.Affected {
+			affected = append(affected, &metadatav1.RemediationAffected{
+				Repo:   a.Repo,
+				Tag:    a.Tag,
+				Digest: a.Digest,
+			})
+		}
+		out.Remediations = append(out.Remediations, &metadatav1.Remediation{
+			PackageName:    r.PackageName,
+			FromVersion:    r.FromVersion,
+			ToVersion:      r.ToVersion,
+			CvesFixed:      r.CVEsFixed,
+			CvesFixedCount: r.CVEsFixedCount,
+			MaxSeverity:    r.MaxSeverity,
+			Affected:       affected,
+			AffectedCount:  r.AffectedCount,
+		})
+	}
+	return out, nil
+}
+
+// GetTenantStorageBreakdown returns the tenant's total storage usage plus the
+// top-50 repositories sorted by storage_used DESC. Backs FE-API-031.
+func (h *MetadataHandler) GetTenantStorageBreakdown(ctx context.Context, req *metadatav1.GetTenantStorageBreakdownRequest) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	resp, err := h.repo.GetTenantStorageBreakdown(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return resp, nil
 }
 
 // CountRepositories returns the number of repositories owned by the tenant.

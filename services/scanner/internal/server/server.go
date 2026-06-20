@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -16,6 +19,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
@@ -23,7 +27,10 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/scanner/internal/config"
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
+	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
+	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
+	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
 	"github.com/steveokay/oci-janus/services/scanner/internal/worker"
 
@@ -55,6 +62,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("dial storage %s: %w", cfg.StorageGRPCAddr, err)
 	}
 	defer storageConn.Close()
+
+	// FE-API-018/019 — scanner now owns a Postgres schema. PoolConfig
+	// rejects sslmode=disable in production and applies the platform's
+	// pool tuning defaults.
+	tmpDB := &loader.DBConfig{DBDSN: cfg.DBDSN, DBMaxConns: cfg.DBMaxConns, Environment: cfg.OTELEnvironment}
+	poolCfg, err := tmpDB.PoolConfig()
+	if err != nil {
+		return fmt.Errorf("build pool config: %w", err)
+	}
+	dbPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return fmt.Errorf("pgxpool.New: %w", err)
+	}
+	defer dbPool.Close()
+
+	if err := runMigrations(ctx, cfg.DBDSN); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+	repo := repository.New(dbPool)
 
 	// RabbitMQ publisher for scan.completed / scan.policy_blocked events.
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
@@ -91,6 +117,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.
 	go pool.Start(ctx, cfg.WorkerCount)
 
+	// Compliance-report worker: polls compliance_reports and renders PDF +
+	// SPDX output. Safe to run alongside multiple replicas via
+	// FOR UPDATE SKIP LOCKED inside ClaimPendingReport.
+	rw := reportworker.New(repo, reportworker.Config{
+		OutputDir:    cfg.ReportOutputDir,
+		PollInterval: time.Duration(cfg.ReportPollIntervalSecs) * time.Second,
+	})
+	go rw.Run(ctx)
+
 	// Consume push.completed events and dispatch to the worker pool.
 	go func() {
 		slog.Info("starting push.completed consumer")
@@ -111,7 +146,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	grpcSrv := grpc.NewServer()
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
-	scannerv1.RegisterScannerServiceServer(grpcSrv, handler.New(pool, scanStore))
+	scannerv1.RegisterScannerServiceServer(grpcSrv, handler.New(pool, scanStore).WithRepository(repo))
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -190,3 +225,20 @@ func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
 	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
 }
 
+// runMigrations runs goose SQL migrations against the scanner DB.
+func runMigrations(ctx context.Context, dsn string) error {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	db := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = db.Close() }()
+
+	goose.SetBaseFS(scannermigrations.FS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+	return goose.Up(db, ".")
+}

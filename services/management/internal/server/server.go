@@ -17,6 +17,8 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -90,6 +92,33 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		webhookClient = webhookv1.NewWebhookServiceClient(webhookConn)
 	}
 
+	// signer gRPC client is optional — wired only when SIGNER_GRPC_ADDR is set
+	// (enables FE-API-003 /api/v1/.../signature). Nil leaves the route at
+	// 404 "route disabled" so a management deployment without a signer
+	// service still serves every other surface.
+	var signerClient signerv1.SignerServiceClient
+	if cfg.SignerGRPCAddr != "" {
+		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		if err != nil {
+			return fmt.Errorf("dial signer grpc: %w", err)
+		}
+		defer signerConn.Close()
+		signerClient = signerv1.NewSignerServiceClient(signerConn)
+	}
+
+	// scanner gRPC client is optional — wired only when SCANNER_GRPC_ADDR
+	// is set (enables FE-API-018 scan policies and FE-API-019 compliance
+	// reports). Nil leaves the routes returning 404 "route disabled".
+	var scannerClient scannerv1.ScannerServiceClient
+	if cfg.ScannerGRPCAddr != "" {
+		scannerConn, err := grpc.NewClient(cfg.ScannerGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		if err != nil {
+			return fmt.Errorf("dial scanner grpc: %w", err)
+		}
+		defer scannerConn.Close()
+		scannerClient = scannerv1.NewScannerServiceClient(scannerConn)
+	}
+
 	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
@@ -97,6 +126,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	)
 	h = h.WithTenantClient(tenantClient)
 	h = h.WithWebhookClient(webhookClient)
+	h = h.WithSignerClient(signerClient)
+	h = h.WithScannerClient(scannerClient)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
 	// interactive dashboard while blocking a runaway script.
 	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))

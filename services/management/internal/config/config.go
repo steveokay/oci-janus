@@ -29,6 +29,19 @@ type Config struct {
 	// "route disabled").
 	WebhookGRPCAddr string `mapstructure:"WEBHOOK_GRPC_ADDR"`
 
+	// SignerGRPCAddr is optional — only required when FE-API-003
+	// `/api/v1/.../signature` is enabled. Empty leaves that route at 404
+	// "route disabled" so a deployment without registry-signer still
+	// serves every other surface.
+	SignerGRPCAddr string `mapstructure:"SIGNER_GRPC_ADDR"`
+
+	// ScannerGRPCAddr is optional — required only when the FE-API-018
+	// scan policies + FE-API-019 compliance report routes are enabled.
+	// Empty leaves `/api/v1/security/policies` and
+	// `/api/v1/security/reports/*` returning 404 "route disabled" so a
+	// deployment without registry-scanner still serves every other surface.
+	ScannerGRPCAddr string `mapstructure:"SCANNER_GRPC_ADDR"`
+
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 

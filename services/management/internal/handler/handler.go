@@ -24,6 +24,8 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -34,6 +36,14 @@ import (
 
 // maxBodyBytes caps incoming JSON request bodies to prevent large-payload attacks.
 const maxBodyBytes = 4096
+
+// EventPublisher is the narrow contract the management handler needs from the
+// RabbitMQ publisher. Exported so external tests in the handler_test package
+// can supply a fake without dragging in amqp091. *publisher.Publisher
+// satisfies this interface.
+type EventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
 
 // Handler holds gRPC client dependencies for all management endpoints.
 type Handler struct {
@@ -46,8 +56,19 @@ type Handler struct {
 	// webhook is optional — wired only when WEBHOOK_GRPC_ADDR is set. nil
 	// disables the `/api/v1/webhooks` family (they return 404 "route disabled").
 	webhook webhookv1.WebhookServiceClient
+	// signer is optional — wired only when SIGNER_GRPC_ADDR is set. nil
+	// disables the `/api/v1/.../signature` route (FE-API-003); it returns
+	// 404 "route disabled" so the frontend can render the unsigned state
+	// instead of an error.
+	signer signerv1.SignerServiceClient
+	// scanner is optional — wired only when SCANNER_GRPC_ADDR is set.
+	// nil disables the FE-API-018 `/api/v1/security/policies` and
+	// FE-API-019 `/api/v1/security/reports/*` routes (404 "route disabled").
+	scanner scannerv1.ScannerServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
-	pub           *publisher.Publisher
+	// Typed as an interface so tests can substitute a fake without standing up
+	// a real RabbitMQ broker. *publisher.Publisher satisfies the interface.
+	pub           EventPublisher
 	healthClients []healthpb.HealthClient
 	// platformAdminTenantID is the tenant whose admin/owner users can call cross-tenant
 	// platform operations (e.g. setting another tenant's storage quota). Empty disables
@@ -61,6 +82,10 @@ type Handler struct {
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
 // healthClients are optional; when provided they are polled by handleStats to compute SystemHealthPct.
+//
+// pub is typed as a narrow eventPublisher interface so tests may substitute a
+// fake; the production wiring in services/management/internal/server still
+// passes a *publisher.Publisher, which satisfies the interface.
 func New(
 	auth authv1.AuthServiceClient,
 	meta metadatav1.MetadataServiceClient,
@@ -69,14 +94,28 @@ func New(
 	platformAdminTenantID string,
 	healthClients ...healthpb.HealthClient,
 ) *Handler {
-	return &Handler{
+	h := &Handler{
 		auth:                  auth,
 		meta:                  meta,
 		audit:                 audit,
-		pub:                   pub,
 		platformAdminTenantID: platformAdminTenantID,
 		healthClients:         healthClients,
 	}
+	// Guard against the typed-nil-into-interface trap: when callers pass an
+	// untyped nil (tests do this for the scan-trigger paths that don't exercise
+	// the publisher), we want h.pub == nil to be true so downstream gating works.
+	if pub != nil {
+		h.pub = pub
+	}
+	return h
+}
+
+// WithPublisher swaps the event publisher. Used by tests to inject a fake
+// without touching the production New signature. Returns the handler for
+// chained initialization.
+func (h *Handler) WithPublisher(p EventPublisher) *Handler {
+	h.pub = p
+	return h
 }
 
 // WithRateLimiter attaches a per-user rate limiter that runs after RequireAuth
@@ -96,12 +135,38 @@ func (h *Handler) WithTenantClient(c tenantv1.TenantServiceClient) *Handler {
 	return h
 }
 
+// WithSignerClient enables the `/api/v1/.../signature` route (FE-API-003).
+// Nil leaves the route returning 404 "route disabled" so management can
+// deploy without registry-signer in environments that don't run image
+// signing.
+func (h *Handler) WithSignerClient(c signerv1.SignerServiceClient) *Handler {
+	h.signer = c
+	return h
+}
+
 // WithWebhookClient enables the `/api/v1/webhooks` family (CRUD + deliveries
 // + test + rotate-secret). Nil disables the routes (404 "route disabled") so
 // management can deploy without registry-webhook in environments that don't
 // need outbound webhooks.
 func (h *Handler) WithWebhookClient(c webhookv1.WebhookServiceClient) *Handler {
 	h.webhook = c
+	return h
+}
+
+// WithScannerClient enables the FE-API-018 + FE-API-019 routes:
+//
+//	GET /api/v1/security/policies
+//	PUT /api/v1/security/policies
+//	POST /api/v1/security/reports/generate
+//	GET /api/v1/security/reports
+//	GET /api/v1/security/reports/{id}
+//	GET /api/v1/security/reports/{id}/download/{pdf|sbom}
+//
+// Nil leaves all of the above returning 404 "route disabled" so the
+// dashboard can render the "scanner unavailable" state without a hard
+// error.
+func (h *Handler) WithScannerClient(c scannerv1.ScannerServiceClient) *Handler {
+	h.scanner = c
 	return h
 }
 
@@ -168,8 +233,25 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleListTags)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}", authMW(http.HandlerFunc(h.handleDeleteTag)))
 
+	// Bulk tag delete (FE-API-036). DELETE with body of tag names; per-tag
+	// result returned so partial successes are visible to the UI.
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags", authMW(http.HandlerFunc(h.handleBulkDeleteTags)))
+
+	// Per-repo storage breakdown (FE-API-031). Top-50 repos by storage_used
+	// plus the tenant total, in one call.
+	mux.Handle("GET /api/v1/stats/storage", authMW(http.HandlerFunc(h.handleGetStorageBreakdown)))
+
 	// Manifest detail for a specific tag (FE-API-002).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
+
+	// Signing verification for a specific tag (FE-API-003). 404 when
+	// SIGNER_GRPC_ADDR is unset on the BFF. FE-API-025 layers a
+	// ?verify=true query param on top for opt-in cryptographic verification.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature", authMW(http.HandlerFunc(h.handleGetSignature)))
+
+	// Sign the current manifest of a tag (FE-API-026). 404 when
+	// SIGNER_GRPC_ADDR is unset; 403 unless the caller is repo admin.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/sign", authMW(http.HandlerFunc(h.handleSignManifest)))
 
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
@@ -182,11 +264,20 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// one repo (push, delete, scan, sign). Handler lives in repo_activity.go.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/activity", authMW(http.HandlerFunc(h.handleListRepoActivity)))
 
+	// FE-API-008 tenant-wide notifications feed for the topbar bell. Handler
+	// lives in notifications.go. Polled by the dashboard; no SSE/WebSocket.
+	mux.Handle("GET /api/v1/notifications", authMW(http.HandlerFunc(h.handleListNotifications)))
+
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
+
+	// Scan policies (FE-API-018) + compliance reports (FE-API-019). Routes
+	// return 404 when SCANNER_GRPC_ADDR is unset.
+	h.RegisterSecurityPolicies(mux, authMW)
+	h.RegisterSecurityReports(mux, authMW)
 
 	// Webhook management — CRUD + deliveries + test + rotate-secret.
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
@@ -1020,16 +1111,25 @@ type manifestConfig struct {
 }
 
 // ManifestResponse is the JSON body for GET …/tags/{tag}/manifest.
+//
+// For single-arch image manifests `Config` + `Layers` carry the detail.
+// For OCI image indexes / Docker manifest lists `Manifests` is populated
+// and `Config` + `Layers` are empty. `IsIndex` is the one explicit signal
+// the client can branch on without sniffing media types.
 type ManifestResponse struct {
-	Digest    string         `json:"digest"`
-	MediaType string         `json:"media_type"`
-	SizeBytes int64          `json:"size_bytes"`
-	CreatedAt time.Time      `json:"created_at"`
-	Config    manifestConfig `json:"config"`
+	Digest    string          `json:"digest"`
+	MediaType string          `json:"media_type"`
+	SizeBytes int64           `json:"size_bytes"`
+	CreatedAt time.Time       `json:"created_at"`
+	IsIndex   bool            `json:"is_index"`
+	Config    manifestConfig  `json:"config"`
 	Layers    []manifestLayer `json:"layers"`
+	Manifests []manifestEntry `json:"manifests"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
+// Covers both single-arch image manifests (config + layers) and image
+// indexes / Docker manifest lists (manifests[] with per-platform entries).
 type rawManifest struct {
 	Config struct {
 		Digest    string `json:"digest"`
@@ -1041,6 +1141,33 @@ type rawManifest struct {
 		Size      int64  `json:"size"`
 		MediaType string `json:"mediaType"`
 	} `json:"layers"`
+	// Manifests is populated for OCI image indexes
+	// (application/vnd.oci.image.index.v1+json) and Docker manifest lists
+	// (application/vnd.docker.distribution.manifest.list.v2+json). Each
+	// entry points at a per-platform child manifest.
+	Manifests []struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+		Platform  struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+			Variant      string `json:"variant"`
+			OSVersion    string `json:"os.version"`
+		} `json:"platform"`
+	} `json:"manifests"`
+}
+
+// manifestEntry surfaces a single child manifest of an OCI index — what the
+// dashboard renders as a per-platform row.
+type manifestEntry struct {
+	Digest       string `json:"digest"`
+	Size         int64  `json:"size"`
+	MediaType    string `json:"media_type"`
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Variant      string `json:"variant,omitempty"`
+	OSVersion    string `json:"os_version,omitempty"`
 }
 
 func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
@@ -1093,6 +1220,7 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		SizeBytes: m.GetSizeBytes(),
 		CreatedAt: m.GetCreatedAt().AsTime(),
 		Layers:    []manifestLayer{},
+		Manifests: []manifestEntry{},
 	}
 
 	var raw rawManifest
@@ -1109,6 +1237,22 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 				MediaType: l.MediaType,
 			})
 		}
+		// Index manifests / Docker manifest lists — populate per-platform
+		// entries so the UI can render an arch/os table. `IsIndex` is true
+		// when the manifest reports any child entries; we don't gate on
+		// mediaType alone because Docker and OCI use different strings.
+		for _, entry := range raw.Manifests {
+			resp.Manifests = append(resp.Manifests, manifestEntry{
+				Digest:       entry.Digest,
+				Size:         entry.Size,
+				MediaType:    entry.MediaType,
+				Architecture: entry.Platform.Architecture,
+				OS:           entry.Platform.OS,
+				Variant:      entry.Platform.Variant,
+				OSVersion:    entry.Platform.OSVersion,
+			})
+		}
+		resp.IsIndex = len(resp.Manifests) > 0
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1118,12 +1262,31 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/workspace/me   (FE-API-009)
 // ---------------------------------------------------------------------------
 
+// WorkspaceDomainEntry mirrors tenantv1.DomainEntry in the REST shape. Carries
+// just enough state for the dashboard's domain settings page: the hostname,
+// whether the DNS TXT challenge succeeded, and which one is the canonical
+// registry hostname (FE-API-007).
+type WorkspaceDomainEntry struct {
+	Domain    string `json:"domain"`
+	Verified  bool   `json:"verified"`
+	IsPrimary bool   `json:"is_primary"`
+}
+
 // WorkspaceResponse is the JSON body for GET /api/v1/workspace/me.
+//
+// FE-API-009 expanded shape: Slug + Host + HostIsCustom + Domains. Host is the
+// resolved registry hostname for `docker login` / `docker push`; HostIsCustom
+// distinguishes a verified custom domain from the wildcard fallback so the
+// dashboard can label the source.
 type WorkspaceResponse struct {
-	TenantID  string    `json:"tenant_id"`
-	Name      string    `json:"name"`
-	Plan      string    `json:"plan"`
-	CreatedAt time.Time `json:"created_at"`
+	TenantID     string                 `json:"tenant_id"`
+	Name         string                 `json:"name"`
+	Slug         string                 `json:"slug"`
+	Plan         string                 `json:"plan"`
+	Host         string                 `json:"host"`
+	HostIsCustom bool                   `json:"host_is_custom"`
+	Domains      []WorkspaceDomainEntry `json:"domains"`
+	CreatedAt    time.Time              `json:"created_at"`
 }
 
 func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -1140,11 +1303,27 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to fetch workspace")
 		return
 	}
+
+	// Translate proto domains to the REST shape. Always emit a non-nil slice so
+	// the frontend doesn't have to guard against null.
+	domains := make([]WorkspaceDomainEntry, 0, len(t.GetDomains()))
+	for _, d := range t.GetDomains() {
+		domains = append(domains, WorkspaceDomainEntry{
+			Domain:    d.GetDomain(),
+			Verified:  d.GetVerified(),
+			IsPrimary: d.GetIsPrimary(),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, WorkspaceResponse{
-		TenantID:  t.GetTenantId(),
-		Name:      t.GetName(),
-		Plan:      t.GetPlan(),
-		CreatedAt: t.GetCreatedAt().AsTime(),
+		TenantID:     t.GetTenantId(),
+		Name:         t.GetName(),
+		Slug:         t.GetSlug(),
+		Plan:         t.GetPlan(),
+		Host:         t.GetHost(),
+		HostIsCustom: t.GetHostIsCustom(),
+		Domains:      domains,
+		CreatedAt:    t.GetCreatedAt().AsTime(),
 	})
 }
 

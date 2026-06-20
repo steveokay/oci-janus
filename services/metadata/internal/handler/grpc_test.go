@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
@@ -52,6 +54,10 @@ type fakeRepo struct {
 	// UpdateRepositoryQuota
 	updateQuotaResult *metadatav1.Repository
 	updateQuotaErr    error
+
+	// GetTenantStorageBreakdown (FE-API-031)
+	storageBreakdownResp *metadatav1.GetTenantStorageBreakdownResponse
+	storageBreakdownErr  error
 
 	// PutTag
 	putTagResult *metadatav1.Tag
@@ -111,12 +117,52 @@ type fakeRepo struct {
 	// Security overview (FE-API-020)
 	securityOverview    *repository.SecurityOverview
 	securityOverviewErr error
+	// FE-API-014: vulnerability list
+	listVulnsRows  []repository.VulnerabilityRow
+	listVulnsNext  string
+	listVulnsErr   error
+	listVulnsCalls []listVulnsCallArgs
+	// FE-API-015: scan history
+	listScansRows  []repository.ScanHistoryRow
+	listScansNext  string
+	listScansErr   error
+	listScansCalls []listScansCallArgs
+	// FE-API-017: remediation suggestions
+	listRemRows  []repository.RemediationRow
+	listRemNext  string
+	listRemErr   error
+	listRemCalls []listRemCallArgs
 	// UpdateRepository
 	updateRepoResult *metadatav1.Repository
 	updateRepoErr    error
 	// Repository count
 	repoCount    int64
 	repoCountErr error
+}
+
+// listVulnsCallArgs / listScansCallArgs capture what the handler forwards
+// so the tests can assert validation + cursor wiring.
+type listVulnsCallArgs struct {
+	tenantID  string
+	severity  string
+	pageToken string
+	limit     int
+}
+
+type listScansCallArgs struct {
+	tenantID  string
+	since     time.Time
+	pageToken string
+	limit     int
+}
+
+// listRemCallArgs records what ListTenantRemediations forwarded so the
+// handler tests can assert tenant_id / pagination wiring without a real
+// database.
+type listRemCallArgs struct {
+	tenantID  string
+	pageToken string
+	limit     int
 }
 
 // ── metadataRepo implementation on fakeRepo ───────────────────────────────────
@@ -201,6 +247,10 @@ func (f *fakeRepo) ListOrphanedBlobs(_ context.Context) ([]*metadatav1.BlobRef, 
 	return f.listOrphanedResult, f.listOrphanedErr
 }
 
+func (f *fakeRepo) GetTenantStorageBreakdown(_ context.Context, _ string) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	return f.storageBreakdownResp, f.storageBreakdownErr
+}
+
 func (f *fakeRepo) GetTenantQuotaUsage(_ context.Context, _ string) (*metadatav1.QuotaUsage, error) {
 	return f.quotaUsageResult, f.quotaUsageErr
 }
@@ -231,6 +281,27 @@ func (f *fakeRepo) GetTenantVulnerabilityCount(_ context.Context, _ string) (int
 
 func (f *fakeRepo) GetSecurityOverview(_ context.Context, _ string) (*repository.SecurityOverview, error) {
 	return f.securityOverview, f.securityOverviewErr
+}
+
+func (f *fakeRepo) ListTenantVulnerabilities(_ context.Context, tenantID, sev, token string, limit int) ([]repository.VulnerabilityRow, string, error) {
+	f.listVulnsCalls = append(f.listVulnsCalls, listVulnsCallArgs{
+		tenantID: tenantID, severity: sev, pageToken: token, limit: limit,
+	})
+	return f.listVulnsRows, f.listVulnsNext, f.listVulnsErr
+}
+
+func (f *fakeRepo) ListScanHistory(_ context.Context, tenantID string, since time.Time, token string, limit int) ([]repository.ScanHistoryRow, string, error) {
+	f.listScansCalls = append(f.listScansCalls, listScansCallArgs{
+		tenantID: tenantID, since: since, pageToken: token, limit: limit,
+	})
+	return f.listScansRows, f.listScansNext, f.listScansErr
+}
+
+func (f *fakeRepo) ListTenantRemediations(_ context.Context, tenantID, token string, limit int) ([]repository.RemediationRow, string, error) {
+	f.listRemCalls = append(f.listRemCalls, listRemCallArgs{
+		tenantID: tenantID, pageToken: token, limit: limit,
+	})
+	return f.listRemRows, f.listRemNext, f.listRemErr
 }
 
 func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
@@ -1479,4 +1550,209 @@ func TestListOrphanedBlobs_empty_sendsNothing(t *testing.T) {
 	if len(stream.sent) != 0 {
 		t.Errorf("expected 0 sent, got %d", len(stream.sent))
 	}
+}
+
+// ─── FE-API-014: ListTenantVulnerabilities ──────────────────────────────────
+
+// TestListTenantVulnerabilities_missingTenant_returnsInvalidArgument verifies
+// the guard rejects empty tenant_id before touching the repository.
+func TestListTenantVulnerabilities_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListTenantVulnerabilities(context.Background(), &metadatav1.ListTenantVulnerabilitiesRequest{})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListTenantVulnerabilities_invalidSeverity_returnsInvalidArgument
+// verifies an out-of-allowlist severity is rejected at the gRPC layer so the
+// repository never sees junk values.
+func TestListTenantVulnerabilities_invalidSeverity_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListTenantVulnerabilities(context.Background(), &metadatav1.ListTenantVulnerabilitiesRequest{
+		TenantId: "t1",
+		Severity: "SEVERE",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListTenantVulnerabilities_happyPath_mapsRowsToProto verifies one CVE
+// rolls up to one TenantVulnerability with its affected tags + timestamps.
+func TestListTenantVulnerabilities_happyPath_mapsRowsToProto(t *testing.T) {
+	first := time.Now().Add(-3 * time.Hour)
+	last := time.Now().Add(-1 * time.Hour)
+	fake := &fakeRepo{
+		listVulnsRows: []repository.VulnerabilityRow{
+			{
+				CVE: "CVE-2024-1", Severity: "CRITICAL",
+				PackageName: "openssl", PackageVersion: "1.0.0", FixedIn: "1.0.1",
+				FirstSeen: first, LastSeen: last,
+			},
+		},
+		listVulnsNext: "cursor-2",
+	}
+	h := newHandler(fake)
+	resp, err := h.ListTenantVulnerabilities(context.Background(), &metadatav1.ListTenantVulnerabilitiesRequest{
+		TenantId: "t1", Severity: "critical", PageSize: 25,
+	})
+	requireNoErr(t, err)
+	if len(resp.Vulnerabilities) != 1 || resp.Vulnerabilities[0].CveId != "CVE-2024-1" {
+		t.Fatalf("expected 1 vuln CVE-2024-1, got %+v", resp.Vulnerabilities)
+	}
+	if resp.NextPageToken != "cursor-2" {
+		t.Errorf("NextPageToken: got %q, want cursor-2", resp.NextPageToken)
+	}
+	// Severity is uppercased before being forwarded.
+	if got := fake.listVulnsCalls[0].severity; got != "CRITICAL" {
+		t.Errorf("severity forwarded: got %q, want CRITICAL", got)
+	}
+}
+
+// TestListTenantVulnerabilities_pageTokenErrorBubblesAsInvalidArgument
+// verifies a malformed cursor surfaces as InvalidArgument so the BFF can
+// return 400 rather than 500.
+func TestListTenantVulnerabilities_pageTokenErrorBubblesAsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listVulnsErr: errors.New("decode page_token: bad")})
+	_, err := h.ListTenantVulnerabilities(context.Background(), &metadatav1.ListTenantVulnerabilitiesRequest{
+		TenantId: "t1", PageToken: "***",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// ─── FE-API-015: ListScanHistory ────────────────────────────────────────────
+
+// TestListScanHistory_missingTenant_returnsInvalidArgument verifies the
+// guard rejects empty tenant_id before touching the repository.
+func TestListScanHistory_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListScanHistory(context.Background(), &metadatav1.ListScanHistoryRequest{})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListScanHistory_defaultsSince30DaysAgo verifies the default time window
+// is applied when the request omits `since`.
+func TestListScanHistory_defaultsSince30DaysAgo(t *testing.T) {
+	fake := &fakeRepo{}
+	h := newHandler(fake)
+	_, err := h.ListScanHistory(context.Background(), &metadatav1.ListScanHistoryRequest{TenantId: "t1"})
+	requireNoErr(t, err)
+	if len(fake.listScansCalls) != 1 {
+		t.Fatalf("expected one repo call, got %d", len(fake.listScansCalls))
+	}
+	cutoff := fake.listScansCalls[0].since
+	age := time.Since(cutoff)
+	if age < 29*24*time.Hour || age > 31*24*time.Hour {
+		t.Errorf("default since not within 30 days: %v", age)
+	}
+}
+
+// TestListScanHistory_completeStatusMappedToCompleted verifies the wire
+// status string is translated from "complete" to "completed" as documented.
+func TestListScanHistory_completeStatusMappedToCompleted(t *testing.T) {
+	completed := time.Now().Add(-1 * time.Hour)
+	fake := &fakeRepo{
+		listScansRows: []repository.ScanHistoryRow{
+			{
+				ScanID: "s1", Repo: "myorg/myrepo", Tag: "v1",
+				ManifestDigest: "sha256:abc", Scanner: "trivy",
+				CompletedAt: completed, Status: "complete",
+				Critical: 1, High: 2, Medium: 0, Low: 0, Negligible: 0,
+				Trigger: "push",
+			},
+		},
+		listScansNext: "next-1",
+	}
+	h := newHandler(fake)
+	resp, err := h.ListScanHistory(context.Background(), &metadatav1.ListScanHistoryRequest{
+		TenantId: "t1", Since: timestamppb.New(completed.Add(-7 * 24 * time.Hour)),
+	})
+	requireNoErr(t, err)
+	if len(resp.Scans) != 1 {
+		t.Fatalf("expected 1 scan, got %d", len(resp.Scans))
+	}
+	if resp.Scans[0].Status != "completed" {
+		t.Errorf("status: got %q, want completed", resp.Scans[0].Status)
+	}
+	if resp.Scans[0].Trigger != "push" {
+		t.Errorf("trigger: got %q, want push", resp.Scans[0].Trigger)
+	}
+	if resp.Scans[0].GetSeverityCounts().GetHigh() != 2 {
+		t.Errorf("high count not wired through: got %v", resp.Scans[0].GetSeverityCounts())
+	}
+	if resp.NextPageToken != "next-1" {
+		t.Errorf("NextPageToken: got %q, want next-1", resp.NextPageToken)
+	}
+}
+
+// TestListScanHistory_pageTokenErrorBubblesAsInvalidArgument verifies a
+// malformed cursor surfaces as InvalidArgument so the BFF can return 400.
+func TestListScanHistory_pageTokenErrorBubblesAsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listScansErr: errors.New("decode page_token: bad")})
+	_, err := h.ListScanHistory(context.Background(), &metadatav1.ListScanHistoryRequest{
+		TenantId: "t1", PageToken: "junk",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// ─── FE-API-017: ListTenantRemediations ─────────────────────────────────────
+
+// TestListTenantRemediations_missingTenant_returnsInvalidArgument verifies
+// the empty-tenant guard fires before touching the repository.
+func TestListTenantRemediations_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListTenantRemediations_happyPath_mapsRowsToProto verifies one row
+// rolls through with its affected list, CVEs, and cursor. Also asserts the
+// handler forwarded tenant_id + page_size to the repository.
+func TestListTenantRemediations_happyPath_mapsRowsToProto(t *testing.T) {
+	fake := &fakeRepo{
+		listRemRows: []repository.RemediationRow{
+			{
+				PackageName: "openssl", FromVersion: "1.0.0", ToVersion: "1.0.1",
+				CVEsFixed: []string{"CVE-2024-1", "CVE-2024-2"}, CVEsFixedCount: 2,
+				MaxSeverity: "CRITICAL",
+				Affected: []repository.RemediationAffectedRow{
+					{Repo: "acme/api", Tag: "v1", Digest: "sha256:abc"},
+				},
+				AffectedCount: 5,
+			},
+		},
+		listRemNext: "cursor-2",
+	}
+	h := newHandler(fake)
+	resp, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{
+		TenantId: "t1", PageSize: 25,
+	})
+	requireNoErr(t, err)
+	if len(resp.Remediations) != 1 {
+		t.Fatalf("expected 1 remediation, got %d", len(resp.Remediations))
+	}
+	r0 := resp.Remediations[0]
+	if r0.PackageName != "openssl" || r0.FromVersion != "1.0.0" || r0.ToVersion != "1.0.1" {
+		t.Errorf("unexpected upgrade: %s %s -> %s", r0.PackageName, r0.FromVersion, r0.ToVersion)
+	}
+	if r0.CvesFixedCount != 2 || len(r0.CvesFixed) != 2 {
+		t.Errorf("CVE fields: count=%d slice=%v", r0.CvesFixedCount, r0.CvesFixed)
+	}
+	if r0.AffectedCount != 5 || len(r0.Affected) != 1 {
+		t.Errorf("affected: count=%d slice=%d", r0.AffectedCount, len(r0.Affected))
+	}
+	if resp.NextPageToken != "cursor-2" {
+		t.Errorf("NextPageToken: got %q, want cursor-2", resp.NextPageToken)
+	}
+	if len(fake.listRemCalls) != 1 || fake.listRemCalls[0].tenantID != "t1" || fake.listRemCalls[0].limit != 25 {
+		t.Errorf("forwarded args: %+v", fake.listRemCalls)
+	}
+}
+
+// TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument ensures
+// the repository's "decode page_token" error is mapped to InvalidArgument so
+// the BFF can surface 400 instead of 500.
+func TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listRemErr: errors.New("decode page_token: bad")})
+	_, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{
+		TenantId: "t1", PageToken: "***",
+	})
+	requireCode(t, err, codes.InvalidArgument)
 }

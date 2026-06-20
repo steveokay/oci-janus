@@ -9,6 +9,7 @@ import {
   Building2,
   Activity,
   KeyRound,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -39,6 +40,7 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { to: "/members", label: "Members", icon: Users },
       { to: "/api-keys", label: "API keys", icon: KeyRound },
+      { to: "/workspace/domains", label: "Custom domains", icon: Globe },
     ],
   },
   {

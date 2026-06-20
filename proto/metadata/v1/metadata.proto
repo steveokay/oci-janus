@@ -54,6 +54,28 @@ service MetadataService {
   // open-vulnerability counts, scan coverage, and recency. Backs
   // GET /api/v1/security/overview on registry-management.
   rpc GetSecurityOverview(GetSecurityOverviewRequest) returns (SecurityOverview);
+
+  // ListTenantVulnerabilities (FE-API-014) — workspace-wide vulnerabilities,
+  // grouped by CVE across the latest complete scan per (tenant, repo, tag).
+  // Backs GET /api/v1/security/vulnerabilities on registry-management.
+  rpc ListTenantVulnerabilities(ListTenantVulnerabilitiesRequest) returns (ListTenantVulnerabilitiesResponse);
+
+  // ListScanHistory (FE-API-015) — flat scan-history feed ordered by
+  // completed_at DESC. Backs GET /api/v1/security/scans on
+  // registry-management.
+  rpc ListScanHistory(ListScanHistoryRequest) returns (ListScanHistoryResponse);
+
+  // ListTenantRemediations (FE-API-017) — actionable upgrade groupings:
+  // "upgrade package X from version A to version B fixes N CVEs across M
+  // (repo, tag) tuples." Computed from the latest complete scan per
+  // (tenant, repo, manifest_digest). Backs GET /api/v1/security/remediation
+  // on registry-management.
+  rpc ListTenantRemediations(ListTenantRemediationsRequest) returns (ListTenantRemediationsResponse);
+
+  // GetTenantStorageBreakdown (FE-API-031) — top-50 repos by storage,
+  // plus the tenant-wide total. Backs GET /api/v1/stats/storage on
+  // registry-management.
+  rpc GetTenantStorageBreakdown(GetTenantStorageBreakdownRequest) returns (GetTenantStorageBreakdownResponse);
 }
 
 message Repository {
@@ -229,4 +251,151 @@ message SecurityOverview {
   ScanCoverage    scan_coverage              = 3;
   int64           recent_scans_24h           = 4;
   int64           days_since_last_scan       = 5;
+}
+
+// ─── FE-API-014: workspace-wide vulnerabilities ─────────────────────────────
+
+// AffectedTag identifies a (repo, tag, manifest_digest) combination affected
+// by a particular CVE. Aggregated across the latest scan per tag.
+message AffectedTag {
+  string repo   = 1; // "org/name" composite, ready for the dashboard
+  string tag    = 2;
+  string digest = 3; // manifest digest
+}
+
+// TenantVulnerability is one CVE rolled up across every tag where it appears
+// in the latest scan. `affected` is the list of (repo, tag, digest) tuples
+// the CVE touches. `first_seen` / `last_seen` are the min/max scan
+// completion timestamps across those tuples.
+message TenantVulnerability {
+  string                    cve_id          = 1;
+  string                    severity        = 2; // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE
+  string                    title           = 3;
+  string                    description     = 4;
+  string                    fixed_in        = 5;
+  string                    package_name    = 6;
+  string                    package_version = 7;
+  repeated AffectedTag      affected        = 8;
+  google.protobuf.Timestamp first_seen      = 9;
+  google.protobuf.Timestamp last_seen       = 10;
+}
+
+message ListTenantVulnerabilitiesRequest {
+  string tenant_id  = 1;
+  // severity is an optional filter; "" means all severities.
+  // Valid values: CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE.
+  string severity   = 2;
+  // page_token is an opaque cursor returned by a previous call. Internally
+  // base64(severity_rank|cve_id).
+  string page_token = 3;
+  // page_size caps results per call (default 50, max 200 enforced server-side).
+  int32  page_size  = 4;
+}
+
+message ListTenantVulnerabilitiesResponse {
+  repeated TenantVulnerability vulnerabilities  = 1;
+  string                       next_page_token  = 2;
+}
+
+// ─── FE-API-015: scan history ───────────────────────────────────────────────
+
+// ScanHistoryEntry mirrors one scan_results row enriched with repo + tag
+// context. `tag` may be empty when the digest is no longer tagged in any
+// repository (e.g. tag was retagged after the scan ran).
+message ScanHistoryEntry {
+  string                    scan_id         = 1;
+  string                    repo            = 2; // "org/name" composite
+  string                    tag             = 3;
+  string                    manifest_digest = 4;
+  string                    scanner         = 5; // scanner name (e.g. "trivy")
+  google.protobuf.Timestamp started_at      = 6;
+  google.protobuf.Timestamp completed_at    = 7;
+  string                    status          = 8; // pending|running|complete|failed
+  SecurityCounts            severity_counts = 9;
+  string                    trigger         = 10; // push|manual|scheduled
+}
+
+message ListScanHistoryRequest {
+  string                    tenant_id  = 1;
+  // since filters scans whose completed_at >= since. Optional;
+  // default applied server-side (30 days ago).
+  google.protobuf.Timestamp since      = 2;
+  // page_token is an opaque keyset cursor over (completed_at, scan_id) DESC.
+  string                    page_token = 3;
+  // page_size caps results per call (default 50, max 200).
+  int32                     page_size  = 4;
+}
+
+message ListScanHistoryResponse {
+  repeated ScanHistoryEntry scans            = 1;
+  string                    next_page_token  = 2;
+}
+
+// ─── FE-API-017: remediation suggestions ────────────────────────────────────
+
+// RemediationAffected identifies one (repo, tag, digest) tuple where a
+// remediation grouping applies. `tag` is empty when the manifest_digest is
+// no longer tagged at the time of the latest scan.
+message RemediationAffected {
+  string repo   = 1; // "org/name" composite
+  string tag    = 2;
+  string digest = 3; // manifest digest
+}
+
+// Remediation describes one actionable upgrade grouping: bumping
+// `package_name` from `from_version` to `to_version` would fix every CVE
+// listed in `cves_fixed`. `affected` is a deduplicated list of (repo, tag,
+// digest) tuples where this upgrade applies, capped at 10 entries server-
+// side (full count in `affected_count`). `max_severity` is the worst
+// severity across the grouped findings.
+message Remediation {
+  string                       package_name      = 1;
+  string                       from_version      = 2;
+  string                       to_version        = 3;
+  repeated string              cves_fixed        = 4;
+  int32                        cves_fixed_count  = 5;
+  string                       max_severity      = 6; // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE
+  repeated RemediationAffected affected          = 7;
+  int32                        affected_count    = 8;
+}
+
+message ListTenantRemediationsRequest {
+  string tenant_id  = 1;
+  // page_token is an opaque cursor returned by a previous call. Internally
+  // base64(max_severity_rank|-cves_fixed_count|package_name|from_version|to_version).
+  string page_token = 2;
+  // page_size caps results per call (default 50, max 200 enforced server-side).
+  int32  page_size  = 3;
+}
+
+message ListTenantRemediationsResponse {
+  repeated Remediation remediations    = 1;
+  string               next_page_token = 2;
+}
+
+// ─── FE-API-031: per-repo storage breakdown ─────────────────────────────────
+
+// RepositoryStorageEntry is one row in GetTenantStorageBreakdownResponse.
+// `percent_of_tenant` is 100 * storage_used_bytes / tenant_storage_used_bytes
+// (0.0 when tenant total is 0). Always materialised server-side so
+// clients render identical numbers across all surfaces.
+message RepositoryStorageEntry {
+  string repo_id            = 1;
+  string org                = 2;
+  string name               = 3;
+  int64  storage_used_bytes = 4;
+  double percent_of_tenant  = 5;
+}
+
+message GetTenantStorageBreakdownRequest {
+  string tenant_id = 1;
+}
+
+// GetTenantStorageBreakdownResponse returns the tenant's total storage and
+// the top-50 repos by storage usage. Capped server-side; no pagination —
+// the top-N is itself the answer to the "where is my storage going" UI
+// question. Add pagination later if a use case emerges.
+message GetTenantStorageBreakdownResponse {
+  int64                           tenant_storage_used_bytes = 1;
+  repeated RepositoryStorageEntry repositories              = 2;
 }
