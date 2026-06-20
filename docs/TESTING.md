@@ -32,13 +32,18 @@
 - Secret scanning: `gitleaks` workflow on every push and PR.
 - Integration: OWASP ZAP baseline scan against staging environment (weekly).
 
-## Per-service test coverage (as of Sprint 5)
+## Per-service test coverage (as of 2026-06-21)
 
 | Service | Coverage | Notes |
 |---|---|---|
 | libs | 80%+ | Foundation packages all covered |
-| auth | 80%+ | grpc + http handlers + service layer |
+| auth | 80%+ | grpc + http handlers + service layer; +12 OAuth + 9 SAML tests landed with FE-API-034 (`df39d13` + `4e3d939`) |
 | core | 80%+ | http handlers + service registry/auth client |
-| audit | 80%+ | 11 gRPC handler tests via bufconn |
-| management | 80%+ | 31 handler tests covering all REST routes |
-| metadata, storage, scanner, proxy, webhook, gc, tenant, signer, gateway | Not assessed | Sprint 6 backlog |
+| audit | 80%+ | gRPC handler tests via bufconn; analytics + notifications + repo_activity covered after FE-API-004/008/030 |
+| management | 80%+ | 73+ handler tests covering every BFF REST route landed in this wave (webhooks, security center, admin tenants, GC, signing, SBOM, SSO admin) |
+| webhook | 80%+ | Dispatcher + grpc handler tests including PENTEST-027 sanitize-URL and PENTEST-031 generic error |
+| metadata | partial | Repository + grpc handler tests landed alongside every FE-API-014..020 + FE-API-031/033 RPC |
+| scanner | partial | Repository + report worker tests landed with FE-API-018/019 (`f40365f`) |
+| gc | partial | 7 repo + 17 gc handler tests landed with FE-API-032 (`92e6028`) |
+| tenant | partial | Worker tests (REM-004) + domain/Update RPC tests with FE-API-027/029 |
+| storage, proxy, signer, gateway | Not assessed | Sprint 6 backlog |
