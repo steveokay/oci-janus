@@ -1,5 +1,7 @@
 import * as React from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { Badge } from "@/components/ui/badge";
+import { useWorkspace } from "@/lib/api/workspace";
 import {
   LayoutDashboard,
   Boxes,
@@ -64,6 +66,15 @@ export function Sidebar(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const showAdmin = isPlatformAdmin(claims);
   const { location } = useRouterState();
+  const { data: workspace } = useWorkspace();
+
+  // FE-API-009 — sidebar header reflects the live workspace name once the
+  // BFF responds. Falls back to "Janus / Registry control" on first paint
+  // and when the tenant gRPC client isn't wired (BFF returns 404). The
+  // tenant id chip in the user menu remains the source of truth for the
+  // exact tenant uuid.
+  const workspaceName = workspace?.name ?? "Janus";
+  const workspaceSubLabel = workspace?.name ? "Workspace" : "Registry control";
 
   return (
     <aside
@@ -79,13 +90,31 @@ export function Sidebar(): React.ReactElement {
           aria-hidden
         >
           <span className="font-display text-lg font-semibold leading-none">
-            J
+            {workspaceName[0]?.toUpperCase() ?? "J"}
           </span>
         </span>
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold tracking-tight">Janus</span>
+        <div className="flex min-w-0 flex-col leading-tight">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-semibold tracking-tight">
+              {workspaceName}
+            </span>
+            {workspace?.plan ? (
+              <Badge
+                tone={
+                  workspace.plan === "enterprise"
+                    ? "accent"
+                    : workspace.plan === "pro"
+                      ? "success"
+                      : "neutral"
+                }
+                className="!py-0 text-[9px] uppercase tracking-wider"
+              >
+                {workspace.plan}
+              </Badge>
+            ) : null}
+          </div>
           <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-            Registry control
+            {workspaceSubLabel}
           </span>
         </div>
       </Link>
