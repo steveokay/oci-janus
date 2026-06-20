@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,6 +151,50 @@ func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) 
 }
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
 	return int64(len(f.users)), nil
+}
+
+// SSO fake methods — FE-API-034. Note that the in-memory store is keyed by
+// username, so lookups by email/ID iterate the map.
+func (f *fakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == req.TenantID && (u.Username == req.Username || (req.Email != "" && strings.EqualFold(u.Email, req.Email))) {
+			return nil, repository.ErrAlreadyExists
+		}
+	}
+	u := &repository.User{
+		ID:        uuid.New(),
+		TenantID:  req.TenantID,
+		Username:  req.Username,
+		Email:     req.Email,
+		IsActive:  true,
+		CreatedAt: time.Now(),
+	}
+	if req.DisplayName != "" {
+		v := req.DisplayName
+		u.DisplayName = &v
+	}
+	f.users[u.Username] = u
+	return u, nil
+}
+
+func (f *fakeUserRepo) TouchLastLogin(_ context.Context, id uuid.UUID) error {
+	for _, u := range f.users {
+		if u.ID == id {
+			now := time.Now()
+			u.LastLoginAt = &now
+			return nil
+		}
+	}
+	return nil
 }
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.

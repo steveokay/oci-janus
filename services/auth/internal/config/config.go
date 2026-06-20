@@ -33,6 +33,19 @@ type Config struct {
 	// RabbitMQURL is the AMQP connection URL for publishing RBAC audit events.
 	// Required so that GrantRole / RevokeRole changes are traceable via registry-audit.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
+
+	// FE-API-034 — SSO config.
+	//
+	// SSOCredentialKeyHex is the 64-character (32-byte) hex AES-256 key used
+	// to encrypt OAuth client_secret values at rest. When empty, SSO routes
+	// are not registered and the dashboard's SSO buttons fall back to "coming
+	// soon". Required in production.
+	SSOCredentialKeyHex string `mapstructure:"SSO_CREDENTIAL_KEY_HEX"`
+
+	// SSOBaseURL is the public origin used to compose OAuth redirect_uri
+	// values (e.g. "https://registry.example.com"). Must match what the IdP
+	// has registered for the application.
+	SSOBaseURL string `mapstructure:"SSO_BASE_URL"`
 }
 
 // Load binds environment variables into Config and validates required fields.
