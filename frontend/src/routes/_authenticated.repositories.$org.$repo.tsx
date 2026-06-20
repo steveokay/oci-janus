@@ -7,6 +7,7 @@ import { TagsPanel } from "@/components/repositories/tags-panel";
 import { DeleteRepositoryDialog } from "@/components/repositories/delete-repository-dialog";
 import { RepoMembersPanel } from "@/components/repositories/repo-members-panel";
 import { DescriptionCard } from "@/components/repositories/description-card";
+import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
   TabsContent,
@@ -47,6 +48,8 @@ function RepositoryDetail(): React.ReactElement {
       <PullCommandCard org={org} repo={repo} />
 
       <DescriptionCard description={data?.description} />
+
+      <AnalyticsCard scope="repo" org={org} repo={repo} />
 
       <Tabs defaultValue="tags">
         <TabsList>

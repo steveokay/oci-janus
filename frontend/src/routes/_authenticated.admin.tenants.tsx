@@ -15,8 +15,8 @@ import { TenantsTable } from "@/components/admin/tenants-table";
 import { CreateTenantDialog } from "@/components/admin/create-tenant-dialog";
 import { SetQuotaDialog } from "@/components/admin/set-quota-dialog";
 import { DeleteTenantDialog } from "@/components/admin/delete-tenant-dialog";
+import { TenantDetailDrawer } from "@/components/admin/tenant-detail-drawer";
 import { ComingSoon } from "@/components/common/coming-soon";
-import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import {
   useAdminTenants,
   type AdminTenant,
@@ -44,6 +44,7 @@ function AdminTenantsPage(): React.ReactElement {
   const [deleteTarget, setDeleteTarget] = React.useState<AdminTenant | null>(
     null,
   );
+  const [drawerTenantId, setDrawerTenantId] = React.useState<string | null>(null);
 
   const tenants = data ?? [];
 
@@ -82,11 +83,6 @@ function AdminTenantsPage(): React.ReactElement {
         </Button>
       </header>
 
-      <ComingSoonHint apiId="FE-API-029">
-        Rename + plan-change land as inline-edit affordances on each row. Today
-        the only mutators are quota and delete.
-      </ComingSoonHint>
-
       {/* At-a-glance metrics — plan breakdown across all tenants */}
       {!isError && !isLoading && tenants.length > 0 ? (
         <PlanBreakdown tenants={tenants} />
@@ -114,6 +110,7 @@ function AdminTenantsPage(): React.ReactElement {
         <TenantsTable
           tenants={tenants}
           loading={isLoading}
+          onView={(t) => setDrawerTenantId(t.tenant_id)}
           onSetQuota={(t) => setQuotaTarget(t)}
           onDelete={(t) => setDeleteTarget(t)}
         />
@@ -128,16 +125,6 @@ function AdminTenantsPage(): React.ReactElement {
             "Last run: mode, duration, blobs freed, manifests deleted",
             "Next scheduled run time",
             "Run-now CTA gated behind type-to-confirm — full GC is expensive",
-          ]}
-        />
-        <ComingSoon
-          apiId="FE-API-028"
-          title="Tenant detail with usage"
-          description="Clicking a row should drill into a drawer showing the tenant's storage_used + repo / org / user count + last push timestamp. Today the admin list only carries name + plan + created_at."
-          highlights={[
-            "metadata aggregates storage + repo + org counts in one query",
-            "auth provides user_count; audit provides last_push_at",
-            "Drill-in drawer surfaces from the existing row hover",
           ]}
         />
       </div>
@@ -164,6 +151,12 @@ function AdminTenantsPage(): React.ReactElement {
           tenant={deleteTarget}
         />
       ) : null}
+      <TenantDetailDrawer
+        tenantId={drawerTenantId}
+        onOpenChange={(o) => {
+          if (!o) setDrawerTenantId(null);
+        }}
+      />
     </div>
   );
 }

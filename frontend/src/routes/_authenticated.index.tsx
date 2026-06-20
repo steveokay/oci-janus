@@ -5,9 +5,10 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { StorageCard } from "@/components/dashboard/storage-card";
 import { HealthCard } from "@/components/dashboard/health-card";
 import { QuickActions } from "@/components/dashboard/quick-actions";
+import { AnalyticsCard } from "@/components/dashboard/analytics-card";
+import { StorageBreakdownCard } from "@/components/dashboard/storage-breakdown-card";
 import { ErrorState } from "@/components/ui/error-state";
 import { SeverityBar } from "@/components/security/severity-bar";
-import { ComingSoon } from "@/components/common/coming-soon";
 import { useStats } from "@/lib/api/stats";
 import { formatCompactNumber } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth/store";
@@ -113,28 +114,8 @@ function DashboardHome(): React.ReactElement {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ComingSoon
-          apiId="FE-API-030"
-          title="Pulls / pushes sparkline"
-          description="A small time-series under each KPI tile so operators can spot a drop in pull traffic or a sudden push spike without leaving the dashboard."
-          highlights={[
-            "24h / 7d / 30d range toggle with bucket size auto-derived",
-            "Tenant-wide aggregate plus repo-scoped drilldowns",
-            "Source: audit events on push.image / pull.image",
-          ]}
-        />
-        <ComingSoon
-          apiId="FE-API-031"
-          title="Storage breakdown by repository"
-          description={
-            "A 'where is my storage going' tile so admins can spot the repos eating their quota without iterating /repositories one by one."
-          }
-          highlights={[
-            "Top 50 repos sorted by storage_used_bytes DESC",
-            "Each row carries percent_of_tenant for instant ranking",
-            "Surfaces on /admin/tenants too once it lands",
-          ]}
-        />
+        <AnalyticsCard scope="tenant" />
+        <StorageBreakdownCard />
       </div>
 
       <section className="space-y-3">

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Tag as TagIcon } from "lucide-react";
+import { Tag as TagIcon, Trash2 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Table,
@@ -11,24 +11,58 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
-import { ComingSoonHint } from "@/components/common/coming-soon-hint";
+import { BulkDeleteTagsDialog } from "@/components/repositories/bulk-delete-tags-dialog";
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
+import { BULK_DELETE_MAX } from "@/lib/api/tags";
+import { cn } from "@/lib/utils";
 
 interface TagsPanelProps {
   org: string;
   repo: string;
 }
 
-// Beacon — TagsPanel. Lives inside the Tabs on the repository detail page.
-// Light wrapper around the tags table — keeps the state machine local so
-// switching tabs doesn't re-mount the rest of the page.
+// TagsPanel — lives inside the repo-detail tab strip.
+//
+// FE-API-036 adds checkbox selection + a "Delete selected" toolbar above
+// the table. Selection state is local to the panel — switching tabs
+// re-mounts and clears it, which matches the expected "destructive
+// actions don't survive context switches" gesture.
 export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
   const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useTags(org, repo);
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  const tags = React.useMemo(() => data ?? [], [data]);
+  const visibleTagNames = React.useMemo(() => tags.map((t) => t.name), [tags]);
+  // Cap selection at the server's hard limit so the toolbar can show a
+  // friendlier "max 100" hint instead of letting the BFF 400 the request.
+  const selectionCount = selected.size;
+  const overCap = selectionCount > BULK_DELETE_MAX;
+
+  function toggleOne(name: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+  function toggleAll(): void {
+    setSelected((prev) => {
+      // If every visible row is selected, clear; otherwise select every
+      // visible row. The set may carry tags no longer visible after a
+      // refresh — those get dropped on clear and re-added if visible.
+      const allSelected = visibleTagNames.every((n) => prev.has(n));
+      if (allSelected) return new Set();
+      return new Set(visibleTagNames);
+    });
+  }
 
   if (isError) {
     return (
@@ -40,7 +74,7 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
     );
   }
 
-  if (!isLoading && (data?.length ?? 0) === 0) {
+  if (!isLoading && tags.length === 0) {
     return (
       <EmptyState
         icon={<TagIcon className="size-5" />}
@@ -50,111 +84,243 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
     );
   }
 
+  const allVisibleSelected =
+    visibleTagNames.length > 0 &&
+    visibleTagNames.every((n) => selected.has(n));
+  const someVisibleSelected =
+    !allVisibleSelected && visibleTagNames.some((n) => selected.has(n));
+
   return (
     <div className="space-y-3">
-      <ComingSoonHint apiId="FE-API-036">
-        Row-select checkboxes + "Delete selected" toolbar land here. Today the
-        only delete affordance is per-tag on the detail page.
-      </ComingSoonHint>
+      <SelectionToolbar
+        count={selectionCount}
+        overCap={overCap}
+        onClear={() => setSelected(new Set())}
+        onDelete={() => setConfirmOpen(true)}
+      />
+
       <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
         <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[30%]">Tag</TableHead>
-            <TableHead>Digest</TableHead>
-            <TableHead>Size</TableHead>
-            <TableHead className="hidden md:table-cell">Updated</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {isLoading ? (
-            <SkeletonRows />
-          ) : (
-            data?.map((t) => {
-              // Programmatic navigation on the row's onClick + a parallel
-              // mousedown trigger (some browsers stall the onClick on
-              // <tr> with display:table-row; mousedown always fires). Each
-              // cell's content gets pointer-events:none so clicks fall
-              // through to the row; the CopyButton column re-enables
-              // pointer-events with stopPropagation so it acts on its own.
-              const target = {
-                to: "/repositories/$org/$repo/tags/$tag" as const,
-                params: { org, repo, tag: t.name },
-              };
-              const open = () => void navigate(target);
-              // Concrete URL for the row — used as a real <a href> so even
-              // if React's synthetic event system doesn't fire on <tr>,
-              // browser native navigation still resolves the click.
-              const hrefTo = `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(t.name)}`;
-              return (
-                <TableRow
-                  key={`${t.name}-${t.manifest_digest}`}
-                  interactive
-                  role="link"
-                  tabIndex={0}
-                  onClick={open}
-                  onMouseDown={(e) => {
-                    if (e.button === 0) open();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      open();
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[40px] !pr-0">
+                <SelectionCheckbox
+                  checked={allVisibleSelected}
+                  indeterminate={someVisibleSelected}
+                  onChange={toggleAll}
+                  ariaLabel={
+                    allVisibleSelected
+                      ? "Deselect all visible tags"
+                      : "Select all visible tags"
+                  }
+                />
+              </TableHead>
+              <TableHead className="w-[28%]">Tag</TableHead>
+              <TableHead>Digest</TableHead>
+              <TableHead>Size</TableHead>
+              <TableHead className="hidden md:table-cell">Updated</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <SkeletonRows />
+            ) : (
+              tags.map((t) => {
+                const target = {
+                  to: "/repositories/$org/$repo/tags/$tag" as const,
+                  params: { org, repo, tag: t.name },
+                };
+                const open = () => void navigate(target);
+                const hrefTo = `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(t.name)}`;
+                const isSelected = selected.has(t.name);
+                return (
+                  <TableRow
+                    key={`${t.name}-${t.manifest_digest}`}
+                    interactive
+                    role="link"
+                    tabIndex={0}
+                    data-state={isSelected ? "selected" : undefined}
+                    className={
+                      isSelected ? "bg-[var(--color-accent-subtle)]/40" : ""
                     }
-                  }}
-                >
-                  <TableCell className="p-0">
-                    {/* Native anchor — fills the cell + carries href so
-                        browser navigation resolves even if React's synthetic
-                        click misses. TanStack Router's history listener
-                        upgrades the navigation to SPA in-app. */}
-                    <a
-                      href={hrefTo}
-                      onClick={(e) => {
+                    onClick={open}
+                    onMouseDown={(e) => {
+                      if (e.button === 0) open();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         open();
-                      }}
-                      className="block px-4 py-3 text-inherit no-underline"
-                    >
-                      <Badge tone="accent">
-                        <TagIcon className="size-3" /> {t.name}
-                      </Badge>
-                    </a>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <code
-                        className="pointer-events-none truncate font-mono text-xs text-[var(--color-fg-muted)]"
-                        title={t.manifest_digest}
-                      >
-                        {t.manifest_digest.slice(0, 19)}…
-                      </code>
+                      }
+                    }}
+                  >
+                    <TableCell className="w-[40px] !pr-0">
+                      {/* stopPropagation on both click + mousedown so the
+                          row-level navigate handler doesn't trigger. */}
                       <span
                         onClick={(e) => e.stopPropagation()}
                         onMouseDown={(e) => e.stopPropagation()}
                       >
-                        <CopyButton value={t.manifest_digest} iconOnly />
+                        <SelectionCheckbox
+                          checked={isSelected}
+                          onChange={() => toggleOne(t.name)}
+                          ariaLabel={`Select tag ${t.name}`}
+                        />
                       </span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="pointer-events-none font-mono text-xs">
-                    {t.size_bytes > 0 ? (
-                      formatBytes(t.size_bytes)
-                    ) : (
-                      <span className="text-[var(--color-fg-subtle)]">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="pointer-events-none hidden text-xs text-[var(--color-fg-muted)] md:table-cell">
-                    {formatRelativeDate(t.updated_at)}
-                  </TableCell>
-                </TableRow>
-              );
-            })
-          )}
-        </TableBody>
-      </Table>
+                    </TableCell>
+                    <TableCell className="p-0">
+                      <a
+                        href={hrefTo}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          open();
+                        }}
+                        className="block px-4 py-3 text-inherit no-underline"
+                      >
+                        <Badge tone="accent">
+                          <TagIcon className="size-3" /> {t.name}
+                        </Badge>
+                      </a>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <code
+                          className="pointer-events-none truncate font-mono text-xs text-[var(--color-fg-muted)]"
+                          title={t.manifest_digest}
+                        >
+                          {t.manifest_digest.slice(0, 19)}…
+                        </code>
+                        <span
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <CopyButton value={t.manifest_digest} iconOnly />
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="pointer-events-none font-mono text-xs">
+                      {t.size_bytes > 0 ? (
+                        formatBytes(t.size_bytes)
+                      ) : (
+                        <span className="text-[var(--color-fg-subtle)]">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="pointer-events-none hidden text-xs text-[var(--color-fg-muted)] md:table-cell">
+                      {formatRelativeDate(t.updated_at)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
       </div>
+
+      <BulkDeleteTagsDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        org={org}
+        repo={repo}
+        tagNames={Array.from(selected).slice(0, BULK_DELETE_MAX)}
+        onCompleted={() => setSelected(new Set())}
+      />
     </div>
+  );
+}
+
+interface SelectionToolbarProps {
+  count: number;
+  overCap: boolean;
+  onClear: () => void;
+  onDelete: () => void;
+}
+
+function SelectionToolbar({
+  count,
+  overCap,
+  onClear,
+  onDelete,
+}: SelectionToolbarProps): React.ReactElement {
+  // Always render the toolbar in the same slot — but make it visually
+  // recede when no selection is active so it doesn't shift the table down
+  // on first interaction.
+  const active = count > 0;
+  return (
+    <div
+      role="toolbar"
+      aria-label="Tag selection actions"
+      className={cn(
+        "flex h-9 items-center justify-between rounded-md border px-3 transition-colors",
+        active
+          ? "border-[var(--color-accent-border)] bg-[var(--color-accent-subtle)]/60"
+          : "border-[var(--color-border)] bg-[var(--color-surface-sunken)]",
+      )}
+    >
+      <div className="text-xs">
+        {active ? (
+          <span className="font-medium text-[var(--color-fg)]">
+            {count.toLocaleString()} selected
+            {overCap ? (
+              <span className="ml-2 text-[var(--color-danger)]">
+                · capped at {BULK_DELETE_MAX} per request
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="text-[var(--color-fg-subtle)]">
+            Tick rows to bulk-delete tags (cap {BULK_DELETE_MAX} per request)
+          </span>
+        )}
+      </div>
+      {active ? (
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={onClear}>
+            Clear
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+            className="text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+          >
+            <Trash2 className="size-3.5" />
+            Delete selected
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface SelectionCheckboxProps {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}
+
+// Native input[type=checkbox] styled to match Beacon. No Radix dependency
+// because we only need a single visual variant — the styled accent ring
+// is enough.
+function SelectionCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+  ariaLabel,
+}: SelectionCheckboxProps): React.ReactElement {
+  const ref = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => {
+    if (ref.current) ref.current.indeterminate = Boolean(indeterminate);
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      aria-label={ariaLabel}
+      className="size-4 cursor-pointer rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
+    />
   );
 }
 
@@ -163,6 +329,9 @@ function SkeletonRows(): React.ReactElement {
     <>
       {Array.from({ length: 4 }).map((_, i) => (
         <TableRow key={i}>
+          <TableCell className="w-[40px]">
+            <Skeleton className="size-4 rounded" />
+          </TableCell>
           <TableCell>
             <Skeleton className="h-5 w-20 rounded-full" />
           </TableCell>
