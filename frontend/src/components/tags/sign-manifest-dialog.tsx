@@ -119,9 +119,16 @@ export function SignManifestDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
-          <div className="space-y-1.5">
-            <Label htmlFor="signer-id">Signer ID</Label>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" noValidate>
+          {/* Field stack: label → input is a tight visual group (mb-2),
+              then a bigger breath (mt-3) before the hint so the hint
+              reads as a separate "footnote" rather than crowding the
+              input. Matches the rhythm used by ChangePasswordDialog +
+              CreateApiKeyDialog so dialogs feel consistent. */}
+          <div>
+            <Label htmlFor="signer-id" className="mb-2 inline-block">
+              Signer ID
+            </Label>
             <Input
               id="signer-id"
               autoFocus
@@ -132,14 +139,14 @@ export function SignManifestDialog({
               {...register("signer_id")}
             />
             {errors.signer_id ? (
-              <p className="text-xs text-[var(--color-danger)]">
+              <p className="mt-2 text-xs text-[var(--color-danger)]">
                 {errors.signer_id.message}
               </p>
             ) : (
-              <p className="text-xs text-[var(--color-fg-subtle)]">
-                Defaults to <code className="font-mono">registry-signer</code> —
-                the dev key seeded in Vault. Override with a fully-qualified KMS
-                ARN once configured.
+              <p className="mt-3 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
+                Defaults to <code className="font-mono text-[var(--color-fg-muted)]">registry-signer</code>{" "}
+                — the dev key seeded in Vault. Override with a fully-qualified
+                KMS ARN once configured.
               </p>
             )}
           </div>
