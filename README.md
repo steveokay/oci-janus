@@ -579,17 +579,25 @@ npm run build
 npm run typecheck
 ```
 
-### Implemented screens
+### Implemented surface (Beacon rebuild)
 
-| Screen | Route | Status |
+The current UI is the Beacon rebuild (PR #14 merged 2026-06-19), tracked in [`FE-STATUS.md`](FE-STATUS.md). The pre-Beacon UI is archived to `frontend-archive-v1`.
+
+| Surface | Route | Status |
 |---|---|---|
-| Login | `/login` | ✅ Done |
-| Repository Dashboard | `/dashboard` | ✅ Done |
-| Image Details & Tags | `/dashboard/:repoName` | ✅ Done |
-| Security Scan Results | `/dashboard/:repoName/scan` | ✅ Done |
-| Build History | `/dashboard/:repoName/builds` | ✅ Done |
+| Login (+ SSO buttons) | `/login` | ✅ Done |
+| Dashboard | `/` | ✅ Done |
+| Repositories list / detail | `/repositories`, `/repositories/:org/:repo` | ✅ Done |
+| Tag detail (Security / Push history / Layers / Signing) | `/repositories/:org/:repo/tags/:tag` | ✅ Done |
+| Security center (Overview / Vulnerabilities / Scans / Remediation / Policies) | `/security` | ✅ Overview + Vulns + Scans wired; Remediation / Policies pending |
+| Activity / Notifications | `/activity` | ✅ Done |
+| Members + RBAC | `/members`, `/orgs/:org/members` | ✅ Done |
+| Webhooks (list + detail + CRUD + delivery log + test + rotate) | `/webhooks`, `/webhooks/:id` | ✅ Done |
+| Workspace identity + custom domains | `/workspace/domains` | ✅ Done |
+| Profile + API keys | `/profile` | ✅ Done |
+| Platform admin (tenants + GC) | `/admin/tenants` | ✅ Done; admin GC view pending |
 
-All five Stitch-verified screens are pixel-perfect and wired to the `services/management` REST API via TanStack Query. The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zustand memory only (never `localStorage` — FE-SEC-001/002) and is silently refreshed 60 seconds before expiry via `POST /api/v1/token/refresh`. The Axios 401 interceptor clears auth state and redirects to `/login?reason=session_expired`.
+The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zustand memory only (never `localStorage` — FE-SEC-001/002) and is silently refreshed 60 seconds before expiry via `POST /api/v1/token/refresh`. The Axios 401 interceptor clears auth state and redirects to `/login?reason=session_expired`. Beacon ships with full dark-mode parity, Cmd+K command palette, sonner toasts, and TanStack Query for all data fetching.
 
 ---
 
