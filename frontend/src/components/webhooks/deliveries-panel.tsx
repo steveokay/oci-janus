@@ -21,6 +21,7 @@ import {
   type DeliveryStatus,
   type WebhookDelivery,
 } from "@/lib/api/webhooks";
+import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import { cn } from "@/lib/utils";
 
 interface DeliveriesPanelProps {
@@ -100,7 +101,7 @@ export function DeliveriesPanel({
           </span>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         <ol className="relative space-y-5">
           {/* Vertical rail behind the status dots */}
           <span
@@ -111,6 +112,11 @@ export function DeliveriesPanel({
             <DeliveryRow key={d.delivery_id} delivery={d} />
           ))}
         </ol>
+        <ComingSoonHint apiId="FE-API-035">
+          Expand-row will show the request payload + response body in monospace
+          blocks for debugging. Today the list deliberately omits payload to
+          keep the response small.
+        </ComingSoonHint>
       </CardContent>
     </Card>
   );

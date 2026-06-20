@@ -4,7 +4,10 @@ import {
   ShieldOff,
   ShieldQuestion,
   FileSignature,
+  CheckCircle2,
+  PenLine,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -12,10 +15,12 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
+import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import {
   useSignature,
   SIGNING_DISABLED,
@@ -83,10 +88,77 @@ export function SigningPanel({
   }
 
   if (!data.signed) {
-    return <UnsignedCard digest={data.manifest_digest} />;
+    return (
+      <div className="space-y-4">
+        <UnsignedCard digest={data.manifest_digest} />
+        <PendingCapabilities signed={false} />
+      </div>
+    );
   }
 
-  return <SignedCard digest={data.manifest_digest} signatures={data.signatures} />;
+  return (
+    <div className="space-y-4">
+      <SignedCard digest={data.manifest_digest} signatures={data.signatures} />
+      <PendingCapabilities signed />
+    </div>
+  );
+}
+
+// PendingCapabilities — small "what's next" card on the SigningPanel.
+// Surfaces FE-API-025 (verify-on-demand) + FE-API-026 (sign-from-UI) as
+// disabled buttons that explain the action they'll perform when the
+// backend lands. Toasts on click so the affordance acknowledges the user.
+function PendingCapabilities({ signed }: { signed: boolean }): React.ReactElement {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+          Pending capabilities
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled
+            onClick={() =>
+              toast.message("Cryptographic verify lands with FE-API-025.")
+            }
+          >
+            <CheckCircle2 className="size-4" />
+            {signed ? "Verify now" : "Verify when signed"}
+          </Button>
+          <ComingSoonHint apiId="FE-API-025">
+            Runs <code className="font-mono">signer.VerifyManifest</code> against
+            every recorded signature on demand. Cheap default route stays
+            list-only; <code className="font-mono">?verify=true</code> opts into
+            the expensive cryptographic check.
+          </ComingSoonHint>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled
+            onClick={() =>
+              toast.message("Sign-from-UI lands with FE-API-026.")
+            }
+          >
+            <PenLine className="size-4" />
+            Sign manifest
+          </Button>
+          <ComingSoonHint apiId="FE-API-026">
+            <code className="font-mono">POST .../sign</code> with a chosen{" "}
+            <code className="font-mono">signer_id</code> — key material stays in{" "}
+            <code className="font-mono">services/signer</code>'s vault backend;
+            UI never sees it. Auth gate: repo <code className="font-mono">admin</code>.
+          </ComingSoonHint>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function DisabledCard(): React.ReactElement {

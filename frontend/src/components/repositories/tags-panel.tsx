@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
+import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
 
@@ -49,8 +50,13 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
-      <Table>
+    <div className="space-y-3">
+      <ComingSoonHint apiId="FE-API-036">
+        Row-select checkboxes + "Delete selected" toolbar land here. Today the
+        only delete affordance is per-tag on the detail page.
+      </ComingSoonHint>
+      <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
+        <Table>
         <TableHeader>
           <TableRow>
             <TableHead className="w-[30%]">Tag</TableHead>
@@ -129,6 +135,7 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
           )}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Layers, Box } from "lucide-react";
+import { Layers, Box, Download } from "lucide-react";
+import { toast } from "sonner";
 import {
   Table,
   TableBody,
@@ -15,10 +16,12 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
+import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import { useManifest, type ManifestDetail } from "@/lib/api/manifest";
 import { formatBytes } from "@/lib/format";
 
@@ -66,10 +69,55 @@ export function LayersPanel({
     );
   }
 
-  if (data.is_index) {
-    return <IndexView manifest={data} />;
-  }
-  return <ImageView manifest={data} />;
+  return (
+    <div className="space-y-4">
+      {data.is_index ? <IndexView manifest={data} /> : <ImageView manifest={data} />}
+      <SbomPanel />
+    </div>
+  );
+}
+
+// SbomPanel — disabled "Download SBOM" affordance for FE-API-033.
+// Format chooser is rendered as text-only chips so the user can see what
+// will be available once the route lands.
+function SbomPanel(): React.ReactElement {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+          Software bill of materials
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled
+            onClick={() => toast.message("SBOM download lands with FE-API-033.")}
+          >
+            <Download className="size-4" />
+            Download SBOM
+          </Button>
+          <span className="text-xs text-[var(--color-fg-subtle)]">
+            Formats planned:
+          </span>
+          <Badge tone="neutral" className="font-mono">
+            spdx-json
+          </Badge>
+          <Badge tone="neutral" className="font-mono">
+            cyclonedx-json
+          </Badge>
+        </div>
+        <ComingSoonHint apiId="FE-API-033">
+          Surfaces the Trivy-generated SBOM persisted alongside the latest
+          scan_result for this digest. 404{" "}
+          <code className="font-mono">no-sbom</code> when the tag was never
+          scanned.
+        </ComingSoonHint>
+      </CardContent>
+    </Card>
+  );
 }
 
 function ImageView({ manifest }: { manifest: ManifestDetail }): React.ReactElement {

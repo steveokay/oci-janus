@@ -15,6 +15,8 @@ import { TenantsTable } from "@/components/admin/tenants-table";
 import { CreateTenantDialog } from "@/components/admin/create-tenant-dialog";
 import { SetQuotaDialog } from "@/components/admin/set-quota-dialog";
 import { DeleteTenantDialog } from "@/components/admin/delete-tenant-dialog";
+import { ComingSoon } from "@/components/common/coming-soon";
+import { ComingSoonHint } from "@/components/common/coming-soon-hint";
 import {
   useAdminTenants,
   type AdminTenant,
@@ -80,6 +82,11 @@ function AdminTenantsPage(): React.ReactElement {
         </Button>
       </header>
 
+      <ComingSoonHint apiId="FE-API-029">
+        Rename + plan-change land as inline-edit affordances on each row. Today
+        the only mutators are quota and delete.
+      </ComingSoonHint>
+
       {/* At-a-glance metrics — plan breakdown across all tenants */}
       {!isError && !isLoading && tenants.length > 0 ? (
         <PlanBreakdown tenants={tenants} />
@@ -111,6 +118,29 @@ function AdminTenantsPage(): React.ReactElement {
           onDelete={(t) => setDeleteTarget(t)}
         />
       )}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ComingSoon
+          apiId="FE-API-032"
+          title="Housekeeping — garbage collection"
+          description="services/gc runs as a cron today with no read API. A status RPC plus an optional on-demand trigger surface this card so platform admins can see what was freed last night."
+          highlights={[
+            "Last run: mode, duration, blobs freed, manifests deleted",
+            "Next scheduled run time",
+            "Run-now CTA gated behind type-to-confirm — full GC is expensive",
+          ]}
+        />
+        <ComingSoon
+          apiId="FE-API-028"
+          title="Tenant detail with usage"
+          description="Clicking a row should drill into a drawer showing the tenant's storage_used + repo / org / user count + last push timestamp. Today the admin list only carries name + plan + created_at."
+          highlights={[
+            "metadata aggregates storage + repo + org counts in one query",
+            "auth provides user_count; audit provides last_push_at",
+            "Drill-in drawer surfaces from the existing row hover",
+          ]}
+        />
+      </div>
 
       <CreateTenantDialog
         open={createOpen}
