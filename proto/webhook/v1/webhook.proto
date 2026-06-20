@@ -22,6 +22,13 @@ service WebhookService {
   // TestDispatch sends a synthetic `webhook.test` event to the configured URL
   // and returns the response code + duration synchronously (FE-API-023).
   rpc TestDispatch(TestDispatchRequest) returns (TestDispatchResponse);
+  // GetDelivery returns the full delivery row including the JSON payload
+  // (FE-API-035). The list-deliveries route deliberately omits the payload
+  // to keep responses bounded; this single-row variant is the debugging
+  // companion. signature_header + response_body are returned as empty
+  // strings when the underlying schema doesn't capture them yet — a
+  // follow-up migration can populate them without changing the wire shape.
+  rpc GetDelivery(GetDeliveryRequest) returns (DeliveryDetail);
 }
 
 message Endpoint {
@@ -99,4 +106,28 @@ message TestDispatchResponse {
   int32  status_code = 1;
   string error       = 2; // empty on success (2xx)
   int64  duration_ms = 3;
+}
+
+// GetDeliveryRequest looks up one delivery row by id. tenant_id is required
+// so the lookup is scoped — a delivery_id from another tenant returns
+// NotFound, not the actual row.
+message GetDeliveryRequest {
+  string endpoint_id  = 1;
+  string delivery_id  = 2;
+  string tenant_id    = 3;
+}
+
+// DeliveryDetail is the full delivery row plus the JSON payload, signature
+// header, and response body. Used by the dashboard "expand row" affordance
+// on the Deliveries panel (FE-API-035).
+//
+// `signature_header` and `response_body` are intentionally string fields
+// even when empty — the current schema doesn't yet capture them, so the
+// wire shape stays stable while a follow-up migration / dispatcher patch
+// fills them in.
+message DeliveryDetail {
+  Delivery delivery        = 1;
+  string   payload_json    = 2; // raw JSON payload as it was queued
+  string   signature_header= 3; // HMAC header value sent on the request
+  string   response_body   = 4; // captured response body, if stored
 }

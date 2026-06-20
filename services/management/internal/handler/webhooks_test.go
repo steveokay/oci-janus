@@ -57,6 +57,32 @@ func (s *errWebhookServer) ListDeliveries(_ *webhookv1.ListDeliveriesRequest, _ 
 	return s.err
 }
 
+func (s *errWebhookServer) GetDelivery(_ context.Context, _ *webhookv1.GetDeliveryRequest) (*webhookv1.DeliveryDetail, error) {
+	return nil, s.err
+}
+
+// canonWebhookServer answers with a predictable single delivery for
+// FE-API-035 happy-path tests.
+type canonWebhookServer struct {
+	webhookv1.UnimplementedWebhookServiceServer
+}
+
+func (s *canonWebhookServer) GetDelivery(_ context.Context, req *webhookv1.GetDeliveryRequest) (*webhookv1.DeliveryDetail, error) {
+	return &webhookv1.DeliveryDetail{
+		Delivery: &webhookv1.Delivery{
+			DeliveryId: req.GetDeliveryId(),
+			EndpointId: req.GetEndpointId(),
+			TenantId:   req.GetTenantId(),
+			EventType:  "push.completed",
+			Status:     "delivered",
+			Attempts:   1,
+		},
+		PayloadJson:     `{"event":"push.completed","repo":"acme/api"}`,
+		SignatureHeader: "",
+		ResponseBody:    "",
+	}, nil
+}
+
 // newWebhookTestEnv spins up the full management handler (auth + meta + audit +
 // webhook) wired with a provided webhook gRPC server. Mirrors newTestEnv but
 // includes the extra webhook bufconn so webhook routes are exerciseable.
@@ -169,4 +195,57 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/webhooks/{id}/deliveries/{delivery_id}   (FE-API-035)
+// ---------------------------------------------------------------------------
+
+func TestGetDelivery_admin_returns200(t *testing.T) {
+	env := newWebhookTestEnv(t, &canonWebhookServer{})
+	endpointID := "11111111-1111-1111-1111-111111111111"
+	deliveryID := "22222222-2222-2222-2222-222222222222"
+	resp := env.get(t, "/api/v1/webhooks/"+endpointID+"/deliveries/"+deliveryID, adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		DeliveryID  string `json:"delivery_id"`
+		PayloadJSON string `json:"payload_json"`
+	}
+	decodeJSON(t, resp, &body)
+	if body.DeliveryID != deliveryID {
+		t.Errorf("delivery_id: got %q, want %q", body.DeliveryID, deliveryID)
+	}
+	if body.PayloadJSON == "" {
+		t.Error("expected non-empty payload_json")
+	}
+}
+
+func TestGetDelivery_invalidEndpointID_returns400(t *testing.T) {
+	env := newWebhookTestEnv(t, &canonWebhookServer{})
+	resp := env.get(t, "/api/v1/webhooks/not-a-uuid/deliveries/22222222-2222-2222-2222-222222222222", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetDelivery_reader_returns403(t *testing.T) {
+	env := newWebhookTestEnv(t, &canonWebhookServer{})
+	resp := env.get(t,
+		"/api/v1/webhooks/11111111-1111-1111-1111-111111111111/deliveries/22222222-2222-2222-2222-222222222222",
+		readerToken)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestGetDelivery_notFound_returns404(t *testing.T) {
+	env := newWebhookTestEnv(t, &errWebhookServer{err: status.Error(codes.NotFound, "delivery not found")})
+	resp := env.get(t,
+		"/api/v1/webhooks/11111111-1111-1111-1111-111111111111/deliveries/22222222-2222-2222-2222-222222222222",
+		adminToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
 }
