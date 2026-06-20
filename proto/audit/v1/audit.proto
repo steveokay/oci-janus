@@ -36,6 +36,23 @@ service AuditService {
   // there is no per-user "read" state stored on the backend — clients persist
   // a last_seen_at timestamp locally and compute unread by filtering on it.
   rpc GetNotifications(GetNotificationsRequest) returns (GetNotificationsResponse);
+
+  // GetAnalytics returns a time-bucketed series of audit-event counts for a
+  // single action (e.g. "push.image", "pull.image"). The caller picks both
+  // the look-back window (range_secs) and the bucket size (bucket_secs) so
+  // the BFF can present pre-canned ranges (24h/7d/30d) without baking that
+  // mapping into the audit service. Buckets are aligned to the start of the
+  // look-back window (range_start = now - range_secs, truncated to bucket
+  // boundary) using PostgreSQL's date_bin (PG14+). Quiet windows are NOT
+  // pre-filled here — the caller (registry-management) pre-allocates the
+  // empty series and merges the rows we return so the wire payload stays
+  // compact.
+  //
+  // FE-API-030. Scope is either "tenant" (whole-tenant series) or "repo"
+  // (single repository identified by repo_id in the request) — keeping the
+  // gRPC API generic means a future per-org or per-tag analytics route can
+  // reuse the same RPC without a new proto round trip.
+  rpc GetAnalytics(GetAnalyticsRequest) returns (GetAnalyticsResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -199,4 +216,61 @@ message GetNotificationsResponse {
   // unread_count is len(notifications) — see method comment for the
   // server-side "unread" semantics.
   int32 unread_count = 3;
+}
+
+// GetAnalyticsRequest specifies a time-series query over audit_events.
+// FE-API-030. The (range_secs, bucket_secs) pair lets the BFF translate
+// caller-friendly ranges like "24h" into bucket boundaries the audit
+// service can group on with date_bin without baking the mapping into the
+// gRPC API.
+message GetAnalyticsRequest {
+  // tenant_id scopes the query to prevent cross-tenant data leakage.
+  string tenant_id = 1;
+  // scope_type is either "tenant" (count tenant-wide) or "repo" (count for
+  // a single repository identified by repo_id). Unknown values are rejected
+  // server-side with InvalidArgument.
+  string scope_type = 2;
+  // repo_id is required when scope_type == "repo" and matched against
+  // metadata.raw.repo_id in the audit event payload — same convention the
+  // GetBuildHistory RPC uses to avoid a LIKE scan across resources.
+  string repo_id = 3;
+  // action is the canonical audit action to count (e.g. "push.image",
+  // "pull.image"). Bound to a server-side allowlist so callers cannot
+  // smuggle arbitrary strings into the SQL filter.
+  string action = 4;
+  // range_secs is how far back from "now" the series should cover. The
+  // audit service clamps it to a 90-day max look-back to match partition
+  // retention.
+  int64 range_secs = 5;
+  // bucket_secs is the width of one bucket. Must divide range_secs evenly
+  // so the result is a clean grid; the audit service rejects values that
+  // don't.
+  int64 bucket_secs = 6;
+}
+
+// AnalyticsBucket is one (bucket_start, count) point in the series.
+// bucket_start is aligned to the start of the look-back window so two calls
+// with the same (range_secs, bucket_secs) at slightly different wall-clock
+// times still produce comparable grids (modulo the cutoff bucket).
+message AnalyticsBucket {
+  // bucket_start is the inclusive lower bound of the bucket (UTC).
+  google.protobuf.Timestamp bucket_start = 1;
+  // count is the number of audit events of the requested action that fell
+  // inside this bucket.
+  int64 count = 2;
+}
+
+// GetAnalyticsResponse carries the populated buckets in ascending time
+// order. Buckets with zero events ARE NOT included here — the caller
+// (registry-management) pre-allocates the full series and merges the rows
+// we return so the wire payload stays small even for a sparse 30-day grid.
+message GetAnalyticsResponse {
+  repeated AnalyticsBucket buckets = 1;
+  // total is the sum of count across every bucket — saves the caller a
+  // loop and is cheap to derive in SQL.
+  int64 total = 2;
+  // range_start is the UTC instant the look-back window opened, after
+  // bucket alignment. Echoed so the caller can sanity-check its own
+  // pre-allocation grid against what the server actually bucketed against.
+  google.protobuf.Timestamp range_start = 3;
 }

@@ -48,6 +48,30 @@ type fakeRepo struct {
 
 	// notificationsResponder lets a test return different pages per cursor.
 	notificationsResponder func(call notificationCall) ([]*repository.NotificationRow, error)
+
+	// analytics holds the rows GetAnalytics returns. Tests either set this
+	// slice directly or override via analyticsResponder for per-call shaping.
+	analytics    []*repository.AnalyticsBucketRow
+	analyticsErr error
+
+	// analyticsCalls captures parameters of every GetAnalytics invocation so
+	// handler tests can assert clamping and scope routing.
+	analyticsCalls []analyticsCall
+
+	// analyticsResponder, when non-nil, overrides the default analytics
+	// behaviour so a test can return different rows depending on the
+	// scope / action / range.
+	analyticsResponder func(call analyticsCall) ([]*repository.AnalyticsBucketRow, error)
+}
+
+// analyticsCall captures the parameters passed to one GetAnalytics call.
+type analyticsCall struct {
+	tenantID   uuid.UUID
+	scope      repository.AnalyticsScope
+	action     string
+	rangeStart time.Time
+	rangeEnd   time.Time
+	bucketSecs int64
 }
 
 // notificationCall captures the parameters passed to one GetNotifications call.
@@ -127,6 +151,30 @@ func (f *fakeRepo) GetNotifications(
 		return f.notificationsResponder(call)
 	}
 	return f.notifications, f.notificationsErr
+}
+
+func (f *fakeRepo) GetAnalytics(
+	_ context.Context,
+	tenantID uuid.UUID,
+	scope repository.AnalyticsScope,
+	action string,
+	rangeStart time.Time,
+	rangeEnd time.Time,
+	bucketSecs int64,
+) ([]*repository.AnalyticsBucketRow, error) {
+	call := analyticsCall{
+		tenantID:   tenantID,
+		scope:      scope,
+		action:     action,
+		rangeStart: rangeStart,
+		rangeEnd:   rangeEnd,
+		bucketSecs: bucketSecs,
+	}
+	f.analyticsCalls = append(f.analyticsCalls, call)
+	if f.analyticsResponder != nil {
+		return f.analyticsResponder(call)
+	}
+	return f.analytics, f.analyticsErr
 }
 
 func newHandler(repo auditRepo) *GRPCHandler {
