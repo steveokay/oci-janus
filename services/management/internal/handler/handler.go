@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
@@ -851,6 +854,14 @@ func (h *Handler) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		TenantId:       tenantID,
 	})
 	if err != nil {
+		// No scan recorded yet is the normal "operator hasn't triggered a
+		// scan" state — surface as 404 so the dashboard renders its
+		// "Trigger scan" CTA instead of an error banner. Anything else is
+		// a real failure worth a 500.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
+			writeError(w, http.StatusNotFound, "no scan recorded")
+			return
+		}
 		slog.Error("GetScanResult", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to fetch scan result")
 		return
