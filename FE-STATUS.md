@@ -62,6 +62,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S9.3 | Workspace-wide security center | DONE ✅ (`5968bf0`) | FE-API-014 vulnerabilities table, FE-API-015 scan history timeline |
 | S9 | Remaining stubs (S9.4+) | IN PROGRESS | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-030 analytics charts, FE-API-031 storage breakdown, FE-API-032 admin GC, FE-API-034 SSO admin / login |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
+| S11 | Retention policies | NOT STARTED | per-repo "Retention" tab on repo-detail (FE-API-037 CRUD + FE-API-038 dry-run + FE-API-043 activity rule); per-org "Default retention" section on org page (FE-API-039); "Pending deletion" badges on tag rows; gc admin "Retention" tile (FE-API-040 housekeeping summary). **RBAC**: repo `admin`/`owner` writes per-repo policy; org `admin`/`owner` writes org default; readers see "(inherited from org default)" labelling — never platform-admin tier. |
 
 ---
 
@@ -381,6 +382,66 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [ ] Every link in `/docs/*` resolves; no `TODO` placeholders left
 - [ ] Topbar Docs button opens the right URL in dev (`VITE_DOCS_URL` set) and prod
 - [ ] Mobile (sub-`md`) — Docs button collapses to icon-only without overflowing the topbar
+- [ ] Build / typecheck / lint pass
+
+### S11 — Retention policies
+
+> Per-repo image lifecycle policies (delete after X days / X total / X
+> GB / N days no activity). Lives on the **repo detail** page next to
+> Tags / Members / Settings — NOT under `/admin/*`. RBAC-gated: repo
+> `admin` or `owner` writes per-repo; org `admin` or `owner` writes
+> org default; readers see inherited values labelled
+> "(inherited from org default)". Mirrors the Members + Webhooks
+> ownership model — never platform-admin tier.
+
+**Backend dependencies** (in order)
+- FE-API-037: per-repo retention CRUD (`GET/PUT/DELETE /api/v1/repositories/{org}/{repo}/policies/retention`)
+- FE-API-038: dry-run + 24h preview window
+- FE-API-039: per-org default + inheritance (`GET/PUT /api/v1/orgs/{org}/policies/retention`)
+- FE-API-040: executor (gc mode `retention` + soft-delete + 7-day grace)
+- FE-API-041: `retention.evaluated` / `retention.applied` / `retention.grace_completed` audit + webhook events
+- FE-API-042: pull-activity tracking (also closes the FE-API-030 caveat)
+- FE-API-043: activity-based rule (depends on 042)
+
+**Repo detail — new "Retention" tab**
+- [ ] Tab added next to Tags / Members / Settings; visible to everyone with repo read access; CTAs disabled-with-tooltip for sub-admin roles
+- [ ] **Rule editor** — chip-based UI for the rule kinds: `max_age_days` / `max_count` / `max_size_bytes` / `dangling_grace_days` (and `max_idle_days` once FE-API-043 lands). Each chip carries the numeric input + a remove button
+- [ ] **Protected tag patterns** — chip input pre-seeded with `latest`, `stable`, `^v?\d+(\.\d+){0,2}$`; operators can add/remove
+- [ ] **"Inherited from org default"** read-only view when no per-repo policy exists; CTA "Override default for this repo" promotes to editor
+- [ ] **Dry-run dialog** — clicking "Preview impact" before Save POSTs to FE-API-038 and renders the would-delete table (tag, digest, pushed_at, size, reason) with a total at the bottom; explicit "Cancel" / "Save policy" buttons; preview is mandatory before first save
+- [ ] **Preview-window banner** — after Save, shows "Policy is in preview for 24h — no deletions will run yet. Showing what WILL be deleted on …" with a countdown
+- [ ] **History panel** — last 10 runs from `gc_runs WHERE mode='retention'`: triggered_by + counts + bytes_freed + status
+- [ ] **Pending-deletion badges** — Tags tab gains a "🗑 deletes in N days" pill on each tag that's in the soft-delete window; clicking the badge opens an "Undo" dialog (clears `retention_pending_delete_at` for that manifest)
+
+**Org page — new "Default retention" section**
+- [ ] Located on the existing `/orgs/{org}/members` page as a new sub-tab (or new route `/orgs/{org}/settings` — pick during build)
+- [ ] Same rule editor + protected-pattern chips as the per-repo editor
+- [ ] Dry-run preview shows aggregate impact across every repo in the org that DOESN'T have its own override
+- [ ] List of repos that override the default + a quick-link to each repo's Retention tab
+- [ ] Save fires `retention.evaluated` event so audit picks up who configured the default
+
+**Dashboard — Storage breakdown enhancement**
+- [ ] Reuse FE-API-031 storage breakdown card; add a column "Retention" showing the rule summary ("max 50 manifests" / "30 days" / "inherited") with a link to the repo Retention tab
+- [ ] Optional: bar segment shading for "pending deletion" portion of each repo's storage so operators can see what would clear after grace
+
+**Admin — Housekeeping card grows a Retention tile**
+- [ ] FE-API-032 admin GC page (already planned) gains a "Retention" tile next to "GC" — same shape but mode-scoped to `retention`. Counts of pending-delete + grace_completed runs in the last 24h / 7d
+- [ ] Recent runs table filterable by mode (`gc` / `retention` / `retention_grace`)
+
+**Notifications + audit**
+- [ ] Topbar notification bell consumes `retention.evaluated` events with summary copy "Retention policy on acme/api would delete 12 manifests in 24h"
+- [ ] `/activity` route shows `retention.applied` rows with link to the affected repo
+- [ ] Webhook delivery panel surfaces `retention.*` event types in the routing-key chip list
+
+**Inline help / docs**
+- [ ] First-time tab visit shows a 1-screen explainer ("How retention works on Janus") with link to `docs/retention.md`
+- [ ] Rule chips have tooltip explanations ("Removes manifests pushed more than N days ago; tag-pattern protection applies first")
+
+**Verification**
+- [ ] RBAC: writer cannot save; admin can; reader sees inherited label
+- [ ] Dry-run output matches a hand-computed deletion list for a seeded fixture
+- [ ] Preview-window countdown clears at the right time + executor switches to real deletes
+- [ ] Soft-delete badges appear / disappear correctly on the Tags tab
 - [ ] Build / typecheck / lint pass
 
 ---
