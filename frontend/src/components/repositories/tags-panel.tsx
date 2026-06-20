@@ -81,14 +81,7 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
                 to: "/repositories/$org/$repo/tags/$tag" as const,
                 params: { org, repo, tag: t.name },
               };
-              const open = () => {
-                // Diagnostic — leave in for now so the user can prove from
-                // the console whether the click event reaches this handler.
-                // Remove once the route navigation is confirmed working in
-                // the user's browser.
-                console.log("[beacon] tag-row navigate", target);
-                void navigate(target);
-              };
+              const open = () => void navigate(target);
               // Concrete URL for the row — used as a real <a href> so even
               // if React's synthetic event system doesn't fire on <tr>,
               // browser native navigation still resolves the click.

@@ -21,7 +21,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 
 export const Route = createFileRoute(
-  "/_authenticated/repositories/$org/$repo/tags/$tag",
+  "/_authenticated/repositories/$org/$repo_/tags/$tag",
 )({
   component: TagDetail,
 });
