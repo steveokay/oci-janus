@@ -220,6 +220,65 @@ func (s *fakeMetaServer) GetSecurityOverview(_ context.Context, _ *metadatav1.Ge
 // when non-nil. Tests reset it via t.Cleanup so cases stay isolated.
 var securityOverviewOverride *metadatav1.SecurityOverview
 
+// ListTenantVulnerabilities (FE-API-014) fake — returns vulnsListOverride
+// when non-nil, otherwise a small canned set covering the happy path.
+// vulnsListCall captures the last request so tests can assert the BFF
+// forwarded the query string verbatim.
+var (
+	vulnsListOverride *metadatav1.ListTenantVulnerabilitiesResponse
+	vulnsListCall     *metadatav1.ListTenantVulnerabilitiesRequest
+)
+
+func (s *fakeMetaServer) ListTenantVulnerabilities(_ context.Context, req *metadatav1.ListTenantVulnerabilitiesRequest) (*metadatav1.ListTenantVulnerabilitiesResponse, error) {
+	vulnsListCall = req
+	if vulnsListOverride != nil {
+		return vulnsListOverride, nil
+	}
+	return &metadatav1.ListTenantVulnerabilitiesResponse{
+		Vulnerabilities: []*metadatav1.TenantVulnerability{
+			{
+				CveId: "CVE-2024-9999", Severity: "CRITICAL",
+				PackageName: "openssl", PackageVersion: "1.0.0", FixedIn: "1.0.1",
+				Affected: []*metadatav1.AffectedTag{
+					{Repo: "myorg/myrepo", Tag: "v1", Digest: "sha256:abc"},
+				},
+				FirstSeen: timestamppb.Now(),
+				LastSeen:  timestamppb.Now(),
+			},
+		},
+		NextPageToken: "next-page",
+	}, nil
+}
+
+// ListScanHistory (FE-API-015) fake — returns scanHistoryOverride when
+// non-nil, otherwise a single canned scan. scanHistoryCall captures the
+// last request so tests can assert query-string wiring.
+var (
+	scanHistoryOverride *metadatav1.ListScanHistoryResponse
+	scanHistoryCall     *metadatav1.ListScanHistoryRequest
+)
+
+func (s *fakeMetaServer) ListScanHistory(_ context.Context, req *metadatav1.ListScanHistoryRequest) (*metadatav1.ListScanHistoryResponse, error) {
+	scanHistoryCall = req
+	if scanHistoryOverride != nil {
+		return scanHistoryOverride, nil
+	}
+	now := timestamppb.Now()
+	return &metadatav1.ListScanHistoryResponse{
+		Scans: []*metadatav1.ScanHistoryEntry{
+			{
+				ScanId: "scan-1", Repo: "myorg/myrepo", Tag: "v1",
+				ManifestDigest: "sha256:abc", Scanner: "trivy",
+				StartedAt: now, CompletedAt: now,
+				Status:         "completed",
+				SeverityCounts: &metadatav1.SecurityCounts{Critical: 1, High: 2},
+				Trigger:        "push",
+			},
+		},
+		NextPageToken: "next-scan",
+	}, nil
+}
+
 // fakeAuditServer handles build history and daily pull count.
 type fakeAuditServer struct {
 	auditv1.UnimplementedAuditServiceServer
@@ -1140,5 +1199,145 @@ func TestRepoActivity_invalidSince_returns400(t *testing.T) {
 	resp := env.get(t, "/api/v1/repositories/myorg/myrepo/activity?since=not-a-time", adminToken)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/security/vulnerabilities   (FE-API-014)
+// ---------------------------------------------------------------------------
+
+// TestListVulnerabilities_adminToken_returnsList exercises the happy path
+// against the canned fakeMetaServer response.
+func TestListVulnerabilities_adminToken_returnsList(t *testing.T) {
+	t.Cleanup(func() { vulnsListCall = nil; vulnsListOverride = nil })
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/vulnerabilities?severity=critical&limit=10", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.VulnerabilityListResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Vulnerabilities) != 1 || body.Vulnerabilities[0].CVEID != "CVE-2024-9999" {
+		t.Errorf("unexpected vulnerabilities: %+v", body.Vulnerabilities)
+	}
+	if body.NextPageToken != "next-page" {
+		t.Errorf("NextPageToken: got %q, want next-page", body.NextPageToken)
+	}
+	// Severity is uppercased before forwarding to metadata.
+	if vulnsListCall == nil || vulnsListCall.GetSeverity() != "CRITICAL" {
+		t.Errorf("severity forwarded: got %v", vulnsListCall)
+	}
+}
+
+// TestListVulnerabilities_invalidSeverity_returns400 verifies a bad
+// severity value short-circuits before any gRPC call.
+func TestListVulnerabilities_invalidSeverity_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/vulnerabilities?severity=SEVERE", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestListVulnerabilities_invalidPageToken_returns400 verifies an unsafe
+// page_token (chars outside the base64url alphabet) is rejected.
+func TestListVulnerabilities_invalidPageToken_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/vulnerabilities?page_token=!!!", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestListVulnerabilities_noAuth_returns401 verifies the route is behind
+// the standard auth middleware.
+func TestListVulnerabilities_noAuth_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/vulnerabilities", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestListVulnerabilities_limitOver200_clampedTo200 verifies the over-the-
+// top limit is capped server-side so a caller can't request millions of
+// rows in one shot.
+func TestListVulnerabilities_limitOver200_clampedTo200(t *testing.T) {
+	t.Cleanup(func() { vulnsListCall = nil })
+	env := newTestEnv(t)
+	_ = env.get(t, "/api/v1/security/vulnerabilities?limit=10000", adminToken)
+	if vulnsListCall == nil || vulnsListCall.GetPageSize() != 200 {
+		t.Errorf("page_size not clamped: %v", vulnsListCall)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/security/scans   (FE-API-015)
+// ---------------------------------------------------------------------------
+
+// TestListScanHistory_adminToken_returnsList exercises the happy path
+// against the canned fakeMetaServer response.
+func TestListScanHistory_adminToken_returnsList(t *testing.T) {
+	t.Cleanup(func() { scanHistoryCall = nil; scanHistoryOverride = nil })
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/scans?limit=25", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.ScanHistoryListResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Scans) != 1 || body.Scans[0].ScanID != "scan-1" {
+		t.Errorf("unexpected scans: %+v", body.Scans)
+	}
+	if body.NextPageToken != "next-scan" {
+		t.Errorf("NextPageToken: got %q, want next-scan", body.NextPageToken)
+	}
+	if body.Scans[0].Trigger != "push" {
+		t.Errorf("Trigger: got %q, want push", body.Scans[0].Trigger)
+	}
+	if body.Scans[0].SeverityCounts.High != 2 {
+		t.Errorf("severity_counts.high: got %d, want 2", body.Scans[0].SeverityCounts.High)
+	}
+}
+
+// TestListScanHistory_sinceParsesRFC3339 verifies the BFF forwards a parsed
+// timestamp to the metadata service rather than passing the raw string.
+func TestListScanHistory_sinceParsesRFC3339(t *testing.T) {
+	t.Cleanup(func() { scanHistoryCall = nil })
+	env := newTestEnv(t)
+	since := time.Now().Add(-72 * time.Hour).UTC().Format(time.RFC3339)
+	_ = env.get(t, "/api/v1/security/scans?since="+since, adminToken)
+	if scanHistoryCall == nil || scanHistoryCall.GetSince() == nil {
+		t.Fatalf("since not forwarded: %+v", scanHistoryCall)
+	}
+}
+
+// TestListScanHistory_invalidSince_returns400 verifies a malformed since
+// value short-circuits before any gRPC call.
+func TestListScanHistory_invalidSince_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/scans?since=not-a-time", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestListScanHistory_invalidPageToken_returns400 verifies an unsafe
+// page_token (chars outside the base64url alphabet) is rejected.
+func TestListScanHistory_invalidPageToken_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/scans?page_token=!!!", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestListScanHistory_noAuth_returns401 verifies the route is behind the
+// standard auth middleware.
+func TestListScanHistory_noAuth_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/scans", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
 	}
 }

@@ -2665,6 +2665,577 @@ func (x *SecurityOverview) GetDaysSinceLastScan() int64 {
 	return 0
 }
 
+// AffectedTag identifies a (repo, tag, manifest_digest) combination affected
+// by a particular CVE. Aggregated across the latest scan per tag.
+type AffectedTag struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Repo   string `protobuf:"bytes,1,opt,name=repo,proto3" json:"repo,omitempty"` // "org/name" composite, ready for the dashboard
+	Tag    string `protobuf:"bytes,2,opt,name=tag,proto3" json:"tag,omitempty"`
+	Digest string `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"` // manifest digest
+}
+
+func (x *AffectedTag) Reset() {
+	*x = AffectedTag{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[38]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *AffectedTag) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AffectedTag) ProtoMessage() {}
+
+func (x *AffectedTag) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[38]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AffectedTag.ProtoReflect.Descriptor instead.
+func (*AffectedTag) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *AffectedTag) GetRepo() string {
+	if x != nil {
+		return x.Repo
+	}
+	return ""
+}
+
+func (x *AffectedTag) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+func (x *AffectedTag) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// TenantVulnerability is one CVE rolled up across every tag where it appears
+// in the latest scan. `affected` is the list of (repo, tag, digest) tuples
+// the CVE touches. `first_seen` / `last_seen` are the min/max scan
+// completion timestamps across those tuples.
+type TenantVulnerability struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	CveId          string                 `protobuf:"bytes,1,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
+	Severity       string                 `protobuf:"bytes,2,opt,name=severity,proto3" json:"severity,omitempty"` // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE
+	Title          string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	Description    string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	FixedIn        string                 `protobuf:"bytes,5,opt,name=fixed_in,json=fixedIn,proto3" json:"fixed_in,omitempty"`
+	PackageName    string                 `protobuf:"bytes,6,opt,name=package_name,json=packageName,proto3" json:"package_name,omitempty"`
+	PackageVersion string                 `protobuf:"bytes,7,opt,name=package_version,json=packageVersion,proto3" json:"package_version,omitempty"`
+	Affected       []*AffectedTag         `protobuf:"bytes,8,rep,name=affected,proto3" json:"affected,omitempty"`
+	FirstSeen      *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=first_seen,json=firstSeen,proto3" json:"first_seen,omitempty"`
+	LastSeen       *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
+}
+
+func (x *TenantVulnerability) Reset() {
+	*x = TenantVulnerability{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[39]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *TenantVulnerability) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantVulnerability) ProtoMessage() {}
+
+func (x *TenantVulnerability) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[39]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantVulnerability.ProtoReflect.Descriptor instead.
+func (*TenantVulnerability) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *TenantVulnerability) GetCveId() string {
+	if x != nil {
+		return x.CveId
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetFixedIn() string {
+	if x != nil {
+		return x.FixedIn
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetPackageName() string {
+	if x != nil {
+		return x.PackageName
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetPackageVersion() string {
+	if x != nil {
+		return x.PackageVersion
+	}
+	return ""
+}
+
+func (x *TenantVulnerability) GetAffected() []*AffectedTag {
+	if x != nil {
+		return x.Affected
+	}
+	return nil
+}
+
+func (x *TenantVulnerability) GetFirstSeen() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FirstSeen
+	}
+	return nil
+}
+
+func (x *TenantVulnerability) GetLastSeen() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeen
+	}
+	return nil
+}
+
+type ListTenantVulnerabilitiesRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// severity is an optional filter; "" means all severities.
+	// Valid values: CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE.
+	Severity string `protobuf:"bytes,2,opt,name=severity,proto3" json:"severity,omitempty"`
+	// page_token is an opaque cursor returned by a previous call. Internally
+	// base64(severity_rank|cve_id).
+	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// page_size caps results per call (default 50, max 200 enforced server-side).
+	PageSize int32 `protobuf:"varint,4,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+}
+
+func (x *ListTenantVulnerabilitiesRequest) Reset() {
+	*x = ListTenantVulnerabilitiesRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[40]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListTenantVulnerabilitiesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantVulnerabilitiesRequest) ProtoMessage() {}
+
+func (x *ListTenantVulnerabilitiesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[40]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantVulnerabilitiesRequest.ProtoReflect.Descriptor instead.
+func (*ListTenantVulnerabilitiesRequest) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *ListTenantVulnerabilitiesRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ListTenantVulnerabilitiesRequest) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *ListTenantVulnerabilitiesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListTenantVulnerabilitiesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type ListTenantVulnerabilitiesResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Vulnerabilities []*TenantVulnerability `protobuf:"bytes,1,rep,name=vulnerabilities,proto3" json:"vulnerabilities,omitempty"`
+	NextPageToken   string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+}
+
+func (x *ListTenantVulnerabilitiesResponse) Reset() {
+	*x = ListTenantVulnerabilitiesResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[41]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListTenantVulnerabilitiesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantVulnerabilitiesResponse) ProtoMessage() {}
+
+func (x *ListTenantVulnerabilitiesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[41]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantVulnerabilitiesResponse.ProtoReflect.Descriptor instead.
+func (*ListTenantVulnerabilitiesResponse) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ListTenantVulnerabilitiesResponse) GetVulnerabilities() []*TenantVulnerability {
+	if x != nil {
+		return x.Vulnerabilities
+	}
+	return nil
+}
+
+func (x *ListTenantVulnerabilitiesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// ScanHistoryEntry mirrors one scan_results row enriched with repo + tag
+// context. `tag` may be empty when the digest is no longer tagged in any
+// repository (e.g. tag was retagged after the scan ran).
+type ScanHistoryEntry struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ScanId         string                 `protobuf:"bytes,1,opt,name=scan_id,json=scanId,proto3" json:"scan_id,omitempty"`
+	Repo           string                 `protobuf:"bytes,2,opt,name=repo,proto3" json:"repo,omitempty"` // "org/name" composite
+	Tag            string                 `protobuf:"bytes,3,opt,name=tag,proto3" json:"tag,omitempty"`
+	ManifestDigest string                 `protobuf:"bytes,4,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Scanner        string                 `protobuf:"bytes,5,opt,name=scanner,proto3" json:"scanner,omitempty"` // scanner name (e.g. "trivy")
+	StartedAt      *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	Status         string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"` // pending|running|complete|failed
+	SeverityCounts *SecurityCounts        `protobuf:"bytes,9,opt,name=severity_counts,json=severityCounts,proto3" json:"severity_counts,omitempty"`
+	Trigger        string                 `protobuf:"bytes,10,opt,name=trigger,proto3" json:"trigger,omitempty"` // push|manual|scheduled
+}
+
+func (x *ScanHistoryEntry) Reset() {
+	*x = ScanHistoryEntry{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[42]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ScanHistoryEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScanHistoryEntry) ProtoMessage() {}
+
+func (x *ScanHistoryEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[42]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScanHistoryEntry.ProtoReflect.Descriptor instead.
+func (*ScanHistoryEntry) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *ScanHistoryEntry) GetScanId() string {
+	if x != nil {
+		return x.ScanId
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetRepo() string {
+	if x != nil {
+		return x.Repo
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetScanner() string {
+	if x != nil {
+		return x.Scanner
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *ScanHistoryEntry) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+func (x *ScanHistoryEntry) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ScanHistoryEntry) GetSeverityCounts() *SecurityCounts {
+	if x != nil {
+		return x.SeverityCounts
+	}
+	return nil
+}
+
+func (x *ScanHistoryEntry) GetTrigger() string {
+	if x != nil {
+		return x.Trigger
+	}
+	return ""
+}
+
+type ListScanHistoryRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// since filters scans whose completed_at >= since. Optional;
+	// default applied server-side (30 days ago).
+	Since *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
+	// page_token is an opaque keyset cursor over (completed_at, scan_id) DESC.
+	PageToken string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// page_size caps results per call (default 50, max 200).
+	PageSize int32 `protobuf:"varint,4,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+}
+
+func (x *ListScanHistoryRequest) Reset() {
+	*x = ListScanHistoryRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[43]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListScanHistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScanHistoryRequest) ProtoMessage() {}
+
+func (x *ListScanHistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[43]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScanHistoryRequest.ProtoReflect.Descriptor instead.
+func (*ListScanHistoryRequest) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *ListScanHistoryRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ListScanHistoryRequest) GetSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Since
+	}
+	return nil
+}
+
+func (x *ListScanHistoryRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListScanHistoryRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type ListScanHistoryResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Scans         []*ScanHistoryEntry `protobuf:"bytes,1,rep,name=scans,proto3" json:"scans,omitempty"`
+	NextPageToken string              `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+}
+
+func (x *ListScanHistoryResponse) Reset() {
+	*x = ListScanHistoryResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[44]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListScanHistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScanHistoryResponse) ProtoMessage() {}
+
+func (x *ListScanHistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[44]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScanHistoryResponse.ProtoReflect.Descriptor instead.
+func (*ListScanHistoryResponse) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *ListScanHistoryResponse) GetScans() []*ScanHistoryEntry {
+	if x != nil {
+		return x.Scans
+	}
+	return nil
+}
+
+func (x *ListScanHistoryResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_metadata_v1_metadata_proto protoreflect.FileDescriptor
 
 var file_metadata_v1_metadata_proto_rawDesc = []byte{
@@ -3022,7 +3593,101 @@ var file_metadata_v1_metadata_proto_rawDesc = []byte{
 	0x6e, 0x73, 0x32, 0x34, 0x68, 0x12, 0x2f, 0x0a, 0x14, 0x64, 0x61, 0x79, 0x73, 0x5f, 0x73, 0x69,
 	0x6e, 0x63, 0x65, 0x5f, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x73, 0x63, 0x61, 0x6e, 0x18, 0x05, 0x20,
 	0x01, 0x28, 0x03, 0x52, 0x11, 0x64, 0x61, 0x79, 0x73, 0x53, 0x69, 0x6e, 0x63, 0x65, 0x4c, 0x61,
-	0x73, 0x74, 0x53, 0x63, 0x61, 0x6e, 0x32, 0xcc, 0x14, 0x0a, 0x0f, 0x4d, 0x65, 0x74, 0x61, 0x64,
+	0x73, 0x74, 0x53, 0x63, 0x61, 0x6e, 0x22, 0x4b, 0x0a, 0x0b, 0x41, 0x66, 0x66, 0x65, 0x63, 0x74,
+	0x65, 0x64, 0x54, 0x61, 0x67, 0x12, 0x12, 0x0a, 0x04, 0x72, 0x65, 0x70, 0x6f, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x04, 0x72, 0x65, 0x70, 0x6f, 0x12, 0x10, 0x0a, 0x03, 0x74, 0x61, 0x67,
+	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x74, 0x61, 0x67, 0x12, 0x16, 0x0a, 0x06, 0x64,
+	0x69, 0x67, 0x65, 0x73, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x64, 0x69, 0x67,
+	0x65, 0x73, 0x74, 0x22, 0x9a, 0x03, 0x0a, 0x13, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75,
+	0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69, 0x74, 0x79, 0x12, 0x15, 0x0a, 0x06, 0x63,
+	0x76, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x63, 0x76, 0x65,
+	0x49, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x12, 0x14,
+	0x0a, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74,
+	0x69, 0x74, 0x6c, 0x65, 0x12, 0x20, 0x0a, 0x0b, 0x64, 0x65, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74,
+	0x69, 0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x64, 0x65, 0x73, 0x63, 0x72,
+	0x69, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x19, 0x0a, 0x08, 0x66, 0x69, 0x78, 0x65, 0x64, 0x5f,
+	0x69, 0x6e, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x66, 0x69, 0x78, 0x65, 0x64, 0x49,
+	0x6e, 0x12, 0x21, 0x0a, 0x0c, 0x70, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x5f, 0x6e, 0x61, 0x6d,
+	0x65, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x70, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65,
+	0x4e, 0x61, 0x6d, 0x65, 0x12, 0x27, 0x0a, 0x0f, 0x70, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x5f,
+	0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0e, 0x70,
+	0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x3d, 0x0a,
+	0x08, 0x61, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x18, 0x08, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x21, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64,
+	0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x41, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x54,
+	0x61, 0x67, 0x52, 0x08, 0x61, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x12, 0x39, 0x0a, 0x0a,
+	0x66, 0x69, 0x72, 0x73, 0x74, 0x5f, 0x73, 0x65, 0x65, 0x6e, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62,
+	0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x09, 0x66, 0x69,
+	0x72, 0x73, 0x74, 0x53, 0x65, 0x65, 0x6e, 0x12, 0x37, 0x0a, 0x09, 0x6c, 0x61, 0x73, 0x74, 0x5f,
+	0x73, 0x65, 0x65, 0x6e, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f,
+	0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d,
+	0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x08, 0x6c, 0x61, 0x73, 0x74, 0x53, 0x65, 0x65, 0x6e,
+	0x22, 0x97, 0x01, 0x0a, 0x20, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56,
+	0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x74, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x5f,
+	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x74, 0x65, 0x6e, 0x61, 0x6e, 0x74,
+	0x49, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x12, 0x1d,
+	0x0a, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x03, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x09, 0x70, 0x61, 0x67, 0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a,
+	0x09, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x05,
+	0x52, 0x08, 0x70, 0x61, 0x67, 0x65, 0x53, 0x69, 0x7a, 0x65, 0x22, 0xa0, 0x01, 0x0a, 0x21, 0x4c,
+	0x69, 0x73, 0x74, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61,
+	0x62, 0x69, 0x6c, 0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x53, 0x0a, 0x0f, 0x76, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69, 0x74,
+	0x69, 0x65, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x29, 0x2e, 0x72, 0x65, 0x67, 0x69,
+	0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31,
+	0x2e, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69,
+	0x6c, 0x69, 0x74, 0x79, 0x52, 0x0f, 0x76, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c,
+	0x69, 0x74, 0x69, 0x65, 0x73, 0x12, 0x26, 0x0a, 0x0f, 0x6e, 0x65, 0x78, 0x74, 0x5f, 0x70, 0x61,
+	0x67, 0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d,
+	0x6e, 0x65, 0x78, 0x74, 0x50, 0x61, 0x67, 0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x8f, 0x03,
+	0x0a, 0x10, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x45, 0x6e, 0x74,
+	0x72, 0x79, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x63, 0x61, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x63, 0x61, 0x6e, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x72,
+	0x65, 0x70, 0x6f, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x72, 0x65, 0x70, 0x6f, 0x12,
+	0x10, 0x0a, 0x03, 0x74, 0x61, 0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x74, 0x61,
+	0x67, 0x12, 0x27, 0x0a, 0x0f, 0x6d, 0x61, 0x6e, 0x69, 0x66, 0x65, 0x73, 0x74, 0x5f, 0x64, 0x69,
+	0x67, 0x65, 0x73, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0e, 0x6d, 0x61, 0x6e, 0x69,
+	0x66, 0x65, 0x73, 0x74, 0x44, 0x69, 0x67, 0x65, 0x73, 0x74, 0x12, 0x18, 0x0a, 0x07, 0x73, 0x63,
+	0x61, 0x6e, 0x6e, 0x65, 0x72, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x63, 0x61,
+	0x6e, 0x6e, 0x65, 0x72, 0x12, 0x39, 0x0a, 0x0a, 0x73, 0x74, 0x61, 0x72, 0x74, 0x65, 0x64, 0x5f,
+	0x61, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c,
+	0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73,
+	0x74, 0x61, 0x6d, 0x70, 0x52, 0x09, 0x73, 0x74, 0x61, 0x72, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12,
+	0x3d, 0x0a, 0x0c, 0x63, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18,
+	0x07, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
+	0x70, 0x52, 0x0b, 0x63, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x16,
+	0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06,
+	0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x4d, 0x0a, 0x0f, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69,
+	0x74, 0x79, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x24, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64,
+	0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x65, 0x63, 0x75, 0x72, 0x69, 0x74, 0x79, 0x43,
+	0x6f, 0x75, 0x6e, 0x74, 0x73, 0x52, 0x0e, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x43,
+	0x6f, 0x75, 0x6e, 0x74, 0x73, 0x12, 0x18, 0x0a, 0x07, 0x74, 0x72, 0x69, 0x67, 0x67, 0x65, 0x72,
+	0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x74, 0x72, 0x69, 0x67, 0x67, 0x65, 0x72, 0x22,
+	0xa3, 0x01, 0x0a, 0x16, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74,
+	0x6f, 0x72, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x74, 0x65,
+	0x6e, 0x61, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x74,
+	0x65, 0x6e, 0x61, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x30, 0x0a, 0x05, 0x73, 0x69, 0x6e, 0x63, 0x65,
+	0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
+	0x6d, 0x70, 0x52, 0x05, 0x73, 0x69, 0x6e, 0x63, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x70, 0x61, 0x67,
+	0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x70,
+	0x61, 0x67, 0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x61, 0x67, 0x65,
+	0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x70, 0x61, 0x67,
+	0x65, 0x53, 0x69, 0x7a, 0x65, 0x22, 0x7f, 0x0a, 0x17, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x63, 0x61,
+	0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x3c, 0x0a, 0x05, 0x73, 0x63, 0x61, 0x6e, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x26, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64,
+	0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f,
+	0x72, 0x79, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x05, 0x73, 0x63, 0x61, 0x6e, 0x73, 0x12, 0x26,
+	0x0a, 0x0f, 0x6e, 0x65, 0x78, 0x74, 0x5f, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65,
+	0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x78, 0x74, 0x50, 0x61, 0x67,
+	0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x32, 0xcb, 0x16, 0x0a, 0x0f, 0x4d, 0x65, 0x74, 0x61, 0x64,
 	0x61, 0x74, 0x61, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x63, 0x0a, 0x10, 0x43, 0x72,
 	0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x70, 0x6f, 0x73, 0x69, 0x74, 0x6f, 0x72, 0x79, 0x12, 0x2d,
 	0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61,
@@ -3187,12 +3852,28 @@ var file_metadata_v1_metadata_proto_rawDesc = []byte{
 	0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x26, 0x2e,
 	0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74,
 	0x61, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x65, 0x63, 0x75, 0x72, 0x69, 0x74, 0x79, 0x4f, 0x76, 0x65,
-	0x72, 0x76, 0x69, 0x65, 0x77, 0x42, 0x44, 0x5a, 0x42, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e,
-	0x63, 0x6f, 0x6d, 0x2f, 0x73, 0x74, 0x65, 0x76, 0x65, 0x6f, 0x6b, 0x61, 0x79, 0x2f, 0x6f, 0x63,
-	0x69, 0x2d, 0x6a, 0x61, 0x6e, 0x75, 0x73, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65,
-	0x6e, 0x2f, 0x67, 0x6f, 0x2f, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2f, 0x76, 0x31,
-	0x3b, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x33,
+	0x72, 0x76, 0x69, 0x65, 0x77, 0x12, 0x8c, 0x01, 0x0a, 0x19, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65,
+	0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69, 0x74,
+	0x69, 0x65, 0x73, 0x12, 0x36, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d,
+	0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54,
+	0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75, 0x6c, 0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69,
+	0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x37, 0x2e, 0x72, 0x65,
+	0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e,
+	0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x56, 0x75, 0x6c,
+	0x6e, 0x65, 0x72, 0x61, 0x62, 0x69, 0x6c, 0x69, 0x74, 0x69, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x6e, 0x0a, 0x0f, 0x4c, 0x69, 0x73, 0x74, 0x53, 0x63, 0x61, 0x6e,
+	0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x12, 0x2c, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74,
+	0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c,
+	0x69, 0x73, 0x74, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2d, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79,
+	0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73,
+	0x74, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x42, 0x44, 0x5a, 0x42, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63,
+	0x6f, 0x6d, 0x2f, 0x73, 0x74, 0x65, 0x76, 0x65, 0x6f, 0x6b, 0x61, 0x79, 0x2f, 0x6f, 0x63, 0x69,
+	0x2d, 0x6a, 0x61, 0x6e, 0x75, 0x73, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e,
+	0x2f, 0x67, 0x6f, 0x2f, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2f, 0x76, 0x31, 0x3b,
+	0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74,
+	0x6f, 0x33,
 }
 
 var (
@@ -3207,7 +3888,7 @@ func file_metadata_v1_metadata_proto_rawDescGZIP() []byte {
 	return file_metadata_v1_metadata_proto_rawDescData
 }
 
-var file_metadata_v1_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_metadata_v1_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_metadata_v1_metadata_proto_goTypes = []any{
 	(*Repository)(nil),                         // 0: registry.metadata.v1.Repository
 	(*Tag)(nil),                                // 1: registry.metadata.v1.Tag
@@ -3247,81 +3928,101 @@ var file_metadata_v1_metadata_proto_goTypes = []any{
 	(*SecurityCounts)(nil),                     // 35: registry.metadata.v1.SecurityCounts
 	(*ScanCoverage)(nil),                       // 36: registry.metadata.v1.ScanCoverage
 	(*SecurityOverview)(nil),                   // 37: registry.metadata.v1.SecurityOverview
-	nil,                                        // 38: registry.metadata.v1.ScanResult.SeverityCountsEntry
-	nil,                                        // 39: registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
-	(*timestamppb.Timestamp)(nil),              // 40: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),                      // 41: google.protobuf.Empty
+	(*AffectedTag)(nil),                        // 38: registry.metadata.v1.AffectedTag
+	(*TenantVulnerability)(nil),                // 39: registry.metadata.v1.TenantVulnerability
+	(*ListTenantVulnerabilitiesRequest)(nil),   // 40: registry.metadata.v1.ListTenantVulnerabilitiesRequest
+	(*ListTenantVulnerabilitiesResponse)(nil),  // 41: registry.metadata.v1.ListTenantVulnerabilitiesResponse
+	(*ScanHistoryEntry)(nil),                   // 42: registry.metadata.v1.ScanHistoryEntry
+	(*ListScanHistoryRequest)(nil),             // 43: registry.metadata.v1.ListScanHistoryRequest
+	(*ListScanHistoryResponse)(nil),            // 44: registry.metadata.v1.ListScanHistoryResponse
+	nil,                                        // 45: registry.metadata.v1.ScanResult.SeverityCountsEntry
+	nil,                                        // 46: registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
+	(*timestamppb.Timestamp)(nil),              // 47: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),                      // 48: google.protobuf.Empty
 }
 var file_metadata_v1_metadata_proto_depIdxs = []int32{
-	40, // 0: registry.metadata.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
-	40, // 1: registry.metadata.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
-	40, // 2: registry.metadata.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
-	40, // 3: registry.metadata.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
-	38, // 4: registry.metadata.v1.ScanResult.severity_counts:type_name -> registry.metadata.v1.ScanResult.SeverityCountsEntry
-	40, // 5: registry.metadata.v1.ScanResult.started_at:type_name -> google.protobuf.Timestamp
-	40, // 6: registry.metadata.v1.ScanResult.completed_at:type_name -> google.protobuf.Timestamp
-	39, // 7: registry.metadata.v1.UpdateScanStatusRequest.severity_counts:type_name -> registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
+	47, // 0: registry.metadata.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
+	47, // 1: registry.metadata.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 2: registry.metadata.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
+	47, // 3: registry.metadata.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
+	45, // 4: registry.metadata.v1.ScanResult.severity_counts:type_name -> registry.metadata.v1.ScanResult.SeverityCountsEntry
+	47, // 5: registry.metadata.v1.ScanResult.started_at:type_name -> google.protobuf.Timestamp
+	47, // 6: registry.metadata.v1.ScanResult.completed_at:type_name -> google.protobuf.Timestamp
+	46, // 7: registry.metadata.v1.UpdateScanStatusRequest.severity_counts:type_name -> registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
 	35, // 8: registry.metadata.v1.SecurityOverview.severity_counts:type_name -> registry.metadata.v1.SecurityCounts
 	36, // 9: registry.metadata.v1.SecurityOverview.scan_coverage:type_name -> registry.metadata.v1.ScanCoverage
-	6,  // 10: registry.metadata.v1.MetadataService.CreateRepository:input_type -> registry.metadata.v1.CreateRepositoryRequest
-	8,  // 11: registry.metadata.v1.MetadataService.GetRepository:input_type -> registry.metadata.v1.GetRepositoryRequest
-	9,  // 12: registry.metadata.v1.MetadataService.GetRepositoryByName:input_type -> registry.metadata.v1.GetRepositoryByNameRequest
-	10, // 13: registry.metadata.v1.MetadataService.ListRepositories:input_type -> registry.metadata.v1.ListRepositoriesRequest
-	11, // 14: registry.metadata.v1.MetadataService.DeleteRepository:input_type -> registry.metadata.v1.DeleteRepositoryRequest
-	12, // 15: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:input_type -> registry.metadata.v1.UpdateRepositoryQuotaRequest
-	7,  // 16: registry.metadata.v1.MetadataService.UpdateRepository:input_type -> registry.metadata.v1.UpdateRepositoryRequest
-	13, // 17: registry.metadata.v1.MetadataService.PutTag:input_type -> registry.metadata.v1.PutTagRequest
-	14, // 18: registry.metadata.v1.MetadataService.GetTag:input_type -> registry.metadata.v1.GetTagRequest
-	15, // 19: registry.metadata.v1.MetadataService.ListTags:input_type -> registry.metadata.v1.ListTagsRequest
-	16, // 20: registry.metadata.v1.MetadataService.DeleteTag:input_type -> registry.metadata.v1.DeleteTagRequest
-	17, // 21: registry.metadata.v1.MetadataService.PutManifest:input_type -> registry.metadata.v1.PutManifestRequest
-	18, // 22: registry.metadata.v1.MetadataService.GetManifest:input_type -> registry.metadata.v1.GetManifestRequest
-	19, // 23: registry.metadata.v1.MetadataService.DeleteManifest:input_type -> registry.metadata.v1.DeleteManifestRequest
-	20, // 24: registry.metadata.v1.MetadataService.ListUntaggedManifests:input_type -> registry.metadata.v1.ListUntaggedManifestsRequest
-	21, // 25: registry.metadata.v1.MetadataService.LinkBlob:input_type -> registry.metadata.v1.LinkBlobRequest
-	22, // 26: registry.metadata.v1.MetadataService.UnlinkBlob:input_type -> registry.metadata.v1.UnlinkBlobRequest
-	23, // 27: registry.metadata.v1.MetadataService.ListOrphanedBlobs:input_type -> registry.metadata.v1.ListOrphanedBlobsRequest
-	24, // 28: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:input_type -> registry.metadata.v1.GetTenantQuotaUsageRequest
-	25, // 29: registry.metadata.v1.MetadataService.UpdateTenantQuota:input_type -> registry.metadata.v1.UpdateTenantQuotaRequest
-	26, // 30: registry.metadata.v1.MetadataService.IncrementTenantStorage:input_type -> registry.metadata.v1.IncrementTenantStorageRequest
-	27, // 31: registry.metadata.v1.MetadataService.DecrementTenantStorage:input_type -> registry.metadata.v1.DecrementTenantStorageRequest
-	28, // 32: registry.metadata.v1.MetadataService.UpdateScanStatus:input_type -> registry.metadata.v1.UpdateScanStatusRequest
-	29, // 33: registry.metadata.v1.MetadataService.GetScanResult:input_type -> registry.metadata.v1.GetScanResultRequest
-	30, // 34: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:input_type -> registry.metadata.v1.GetTenantVulnerabilityCountRequest
-	32, // 35: registry.metadata.v1.MetadataService.CountRepositories:input_type -> registry.metadata.v1.CountRepositoriesRequest
-	34, // 36: registry.metadata.v1.MetadataService.GetSecurityOverview:input_type -> registry.metadata.v1.GetSecurityOverviewRequest
-	0,  // 37: registry.metadata.v1.MetadataService.CreateRepository:output_type -> registry.metadata.v1.Repository
-	0,  // 38: registry.metadata.v1.MetadataService.GetRepository:output_type -> registry.metadata.v1.Repository
-	0,  // 39: registry.metadata.v1.MetadataService.GetRepositoryByName:output_type -> registry.metadata.v1.Repository
-	0,  // 40: registry.metadata.v1.MetadataService.ListRepositories:output_type -> registry.metadata.v1.Repository
-	41, // 41: registry.metadata.v1.MetadataService.DeleteRepository:output_type -> google.protobuf.Empty
-	0,  // 42: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:output_type -> registry.metadata.v1.Repository
-	0,  // 43: registry.metadata.v1.MetadataService.UpdateRepository:output_type -> registry.metadata.v1.Repository
-	1,  // 44: registry.metadata.v1.MetadataService.PutTag:output_type -> registry.metadata.v1.Tag
-	1,  // 45: registry.metadata.v1.MetadataService.GetTag:output_type -> registry.metadata.v1.Tag
-	1,  // 46: registry.metadata.v1.MetadataService.ListTags:output_type -> registry.metadata.v1.Tag
-	41, // 47: registry.metadata.v1.MetadataService.DeleteTag:output_type -> google.protobuf.Empty
-	2,  // 48: registry.metadata.v1.MetadataService.PutManifest:output_type -> registry.metadata.v1.Manifest
-	2,  // 49: registry.metadata.v1.MetadataService.GetManifest:output_type -> registry.metadata.v1.Manifest
-	41, // 50: registry.metadata.v1.MetadataService.DeleteManifest:output_type -> google.protobuf.Empty
-	2,  // 51: registry.metadata.v1.MetadataService.ListUntaggedManifests:output_type -> registry.metadata.v1.Manifest
-	41, // 52: registry.metadata.v1.MetadataService.LinkBlob:output_type -> google.protobuf.Empty
-	41, // 53: registry.metadata.v1.MetadataService.UnlinkBlob:output_type -> google.protobuf.Empty
-	3,  // 54: registry.metadata.v1.MetadataService.ListOrphanedBlobs:output_type -> registry.metadata.v1.BlobRef
-	4,  // 55: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:output_type -> registry.metadata.v1.QuotaUsage
-	4,  // 56: registry.metadata.v1.MetadataService.UpdateTenantQuota:output_type -> registry.metadata.v1.QuotaUsage
-	41, // 57: registry.metadata.v1.MetadataService.IncrementTenantStorage:output_type -> google.protobuf.Empty
-	41, // 58: registry.metadata.v1.MetadataService.DecrementTenantStorage:output_type -> google.protobuf.Empty
-	41, // 59: registry.metadata.v1.MetadataService.UpdateScanStatus:output_type -> google.protobuf.Empty
-	5,  // 60: registry.metadata.v1.MetadataService.GetScanResult:output_type -> registry.metadata.v1.ScanResult
-	31, // 61: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:output_type -> registry.metadata.v1.VulnerabilityCountResponse
-	33, // 62: registry.metadata.v1.MetadataService.CountRepositories:output_type -> registry.metadata.v1.CountRepositoriesResponse
-	37, // 63: registry.metadata.v1.MetadataService.GetSecurityOverview:output_type -> registry.metadata.v1.SecurityOverview
-	37, // [37:64] is the sub-list for method output_type
-	10, // [10:37] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	38, // 10: registry.metadata.v1.TenantVulnerability.affected:type_name -> registry.metadata.v1.AffectedTag
+	47, // 11: registry.metadata.v1.TenantVulnerability.first_seen:type_name -> google.protobuf.Timestamp
+	47, // 12: registry.metadata.v1.TenantVulnerability.last_seen:type_name -> google.protobuf.Timestamp
+	39, // 13: registry.metadata.v1.ListTenantVulnerabilitiesResponse.vulnerabilities:type_name -> registry.metadata.v1.TenantVulnerability
+	47, // 14: registry.metadata.v1.ScanHistoryEntry.started_at:type_name -> google.protobuf.Timestamp
+	47, // 15: registry.metadata.v1.ScanHistoryEntry.completed_at:type_name -> google.protobuf.Timestamp
+	35, // 16: registry.metadata.v1.ScanHistoryEntry.severity_counts:type_name -> registry.metadata.v1.SecurityCounts
+	47, // 17: registry.metadata.v1.ListScanHistoryRequest.since:type_name -> google.protobuf.Timestamp
+	42, // 18: registry.metadata.v1.ListScanHistoryResponse.scans:type_name -> registry.metadata.v1.ScanHistoryEntry
+	6,  // 19: registry.metadata.v1.MetadataService.CreateRepository:input_type -> registry.metadata.v1.CreateRepositoryRequest
+	8,  // 20: registry.metadata.v1.MetadataService.GetRepository:input_type -> registry.metadata.v1.GetRepositoryRequest
+	9,  // 21: registry.metadata.v1.MetadataService.GetRepositoryByName:input_type -> registry.metadata.v1.GetRepositoryByNameRequest
+	10, // 22: registry.metadata.v1.MetadataService.ListRepositories:input_type -> registry.metadata.v1.ListRepositoriesRequest
+	11, // 23: registry.metadata.v1.MetadataService.DeleteRepository:input_type -> registry.metadata.v1.DeleteRepositoryRequest
+	12, // 24: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:input_type -> registry.metadata.v1.UpdateRepositoryQuotaRequest
+	7,  // 25: registry.metadata.v1.MetadataService.UpdateRepository:input_type -> registry.metadata.v1.UpdateRepositoryRequest
+	13, // 26: registry.metadata.v1.MetadataService.PutTag:input_type -> registry.metadata.v1.PutTagRequest
+	14, // 27: registry.metadata.v1.MetadataService.GetTag:input_type -> registry.metadata.v1.GetTagRequest
+	15, // 28: registry.metadata.v1.MetadataService.ListTags:input_type -> registry.metadata.v1.ListTagsRequest
+	16, // 29: registry.metadata.v1.MetadataService.DeleteTag:input_type -> registry.metadata.v1.DeleteTagRequest
+	17, // 30: registry.metadata.v1.MetadataService.PutManifest:input_type -> registry.metadata.v1.PutManifestRequest
+	18, // 31: registry.metadata.v1.MetadataService.GetManifest:input_type -> registry.metadata.v1.GetManifestRequest
+	19, // 32: registry.metadata.v1.MetadataService.DeleteManifest:input_type -> registry.metadata.v1.DeleteManifestRequest
+	20, // 33: registry.metadata.v1.MetadataService.ListUntaggedManifests:input_type -> registry.metadata.v1.ListUntaggedManifestsRequest
+	21, // 34: registry.metadata.v1.MetadataService.LinkBlob:input_type -> registry.metadata.v1.LinkBlobRequest
+	22, // 35: registry.metadata.v1.MetadataService.UnlinkBlob:input_type -> registry.metadata.v1.UnlinkBlobRequest
+	23, // 36: registry.metadata.v1.MetadataService.ListOrphanedBlobs:input_type -> registry.metadata.v1.ListOrphanedBlobsRequest
+	24, // 37: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:input_type -> registry.metadata.v1.GetTenantQuotaUsageRequest
+	25, // 38: registry.metadata.v1.MetadataService.UpdateTenantQuota:input_type -> registry.metadata.v1.UpdateTenantQuotaRequest
+	26, // 39: registry.metadata.v1.MetadataService.IncrementTenantStorage:input_type -> registry.metadata.v1.IncrementTenantStorageRequest
+	27, // 40: registry.metadata.v1.MetadataService.DecrementTenantStorage:input_type -> registry.metadata.v1.DecrementTenantStorageRequest
+	28, // 41: registry.metadata.v1.MetadataService.UpdateScanStatus:input_type -> registry.metadata.v1.UpdateScanStatusRequest
+	29, // 42: registry.metadata.v1.MetadataService.GetScanResult:input_type -> registry.metadata.v1.GetScanResultRequest
+	30, // 43: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:input_type -> registry.metadata.v1.GetTenantVulnerabilityCountRequest
+	32, // 44: registry.metadata.v1.MetadataService.CountRepositories:input_type -> registry.metadata.v1.CountRepositoriesRequest
+	34, // 45: registry.metadata.v1.MetadataService.GetSecurityOverview:input_type -> registry.metadata.v1.GetSecurityOverviewRequest
+	40, // 46: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:input_type -> registry.metadata.v1.ListTenantVulnerabilitiesRequest
+	43, // 47: registry.metadata.v1.MetadataService.ListScanHistory:input_type -> registry.metadata.v1.ListScanHistoryRequest
+	0,  // 48: registry.metadata.v1.MetadataService.CreateRepository:output_type -> registry.metadata.v1.Repository
+	0,  // 49: registry.metadata.v1.MetadataService.GetRepository:output_type -> registry.metadata.v1.Repository
+	0,  // 50: registry.metadata.v1.MetadataService.GetRepositoryByName:output_type -> registry.metadata.v1.Repository
+	0,  // 51: registry.metadata.v1.MetadataService.ListRepositories:output_type -> registry.metadata.v1.Repository
+	48, // 52: registry.metadata.v1.MetadataService.DeleteRepository:output_type -> google.protobuf.Empty
+	0,  // 53: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:output_type -> registry.metadata.v1.Repository
+	0,  // 54: registry.metadata.v1.MetadataService.UpdateRepository:output_type -> registry.metadata.v1.Repository
+	1,  // 55: registry.metadata.v1.MetadataService.PutTag:output_type -> registry.metadata.v1.Tag
+	1,  // 56: registry.metadata.v1.MetadataService.GetTag:output_type -> registry.metadata.v1.Tag
+	1,  // 57: registry.metadata.v1.MetadataService.ListTags:output_type -> registry.metadata.v1.Tag
+	48, // 58: registry.metadata.v1.MetadataService.DeleteTag:output_type -> google.protobuf.Empty
+	2,  // 59: registry.metadata.v1.MetadataService.PutManifest:output_type -> registry.metadata.v1.Manifest
+	2,  // 60: registry.metadata.v1.MetadataService.GetManifest:output_type -> registry.metadata.v1.Manifest
+	48, // 61: registry.metadata.v1.MetadataService.DeleteManifest:output_type -> google.protobuf.Empty
+	2,  // 62: registry.metadata.v1.MetadataService.ListUntaggedManifests:output_type -> registry.metadata.v1.Manifest
+	48, // 63: registry.metadata.v1.MetadataService.LinkBlob:output_type -> google.protobuf.Empty
+	48, // 64: registry.metadata.v1.MetadataService.UnlinkBlob:output_type -> google.protobuf.Empty
+	3,  // 65: registry.metadata.v1.MetadataService.ListOrphanedBlobs:output_type -> registry.metadata.v1.BlobRef
+	4,  // 66: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:output_type -> registry.metadata.v1.QuotaUsage
+	4,  // 67: registry.metadata.v1.MetadataService.UpdateTenantQuota:output_type -> registry.metadata.v1.QuotaUsage
+	48, // 68: registry.metadata.v1.MetadataService.IncrementTenantStorage:output_type -> google.protobuf.Empty
+	48, // 69: registry.metadata.v1.MetadataService.DecrementTenantStorage:output_type -> google.protobuf.Empty
+	48, // 70: registry.metadata.v1.MetadataService.UpdateScanStatus:output_type -> google.protobuf.Empty
+	5,  // 71: registry.metadata.v1.MetadataService.GetScanResult:output_type -> registry.metadata.v1.ScanResult
+	31, // 72: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:output_type -> registry.metadata.v1.VulnerabilityCountResponse
+	33, // 73: registry.metadata.v1.MetadataService.CountRepositories:output_type -> registry.metadata.v1.CountRepositoriesResponse
+	37, // 74: registry.metadata.v1.MetadataService.GetSecurityOverview:output_type -> registry.metadata.v1.SecurityOverview
+	41, // 75: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:output_type -> registry.metadata.v1.ListTenantVulnerabilitiesResponse
+	44, // 76: registry.metadata.v1.MetadataService.ListScanHistory:output_type -> registry.metadata.v1.ListScanHistoryResponse
+	48, // [48:77] is the sub-list for method output_type
+	19, // [19:48] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_metadata_v1_metadata_proto_init() }
@@ -3786,6 +4487,90 @@ func file_metadata_v1_metadata_proto_init() {
 				return nil
 			}
 		}
+		file_metadata_v1_metadata_proto_msgTypes[38].Exporter = func(v any, i int) any {
+			switch v := v.(*AffectedTag); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[39].Exporter = func(v any, i int) any {
+			switch v := v.(*TenantVulnerability); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[40].Exporter = func(v any, i int) any {
+			switch v := v.(*ListTenantVulnerabilitiesRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[41].Exporter = func(v any, i int) any {
+			switch v := v.(*ListTenantVulnerabilitiesResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[42].Exporter = func(v any, i int) any {
+			switch v := v.(*ScanHistoryEntry); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[43].Exporter = func(v any, i int) any {
+			switch v := v.(*ListScanHistoryRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[44].Exporter = func(v any, i int) any {
+			switch v := v.(*ListScanHistoryResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3793,7 +4578,7 @@ func file_metadata_v1_metadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_metadata_v1_metadata_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   40,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

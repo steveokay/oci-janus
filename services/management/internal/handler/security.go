@@ -35,12 +35,19 @@ type SecurityOverviewResponse struct {
 	DaysSinceLastScan        int64                `json:"days_since_last_scan"`
 }
 
-// RegisterSecurity mounts FE-API-020's GET /api/v1/security/overview onto mux.
-// The route is called from handler.Register; kept in its own method so the
-// security surface can grow (e.g. /api/v1/security/findings) without bloating
-// the main Register switch.
+// RegisterSecurity mounts the /api/v1/security/* routes onto mux. The
+// surface grew across multiple FE-API tickets (016, 020, 014, 015); each
+// handler lives in its own file so concurrent edits don't conflict.
+//
+// Routes:
+//
+//	GET /api/v1/security/overview         — FE-API-020 (tenant aggregate)
+//	GET /api/v1/security/vulnerabilities  — FE-API-014 (workspace-wide CVE list)
+//	GET /api/v1/security/scans            — FE-API-015 (flat scan history)
 func (h *Handler) RegisterSecurity(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
 	mux.Handle("GET /api/v1/security/overview", authMW(http.HandlerFunc(h.handleSecurityOverview)))
+	mux.Handle("GET /api/v1/security/vulnerabilities", authMW(http.HandlerFunc(h.handleListVulnerabilities)))
+	mux.Handle("GET /api/v1/security/scans", authMW(http.HandlerFunc(h.handleListScanHistory)))
 }
 
 // handleSecurityOverview returns the tenant-scoped security summary backing
