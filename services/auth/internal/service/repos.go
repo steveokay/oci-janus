@@ -32,6 +32,13 @@ type userRepo interface {
 	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error)
 	// CountByTenant returns the user count for a tenant (FE-API-028).
 	CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
+	// SSO methods (FE-API-034). GetByEmail is used to match an IdP-asserted
+	// email to an existing user; CreateSSOUser provisions a new account when
+	// auto_provision=true; TouchLastLogin records the SSO login time for
+	// existing users.
+	GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
+	CreateSSOUser(ctx context.Context, req repository.CreateSSOUserRequest) (*repository.User, error)
+	TouchLastLogin(ctx context.Context, id uuid.UUID) error
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

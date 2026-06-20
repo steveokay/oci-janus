@@ -111,6 +111,78 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*User, erro
 	return r.scanOne(ctx, q, id)
 }
 
+// GetByEmail returns the user with the given email in the given tenant.
+// Used by the FE-API-034 SSO callback to match an IdP-provided email to an
+// existing account before deciding whether to auto-provision. Email match is
+// case-insensitive at the application layer — IdPs are inconsistent about
+// casing so we compare lowercase.
+//
+// Returns ErrNotFound if no row matches.
+func (r *UserRepository) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at
+		FROM   users
+		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2)`
+
+	return r.scanOne(ctx, q, tenantID, email)
+}
+
+// CreateSSOUserRequest carries the validated inputs for provisioning an
+// account from an SSO callback. PasswordHash is intentionally empty — SSO
+// users authenticate via the IdP, never via the local password endpoint.
+type CreateSSOUserRequest struct {
+	TenantID      uuid.UUID
+	Username      string
+	Email         string
+	DisplayName   string
+	SSOProviderID uuid.UUID
+}
+
+// CreateSSOUser inserts a user provisioned from an SSO callback.
+// password_hash is set to the empty string so the local password login path
+// cannot succeed for this account (ValidatePassword rejects "" and Argon2
+// verify never returns true against an empty hash).
+//
+// Returns ErrAlreadyExists on a (tenant_id, username) or (tenant_id, email)
+// collision — the caller may then re-query by email and treat that row as
+// the same user (race with another concurrent SSO callback).
+func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserRequest) (*User, error) {
+	const q = `
+		INSERT INTO users (tenant_id, username, email, password_hash,
+		                   display_name, sso_provider_id)
+		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5)
+		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
+		          password_hash, is_active, failed_logins, locked_until,
+		          last_login_at, created_at, updated_at`
+
+	var u User
+	err := r.pool.QueryRow(ctx, q,
+		req.TenantID, req.Username, req.Email, req.DisplayName, req.SSOProviderID,
+	).Scan(
+		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
+		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyExists
+		}
+		return nil, fmt.Errorf("create sso user: %w", err)
+	}
+	return &u, nil
+}
+
+// TouchLastLogin sets last_login_at to NOW for an existing user. Called from
+// the SSO callback for users that already exist, so the audit timeline shows
+// the most recent SSO authentication.
+func (r *UserRepository) TouchLastLogin(ctx context.Context, id uuid.UUID) error {
+	const q = `UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1`
+	_, err := r.pool.Exec(ctx, q, id)
+	return err
+}
+
 // RecordFailedLogin increments failed_logins and returns the new count.
 // The caller uses the count to decide whether to lock the account.
 func (r *UserRepository) RecordFailedLogin(ctx context.Context, id uuid.UUID) (int, error) {
