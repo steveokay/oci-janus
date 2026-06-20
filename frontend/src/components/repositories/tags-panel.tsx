@@ -77,11 +77,22 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
               // cell's content gets pointer-events:none so clicks fall
               // through to the row; the CopyButton column re-enables
               // pointer-events with stopPropagation so it acts on its own.
-              const open = () =>
-                void navigate({
-                  to: "/repositories/$org/$repo/tags/$tag",
-                  params: { org, repo, tag: t.name },
-                });
+              const target = {
+                to: "/repositories/$org/$repo/tags/$tag" as const,
+                params: { org, repo, tag: t.name },
+              };
+              const open = () => {
+                // Diagnostic — leave in for now so the user can prove from
+                // the console whether the click event reaches this handler.
+                // Remove once the route navigation is confirmed working in
+                // the user's browser.
+                console.log("[beacon] tag-row navigate", target);
+                void navigate(target);
+              };
+              // Concrete URL for the row — used as a real <a href> so even
+              // if React's synthetic event system doesn't fire on <tr>,
+              // browser native navigation still resolves the click.
+              const hrefTo = `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(t.name)}`;
               return (
                 <TableRow
                   key={`${t.name}-${t.manifest_digest}`}
@@ -99,10 +110,23 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
                     }
                   }}
                 >
-                  <TableCell className="pointer-events-none">
-                    <Badge tone="accent">
-                      <TagIcon className="size-3" /> {t.name}
-                    </Badge>
+                  <TableCell className="p-0">
+                    {/* Native anchor — fills the cell + carries href so
+                        browser navigation resolves even if React's synthetic
+                        click misses. TanStack Router's history listener
+                        upgrades the navigation to SPA in-app. */}
+                    <a
+                      href={hrefTo}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        open();
+                      }}
+                      className="block px-4 py-3 text-inherit no-underline"
+                    >
+                      <Badge tone="accent">
+                        <TagIcon className="size-3" /> {t.name}
+                      </Badge>
+                    </a>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
