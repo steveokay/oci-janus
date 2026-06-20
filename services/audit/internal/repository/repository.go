@@ -254,6 +254,98 @@ func (r *Repository) GetRepoActivity(
 	return out, rows.Err()
 }
 
+// NotificationRow is one row returned by GetNotifications. Shares the same
+// shape as RepoActivityRow because the projection logic in the handler is
+// nearly identical — only the filter (tenant-wide vs. single repo) differs.
+type NotificationRow struct {
+	ID         uuid.UUID
+	ActorID    string
+	ActorType  string
+	Action     string
+	Resource   string
+	Outcome    string
+	Metadata   json.RawMessage
+	OccurredAt time.Time
+}
+
+// GetNotifications returns operator-facing audit events for an entire tenant,
+// ordered newest-first then by event_id DESC. Used by FE-API-008 to populate
+// the topbar notification bell.
+//
+// Unlike GetRepoActivity this does NOT filter on metadata.raw.repository_name
+// — webhook delivery failures and other tenant-wide events have no
+// repository_name in their payload and must still surface in the bell. The
+// query plan uses idx_audit_events_tenant_occurred (tenant_id, occurred_at
+// DESC) which already exists from the initial schema.
+//
+// eventTypes is REQUIRED to be a non-empty caller-supplied allowlist. The
+// handler is responsible for substituting its operator-facing default when
+// the caller did not specify any types. Empty slice ⇒ no rows returned
+// (the IN clause would match nothing). The caller MUST validate each entry
+// against an allowlist before passing them through here — even though
+// values are bound as a parameterised array, restricting the set keeps
+// this layer honest about which actions a frontend can request.
+//
+// since lower-bounds occurred_at. cursorTime + cursorID, when both non-zero,
+// drive keyset pagination using the lexicographic (occurred_at, id) pair so
+// stable pagination is possible even when many events share an instant.
+func (r *Repository) GetNotifications(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	since time.Time,
+	cursorTime time.Time,
+	cursorID uuid.UUID,
+	eventTypes []string,
+	limit int,
+) ([]*NotificationRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if len(eventTypes) == 0 {
+		return nil, nil
+	}
+
+	// Same keyset-pagination trick as GetRepoActivity — supply a far-future
+	// sentinel when no cursor so the WHERE clause is still parameterised and
+	// the planner picks the tenant index regardless.
+	cursorActive := !cursorTime.IsZero()
+	if !cursorActive {
+		cursorTime = time.Now().Add(100 * 365 * 24 * time.Hour)
+		cursorID = uuid.Nil
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, actor_id, actor_type, action, resource, outcome, metadata, occurred_at
+		 FROM audit_events
+		 WHERE tenant_id = $1
+		   AND occurred_at >= $2
+		   AND action = ANY($3)
+		   AND ($4 = FALSE OR occurred_at < $5 OR (occurred_at = $5 AND id < $6))
+		 ORDER BY occurred_at DESC, id DESC
+		 LIMIT $7`,
+		tenantID, since, eventTypes,
+		cursorActive, cursorTime, cursorID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("audit GetNotifications: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*NotificationRow
+	for rows.Next() {
+		e := &NotificationRow{}
+		if err := rows.Scan(
+			&e.ID, &e.ActorID, &e.ActorType, &e.Action, &e.Resource,
+			&e.Outcome, &e.Metadata, &e.OccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("audit GetNotifications scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CountPulls returns the number of pull.image audit events for a tenant since the given time.
 func (r *Repository) CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error) {
 	var count int64
