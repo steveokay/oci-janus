@@ -49,6 +49,7 @@ const (
 	MetadataService_GetSecurityOverview_FullMethodName         = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
 	MetadataService_ListTenantVulnerabilities_FullMethodName   = "/registry.metadata.v1.MetadataService/ListTenantVulnerabilities"
 	MetadataService_ListScanHistory_FullMethodName             = "/registry.metadata.v1.MetadataService/ListScanHistory"
+	MetadataService_ListTenantRemediations_FullMethodName      = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -101,6 +102,12 @@ type MetadataServiceClient interface {
 	// completed_at DESC. Backs GET /api/v1/security/scans on
 	// registry-management.
 	ListScanHistory(ctx context.Context, in *ListScanHistoryRequest, opts ...grpc.CallOption) (*ListScanHistoryResponse, error)
+	// ListTenantRemediations (FE-API-017) — actionable upgrade groupings:
+	// "upgrade package X from version A to version B fixes N CVEs across M
+	// (repo, tag) tuples." Computed from the latest complete scan per
+	// (tenant, repo, manifest_digest). Backs GET /api/v1/security/remediation
+	// on registry-management.
+	ListTenantRemediations(ctx context.Context, in *ListTenantRemediationsRequest, opts ...grpc.CallOption) (*ListTenantRemediationsResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -493,6 +500,16 @@ func (c *metadataServiceClient) ListScanHistory(ctx context.Context, in *ListSca
 	return out, nil
 }
 
+func (c *metadataServiceClient) ListTenantRemediations(ctx context.Context, in *ListTenantRemediationsRequest, opts ...grpc.CallOption) (*ListTenantRemediationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantRemediationsResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListTenantRemediations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -543,6 +560,12 @@ type MetadataServiceServer interface {
 	// completed_at DESC. Backs GET /api/v1/security/scans on
 	// registry-management.
 	ListScanHistory(context.Context, *ListScanHistoryRequest) (*ListScanHistoryResponse, error)
+	// ListTenantRemediations (FE-API-017) — actionable upgrade groupings:
+	// "upgrade package X from version A to version B fixes N CVEs across M
+	// (repo, tag) tuples." Computed from the latest complete scan per
+	// (tenant, repo, manifest_digest). Backs GET /api/v1/security/remediation
+	// on registry-management.
+	ListTenantRemediations(context.Context, *ListTenantRemediationsRequest) (*ListTenantRemediationsResponse, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -635,6 +658,9 @@ func (UnimplementedMetadataServiceServer) ListTenantVulnerabilities(context.Cont
 }
 func (UnimplementedMetadataServiceServer) ListScanHistory(context.Context, *ListScanHistoryRequest) (*ListScanHistoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListScanHistory not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListTenantRemediations(context.Context, *ListTenantRemediationsRequest) (*ListTenantRemediationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenantRemediations not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1182,6 +1208,24 @@ func _MetadataService_ListScanHistory_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_ListTenantRemediations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantRemediationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListTenantRemediations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListTenantRemediations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListTenantRemediations(ctx, req.(*ListTenantRemediationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1288,6 +1332,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListScanHistory",
 			Handler:    _MetadataService_ListScanHistory_Handler,
+		},
+		{
+			MethodName: "ListTenantRemediations",
+			Handler:    _MetadataService_ListTenantRemediations_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

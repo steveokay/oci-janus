@@ -3236,6 +3236,302 @@ func (x *ListScanHistoryResponse) GetNextPageToken() string {
 	return ""
 }
 
+// RemediationAffected identifies one (repo, tag, digest) tuple where a
+// remediation grouping applies. `tag` is empty when the manifest_digest is
+// no longer tagged at the time of the latest scan.
+type RemediationAffected struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Repo   string `protobuf:"bytes,1,opt,name=repo,proto3" json:"repo,omitempty"` // "org/name" composite
+	Tag    string `protobuf:"bytes,2,opt,name=tag,proto3" json:"tag,omitempty"`
+	Digest string `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"` // manifest digest
+}
+
+func (x *RemediationAffected) Reset() {
+	*x = RemediationAffected{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[45]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RemediationAffected) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemediationAffected) ProtoMessage() {}
+
+func (x *RemediationAffected) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[45]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemediationAffected.ProtoReflect.Descriptor instead.
+func (*RemediationAffected) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *RemediationAffected) GetRepo() string {
+	if x != nil {
+		return x.Repo
+	}
+	return ""
+}
+
+func (x *RemediationAffected) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+func (x *RemediationAffected) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+// Remediation describes one actionable upgrade grouping: bumping
+// `package_name` from `from_version` to `to_version` would fix every CVE
+// listed in `cves_fixed`. `affected` is a deduplicated list of (repo, tag,
+// digest) tuples where this upgrade applies, capped at 10 entries server-
+// side (full count in `affected_count`). `max_severity` is the worst
+// severity across the grouped findings.
+type Remediation struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	PackageName    string                 `protobuf:"bytes,1,opt,name=package_name,json=packageName,proto3" json:"package_name,omitempty"`
+	FromVersion    string                 `protobuf:"bytes,2,opt,name=from_version,json=fromVersion,proto3" json:"from_version,omitempty"`
+	ToVersion      string                 `protobuf:"bytes,3,opt,name=to_version,json=toVersion,proto3" json:"to_version,omitempty"`
+	CvesFixed      []string               `protobuf:"bytes,4,rep,name=cves_fixed,json=cvesFixed,proto3" json:"cves_fixed,omitempty"`
+	CvesFixedCount int32                  `protobuf:"varint,5,opt,name=cves_fixed_count,json=cvesFixedCount,proto3" json:"cves_fixed_count,omitempty"`
+	MaxSeverity    string                 `protobuf:"bytes,6,opt,name=max_severity,json=maxSeverity,proto3" json:"max_severity,omitempty"` // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE
+	Affected       []*RemediationAffected `protobuf:"bytes,7,rep,name=affected,proto3" json:"affected,omitempty"`
+	AffectedCount  int32                  `protobuf:"varint,8,opt,name=affected_count,json=affectedCount,proto3" json:"affected_count,omitempty"`
+}
+
+func (x *Remediation) Reset() {
+	*x = Remediation{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[46]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *Remediation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Remediation) ProtoMessage() {}
+
+func (x *Remediation) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[46]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Remediation.ProtoReflect.Descriptor instead.
+func (*Remediation) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *Remediation) GetPackageName() string {
+	if x != nil {
+		return x.PackageName
+	}
+	return ""
+}
+
+func (x *Remediation) GetFromVersion() string {
+	if x != nil {
+		return x.FromVersion
+	}
+	return ""
+}
+
+func (x *Remediation) GetToVersion() string {
+	if x != nil {
+		return x.ToVersion
+	}
+	return ""
+}
+
+func (x *Remediation) GetCvesFixed() []string {
+	if x != nil {
+		return x.CvesFixed
+	}
+	return nil
+}
+
+func (x *Remediation) GetCvesFixedCount() int32 {
+	if x != nil {
+		return x.CvesFixedCount
+	}
+	return 0
+}
+
+func (x *Remediation) GetMaxSeverity() string {
+	if x != nil {
+		return x.MaxSeverity
+	}
+	return ""
+}
+
+func (x *Remediation) GetAffected() []*RemediationAffected {
+	if x != nil {
+		return x.Affected
+	}
+	return nil
+}
+
+func (x *Remediation) GetAffectedCount() int32 {
+	if x != nil {
+		return x.AffectedCount
+	}
+	return 0
+}
+
+type ListTenantRemediationsRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// page_token is an opaque cursor returned by a previous call. Internally
+	// base64(max_severity_rank|-cves_fixed_count|package_name|from_version|to_version).
+	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// page_size caps results per call (default 50, max 200 enforced server-side).
+	PageSize int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+}
+
+func (x *ListTenantRemediationsRequest) Reset() {
+	*x = ListTenantRemediationsRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[47]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListTenantRemediationsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantRemediationsRequest) ProtoMessage() {}
+
+func (x *ListTenantRemediationsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[47]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantRemediationsRequest.ProtoReflect.Descriptor instead.
+func (*ListTenantRemediationsRequest) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *ListTenantRemediationsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ListTenantRemediationsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListTenantRemediationsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type ListTenantRemediationsResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Remediations  []*Remediation `protobuf:"bytes,1,rep,name=remediations,proto3" json:"remediations,omitempty"`
+	NextPageToken string         `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+}
+
+func (x *ListTenantRemediationsResponse) Reset() {
+	*x = ListTenantRemediationsResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_metadata_v1_metadata_proto_msgTypes[48]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListTenantRemediationsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTenantRemediationsResponse) ProtoMessage() {}
+
+func (x *ListTenantRemediationsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_v1_metadata_proto_msgTypes[48]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTenantRemediationsResponse.ProtoReflect.Descriptor instead.
+func (*ListTenantRemediationsResponse) Descriptor() ([]byte, []int) {
+	return file_metadata_v1_metadata_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ListTenantRemediationsResponse) GetRemediations() []*Remediation {
+	if x != nil {
+		return x.Remediations
+	}
+	return nil
+}
+
+func (x *ListTenantRemediationsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_metadata_v1_metadata_proto protoreflect.FileDescriptor
 
 var file_metadata_v1_metadata_proto_rawDesc = []byte{
@@ -3687,7 +3983,50 @@ var file_metadata_v1_metadata_proto_rawDesc = []byte{
 	0x72, 0x79, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x05, 0x73, 0x63, 0x61, 0x6e, 0x73, 0x12, 0x26,
 	0x0a, 0x0f, 0x6e, 0x65, 0x78, 0x74, 0x5f, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65,
 	0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x78, 0x74, 0x50, 0x61, 0x67,
-	0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x32, 0xcb, 0x16, 0x0a, 0x0f, 0x4d, 0x65, 0x74, 0x61, 0x64,
+	0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x53, 0x0a, 0x13, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69,
+	0x61, 0x74, 0x69, 0x6f, 0x6e, 0x41, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x12, 0x12, 0x0a,
+	0x04, 0x72, 0x65, 0x70, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x72, 0x65, 0x70,
+	0x6f, 0x12, 0x10, 0x0a, 0x03, 0x74, 0x61, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03,
+	0x74, 0x61, 0x67, 0x12, 0x16, 0x0a, 0x06, 0x64, 0x69, 0x67, 0x65, 0x73, 0x74, 0x18, 0x03, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x06, 0x64, 0x69, 0x67, 0x65, 0x73, 0x74, 0x22, 0xcc, 0x02, 0x0a, 0x0b,
+	0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x21, 0x0a, 0x0c, 0x70,
+	0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x0b, 0x70, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x21,
+	0x0a, 0x0c, 0x66, 0x72, 0x6f, 0x6d, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x66, 0x72, 0x6f, 0x6d, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f,
+	0x6e, 0x12, 0x1d, 0x0a, 0x0a, 0x74, 0x6f, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18,
+	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x74, 0x6f, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e,
+	0x12, 0x1d, 0x0a, 0x0a, 0x63, 0x76, 0x65, 0x73, 0x5f, 0x66, 0x69, 0x78, 0x65, 0x64, 0x18, 0x04,
+	0x20, 0x03, 0x28, 0x09, 0x52, 0x09, 0x63, 0x76, 0x65, 0x73, 0x46, 0x69, 0x78, 0x65, 0x64, 0x12,
+	0x28, 0x0a, 0x10, 0x63, 0x76, 0x65, 0x73, 0x5f, 0x66, 0x69, 0x78, 0x65, 0x64, 0x5f, 0x63, 0x6f,
+	0x75, 0x6e, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0e, 0x63, 0x76, 0x65, 0x73, 0x46,
+	0x69, 0x78, 0x65, 0x64, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x6d, 0x61, 0x78,
+	0x5f, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x0b, 0x6d, 0x61, 0x78, 0x53, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x12, 0x45, 0x0a, 0x08,
+	0x61, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x18, 0x07, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x29,
+	0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61,
+	0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f,
+	0x6e, 0x41, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x52, 0x08, 0x61, 0x66, 0x66, 0x65, 0x63,
+	0x74, 0x65, 0x64, 0x12, 0x25, 0x0a, 0x0e, 0x61, 0x66, 0x66, 0x65, 0x63, 0x74, 0x65, 0x64, 0x5f,
+	0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0d, 0x61, 0x66, 0x66,
+	0x65, 0x63, 0x74, 0x65, 0x64, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0x78, 0x0a, 0x1d, 0x4c, 0x69,
+	0x73, 0x74, 0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x74,
+	0x65, 0x6e, 0x61, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
+	0x74, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x70, 0x61, 0x67, 0x65,
+	0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x70, 0x61,
+	0x67, 0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x61, 0x67, 0x65, 0x5f,
+	0x73, 0x69, 0x7a, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x70, 0x61, 0x67, 0x65,
+	0x53, 0x69, 0x7a, 0x65, 0x22, 0x8f, 0x01, 0x0a, 0x1e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65, 0x6e,
+	0x61, 0x6e, 0x74, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x45, 0x0a, 0x0c, 0x72, 0x65, 0x6d, 0x65, 0x64,
+	0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x21, 0x2e,
+	0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74,
+	0x61, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x52, 0x0c, 0x72, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x26,
+	0x0a, 0x0f, 0x6e, 0x65, 0x78, 0x74, 0x5f, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x74, 0x6f, 0x6b, 0x65,
+	0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x78, 0x74, 0x50, 0x61, 0x67,
+	0x65, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x32, 0xd1, 0x17, 0x0a, 0x0f, 0x4d, 0x65, 0x74, 0x61, 0x64,
 	0x61, 0x74, 0x61, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x63, 0x0a, 0x10, 0x43, 0x72,
 	0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x70, 0x6f, 0x73, 0x69, 0x74, 0x6f, 0x72, 0x79, 0x12, 0x2d,
 	0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61,
@@ -3868,12 +4207,20 @@ var file_metadata_v1_metadata_proto_rawDesc = []byte{
 	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2d, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79,
 	0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73,
 	0x74, 0x53, 0x63, 0x61, 0x6e, 0x48, 0x69, 0x73, 0x74, 0x6f, 0x72, 0x79, 0x52, 0x65, 0x73, 0x70,
-	0x6f, 0x6e, 0x73, 0x65, 0x42, 0x44, 0x5a, 0x42, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63,
-	0x6f, 0x6d, 0x2f, 0x73, 0x74, 0x65, 0x76, 0x65, 0x6f, 0x6b, 0x61, 0x79, 0x2f, 0x6f, 0x63, 0x69,
-	0x2d, 0x6a, 0x61, 0x6e, 0x75, 0x73, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e,
-	0x2f, 0x67, 0x6f, 0x2f, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2f, 0x76, 0x31, 0x3b,
-	0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74,
-	0x6f, 0x33,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x83, 0x01, 0x0a, 0x16, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65, 0x6e,
+	0x61, 0x6e, 0x74, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12,
+	0x33, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e, 0x6d, 0x65, 0x74, 0x61, 0x64,
+	0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x65, 0x6e, 0x61, 0x6e,
+	0x74, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x34, 0x2e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x2e,
+	0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x2e, 0x76, 0x31, 0x2e, 0x4c, 0x69, 0x73, 0x74,
+	0x54, 0x65, 0x6e, 0x61, 0x6e, 0x74, 0x52, 0x65, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74, 0x69, 0x6f,
+	0x6e, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x44, 0x5a, 0x42, 0x67, 0x69,
+	0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x73, 0x74, 0x65, 0x76, 0x65, 0x6f, 0x6b,
+	0x61, 0x79, 0x2f, 0x6f, 0x63, 0x69, 0x2d, 0x6a, 0x61, 0x6e, 0x75, 0x73, 0x2f, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x2f, 0x67, 0x6f, 0x2f, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61,
+	0x74, 0x61, 0x2f, 0x76, 0x31, 0x3b, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x76, 0x31,
+	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -3888,7 +4235,7 @@ func file_metadata_v1_metadata_proto_rawDescGZIP() []byte {
 	return file_metadata_v1_metadata_proto_rawDescData
 }
 
-var file_metadata_v1_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_metadata_v1_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_metadata_v1_metadata_proto_goTypes = []any{
 	(*Repository)(nil),                         // 0: registry.metadata.v1.Repository
 	(*Tag)(nil),                                // 1: registry.metadata.v1.Tag
@@ -3935,94 +4282,102 @@ var file_metadata_v1_metadata_proto_goTypes = []any{
 	(*ScanHistoryEntry)(nil),                   // 42: registry.metadata.v1.ScanHistoryEntry
 	(*ListScanHistoryRequest)(nil),             // 43: registry.metadata.v1.ListScanHistoryRequest
 	(*ListScanHistoryResponse)(nil),            // 44: registry.metadata.v1.ListScanHistoryResponse
-	nil,                                        // 45: registry.metadata.v1.ScanResult.SeverityCountsEntry
-	nil,                                        // 46: registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
-	(*timestamppb.Timestamp)(nil),              // 47: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),                      // 48: google.protobuf.Empty
+	(*RemediationAffected)(nil),                // 45: registry.metadata.v1.RemediationAffected
+	(*Remediation)(nil),                        // 46: registry.metadata.v1.Remediation
+	(*ListTenantRemediationsRequest)(nil),      // 47: registry.metadata.v1.ListTenantRemediationsRequest
+	(*ListTenantRemediationsResponse)(nil),     // 48: registry.metadata.v1.ListTenantRemediationsResponse
+	nil,                                        // 49: registry.metadata.v1.ScanResult.SeverityCountsEntry
+	nil,                                        // 50: registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
+	(*timestamppb.Timestamp)(nil),              // 51: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),                      // 52: google.protobuf.Empty
 }
 var file_metadata_v1_metadata_proto_depIdxs = []int32{
-	47, // 0: registry.metadata.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
-	47, // 1: registry.metadata.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
-	47, // 2: registry.metadata.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
-	47, // 3: registry.metadata.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
-	45, // 4: registry.metadata.v1.ScanResult.severity_counts:type_name -> registry.metadata.v1.ScanResult.SeverityCountsEntry
-	47, // 5: registry.metadata.v1.ScanResult.started_at:type_name -> google.protobuf.Timestamp
-	47, // 6: registry.metadata.v1.ScanResult.completed_at:type_name -> google.protobuf.Timestamp
-	46, // 7: registry.metadata.v1.UpdateScanStatusRequest.severity_counts:type_name -> registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
+	51, // 0: registry.metadata.v1.Repository.created_at:type_name -> google.protobuf.Timestamp
+	51, // 1: registry.metadata.v1.Tag.updated_at:type_name -> google.protobuf.Timestamp
+	51, // 2: registry.metadata.v1.Tag.created_at:type_name -> google.protobuf.Timestamp
+	51, // 3: registry.metadata.v1.Manifest.created_at:type_name -> google.protobuf.Timestamp
+	49, // 4: registry.metadata.v1.ScanResult.severity_counts:type_name -> registry.metadata.v1.ScanResult.SeverityCountsEntry
+	51, // 5: registry.metadata.v1.ScanResult.started_at:type_name -> google.protobuf.Timestamp
+	51, // 6: registry.metadata.v1.ScanResult.completed_at:type_name -> google.protobuf.Timestamp
+	50, // 7: registry.metadata.v1.UpdateScanStatusRequest.severity_counts:type_name -> registry.metadata.v1.UpdateScanStatusRequest.SeverityCountsEntry
 	35, // 8: registry.metadata.v1.SecurityOverview.severity_counts:type_name -> registry.metadata.v1.SecurityCounts
 	36, // 9: registry.metadata.v1.SecurityOverview.scan_coverage:type_name -> registry.metadata.v1.ScanCoverage
 	38, // 10: registry.metadata.v1.TenantVulnerability.affected:type_name -> registry.metadata.v1.AffectedTag
-	47, // 11: registry.metadata.v1.TenantVulnerability.first_seen:type_name -> google.protobuf.Timestamp
-	47, // 12: registry.metadata.v1.TenantVulnerability.last_seen:type_name -> google.protobuf.Timestamp
+	51, // 11: registry.metadata.v1.TenantVulnerability.first_seen:type_name -> google.protobuf.Timestamp
+	51, // 12: registry.metadata.v1.TenantVulnerability.last_seen:type_name -> google.protobuf.Timestamp
 	39, // 13: registry.metadata.v1.ListTenantVulnerabilitiesResponse.vulnerabilities:type_name -> registry.metadata.v1.TenantVulnerability
-	47, // 14: registry.metadata.v1.ScanHistoryEntry.started_at:type_name -> google.protobuf.Timestamp
-	47, // 15: registry.metadata.v1.ScanHistoryEntry.completed_at:type_name -> google.protobuf.Timestamp
+	51, // 14: registry.metadata.v1.ScanHistoryEntry.started_at:type_name -> google.protobuf.Timestamp
+	51, // 15: registry.metadata.v1.ScanHistoryEntry.completed_at:type_name -> google.protobuf.Timestamp
 	35, // 16: registry.metadata.v1.ScanHistoryEntry.severity_counts:type_name -> registry.metadata.v1.SecurityCounts
-	47, // 17: registry.metadata.v1.ListScanHistoryRequest.since:type_name -> google.protobuf.Timestamp
+	51, // 17: registry.metadata.v1.ListScanHistoryRequest.since:type_name -> google.protobuf.Timestamp
 	42, // 18: registry.metadata.v1.ListScanHistoryResponse.scans:type_name -> registry.metadata.v1.ScanHistoryEntry
-	6,  // 19: registry.metadata.v1.MetadataService.CreateRepository:input_type -> registry.metadata.v1.CreateRepositoryRequest
-	8,  // 20: registry.metadata.v1.MetadataService.GetRepository:input_type -> registry.metadata.v1.GetRepositoryRequest
-	9,  // 21: registry.metadata.v1.MetadataService.GetRepositoryByName:input_type -> registry.metadata.v1.GetRepositoryByNameRequest
-	10, // 22: registry.metadata.v1.MetadataService.ListRepositories:input_type -> registry.metadata.v1.ListRepositoriesRequest
-	11, // 23: registry.metadata.v1.MetadataService.DeleteRepository:input_type -> registry.metadata.v1.DeleteRepositoryRequest
-	12, // 24: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:input_type -> registry.metadata.v1.UpdateRepositoryQuotaRequest
-	7,  // 25: registry.metadata.v1.MetadataService.UpdateRepository:input_type -> registry.metadata.v1.UpdateRepositoryRequest
-	13, // 26: registry.metadata.v1.MetadataService.PutTag:input_type -> registry.metadata.v1.PutTagRequest
-	14, // 27: registry.metadata.v1.MetadataService.GetTag:input_type -> registry.metadata.v1.GetTagRequest
-	15, // 28: registry.metadata.v1.MetadataService.ListTags:input_type -> registry.metadata.v1.ListTagsRequest
-	16, // 29: registry.metadata.v1.MetadataService.DeleteTag:input_type -> registry.metadata.v1.DeleteTagRequest
-	17, // 30: registry.metadata.v1.MetadataService.PutManifest:input_type -> registry.metadata.v1.PutManifestRequest
-	18, // 31: registry.metadata.v1.MetadataService.GetManifest:input_type -> registry.metadata.v1.GetManifestRequest
-	19, // 32: registry.metadata.v1.MetadataService.DeleteManifest:input_type -> registry.metadata.v1.DeleteManifestRequest
-	20, // 33: registry.metadata.v1.MetadataService.ListUntaggedManifests:input_type -> registry.metadata.v1.ListUntaggedManifestsRequest
-	21, // 34: registry.metadata.v1.MetadataService.LinkBlob:input_type -> registry.metadata.v1.LinkBlobRequest
-	22, // 35: registry.metadata.v1.MetadataService.UnlinkBlob:input_type -> registry.metadata.v1.UnlinkBlobRequest
-	23, // 36: registry.metadata.v1.MetadataService.ListOrphanedBlobs:input_type -> registry.metadata.v1.ListOrphanedBlobsRequest
-	24, // 37: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:input_type -> registry.metadata.v1.GetTenantQuotaUsageRequest
-	25, // 38: registry.metadata.v1.MetadataService.UpdateTenantQuota:input_type -> registry.metadata.v1.UpdateTenantQuotaRequest
-	26, // 39: registry.metadata.v1.MetadataService.IncrementTenantStorage:input_type -> registry.metadata.v1.IncrementTenantStorageRequest
-	27, // 40: registry.metadata.v1.MetadataService.DecrementTenantStorage:input_type -> registry.metadata.v1.DecrementTenantStorageRequest
-	28, // 41: registry.metadata.v1.MetadataService.UpdateScanStatus:input_type -> registry.metadata.v1.UpdateScanStatusRequest
-	29, // 42: registry.metadata.v1.MetadataService.GetScanResult:input_type -> registry.metadata.v1.GetScanResultRequest
-	30, // 43: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:input_type -> registry.metadata.v1.GetTenantVulnerabilityCountRequest
-	32, // 44: registry.metadata.v1.MetadataService.CountRepositories:input_type -> registry.metadata.v1.CountRepositoriesRequest
-	34, // 45: registry.metadata.v1.MetadataService.GetSecurityOverview:input_type -> registry.metadata.v1.GetSecurityOverviewRequest
-	40, // 46: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:input_type -> registry.metadata.v1.ListTenantVulnerabilitiesRequest
-	43, // 47: registry.metadata.v1.MetadataService.ListScanHistory:input_type -> registry.metadata.v1.ListScanHistoryRequest
-	0,  // 48: registry.metadata.v1.MetadataService.CreateRepository:output_type -> registry.metadata.v1.Repository
-	0,  // 49: registry.metadata.v1.MetadataService.GetRepository:output_type -> registry.metadata.v1.Repository
-	0,  // 50: registry.metadata.v1.MetadataService.GetRepositoryByName:output_type -> registry.metadata.v1.Repository
-	0,  // 51: registry.metadata.v1.MetadataService.ListRepositories:output_type -> registry.metadata.v1.Repository
-	48, // 52: registry.metadata.v1.MetadataService.DeleteRepository:output_type -> google.protobuf.Empty
-	0,  // 53: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:output_type -> registry.metadata.v1.Repository
-	0,  // 54: registry.metadata.v1.MetadataService.UpdateRepository:output_type -> registry.metadata.v1.Repository
-	1,  // 55: registry.metadata.v1.MetadataService.PutTag:output_type -> registry.metadata.v1.Tag
-	1,  // 56: registry.metadata.v1.MetadataService.GetTag:output_type -> registry.metadata.v1.Tag
-	1,  // 57: registry.metadata.v1.MetadataService.ListTags:output_type -> registry.metadata.v1.Tag
-	48, // 58: registry.metadata.v1.MetadataService.DeleteTag:output_type -> google.protobuf.Empty
-	2,  // 59: registry.metadata.v1.MetadataService.PutManifest:output_type -> registry.metadata.v1.Manifest
-	2,  // 60: registry.metadata.v1.MetadataService.GetManifest:output_type -> registry.metadata.v1.Manifest
-	48, // 61: registry.metadata.v1.MetadataService.DeleteManifest:output_type -> google.protobuf.Empty
-	2,  // 62: registry.metadata.v1.MetadataService.ListUntaggedManifests:output_type -> registry.metadata.v1.Manifest
-	48, // 63: registry.metadata.v1.MetadataService.LinkBlob:output_type -> google.protobuf.Empty
-	48, // 64: registry.metadata.v1.MetadataService.UnlinkBlob:output_type -> google.protobuf.Empty
-	3,  // 65: registry.metadata.v1.MetadataService.ListOrphanedBlobs:output_type -> registry.metadata.v1.BlobRef
-	4,  // 66: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:output_type -> registry.metadata.v1.QuotaUsage
-	4,  // 67: registry.metadata.v1.MetadataService.UpdateTenantQuota:output_type -> registry.metadata.v1.QuotaUsage
-	48, // 68: registry.metadata.v1.MetadataService.IncrementTenantStorage:output_type -> google.protobuf.Empty
-	48, // 69: registry.metadata.v1.MetadataService.DecrementTenantStorage:output_type -> google.protobuf.Empty
-	48, // 70: registry.metadata.v1.MetadataService.UpdateScanStatus:output_type -> google.protobuf.Empty
-	5,  // 71: registry.metadata.v1.MetadataService.GetScanResult:output_type -> registry.metadata.v1.ScanResult
-	31, // 72: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:output_type -> registry.metadata.v1.VulnerabilityCountResponse
-	33, // 73: registry.metadata.v1.MetadataService.CountRepositories:output_type -> registry.metadata.v1.CountRepositoriesResponse
-	37, // 74: registry.metadata.v1.MetadataService.GetSecurityOverview:output_type -> registry.metadata.v1.SecurityOverview
-	41, // 75: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:output_type -> registry.metadata.v1.ListTenantVulnerabilitiesResponse
-	44, // 76: registry.metadata.v1.MetadataService.ListScanHistory:output_type -> registry.metadata.v1.ListScanHistoryResponse
-	48, // [48:77] is the sub-list for method output_type
-	19, // [19:48] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	45, // 19: registry.metadata.v1.Remediation.affected:type_name -> registry.metadata.v1.RemediationAffected
+	46, // 20: registry.metadata.v1.ListTenantRemediationsResponse.remediations:type_name -> registry.metadata.v1.Remediation
+	6,  // 21: registry.metadata.v1.MetadataService.CreateRepository:input_type -> registry.metadata.v1.CreateRepositoryRequest
+	8,  // 22: registry.metadata.v1.MetadataService.GetRepository:input_type -> registry.metadata.v1.GetRepositoryRequest
+	9,  // 23: registry.metadata.v1.MetadataService.GetRepositoryByName:input_type -> registry.metadata.v1.GetRepositoryByNameRequest
+	10, // 24: registry.metadata.v1.MetadataService.ListRepositories:input_type -> registry.metadata.v1.ListRepositoriesRequest
+	11, // 25: registry.metadata.v1.MetadataService.DeleteRepository:input_type -> registry.metadata.v1.DeleteRepositoryRequest
+	12, // 26: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:input_type -> registry.metadata.v1.UpdateRepositoryQuotaRequest
+	7,  // 27: registry.metadata.v1.MetadataService.UpdateRepository:input_type -> registry.metadata.v1.UpdateRepositoryRequest
+	13, // 28: registry.metadata.v1.MetadataService.PutTag:input_type -> registry.metadata.v1.PutTagRequest
+	14, // 29: registry.metadata.v1.MetadataService.GetTag:input_type -> registry.metadata.v1.GetTagRequest
+	15, // 30: registry.metadata.v1.MetadataService.ListTags:input_type -> registry.metadata.v1.ListTagsRequest
+	16, // 31: registry.metadata.v1.MetadataService.DeleteTag:input_type -> registry.metadata.v1.DeleteTagRequest
+	17, // 32: registry.metadata.v1.MetadataService.PutManifest:input_type -> registry.metadata.v1.PutManifestRequest
+	18, // 33: registry.metadata.v1.MetadataService.GetManifest:input_type -> registry.metadata.v1.GetManifestRequest
+	19, // 34: registry.metadata.v1.MetadataService.DeleteManifest:input_type -> registry.metadata.v1.DeleteManifestRequest
+	20, // 35: registry.metadata.v1.MetadataService.ListUntaggedManifests:input_type -> registry.metadata.v1.ListUntaggedManifestsRequest
+	21, // 36: registry.metadata.v1.MetadataService.LinkBlob:input_type -> registry.metadata.v1.LinkBlobRequest
+	22, // 37: registry.metadata.v1.MetadataService.UnlinkBlob:input_type -> registry.metadata.v1.UnlinkBlobRequest
+	23, // 38: registry.metadata.v1.MetadataService.ListOrphanedBlobs:input_type -> registry.metadata.v1.ListOrphanedBlobsRequest
+	24, // 39: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:input_type -> registry.metadata.v1.GetTenantQuotaUsageRequest
+	25, // 40: registry.metadata.v1.MetadataService.UpdateTenantQuota:input_type -> registry.metadata.v1.UpdateTenantQuotaRequest
+	26, // 41: registry.metadata.v1.MetadataService.IncrementTenantStorage:input_type -> registry.metadata.v1.IncrementTenantStorageRequest
+	27, // 42: registry.metadata.v1.MetadataService.DecrementTenantStorage:input_type -> registry.metadata.v1.DecrementTenantStorageRequest
+	28, // 43: registry.metadata.v1.MetadataService.UpdateScanStatus:input_type -> registry.metadata.v1.UpdateScanStatusRequest
+	29, // 44: registry.metadata.v1.MetadataService.GetScanResult:input_type -> registry.metadata.v1.GetScanResultRequest
+	30, // 45: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:input_type -> registry.metadata.v1.GetTenantVulnerabilityCountRequest
+	32, // 46: registry.metadata.v1.MetadataService.CountRepositories:input_type -> registry.metadata.v1.CountRepositoriesRequest
+	34, // 47: registry.metadata.v1.MetadataService.GetSecurityOverview:input_type -> registry.metadata.v1.GetSecurityOverviewRequest
+	40, // 48: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:input_type -> registry.metadata.v1.ListTenantVulnerabilitiesRequest
+	43, // 49: registry.metadata.v1.MetadataService.ListScanHistory:input_type -> registry.metadata.v1.ListScanHistoryRequest
+	47, // 50: registry.metadata.v1.MetadataService.ListTenantRemediations:input_type -> registry.metadata.v1.ListTenantRemediationsRequest
+	0,  // 51: registry.metadata.v1.MetadataService.CreateRepository:output_type -> registry.metadata.v1.Repository
+	0,  // 52: registry.metadata.v1.MetadataService.GetRepository:output_type -> registry.metadata.v1.Repository
+	0,  // 53: registry.metadata.v1.MetadataService.GetRepositoryByName:output_type -> registry.metadata.v1.Repository
+	0,  // 54: registry.metadata.v1.MetadataService.ListRepositories:output_type -> registry.metadata.v1.Repository
+	52, // 55: registry.metadata.v1.MetadataService.DeleteRepository:output_type -> google.protobuf.Empty
+	0,  // 56: registry.metadata.v1.MetadataService.UpdateRepositoryQuota:output_type -> registry.metadata.v1.Repository
+	0,  // 57: registry.metadata.v1.MetadataService.UpdateRepository:output_type -> registry.metadata.v1.Repository
+	1,  // 58: registry.metadata.v1.MetadataService.PutTag:output_type -> registry.metadata.v1.Tag
+	1,  // 59: registry.metadata.v1.MetadataService.GetTag:output_type -> registry.metadata.v1.Tag
+	1,  // 60: registry.metadata.v1.MetadataService.ListTags:output_type -> registry.metadata.v1.Tag
+	52, // 61: registry.metadata.v1.MetadataService.DeleteTag:output_type -> google.protobuf.Empty
+	2,  // 62: registry.metadata.v1.MetadataService.PutManifest:output_type -> registry.metadata.v1.Manifest
+	2,  // 63: registry.metadata.v1.MetadataService.GetManifest:output_type -> registry.metadata.v1.Manifest
+	52, // 64: registry.metadata.v1.MetadataService.DeleteManifest:output_type -> google.protobuf.Empty
+	2,  // 65: registry.metadata.v1.MetadataService.ListUntaggedManifests:output_type -> registry.metadata.v1.Manifest
+	52, // 66: registry.metadata.v1.MetadataService.LinkBlob:output_type -> google.protobuf.Empty
+	52, // 67: registry.metadata.v1.MetadataService.UnlinkBlob:output_type -> google.protobuf.Empty
+	3,  // 68: registry.metadata.v1.MetadataService.ListOrphanedBlobs:output_type -> registry.metadata.v1.BlobRef
+	4,  // 69: registry.metadata.v1.MetadataService.GetTenantQuotaUsage:output_type -> registry.metadata.v1.QuotaUsage
+	4,  // 70: registry.metadata.v1.MetadataService.UpdateTenantQuota:output_type -> registry.metadata.v1.QuotaUsage
+	52, // 71: registry.metadata.v1.MetadataService.IncrementTenantStorage:output_type -> google.protobuf.Empty
+	52, // 72: registry.metadata.v1.MetadataService.DecrementTenantStorage:output_type -> google.protobuf.Empty
+	52, // 73: registry.metadata.v1.MetadataService.UpdateScanStatus:output_type -> google.protobuf.Empty
+	5,  // 74: registry.metadata.v1.MetadataService.GetScanResult:output_type -> registry.metadata.v1.ScanResult
+	31, // 75: registry.metadata.v1.MetadataService.GetTenantVulnerabilityCount:output_type -> registry.metadata.v1.VulnerabilityCountResponse
+	33, // 76: registry.metadata.v1.MetadataService.CountRepositories:output_type -> registry.metadata.v1.CountRepositoriesResponse
+	37, // 77: registry.metadata.v1.MetadataService.GetSecurityOverview:output_type -> registry.metadata.v1.SecurityOverview
+	41, // 78: registry.metadata.v1.MetadataService.ListTenantVulnerabilities:output_type -> registry.metadata.v1.ListTenantVulnerabilitiesResponse
+	44, // 79: registry.metadata.v1.MetadataService.ListScanHistory:output_type -> registry.metadata.v1.ListScanHistoryResponse
+	48, // 80: registry.metadata.v1.MetadataService.ListTenantRemediations:output_type -> registry.metadata.v1.ListTenantRemediationsResponse
+	51, // [51:81] is the sub-list for method output_type
+	21, // [21:51] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_metadata_v1_metadata_proto_init() }
@@ -4571,6 +4926,54 @@ func file_metadata_v1_metadata_proto_init() {
 				return nil
 			}
 		}
+		file_metadata_v1_metadata_proto_msgTypes[45].Exporter = func(v any, i int) any {
+			switch v := v.(*RemediationAffected); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[46].Exporter = func(v any, i int) any {
+			switch v := v.(*Remediation); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[47].Exporter = func(v any, i int) any {
+			switch v := v.(*ListTenantRemediationsRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_metadata_v1_metadata_proto_msgTypes[48].Exporter = func(v any, i int) any {
+			switch v := v.(*ListTenantRemediationsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -4578,7 +4981,7 @@ func file_metadata_v1_metadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_metadata_v1_metadata_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   47,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

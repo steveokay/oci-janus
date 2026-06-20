@@ -62,6 +62,9 @@ type metadataRepo interface {
 	ListTenantVulnerabilities(ctx context.Context, tenantID, severityFilter, pageToken string, limit int) ([]repository.VulnerabilityRow, string, error)
 	// Scan history (FE-API-015) — paginated flat feed ordered by completed_at DESC.
 	ListScanHistory(ctx context.Context, tenantID string, since time.Time, pageToken string, limit int) ([]repository.ScanHistoryRow, string, error)
+	// Remediation suggestions (FE-API-017) — paginated upgrade groupings
+	// derived from the latest complete scan per (tenant, repo, tag).
+	ListTenantRemediations(ctx context.Context, tenantID, pageToken string, limit int) ([]repository.RemediationRow, string, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
 }
@@ -483,6 +486,53 @@ func (h *MetadataHandler) ListScanHistory(ctx context.Context, req *metadatav1.L
 				Negligible: r.Negligible,
 			},
 			Trigger: r.Trigger,
+		})
+	}
+	return out, nil
+}
+
+// ListTenantRemediations (FE-API-017) returns actionable upgrade groupings
+// for the tenant — "upgrade package X from A to B fixes N CVEs across M
+// (repo, tag) tuples." Tenant isolation is enforced in the repository SQL;
+// the handler validates inputs and maps repository rows to proto messages.
+func (h *MetadataHandler) ListTenantRemediations(ctx context.Context, req *metadatav1.ListTenantRemediationsRequest) (*metadatav1.ListTenantRemediationsResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	rows, next, err := h.repo.ListTenantRemediations(ctx, req.GetTenantId(), req.GetPageToken(), int(req.GetPageSize()))
+	if err != nil {
+		// Malformed cursor surfaces as InvalidArgument so the BFF can return
+		// a 400 rather than a 500. Anything else is internal.
+		if strings.Contains(err.Error(), "page_token") || strings.Contains(err.Error(), "decode") {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
+		return nil, mapErr(err)
+	}
+	out := &metadatav1.ListTenantRemediationsResponse{
+		Remediations:  make([]*metadatav1.Remediation, 0, len(rows)),
+		NextPageToken: next,
+	}
+	for _, r := range rows {
+		// Allocate (not append-nil) so the wire shape is always a JSON array
+		// even when the group has zero entries — the dashboard relies on
+		// stable shape for serde.
+		affected := make([]*metadatav1.RemediationAffected, 0, len(r.Affected))
+		for _, a := range r.Affected {
+			affected = append(affected, &metadatav1.RemediationAffected{
+				Repo:   a.Repo,
+				Tag:    a.Tag,
+				Digest: a.Digest,
+			})
+		}
+		out.Remediations = append(out.Remediations, &metadatav1.Remediation{
+			PackageName:    r.PackageName,
+			FromVersion:    r.FromVersion,
+			ToVersion:      r.ToVersion,
+			CvesFixed:      r.CVEsFixed,
+			CvesFixedCount: r.CVEsFixedCount,
+			MaxSeverity:    r.MaxSeverity,
+			Affected:       affected,
+			AffectedCount:  r.AffectedCount,
 		})
 	}
 	return out, nil
