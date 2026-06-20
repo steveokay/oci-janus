@@ -388,6 +388,11 @@ type ScanPolicy struct {
 
 **Purpose:** Image signing and verification using Cosign (Sigstore) and Notary v2.
 
+> **Canonical reference:** end-to-end signing flow, key lifecycle, dashboard
+> + CLI verification paths, threat model — see [`docs/SIGNING.md`](SIGNING.md).
+> This section covers the proto / gRPC contract; the SIGNING doc covers
+> where the keys live and how they're used in operations.
+
 **Cosign integration:**
 - Signatures stored as OCI artifacts in `registry-core` (standard Cosign behaviour)
 - `registry-signer` exposes a signing API for CI/CD pipelines that don't have key material

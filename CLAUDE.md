@@ -560,7 +560,7 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 11 | No presigned URLs to clients | Prevents storage credential exposure; all blob traffic proxied for audit and rate limiting | Initial |
 | 12 | PostgreSQL RLS as second layer | Defence in depth for tenant isolation; application bug cannot leak cross-tenant data | Initial |
 | 13 | Trivy as default scanner plugin | Active maintenance + good CVE coverage + permissive license | 2026-06-09 |
-| 14 | Vault dev mode as local KMS | Same `SIGNER_KEY_BACKEND=vault` path as production; no special dev-only code path | 2026-06-09 |
+| 14 | Vault dev mode as local KMS | Same `SIGNER_KEY_BACKEND=vault` path as production; no special dev-only code path. **Full doc: [`docs/SIGNING.md`](docs/SIGNING.md)** | 2026-06-09 |
 | 15 | Audit table FORCE RLS + low-privilege `registry_audit_app` role | Application bug cannot tamper with audit records | 2026-06-09 |
 | 16 | GC advisory locks via `pg_try_advisory_lock` (FNV-64a key) | Non-blocking GC across multiple workers; clean lock release via deferred unlock | 2026-06-09 |
 

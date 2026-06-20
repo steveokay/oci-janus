@@ -109,7 +109,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | `registry-metadata` | 8083 | 50054 | Registry metadata (repos, tags, manifests, blobs) |
 | `registry-proxy` | 8084 | 50055 | Pull-through proxy cache for upstream registries |
 | `registry-scanner` | 8085 | 50056 | Vulnerability scan orchestration + plugin host |
-| `registry-signer` | 8086 | 50057 | Cosign + Notary v2 image signing |
+| `registry-signer` | 8086 | 50057 | Cosign + Notary v2 image signing — see [`docs/SIGNING.md`](docs/SIGNING.md) |
 | `registry-webhook` | 8087 | — | Webhook delivery worker |
 | `registry-audit` | 8088 | — | Immutable audit log writer + query API |
 | `registry-gc` | 8089 | — | Garbage collection worker |
@@ -408,6 +408,18 @@ cd services/core && make test-conformance
 ---
 
 ## Security
+
+### Image signing & key management
+
+See **[`docs/SIGNING.md`](docs/SIGNING.md)** for the canonical reference.
+
+In short: image signing is handled by `registry-signer` against a private
+key held in HashiCorp Vault (dev mode locally, Vault prod cluster in
+production, AWS / GCP / Azure KMS deferred). The key never leaves Vault;
+`services/signer` only asks Vault to sign / verify on its behalf. The
+dashboard exposes Sign + Verify-now buttons under the tag-detail Signing
+tab, and `cosign verify --key <key> <image>` from your laptop works as
+an independent check against the same public key.
 
 ### Authentication Flow
 
