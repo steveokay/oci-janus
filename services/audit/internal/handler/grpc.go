@@ -52,6 +52,19 @@ type auditRepo interface {
 		eventTypes []string,
 		limit int,
 	) ([]*repository.NotificationRow, error)
+	// GetAnalytics is the time-series count grouped by date_bin — see
+	// analytics.go for the FE-API-030 RPC. Lives on this composite
+	// interface so production *repository.Repository satisfies a single
+	// dependency.
+	GetAnalytics(
+		ctx context.Context,
+		tenantID uuid.UUID,
+		scope repository.AnalyticsScope,
+		action string,
+		rangeStart time.Time,
+		rangeEnd time.Time,
+		bucketSecs int64,
+	) ([]*repository.AnalyticsBucketRow, error)
 }
 
 // defaultActivityEventTypes is the operator-facing allowlist applied when the

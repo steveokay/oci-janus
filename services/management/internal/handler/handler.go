@@ -268,6 +268,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// lives in notifications.go. Polled by the dashboard; no SSE/WebSocket.
 	mux.Handle("GET /api/v1/notifications", authMW(http.HandlerFunc(h.handleListNotifications)))
 
+	// FE-API-030 pull/push analytics time-series. Per-repo + tenant-wide
+	// routes share bucket sizing + metric mapping in analytics_repo.go.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/analytics", authMW(http.HandlerFunc(h.handleGetRepoAnalytics)))
+	mux.Handle("GET /api/v1/stats/analytics", authMW(http.HandlerFunc(h.handleGetTenantAnalytics)))
+
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 

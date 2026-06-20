@@ -471,6 +471,54 @@ func (s *fakeAuditServer) GetRepoActivity(_ context.Context, req *auditv1.GetRep
 	}, nil
 }
 
+// analyticsCall captures parameters of a single fake GetAnalytics call so
+// FE-API-030 tests can assert the BFF forwarded the right scope, action and
+// bucket sizing without rebuilding the full keyset cursor dance.
+type analyticsCall struct {
+	tenantID   string
+	scopeType  string
+	repoID     string
+	action     string
+	rangeSecs  int64
+	bucketSecs int64
+}
+
+// lastAnalyticsCall is set on every fake GetAnalytics invocation. Tests
+// reset via t.Cleanup so cases stay isolated.
+var lastAnalyticsCall *analyticsCall
+
+// analyticsResponseOverride lets a test stub out the canned response so
+// bucket-alignment / total assertions are deterministic.
+var analyticsResponseOverride *auditv1.GetAnalyticsResponse
+
+// GetAnalytics is the fake FE-API-030 RPC. By default it echoes the
+// (scope, action, range) on the call recorder and returns a single populated
+// bucket so the BFF's pre-allocation merge path is exercised.
+func (s *fakeAuditServer) GetAnalytics(_ context.Context, req *auditv1.GetAnalyticsRequest) (*auditv1.GetAnalyticsResponse, error) {
+	lastAnalyticsCall = &analyticsCall{
+		tenantID:   req.GetTenantId(),
+		scopeType:  req.GetScopeType(),
+		repoID:     req.GetRepoId(),
+		action:     req.GetAction(),
+		rangeSecs:  req.GetRangeSecs(),
+		bucketSecs: req.GetBucketSecs(),
+	}
+	if analyticsResponseOverride != nil {
+		return analyticsResponseOverride, nil
+	}
+	// Default canned response: one bucket of count=7 at "now" truncated to the
+	// nearest bucket boundary, so the BFF's pre-allocated grid can merge it.
+	now := time.Now().UTC()
+	rangeStart := time.Unix(((now.Unix()-req.GetRangeSecs())/req.GetBucketSecs())*req.GetBucketSecs(), 0).UTC()
+	return &auditv1.GetAnalyticsResponse{
+		Buckets: []*auditv1.AnalyticsBucket{
+			{BucketStart: timestamppb.New(rangeStart), Count: 7},
+		},
+		Total:      7,
+		RangeStart: timestamppb.New(rangeStart),
+	}, nil
+}
+
 // fakeHealthServer always returns SERVING.
 type fakeHealthServer struct {
 	healthpb.UnimplementedHealthServer
