@@ -27,6 +27,18 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    // Allow tunnelling the dev server through localhost.run / ngrok-style
+    // hosts. Vite 5+ enforces a Host header allowlist by default to block
+    // DNS-rebinding attacks; for dev we widen it to any *.ngrok-free.dev
+    // / *.ngrok.app / *.trycloudflare.com subdomain and localhost.
+    allowedHosts: [
+      "localhost",
+      ".ngrok-free.dev",
+      ".ngrok-free.app",
+      ".ngrok.app",
+      ".ngrok.io",
+      ".trycloudflare.com",
+    ],
     // In production the gateway routes all `/api/v1/*` to the right service.
     // In dev we don't have the gateway in front, so the proxy has to split
     // the namespace itself: auth-owned subroutes go to :8080, everything else
