@@ -38,11 +38,17 @@ var tenantNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
 type GRPCHandler struct {
 	tenantv1.UnimplementedTenantServiceServer
 	repo *repository.Repository
+	// platformBaseDomain backs the wildcard `<slug>.<base>` host fallback for
+	// tenants without a verified primary custom domain (FE-API-007). Empty is
+	// allowed but disables the fallback — Tenant.host will be "" in that case
+	// so callers can detect the misconfiguration.
+	platformBaseDomain string
 }
 
-// New creates a GRPCHandler.
-func New(repo *repository.Repository) *GRPCHandler {
-	return &GRPCHandler{repo: repo}
+// New creates a GRPCHandler. platformBaseDomain is the wildcard zone every
+// tenant gets a hostname under; pass "" to disable the fallback (tests).
+func New(repo *repository.Repository, platformBaseDomain string) *GRPCHandler {
+	return &GRPCHandler{repo: repo, platformBaseDomain: platformBaseDomain}
 }
 
 // CreateTenant creates a new tenant with a default policy.
@@ -71,7 +77,9 @@ func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTena
 		}
 		return nil, errcodes.MapDBError(err, "create tenant")
 	}
-	return tenantToProto(rec), nil
+	// Brand-new tenant — no domains yet, so the host always comes from the
+	// wildcard fallback. Pass nil to keep the proto-building helper uniform.
+	return h.buildTenantProto(rec, nil), nil
 }
 
 // GetTenant returns a tenant by ID.
@@ -87,7 +95,15 @@ func (h *GRPCHandler) GetTenant(ctx context.Context, req *tenantv1.GetTenantRequ
 	if rec == nil {
 		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
 	}
-	return tenantToProto(rec), nil
+	// Pull every domain so the host-selection algorithm sees the full picture
+	// (primary first, then verified, then unverified). A missing domains
+	// table or non-fatal error degrades to an empty list — the wildcard
+	// fallback host still works.
+	domains, err := h.repo.ListDomainsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list tenant domains")
+	}
+	return h.buildTenantProto(rec, domains), nil
 }
 
 // ListTenants returns a page of tenants ordered by created_at DESC.
@@ -106,7 +122,10 @@ func (h *GRPCHandler) ListTenants(ctx context.Context, req *tenantv1.ListTenants
 
 	tenants := make([]*tenantv1.Tenant, 0, len(recs))
 	for i := range recs {
-		tenants = append(tenants, tenantToProto(&recs[i]))
+		// Listing skips the per-tenant domains lookup to keep page latency
+		// bounded — the host falls back to the wildcard, and clients that
+		// need the full domain list call GetTenant for the specific tenant.
+		tenants = append(tenants, h.buildTenantProto(&recs[i], nil))
 	}
 
 	// Only emit next_page_token when this page is full — a short page implies
@@ -239,13 +258,68 @@ func (h *GRPCHandler) UpdateTenantPolicy(ctx context.Context, req *tenantv1.Upda
 	return policyToProto(p), nil
 }
 
+// tenantToProto remains for tests and any caller that needs the bare 1-4
+// field shape. Real handler paths go through buildTenantProto so they pick
+// up slug / host / domains (FE-API-007).
 func tenantToProto(rec *repository.TenantRecord) *tenantv1.Tenant {
 	return &tenantv1.Tenant{
 		TenantId:  rec.ID.String(),
 		Name:      rec.Name,
 		Plan:      rec.Plan,
+		Slug:      rec.Slug,
 		CreatedAt: timestamppb.New(rec.CreatedAt),
 	}
+}
+
+// buildTenantProto applies the FE-API-007 host-selection algorithm and emits
+// a fully populated Tenant message:
+//   1. If any domain in `domains` has is_primary=true AND verified=true, that
+//      domain is the host and host_is_custom=true.
+//   2. Otherwise host = `<slug>.<platformBaseDomain>` and host_is_custom=false.
+//      When platformBaseDomain is empty (tests / misconfig), host falls back
+//      to the bare slug so the field is never the meaningless ".".
+// Slug fallback: empty Slug → use the tenant id, so the host always parses
+// as a valid hostname even if the migration backfill produced nothing.
+func (h *GRPCHandler) buildTenantProto(rec *repository.TenantRecord, domains []repository.DomainRecord) *tenantv1.Tenant {
+	out := &tenantv1.Tenant{
+		TenantId:  rec.ID.String(),
+		Name:      rec.Name,
+		Plan:      rec.Plan,
+		Slug:      rec.Slug,
+		CreatedAt: timestamppb.New(rec.CreatedAt),
+	}
+
+	// Surface every domain so the BFF can render verification status — the
+	// dashboard's domain settings page needs the full list, not just the host.
+	out.Domains = make([]*tenantv1.DomainEntry, 0, len(domains))
+	for _, d := range domains {
+		out.Domains = append(out.Domains, &tenantv1.DomainEntry{
+			Domain:    d.Domain,
+			Verified:  d.Verified,
+			IsPrimary: d.IsPrimary,
+		})
+	}
+
+	// Host selection — primary verified domain wins over the wildcard fallback.
+	for _, d := range domains {
+		if d.IsPrimary && d.Verified {
+			out.Host = d.Domain
+			out.HostIsCustom = true
+			return out
+		}
+	}
+
+	// Wildcard fallback. Empty slug → tenant id; empty base domain → bare slug.
+	slug := rec.Slug
+	if slug == "" {
+		slug = rec.ID.String()
+	}
+	if h.platformBaseDomain != "" {
+		out.Host = slug + "." + h.platformBaseDomain
+	} else {
+		out.Host = slug
+	}
+	return out
 }
 
 func policyToProto(p *repository.PolicyRecord) *tenantv1.TenantPolicy {

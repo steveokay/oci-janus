@@ -23,6 +23,31 @@ message Tenant {
   string name      = 2;
   string plan      = 3;
   google.protobuf.Timestamp created_at = 4;
+  // FE-API-007: workspace identity completion.
+  // slug is the DNS-safe handle used to construct the wildcard registry
+  // hostname (`<slug>.<PLATFORM_BASE_DOMAIN>`). Derived from `name` at
+  // tenant creation/backfill — see services/tenant repository.
+  string slug = 5;
+  // host is the resolved registry hostname for this tenant — either the
+  // primary verified custom domain (when host_is_custom=true) or the
+  // wildcard fallback `<slug>.<PLATFORM_BASE_DOMAIN>`.
+  string host = 6;
+  // host_is_custom reports whether `host` came from a verified custom
+  // domain. False means the wildcard fallback was used.
+  bool host_is_custom = 7;
+  // domains lists every domain registered against this tenant alongside its
+  // verification state and primary-domain marker.
+  repeated DomainEntry domains = 8;
+}
+
+// DomainEntry is a single tenant_domains row surfaced to API consumers.
+// `is_primary` reflects the host-selection winner; only one verified
+// domain per tenant may carry is_primary=true (enforced by the partial
+// unique index added in 20260620000002_add_domain_is_primary.sql).
+message DomainEntry {
+  string domain      = 1;
+  bool   verified    = 2;
+  bool   is_primary  = 3;
 }
 
 message TenantPolicy {

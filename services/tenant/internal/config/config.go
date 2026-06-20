@@ -32,6 +32,12 @@ type Config struct {
 	RedisAddr     string `mapstructure:"REDIS_ADDR"`
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
 	RedisDB       int    `mapstructure:"REDIS_DB"`
+
+	// PlatformBaseDomain is the wildcard zone every tenant gets a registry
+	// hostname under (`<slug>.<PlatformBaseDomain>`). Used by handler.GetTenant
+	// to build the fallback host when no verified primary custom domain exists.
+	// Defaults to `registry.localhost` for local dev.
+	PlatformBaseDomain string `mapstructure:"PLATFORM_BASE_DOMAIN"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -51,6 +57,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("REDIS_ADDR", "redis:6379")
 	viper.SetDefault("METRICS_ADDR", ":9090")
 	viper.SetDefault("OTEL_SAMPLING_RATE", 1.0)
+	// FE-API-007: the wildcard hostname zone used to derive fallback hosts
+	// like `<slug>.registry.localhost`. Operators override per environment.
+	viper.SetDefault("PLATFORM_BASE_DOMAIN", "registry.localhost")
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

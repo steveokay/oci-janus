@@ -63,7 +63,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	dw := domainworker.New(repo, rdb)
 	go dw.Run(ctx)
 
-	grpcHdl := handler.New(repo)
+	// Pass the configured platform base domain so handler.GetTenant can build
+	// the wildcard host fallback `<slug>.<base>` for tenants without a
+	// verified primary custom domain (FE-API-007).
+	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain)
 
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {
