@@ -188,6 +188,30 @@
 
 ---
 
+### REM-011 — Scanner Plugin End-to-End Works in Dev + With Real Trivy
+- **Affects:** `services/scanner`, `infra/docker-compose`, `docs/`
+- **Status:** NOT STARTED — flagged 2026-06-21 after end-to-end verification of the scan trigger flow.
+- **Why this matters:** The vulnerability-scanning value prop is unverifiable today. Every UI demo of `/security`, every per-tag scan panel, and every auto-scan-on-push flow currently sits on `pending` forever because no scan worker is producing `scan_results` rows. This blocks honest validation of FE-API-014/015/017 and any future scanner-adjacent feature.
+- **Verified facts (2026-06-21):**
+  - `services/scanner/internal/plugin/process.go` enforces a newline-delimited JSON-RPC contract on stdin/stdout (request: `{"id","method":"scan","params":{tenant_id, manifest_digest, layers, image_path}}`; response: `{"id","result":{...}}` or `{"id","error":"..."}`).
+  - `services/scanner/Dockerfile:32-56` bakes `aquasec/trivy:0.52.0` at `/usr/local/bin/trivy` and defaults `SCANNER_PLUGIN_PATH` there — **but Trivy's CLI doesn't speak the JSON-RPC contract**, so pointing the service at raw Trivy fails on first scan.
+  - No dev stub plugin is committed. `process_test.go` only covers error paths (`exit 1`, `NOT_JSON`); there is no happy-path script to drop in for local testing.
+  - The compose stack runs the scanner behind `profiles: ["scanner"]` (off by default). End-to-end test: trigger returned `202 queued`, BFF published `scan.queued` to RabbitMQ, no consumer queue existed, event silently dropped, `scan_results` row never landed.
+- **Tasks:**
+  - [ ] Ship a dev stub plugin under `infra/scanner-plugins/` that satisfies the JSON-RPC contract with hardcoded findings (unblocks local UI testing). Include a Makefile target that prints the SHA256 + the two env-var lines for `.env`.
+  - [ ] Ship a real Trivy adapter (Go binary or short script) that translates JSON-RPC ↔ `trivy image --input <tar> --format json`. Mount or include in the scanner image so the Dockerfile default actually works.
+  - [ ] Fix the Dockerfile: either ship the Trivy adapter alongside the Trivy binary so `SCANNER_PLUGIN_PATH=/usr/local/bin/trivy-adapter` works zero-config, or drop the misleading default + document the adapter requirement.
+  - [ ] Add UI graceful degradation: after ~60s of `pending` with no row, surface a friendly "Scanner isn't running or isn't producing results" panel instead of an indefinite Scanning… spinner.
+  - [ ] Write `docs/SCANNER.md` covering the JSON-RPC contract, the adapter pattern, how to swap plugins (Trivy → Grype → customer-supplied), and the dev-stub workflow.
+  - [ ] Add an integration test that triggers a scan and asserts a `scan_results` row materializes within 30s — guards against the contract drifting silently again.
+- **Acceptance criteria when DONE:**
+  1. `docker compose --profile scanner up -d` starts `registry-scanner` with zero operator config and the dev stub fires successfully.
+  2. `POST /tags/{tag}/scan` produces a `scan_results` row within ~30s.
+  3. Auto-scan via `push.completed` produces a row within ~30s of `docker push`.
+  4. Swap-plugin smoke test passes — replace `SCANNER_PLUGIN_PATH` + checksum, restart, scans still land. Proves any future scanner (Grype, customer-supplied) honors the contract.
+
+---
+
 ## Open Decisions
 
 All decisions resolved. No blockers.
