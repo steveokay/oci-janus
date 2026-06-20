@@ -123,6 +123,11 @@ type fakeRepo struct {
 	listScansNext  string
 	listScansErr   error
 	listScansCalls []listScansCallArgs
+	// FE-API-017: remediation suggestions
+	listRemRows  []repository.RemediationRow
+	listRemNext  string
+	listRemErr   error
+	listRemCalls []listRemCallArgs
 	// UpdateRepository
 	updateRepoResult *metadatav1.Repository
 	updateRepoErr    error
@@ -143,6 +148,15 @@ type listVulnsCallArgs struct {
 type listScansCallArgs struct {
 	tenantID  string
 	since     time.Time
+	pageToken string
+	limit     int
+}
+
+// listRemCallArgs records what ListTenantRemediations forwarded so the
+// handler tests can assert tenant_id / pagination wiring without a real
+// database.
+type listRemCallArgs struct {
+	tenantID  string
 	pageToken string
 	limit     int
 }
@@ -273,6 +287,13 @@ func (f *fakeRepo) ListScanHistory(_ context.Context, tenantID string, since tim
 		tenantID: tenantID, since: since, pageToken: token, limit: limit,
 	})
 	return f.listScansRows, f.listScansNext, f.listScansErr
+}
+
+func (f *fakeRepo) ListTenantRemediations(_ context.Context, tenantID, token string, limit int) ([]repository.RemediationRow, string, error) {
+	f.listRemCalls = append(f.listRemCalls, listRemCallArgs{
+		tenantID: tenantID, pageToken: token, limit: limit,
+	})
+	return f.listRemRows, f.listRemNext, f.listRemErr
 }
 
 func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
@@ -1659,6 +1680,71 @@ func TestListScanHistory_pageTokenErrorBubblesAsInvalidArgument(t *testing.T) {
 	h := newHandler(&fakeRepo{listScansErr: errors.New("decode page_token: bad")})
 	_, err := h.ListScanHistory(context.Background(), &metadatav1.ListScanHistoryRequest{
 		TenantId: "t1", PageToken: "junk",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// ─── FE-API-017: ListTenantRemediations ─────────────────────────────────────
+
+// TestListTenantRemediations_missingTenant_returnsInvalidArgument verifies
+// the empty-tenant guard fires before touching the repository.
+func TestListTenantRemediations_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListTenantRemediations_happyPath_mapsRowsToProto verifies one row
+// rolls through with its affected list, CVEs, and cursor. Also asserts the
+// handler forwarded tenant_id + page_size to the repository.
+func TestListTenantRemediations_happyPath_mapsRowsToProto(t *testing.T) {
+	fake := &fakeRepo{
+		listRemRows: []repository.RemediationRow{
+			{
+				PackageName: "openssl", FromVersion: "1.0.0", ToVersion: "1.0.1",
+				CVEsFixed: []string{"CVE-2024-1", "CVE-2024-2"}, CVEsFixedCount: 2,
+				MaxSeverity: "CRITICAL",
+				Affected: []repository.RemediationAffectedRow{
+					{Repo: "acme/api", Tag: "v1", Digest: "sha256:abc"},
+				},
+				AffectedCount: 5,
+			},
+		},
+		listRemNext: "cursor-2",
+	}
+	h := newHandler(fake)
+	resp, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{
+		TenantId: "t1", PageSize: 25,
+	})
+	requireNoErr(t, err)
+	if len(resp.Remediations) != 1 {
+		t.Fatalf("expected 1 remediation, got %d", len(resp.Remediations))
+	}
+	r0 := resp.Remediations[0]
+	if r0.PackageName != "openssl" || r0.FromVersion != "1.0.0" || r0.ToVersion != "1.0.1" {
+		t.Errorf("unexpected upgrade: %s %s -> %s", r0.PackageName, r0.FromVersion, r0.ToVersion)
+	}
+	if r0.CvesFixedCount != 2 || len(r0.CvesFixed) != 2 {
+		t.Errorf("CVE fields: count=%d slice=%v", r0.CvesFixedCount, r0.CvesFixed)
+	}
+	if r0.AffectedCount != 5 || len(r0.Affected) != 1 {
+		t.Errorf("affected: count=%d slice=%d", r0.AffectedCount, len(r0.Affected))
+	}
+	if resp.NextPageToken != "cursor-2" {
+		t.Errorf("NextPageToken: got %q, want cursor-2", resp.NextPageToken)
+	}
+	if len(fake.listRemCalls) != 1 || fake.listRemCalls[0].tenantID != "t1" || fake.listRemCalls[0].limit != 25 {
+		t.Errorf("forwarded args: %+v", fake.listRemCalls)
+	}
+}
+
+// TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument ensures
+// the repository's "decode page_token" error is mapped to InvalidArgument so
+// the BFF can surface 400 instead of 500.
+func TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listRemErr: errors.New("decode page_token: bad")})
+	_, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{
+		TenantId: "t1", PageToken: "***",
 	})
 	requireCode(t, err, codes.InvalidArgument)
 }

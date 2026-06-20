@@ -44,10 +44,12 @@ type SecurityOverviewResponse struct {
 //	GET /api/v1/security/overview         — FE-API-020 (tenant aggregate)
 //	GET /api/v1/security/vulnerabilities  — FE-API-014 (workspace-wide CVE list)
 //	GET /api/v1/security/scans            — FE-API-015 (flat scan history)
+//	GET /api/v1/security/remediation      — FE-API-017 (upgrade groupings)
 func (h *Handler) RegisterSecurity(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
 	mux.Handle("GET /api/v1/security/overview", authMW(http.HandlerFunc(h.handleSecurityOverview)))
 	mux.Handle("GET /api/v1/security/vulnerabilities", authMW(http.HandlerFunc(h.handleListVulnerabilities)))
 	mux.Handle("GET /api/v1/security/scans", authMW(http.HandlerFunc(h.handleListScanHistory)))
+	mux.Handle("GET /api/v1/security/remediation", authMW(http.HandlerFunc(h.handleListRemediations)))
 }
 
 // handleSecurityOverview returns the tenant-scoped security summary backing

@@ -250,6 +250,38 @@ func (s *fakeMetaServer) ListTenantVulnerabilities(_ context.Context, req *metad
 	}, nil
 }
 
+// ListTenantRemediations (FE-API-017) fake — returns remListOverride when
+// non-nil, otherwise a single canned remediation row. remListCall captures
+// the last request so tests can assert query-string wiring.
+var (
+	remListOverride *metadatav1.ListTenantRemediationsResponse
+	remListCall     *metadatav1.ListTenantRemediationsRequest
+)
+
+func (s *fakeMetaServer) ListTenantRemediations(_ context.Context, req *metadatav1.ListTenantRemediationsRequest) (*metadatav1.ListTenantRemediationsResponse, error) {
+	remListCall = req
+	if remListOverride != nil {
+		return remListOverride, nil
+	}
+	return &metadatav1.ListTenantRemediationsResponse{
+		Remediations: []*metadatav1.Remediation{
+			{
+				PackageName:    "openssl",
+				FromVersion:    "1.0.0",
+				ToVersion:      "1.0.1",
+				CvesFixed:      []string{"CVE-2024-1", "CVE-2024-2"},
+				CvesFixedCount: 2,
+				MaxSeverity:    "CRITICAL",
+				Affected: []*metadatav1.RemediationAffected{
+					{Repo: "acme/api", Tag: "v1.2.3", Digest: "sha256:abc"},
+				},
+				AffectedCount: 5,
+			},
+		},
+		NextPageToken: "next-rem",
+	}, nil
+}
+
 // ListScanHistory (FE-API-015) fake — returns scanHistoryOverride when
 // non-nil, otherwise a single canned scan. scanHistoryCall captures the
 // last request so tests can assert query-string wiring.
@@ -1550,6 +1582,83 @@ func TestListScanHistory_invalidPageToken_returns400(t *testing.T) {
 func TestListScanHistory_noAuth_returns401(t *testing.T) {
 	env := newTestEnv(t)
 	resp := env.get(t, "/api/v1/security/scans", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/security/remediation   (FE-API-017)
+// ---------------------------------------------------------------------------
+
+// TestListRemediations_adminToken_returnsList exercises the happy path
+// against the canned fakeMetaServer response and verifies the BFF maps the
+// proto fields onto the public JSON shape verbatim.
+func TestListRemediations_adminToken_returnsList(t *testing.T) {
+	t.Cleanup(func() { remListCall = nil; remListOverride = nil })
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/remediation?limit=10", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.RemediationListResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Remediations) != 1 {
+		t.Fatalf("unexpected remediations: %+v", body.Remediations)
+	}
+	r0 := body.Remediations[0]
+	if r0.PackageName != "openssl" || r0.FromVersion != "1.0.0" || r0.ToVersion != "1.0.1" {
+		t.Errorf("upgrade tuple: got %s %s -> %s", r0.PackageName, r0.FromVersion, r0.ToVersion)
+	}
+	if r0.CVEsFixedCount != 2 || len(r0.CVEsFixed) != 2 {
+		t.Errorf("CVE fields: count=%d slice=%v", r0.CVEsFixedCount, r0.CVEsFixed)
+	}
+	if r0.AffectedCount != 5 || len(r0.Affected) != 1 {
+		t.Errorf("affected: count=%d slice=%d", r0.AffectedCount, len(r0.Affected))
+	}
+	if body.NextPageToken != "next-rem" {
+		t.Errorf("NextPageToken: got %q, want next-rem", body.NextPageToken)
+	}
+}
+
+// TestListRemediations_pageTokenForwarded ensures a valid base64-safe page
+// token is passed through to the metadata service (the BFF must not mangle
+// the cursor between calls).
+func TestListRemediations_pageTokenForwarded(t *testing.T) {
+	t.Cleanup(func() { remListCall = nil })
+	env := newTestEnv(t)
+	_ = env.get(t, "/api/v1/security/remediation?page_token=abc-_123", adminToken)
+	if remListCall == nil || remListCall.GetPageToken() != "abc-_123" {
+		t.Errorf("page_token forwarded: %+v", remListCall)
+	}
+}
+
+// TestListRemediations_invalidPageToken_returns400 verifies an unsafe page
+// token (chars outside base64url) is rejected before the gRPC call.
+func TestListRemediations_invalidPageToken_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/remediation?page_token=!!!", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestListRemediations_limitOver200_clampedTo200 verifies the over-the-top
+// limit is capped server-side so callers can't request millions of rows.
+func TestListRemediations_limitOver200_clampedTo200(t *testing.T) {
+	t.Cleanup(func() { remListCall = nil })
+	env := newTestEnv(t)
+	_ = env.get(t, "/api/v1/security/remediation?limit=10000", adminToken)
+	if remListCall == nil || remListCall.GetPageSize() != 200 {
+		t.Errorf("page_size not clamped: %v", remListCall)
+	}
+}
+
+// TestListRemediations_noAuth_returns401 verifies the route is behind the
+// standard auth middleware.
+func TestListRemediations_noAuth_returns401(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/security/remediation", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", resp.StatusCode)
 	}
