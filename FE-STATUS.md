@@ -58,6 +58,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S7B | Image detail enhancement | DONE ✅ | Layers + Signing tabs on tag-detail — FE-API-002 (extended for index manifests) + FE-API-003 (signature route) shipped backend-side |
 | S8 | Polish pass | NOT STARTED | dark-mode QA, a11y audit, responsive QA, motion review |
 | S9 | Wire backend-DONE-but-UI-stubbed surfaces | NOT STARTED | `/workspace/domains`, `/activity`, workspace metadata, `/security/vulnerabilities`, `/security/scans`, signing verify-on-demand |
+| S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
 
 ---
 
@@ -328,6 +329,37 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - [ ] Build / typecheck / lint pass
 - [ ] Backend connectivity verified end-to-end against the docker-compose stack
 - [ ] FE-STATUS.md ticked + S9 marked DONE in the sprint table at the top
+
+### S10 — Documentation surface
+
+> Today `status.md` and `FE-STATUS.md` are internal trackers; the Footer
+> docs link points at the placeholder `docs.example.com`. This sprint
+> authors a polished `/docs/*` set drawn from those trackers + CLAUDE.md
+> + `frontend/Dockerfile`/`nginx.conf`, then surfaces it through a Topbar
+> Docs button and the Footer link.
+
+**Authoring**
+- [ ] Decide hosting — markdown files under `/docs/` rendered by the SPA, OR an out-of-app static site (Mintlify / Docusaurus / GitBook). Trade-off: in-app keeps a single deploy + reuses the Beacon theme; out-of-app makes versioning + search easier.
+- [ ] `docs/getting-started.md` — install Docker stack, log in with dev creds, push first image, view in dashboard
+- [ ] `docs/architecture.md` — the 13-service map (drawn from `status.md` + CLAUDE.md §1-3), event flow, multi-tenant model
+- [ ] `docs/api-reference.md` — every `/api/v1/*` route the BFF exposes, mirrored from the management handler files; pair with the existing Postman collection
+- [ ] `docs/fe-api-catalog.md` — the FE-API-001..036 tracker rolled up as a public-facing changelog ("what each ID actually shipped, and where it surfaces in the UI")
+- [ ] `docs/operations.md` — runbooks: rebuilding images, recreating containers, DR (`infra/runbooks/disaster-recovery.md` mirror), GC trigger, custom-domain verification
+- [ ] `docs/security.md` — security model (RLS, mTLS, JWT, RBAC scope grammar), reporting a vulnerability
+- [ ] `docs/troubleshooting.md` — common errors (the table-layout / route-nesting / dot-tag-name traps we hit + every "route disabled" 404 path)
+- [ ] `docs/changelog.md` — per-sprint summary auto-generatable from git log + tracker
+
+**UI surfacing**
+- [ ] Update `frontend/src/components/shell/footer.tsx` — replace the `docs.example.com` placeholder with the real docs URL (config-driven via `VITE_DOCS_URL` so prod can override)
+- [ ] Add a **Docs button** to `frontend/src/components/shell/topbar.tsx` — sits left of the theme toggle, opens in a new tab; small `BookOpen` icon + "Docs" label (hide label below `md`)
+- [ ] Inline help — every `ComingSoon` / `ComingSoonHint` chip becomes a real link into the relevant FE-API docs section once that section ships
+- [ ] FE-STATUS snapshot section gains a "See published docs at …" line so contributors know the canonical reference
+
+**Verification**
+- [ ] Every link in `/docs/*` resolves; no `TODO` placeholders left
+- [ ] Topbar Docs button opens the right URL in dev (`VITE_DOCS_URL` set) and prod
+- [ ] Mobile (sub-`md`) — Docs button collapses to icon-only without overflowing the topbar
+- [ ] Build / typecheck / lint pass
 
 ---
 
