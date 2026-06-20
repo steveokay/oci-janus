@@ -107,6 +107,12 @@ type fakeRepo struct {
 	upsertScanErr error
 	getScanResult *metadatav1.ScanResult
 	getScanErr    error
+	// SBOM (FE-API-033)
+	upsertSBOMErr      error
+	upsertSBOMCalls    []upsertSBOMCallArgs
+	getSBOMResult      *repository.SBOMResult
+	getSBOMErr         error
+	getSBOMCalls       []getSBOMCallArgs
 	vulnTotal     int64
 	vulnCritical  int64
 	vulnHigh      int64
@@ -163,6 +169,21 @@ type listRemCallArgs struct {
 	tenantID  string
 	pageToken string
 	limit     int
+}
+
+// upsertSBOMCallArgs records what UpsertScanSBOM forwarded so the handler
+// tests can assert payload wiring without a real database.
+type upsertSBOMCallArgs struct {
+	tenantID       string
+	manifestDigest string
+	format         string
+	sbomLen        int
+}
+
+// getSBOMCallArgs mirrors upsertSBOMCallArgs for the read path.
+type getSBOMCallArgs struct {
+	tenantID       string
+	manifestDigest string
 }
 
 // ── metadataRepo implementation on fakeRepo ───────────────────────────────────
@@ -273,6 +294,20 @@ func (f *fakeRepo) UpsertScanResult(_ context.Context, _, _, _ string, _ []byte,
 
 func (f *fakeRepo) GetScanResult(_ context.Context, _, _ string) (*metadatav1.ScanResult, error) {
 	return f.getScanResult, f.getScanErr
+}
+
+func (f *fakeRepo) UpsertScanSBOM(_ context.Context, tenantID, manifestDigest, format string, sbom []byte) error {
+	f.upsertSBOMCalls = append(f.upsertSBOMCalls, upsertSBOMCallArgs{
+		tenantID: tenantID, manifestDigest: manifestDigest, format: format, sbomLen: len(sbom),
+	})
+	return f.upsertSBOMErr
+}
+
+func (f *fakeRepo) GetScanSBOM(_ context.Context, tenantID, manifestDigest string) (*repository.SBOMResult, error) {
+	f.getSBOMCalls = append(f.getSBOMCalls, getSBOMCallArgs{
+		tenantID: tenantID, manifestDigest: manifestDigest,
+	})
+	return f.getSBOMResult, f.getSBOMErr
 }
 
 func (f *fakeRepo) GetTenantVulnerabilityCount(_ context.Context, _ string) (int64, int64, int64, int64, int64, int64, error) {
@@ -1753,6 +1788,147 @@ func TestListTenantRemediations_pageTokenErrorBubblesAsInvalidArgument(t *testin
 	h := newHandler(&fakeRepo{listRemErr: errors.New("decode page_token: bad")})
 	_, err := h.ListTenantRemediations(context.Background(), &metadatav1.ListTenantRemediationsRequest{
 		TenantId: "t1", PageToken: "***",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// ── UpsertScanSBOM (FE-API-033) ──────────────────────────────────────────────
+
+// TestUpsertScanSBOM_happyPath_forwardsArgsAndReturnsEmpty verifies the
+// handler unwraps the request and delegates to the repository, returning the
+// empty response when the upsert succeeds.
+func TestUpsertScanSBOM_happyPath_forwardsArgsAndReturnsEmpty(t *testing.T) {
+	fake := &fakeRepo{}
+	h := newHandler(fake)
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		TenantId:       "t1",
+		ManifestDigest: "sha256:abc",
+		Format:         "spdx-json",
+		SbomJson:       []byte(`{"spdxVersion":"SPDX-2.3"}`),
+	})
+	requireNoErr(t, err)
+	if len(fake.upsertSBOMCalls) != 1 {
+		t.Fatalf("expected 1 upsert call, got %d", len(fake.upsertSBOMCalls))
+	}
+	got := fake.upsertSBOMCalls[0]
+	if got.tenantID != "t1" || got.manifestDigest != "sha256:abc" || got.format != "spdx-json" || got.sbomLen == 0 {
+		t.Errorf("forwarded args: %+v", got)
+	}
+}
+
+// TestUpsertScanSBOM_missingTenant_returnsInvalidArgument ensures the handler
+// validates required fields before touching the repository.
+func TestUpsertScanSBOM_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		ManifestDigest: "sha256:abc",
+		Format:         "spdx-json",
+		SbomJson:       []byte(`{}`),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestUpsertScanSBOM_missingDigest_returnsInvalidArgument covers the second
+// required field.
+func TestUpsertScanSBOM_missingDigest_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		TenantId: "t1",
+		Format:   "spdx-json",
+		SbomJson: []byte(`{}`),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestUpsertScanSBOM_unknownFormat_returnsInvalidArgument blocks bogus format
+// strings up front so a typo never reaches the database.
+func TestUpsertScanSBOM_unknownFormat_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		TenantId:       "t1",
+		ManifestDigest: "sha256:abc",
+		Format:         "swid-xml", // never accepted
+		SbomJson:       []byte(`{}`),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestUpsertScanSBOM_emptyBytes_returnsInvalidArgument prevents writing an
+// empty SBOM that would later 404 on read for the wrong reason.
+func TestUpsertScanSBOM_emptyBytes_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		TenantId:       "t1",
+		ManifestDigest: "sha256:abc",
+		Format:         "spdx-json",
+		SbomJson:       nil,
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestUpsertScanSBOM_repoNotFound_returnsNotFound surfaces the "no scan row
+// to attach the SBOM to" case.
+func TestUpsertScanSBOM_repoNotFound_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{upsertSBOMErr: repository.ErrNotFound})
+	_, err := h.UpsertScanSBOM(context.Background(), &metadatav1.UpsertScanSBOMRequest{
+		TenantId:       "t1",
+		ManifestDigest: "sha256:abc",
+		Format:         "spdx-json",
+		SbomJson:       []byte(`{}`),
+	})
+	requireCode(t, err, codes.NotFound)
+}
+
+// ── GetScanSBOM (FE-API-033) ─────────────────────────────────────────────────
+
+// TestGetScanSBOM_happyPath_returnsBytes verifies the handler maps the
+// repository's SBOMResult straight onto the response message.
+func TestGetScanSBOM_happyPath_returnsBytes(t *testing.T) {
+	want := &repository.SBOMResult{Format: "spdx-json", SBOMJSON: []byte(`{"spdxVersion":"SPDX-2.3"}`)}
+	fake := &fakeRepo{getSBOMResult: want}
+	h := newHandler(fake)
+	resp, err := h.GetScanSBOM(context.Background(), &metadatav1.GetScanSBOMRequest{
+		TenantId: "t1", ManifestDigest: "sha256:abc",
+	})
+	requireNoErr(t, err)
+	if resp.GetFormat() != want.Format {
+		t.Errorf("format: got %q want %q", resp.GetFormat(), want.Format)
+	}
+	if string(resp.GetSbomJson()) != string(want.SBOMJSON) {
+		t.Errorf("sbom bytes mismatch")
+	}
+	if len(fake.getSBOMCalls) != 1 || fake.getSBOMCalls[0].tenantID != "t1" {
+		t.Errorf("forwarded args: %+v", fake.getSBOMCalls)
+	}
+}
+
+// TestGetScanSBOM_notFound_returnsNotFound covers both "never scanned" and
+// "scanned but no SBOM recorded" — the repository collapses them to the same
+// ErrNotFound.
+func TestGetScanSBOM_notFound_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{getSBOMErr: repository.ErrNotFound})
+	_, err := h.GetScanSBOM(context.Background(), &metadatav1.GetScanSBOMRequest{
+		TenantId: "t1", ManifestDigest: "sha256:abc",
+	})
+	requireCode(t, err, codes.NotFound)
+}
+
+// TestGetScanSBOM_missingTenant_returnsInvalidArgument validates the request
+// before any repository round-trip.
+func TestGetScanSBOM_missingTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetScanSBOM(context.Background(), &metadatav1.GetScanSBOMRequest{
+		ManifestDigest: "sha256:abc",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestGetScanSBOM_missingDigest_returnsInvalidArgument mirrors the tenant
+// guard for the digest field.
+func TestGetScanSBOM_missingDigest_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetScanSBOM(context.Background(), &metadatav1.GetScanSBOMRequest{
+		TenantId: "t1",
 	})
 	requireCode(t, err, codes.InvalidArgument)
 }

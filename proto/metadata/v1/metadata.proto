@@ -44,6 +44,17 @@ service MetadataService {
   rpc UpdateScanStatus(UpdateScanStatusRequest) returns (google.protobuf.Empty);
   rpc GetScanResult(GetScanResultRequest) returns (ScanResult);
 
+  // Per-tag SBOM storage (FE-API-033). The SBOM is persisted on the
+  // scan_results row keyed by (tenant_id, manifest_digest); the management
+  // BFF exposes a tag-scoped download route on top.
+  //
+  // UpsertScanSBOM is the scanner-side write seam — even when the scanner
+  // hasn't been wired to call it yet, tests can pre-seed an SBOM through it.
+  // GetScanSBOM returns NotFound when the manifest has no scan row or the
+  // sbom_json column is NULL.
+  rpc UpsertScanSBOM(UpsertScanSBOMRequest) returns (google.protobuf.Empty);
+  rpc GetScanSBOM(GetScanSBOMRequest) returns (GetScanSBOMResponse);
+
   // Vulnerability aggregate
   rpc GetTenantVulnerabilityCount(GetTenantVulnerabilityCountRequest) returns (VulnerabilityCountResponse);
 
@@ -199,6 +210,33 @@ message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 // Scan requests
 message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
 message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }
+
+// ─── FE-API-033: per-tag SBOM storage ────────────────────────────────────────
+
+// UpsertScanSBOMRequest persists an SBOM blob on the latest scan_results row
+// for (tenant_id, manifest_digest). `format` is one of "spdx-json" or
+// "cyclonedx-json"; only "spdx-json" is implemented in v1, but the field is
+// stored verbatim so future formats can land without a schema bump.
+message UpsertScanSBOMRequest {
+  string tenant_id        = 1;
+  string manifest_digest  = 2;
+  string format           = 3; // "spdx-json" (v1) or "cyclonedx-json" (future)
+  bytes  sbom_json        = 4;
+}
+
+// GetScanSBOMRequest fetches the SBOM bytes for the latest scan of a manifest.
+message GetScanSBOMRequest {
+  string tenant_id        = 1;
+  string manifest_digest  = 2;
+}
+
+// GetScanSBOMResponse returns the stored SBOM bytes + format. Servers return
+// gRPC NotFound when either no scan row exists for the manifest in the
+// tenant, or the row exists but has no SBOM persisted yet (sbom_json IS NULL).
+message GetScanSBOMResponse {
+  string format    = 1; // "spdx-json" | "cyclonedx-json"
+  bytes  sbom_json = 2;
+}
 
 // Vulnerability count requests
 message GetTenantVulnerabilityCountRequest { string tenant_id = 1; }
