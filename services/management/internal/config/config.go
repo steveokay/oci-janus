@@ -42,6 +42,13 @@ type Config struct {
 	// deployment without registry-scanner still serves every other surface.
 	ScannerGRPCAddr string `mapstructure:"SCANNER_GRPC_ADDR"`
 
+	// GCGRPCAddr is optional — required only when the FE-API-032 GC
+	// status routes are enabled. Empty leaves
+	// `/api/v1/admin/gc/{status,runs,run}` returning 404 "route
+	// disabled" so a management deployment without registry-gc
+	// running in the new persisted mode still serves every other surface.
+	GCGRPCAddr string `mapstructure:"GC_GRPC_ADDR"`
+
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
