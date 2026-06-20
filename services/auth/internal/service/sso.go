@@ -373,6 +373,36 @@ func (s *SSO) StartLogin(ctx context.Context, in StartLoginInput) (*StartLoginRe
 	}, nil
 }
 
+// CreateSAMLLoginSession mints a single-use RelayState token, persists it in
+// auth_login_sessions alongside the AuthnRequest ID, and returns the
+// generated state value. The OAuth flow uses StartLogin (which also builds
+// PKCE); the SAML flow only needs the RelayState + the AuthnRequest ID +
+// the redirect URL, so this method keeps that surface small.
+//
+// authnRequestID is the ID attribute crewjam/saml generated on the
+// AuthnRequest; we persist it in the pkce_verifier column (unused for SAML
+// otherwise) so callbackSAML can pass it to ParseResponse as the only
+// permitted InResponseTo value. Stashing it here means we don't need a new
+// migration to add a saml_request_id column for v1.
+func (s *SSO) CreateSAMLLoginSession(ctx context.Context, tenantID, providerID uuid.UUID, authnRequestID, nextURL string) (string, error) {
+	relayState, err := randomURLToken(32)
+	if err != nil {
+		return "", fmt.Errorf("generate relay state: %w", err)
+	}
+	sess := &repository.LoginSession{
+		State:        relayState,
+		TenantID:     tenantID,
+		ProviderID:   providerID,
+		PKCEVerifier: authnRequestID, // SAML reuses this column for the AuthnRequest ID
+		RedirectURL:  nextURL,
+		ExpiresAt:    time.Now().Add(loginSessionTTL),
+	}
+	if err := s.sessions.Create(ctx, sess); err != nil {
+		return "", fmt.Errorf("persist saml login session: %w", err)
+	}
+	return relayState, nil
+}
+
 // ConsumeLoginSession looks up the session by state and deletes it
 // atomically. A second call with the same state returns ErrSessionNotFound
 // (single-use replay defence).

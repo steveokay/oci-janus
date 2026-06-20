@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,7 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
 	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
+	authsaml "github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
@@ -132,6 +134,32 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		if pub != nil {
 			httpH = httpH.WithEventPublisher(pub)
 		}
+
+		// SAML SP cert/key are independent of OAuth — operators can run with
+		// only OAuth (cert paths empty) or both. Both paths must be set
+		// together; one without the other is a config error.
+		switch {
+		case cfg.SAMLSPCertPath != "" && cfg.SAMLSPKeyPath != "":
+			certPEM, err := os.ReadFile(cfg.SAMLSPCertPath)
+			if err != nil {
+				return fmt.Errorf("read SAML_SP_CERT_PATH: %w", err)
+			}
+			keyPEM, err := os.ReadFile(cfg.SAMLSPKeyPath)
+			if err != nil {
+				return fmt.Errorf("read SAML_SP_KEY_PATH: %w", err)
+			}
+			spCfg, err := authsaml.LoadSPConfig(certPEM, keyPEM)
+			if err != nil {
+				return fmt.Errorf("load SAML SP config: %w", err)
+			}
+			httpH = httpH.WithSAMLConfig(spCfg)
+			slog.Info("SAML SP keypair loaded — /auth/saml/... routes active")
+		case cfg.SAMLSPCertPath != "" || cfg.SAMLSPKeyPath != "":
+			return fmt.Errorf("SAML_SP_CERT_PATH and SAML_SP_KEY_PATH must both be set or both empty")
+		default:
+			slog.Info("SAML SP keypair not configured — /auth/saml/... routes return 501")
+		}
+
 		// Background cleanup: drop expired login sessions every minute so
 		// the auth_login_sessions table never grows beyond the active set.
 		go runLoginSessionCleanup(ctx, ssoSvc)
