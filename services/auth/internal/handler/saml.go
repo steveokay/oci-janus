@@ -1,26 +1,334 @@
-// FE-API-034 — SAML route stubs.
+// FE-API-034 — SAML SP-initiated authentication flow.
 //
-// SAML support is DEFERRED in this commit. The routes are registered so the
-// URLs are reserved (allowing the dashboard to detect "SAML coming soon" via
-// a 501 status instead of a 404) and so a future implementation can drop in
-// the full crewjam/saml flow without changing the router contract.
+// Two routes:
 //
-// Why deferred: integrating github.com/crewjam/saml meaningfully exceeded
-// the scope budget for FE-API-034 once the OAuth flow + admin CRUD landed
-// — IdP metadata parsing, XML signature validation, AuthnRequest signing,
-// and ACS POST handling each carry security gotchas that deserve their own
-// review pass. The OAuth surface still unblocks the Sprint 7 SSO button
-// targets (Google/GitHub/Microsoft), which is the bulk of the value.
+//   GET  /auth/saml/{provider_id}/start  — mints the AuthnRequest + redirects
+//   POST /auth/saml/{provider_id}/acs    — receives the IdP SAMLResponse
+//
+// Both routes return 501 NOT_CONFIGURED when SAML support is not wired
+// (SAML_SP_CERT_PATH / SAML_SP_KEY_PATH unset). When wired, the start handler
+// reuses the same auth_login_sessions table that powers OAuth — the RelayState
+// SAML term is the same concept as the OAuth `state` token (single-use,
+// 10-minute TTL, originated by us). The ACS handler consumes that session,
+// validates the IdP signature + Conditions via crewjam/saml, extracts the
+// user identifier, and reuses EnsureSSOUser + IssueSSOToken so the
+// auto-provisioning path is identical to OAuth.
 package handler
 
-import "net/http"
+import (
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
 
-// startSAML is a placeholder for the SAML SP-initiated AuthnRequest flow.
-func (h *HTTPHandler) startSAML(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOTIMPLEMENTED", "SAML support is coming in a follow-up sprint")
+	crewjamsaml "github.com/crewjam/saml"
+	"github.com/google/uuid"
+
+	"github.com/steveokay/oci-janus/services/auth/internal/repository"
+	"github.com/steveokay/oci-janus/services/auth/internal/saml"
+	"github.com/steveokay/oci-janus/services/auth/internal/service"
+)
+
+// SAML binding URNs. Re-declared locally so the handler doesn't need to
+// import crewjam/saml just for these constants; the underlying URNs are
+// fixed by the SAML 2.0 spec and won't change.
+const (
+	crewjamSAMLHTTPRedirectBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+	crewjamSAMLHTTPPostBinding     = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+)
+
+// SAML attribute name candidates we walk in priority order to recover the
+// user's email address. Most enterprise IdPs publish a long URN-style name;
+// Okta/Auth0 often add a short alias. The first matching attribute wins; if
+// none match we fall back to the assertion's NameID (which IdPs frequently
+// populate with the user's email when Format is emailAddress).
+var samlEmailAttributes = []string{
+	"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+	"urn:oid:0.9.2342.19200300.100.1.3",
+	"email",
+	"mail",
+	"emailAddress",
+	"EmailAddress",
 }
 
-// callbackSAML is a placeholder for the SAML ACS POST endpoint.
-func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOTIMPLEMENTED", "SAML support is coming in a follow-up sprint")
+// SAML attribute name candidates for the user's display name. Same priority
+// ordering as samlEmailAttributes — URN first, short name second.
+var samlNameAttributes = []string{
+	"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
+	"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/displayname",
+	"urn:oid:2.16.840.1.113730.3.1.241",
+	"urn:oid:2.5.4.3",
+	"name",
+	"displayName",
+	"DisplayName",
+	"cn",
+}
+
+// startSAML mints an AuthnRequest, persists the login session, and 302s the
+// user to the IdP's SSO endpoint via the HTTP-Redirect binding.
+func (h *HTTPHandler) startSAML(w http.ResponseWriter, r *http.Request) {
+	providerID, err := uuid.Parse(r.PathValue("provider_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
+		return
+	}
+
+	// Validate ?next= against the open-redirect allowlist BEFORE any DB work.
+	nextURL, err := service.SanitizeNextParam(r.URL.Query().Get("next"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid next parameter")
+		return
+	}
+	if nextURL == "" {
+		nextURL = "/"
+	}
+
+	// SAML config check happens after path-param + next validation so the
+	// 501 is reserved for "we'd have served it but the deployment isn't
+	// configured" rather than masking bad-request bugs.
+	if h.samlConfig == nil {
+		writeError(w, http.StatusNotImplemented, "NOTCONFIGURED", "SAML SP cert/key not configured")
+		return
+	}
+
+	p, err := h.sso.GetProvider(r.Context(), providerID, true, false)
+	if err != nil {
+		if errors.Is(err, service.ErrProviderNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "saml: GetProvider", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if p.Type != repository.AuthProviderSAML {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider is not a SAML provider")
+		return
+	}
+
+	sp, err := saml.BuildServiceProvider(
+		h.samlConfig,
+		[]byte(p.SAMLIdpMetadataXML),
+		h.ssoBaseURL,
+		p.ID.String(),
+		p.SAMLEntityID,
+		p.SAMLAudience,
+	)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: BuildServiceProvider", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "SAML configuration error")
+		return
+	}
+
+	// Build the AuthnRequest directly so we can capture its generated ID. The
+	// ID is persisted alongside the RelayState so callbackSAML can pass it to
+	// ParseResponse as the only permitted InResponseTo value — this blocks an
+	// attacker from injecting a response from a different SP-initiated flow
+	// even if they capture our RelayState.
+	authnReq, err := sp.MakeAuthenticationRequest(
+		sp.GetSSOBindingLocation(crewjamSAMLHTTPRedirectBinding),
+		crewjamSAMLHTTPRedirectBinding,
+		crewjamSAMLHTTPPostBinding,
+	)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: MakeAuthenticationRequest", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not build AuthnRequest")
+		return
+	}
+
+	// Mint a single-use RelayState — same shape as the OAuth `state` token
+	// (32 random bytes, base64url). Reusing CreateSAMLLoginSession lets the
+	// callback look up the originating tenant + next URL by relay state. We
+	// pass the AuthnRequest ID so it round-trips back as InResponseTo.
+	relayState, err := h.sso.CreateSAMLLoginSession(r.Context(), p.TenantID, p.ID, authnReq.ID, nextURL)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: CreateSAMLLoginSession", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not start SAML session")
+		return
+	}
+
+	authnURL, err := authnReq.Redirect(relayState, sp)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: AuthnRequest.Redirect", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not build AuthnRequest URL")
+		return
+	}
+
+	http.Redirect(w, r, authnURL.String(), http.StatusFound)
+}
+
+// callbackSAML handles the ACS POST from the IdP. crewjam/saml's
+// ParseResponse validates the signature, Conditions (NotOnOrAfter), audience,
+// and Recipient — anything failing those checks bubbles up as an error and
+// becomes a 400 INVALIDSAML response.
+func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
+	providerID, err := uuid.Parse(r.PathValue("provider_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid form body")
+		return
+	}
+	samlResponse := r.PostForm.Get("SAMLResponse")
+	relayState := r.PostForm.Get("RelayState")
+
+	if samlResponse == "" || relayState == "" {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "missing SAMLResponse or RelayState")
+		return
+	}
+
+	if h.samlConfig == nil {
+		writeError(w, http.StatusNotImplemented, "NOTCONFIGURED", "SAML SP cert/key not configured")
+		return
+	}
+
+	p, err := h.sso.GetProvider(r.Context(), providerID, true, false)
+	if err != nil {
+		if errors.Is(err, service.ErrProviderNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "saml: GetProvider", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if p.Type != repository.AuthProviderSAML {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider is not a SAML provider")
+		return
+	}
+
+	// Consume the login session FIRST so a replayed RelayState fails the
+	// second request even before we touch the SAMLResponse. Single-use is
+	// our primary defence — XML signature validity says nothing about
+	// whether the IdP message has already been delivered.
+	sess, err := h.sso.ConsumeLoginSession(r.Context(), relayState)
+	if err != nil {
+		if errors.Is(err, service.ErrSessionNotFound) {
+			writeError(w, http.StatusBadRequest, "INVALIDSTATE", "invalid or expired RelayState")
+			return
+		}
+		slog.ErrorContext(r.Context(), "saml: ConsumeLoginSession", "err", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if sess.ProviderID != providerID {
+		writeError(w, http.StatusBadRequest, "INVALIDSTATE", "RelayState does not match provider")
+		return
+	}
+
+	sp, err := saml.BuildServiceProvider(
+		h.samlConfig,
+		[]byte(p.SAMLIdpMetadataXML),
+		h.ssoBaseURL,
+		p.ID.String(),
+		p.SAMLEntityID,
+		p.SAMLAudience,
+	)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: BuildServiceProvider", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "SAML configuration error")
+		return
+	}
+
+	// ParseResponse validates the XML signature, conditions, audience, and
+	// the InResponseTo attribute. The possibleRequestIDs slice tells
+	// crewjam/saml which AuthnRequest IDs we have outstanding — we pass the
+	// ID we stashed in sess.PKCEVerifier at /start, so only the specific
+	// in-flight authentication request can be answered. This is stronger
+	// than the RelayState check alone: without it, a stolen RelayState could
+	// be paired with an attacker-induced response from the same IdP for a
+	// different SP-initiated flow.
+	assertion, err := sp.ParseResponse(r, []string{sess.PKCEVerifier})
+	if err != nil {
+		// Don't echo the underlying error string back to the user — it can
+		// leak details about our SP config or the IdP cert. Log full detail
+		// server-side; return a generic 400.
+		//
+		// crewjam/saml wraps the real cause in InvalidResponseError.PrivateErr.
+		// We unwrap so the operator can debug signature / clock-skew issues
+		// without enabling debug logging on the IdP.
+		privErr := err
+		if invalid, ok := err.(*crewjamsaml.InvalidResponseError); ok && invalid.PrivateErr != nil {
+			privErr = invalid.PrivateErr
+		}
+		slog.WarnContext(r.Context(), "saml: ParseResponse failed",
+			"err", err.Error(),
+			"cause", privErr.Error(),
+			"provider_id", providerID)
+		writeError(w, http.StatusBadRequest, "INVALIDSAML", "SAML response failed validation")
+		return
+	}
+
+	email := saml.ExtractAttribute(assertion, samlEmailAttributes...)
+	name := saml.ExtractAttribute(assertion, samlNameAttributes...)
+
+	// Fall back to NameID when the assertion didn't include a separate email
+	// attribute — many IdPs populate NameID with the user's email when
+	// Format is emailAddress. We do NOT enforce the Format value because some
+	// IdPs use "unspecified" even for email-shaped NameIDs.
+	if email == "" {
+		if assertion.Subject != nil && assertion.Subject.NameID != nil {
+			email = strings.TrimSpace(assertion.Subject.NameID.Value)
+		}
+	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "MISSINGEMAIL", "SAML assertion has no email")
+		return
+	}
+
+	// SAML doesn't carry an explicit email_verified claim. We treat the IdP
+	// having authenticated the user as proof — passing false would refuse
+	// every SAML login since EnsureSSOUser's OAuth path enforces verified.
+	// This is documented in CLAUDE.md §7 and matches the way Auth0, Okta,
+	// and Azure AD treat SAML claims.
+	user, roles, err := h.sso.EnsureSSOUser(r.Context(), p, service.SSOIdentity{
+		Email:         email,
+		EmailVerified: true,
+		DisplayName:   name,
+		Subject:       samlSubject(assertion),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAutoProvisionDisabled):
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "user does not exist and auto-provision is disabled")
+			return
+		case errors.Is(err, service.ErrAccountDisabled):
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "account is disabled")
+			return
+		}
+		slog.ErrorContext(r.Context(), "saml: EnsureSSOUser", "err", err, "provider_id", providerID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not complete login")
+		return
+	}
+
+	tok, err := h.sso.IssueSSOToken(r.Context(), user, roles)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "saml: IssueSSOToken", "err", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not issue token")
+		return
+	}
+
+	// Same JWT return mechanism as OAuth: 302 to {next}?sso_token=<jwt>. The
+	// frontend swaps the token into authStore on first paint then strips it
+	// from the URL via history.replaceState. Documented in sso.go.
+	dest, perr := safeAppendQuery(sess.RedirectURL, "sso_token", tok)
+	if perr != nil {
+		dest = "/?sso_token=" + url.QueryEscape(tok)
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// samlSubject returns the assertion's NameID value (or "" when missing). Used
+// as the audit-friendly subject identifier when logging SSO provisioning;
+// passed into SSOIdentity.Subject so the auth.user_sso_provisioned event
+// carries something stable per-user across re-logins.
+func samlSubject(assertion *crewjamsaml.Assertion) string {
+	if assertion == nil || assertion.Subject == nil || assertion.Subject.NameID == nil {
+		return ""
+	}
+	return strings.TrimSpace(assertion.Subject.NameID.Value)
 }

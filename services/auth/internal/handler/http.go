@@ -16,6 +16,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
+	"github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
@@ -80,6 +81,9 @@ type HTTPHandler struct {
 	// eventPublisher is the optional RabbitMQ publisher used by the SSO admin
 	// CRUD audit events. nil silently skips the publish.
 	eventPublisher SSOEventPublisher
+	// samlConfig is the optional SAML SP signing keypair (FE-API-034). nil
+	// disables SAML support — the /auth/saml/... routes return 501.
+	samlConfig *saml.SPConfig
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
@@ -109,6 +113,14 @@ func (h *HTTPHandler) WithSSO(sso *service.SSO, baseURL string) *HTTPHandler {
 // CRUD audit events. Optional; nil publisher silently skips publishes.
 func (h *HTTPHandler) WithEventPublisher(p SSOEventPublisher) *HTTPHandler {
 	h.eventPublisher = p
+	return h
+}
+
+// WithSAMLConfig attaches the SP signing keypair used by the SAML routes.
+// Optional — without it the /auth/saml/... routes return 501. Returns the
+// handler so callers can chain.
+func (h *HTTPHandler) WithSAMLConfig(cfg *saml.SPConfig) *HTTPHandler {
+	h.samlConfig = cfg
 	return h
 }
 
