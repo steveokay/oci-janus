@@ -116,6 +116,26 @@ service MetadataService {
   // DeleteRepoRetentionPolicy removes the per-repo override; the repo then
   // falls back to the org default (FE-API-039).
   rpc DeleteRepoRetentionPolicy(DeleteRepoRetentionPolicyRequest) returns (google.protobuf.Empty);
+
+  // ─── FE-API-038: retention policy dry-run + preview-window state ─────────
+  //
+  // EvaluateRetention is the read-only evaluation engine that powers both
+  // the dry-run (operator inspects a candidate policy before saving) and the
+  // preview-window state endpoint (UI countdown for an already-saved policy
+  // sitting in its 24h preview window).
+  //
+  // The handler does NOT persist the candidate — it merely materialises which
+  // manifests WOULD be selected for deletion (and which would be excluded by
+  // a protected_tag_patterns regex) given the current manifest + tag state of
+  // the repository. The executor (FE-API-040) is a separate ticket and is
+  // the only path that actually deletes.
+  //
+  // Caps: the returned `would_delete` list is truncated to the smaller of
+  // `max_delete_results` (default 1000, server cap 5000) and the full
+  // candidate set. `total_count` / `total_bytes` always reflect the full set
+  // (computed via SQL aggregate, not by counting the truncated slice) so the
+  // UI can render "showing 1000 of 47 312 candidates" honestly.
+  rpc EvaluateRetention(EvaluateRetentionRequest) returns (EvaluateRetentionResponse);
 }
 
 message Repository {
@@ -554,4 +574,74 @@ message UpsertRepoRetentionPolicyRequest {
 message DeleteRepoRetentionPolicyRequest {
   string repo_id   = 1;
   string tenant_id = 2;
+}
+
+// ─── FE-API-038: retention policy dry-run + preview-window state ───────────
+
+// RetentionPolicyCandidate is the policy shape passed to EvaluateRetention.
+// It mirrors the persisted policy on the rules + protected_tag_patterns axes
+// but is NEVER written to the DB by this RPC — the evaluator only reads from
+// the manifests/tags tables. For the preview-window endpoint, the management
+// BFF loads the saved row and passes it through this same field so the
+// metadata API surface stays small (one read path, one write path).
+message RetentionPolicyCandidate {
+  bool                   enabled                = 1;
+  repeated RetentionRule rules                  = 2;
+  repeated string        protected_tag_patterns = 3;
+}
+
+// RetentionDeletionCandidate is one manifest the evaluator would select for
+// deletion under the candidate policy. `reasons` is the list of rule kinds
+// that selected it — a manifest can match multiple rules (e.g. both
+// max_age_days and max_count) and the UI surfaces all of them so the
+// operator understands why each candidate appears.
+message RetentionDeletionCandidate {
+  string                    manifest_id     = 1;
+  string                    manifest_digest = 2;
+  repeated string           tags            = 3;
+  google.protobuf.Timestamp pushed_at       = 4;
+  int64                     size_bytes      = 5;
+  repeated string           reasons         = 6;
+}
+
+// RetentionProtectedManifest is one manifest the evaluator excluded because
+// at least one of its tags matched a protected_tag_patterns regex. Only the
+// FIRST matching pattern is returned — the UI just needs to show "skipped
+// because tag X matched pattern Y", not the full intersection.
+message RetentionProtectedManifest {
+  string          manifest_id     = 1;
+  string          manifest_digest = 2;
+  repeated string tags            = 3;
+  string          matched_pattern = 4;
+}
+
+// EvaluateRetentionRequest carries the candidate policy + caps. `repo_id`
+// scopes the manifest set; tenant_id is required for RLS even though every
+// manifest is already FK-attached to repositories.tenant_id.
+//
+// `max_delete_results` defaults to 1000 server-side and is clamped to
+// [1, 5000]. `max_protected_results` defaults to 100 and is clamped to
+// [1, 500]. Clamping happens in the handler so a hostile client cannot
+// trick the evaluator into materialising a huge response.
+message EvaluateRetentionRequest {
+  string                   repo_id               = 1;
+  string                   tenant_id             = 2;
+  RetentionPolicyCandidate candidate             = 3;
+  int32                    max_delete_results    = 4;
+  int32                    max_protected_results = 5;
+}
+
+// EvaluateRetentionResponse contains the materialised dry-run output.
+// `total_count` / `total_bytes` reflect the full set even when
+// `would_delete` is truncated — the UI relies on this to render an
+// honest counter. `truncated` is set when `would_delete` was capped;
+// the protected list is capped without a flag because the dashboard
+// doesn't render protected-skipped as a primary affordance.
+message EvaluateRetentionResponse {
+  repeated RetentionDeletionCandidate would_delete      = 1;
+  repeated RetentionProtectedManifest protected_skipped = 2;
+  int64                               total_count       = 3;
+  int64                               total_bytes       = 4;
+  google.protobuf.Timestamp           evaluated_at      = 5;
+  bool                                truncated         = 6;
 }

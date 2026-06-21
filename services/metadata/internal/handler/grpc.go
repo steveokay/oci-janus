@@ -87,6 +87,17 @@ type metadataRepo interface {
 		updatedBy string,
 	) (*metadatav1.RetentionPolicy, error)
 	DeleteRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) error
+	// FE-API-038: read-only evaluator. Materialises the would-delete /
+	// protected-skipped sets for a candidate policy without persisting it.
+	// Used by both the dry-run endpoint and the preview-window state endpoint
+	// (which loads the saved policy and feeds it back through this same RPC
+	// so the metadata API surface stays small).
+	EvaluateRetention(
+		ctx context.Context,
+		tenantID, repoID string,
+		candidate *metadatav1.RetentionPolicyCandidate,
+		maxDeleteResults, maxProtectedResults int,
+	) (*repository.EvaluationResult, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.

@@ -189,26 +189,32 @@
 ---
 
 ### REM-011 — Scanner Plugin End-to-End Works in Dev + With Real Trivy
-- **Affects:** `services/scanner`, `infra/docker-compose`, `docs/`
-- **Status:** NOT STARTED — flagged 2026-06-21 after end-to-end verification of the scan trigger flow.
-- **Why this matters:** The vulnerability-scanning value prop is unverifiable today. Every UI demo of `/security`, every per-tag scan panel, and every auto-scan-on-push flow currently sits on `pending` forever because no scan worker is producing `scan_results` rows. This blocks honest validation of FE-API-014/015/017 and any future scanner-adjacent feature.
-- **Verified facts (2026-06-21):**
-  - `services/scanner/internal/plugin/process.go` enforces a newline-delimited JSON-RPC contract on stdin/stdout (request: `{"id","method":"scan","params":{tenant_id, manifest_digest, layers, image_path}}`; response: `{"id","result":{...}}` or `{"id","error":"..."}`).
-  - `services/scanner/Dockerfile:32-56` bakes `aquasec/trivy:0.52.0` at `/usr/local/bin/trivy` and defaults `SCANNER_PLUGIN_PATH` there — **but Trivy's CLI doesn't speak the JSON-RPC contract**, so pointing the service at raw Trivy fails on first scan.
-  - No dev stub plugin is committed. `process_test.go` only covers error paths (`exit 1`, `NOT_JSON`); there is no happy-path script to drop in for local testing.
-  - The compose stack runs the scanner behind `profiles: ["scanner"]` (off by default). End-to-end test: trigger returned `202 queued`, BFF published `scan.queued` to RabbitMQ, no consumer queue existed, event silently dropped, `scan_results` row never landed.
-- **Tasks:**
-  - [ ] Ship a dev stub plugin under `infra/scanner-plugins/` that satisfies the JSON-RPC contract with hardcoded findings (unblocks local UI testing). Include a Makefile target that prints the SHA256 + the two env-var lines for `.env`.
-  - [ ] Ship a real Trivy adapter (Go binary or short script) that translates JSON-RPC ↔ `trivy image --input <tar> --format json`. Mount or include in the scanner image so the Dockerfile default actually works.
-  - [ ] Fix the Dockerfile: either ship the Trivy adapter alongside the Trivy binary so `SCANNER_PLUGIN_PATH=/usr/local/bin/trivy-adapter` works zero-config, or drop the misleading default + document the adapter requirement.
-  - [ ] Add UI graceful degradation: after ~60s of `pending` with no row, surface a friendly "Scanner isn't running or isn't producing results" panel instead of an indefinite Scanning… spinner.
-  - [ ] Write `docs/SCANNER.md` covering the JSON-RPC contract, the adapter pattern, how to swap plugins (Trivy → Grype → customer-supplied), and the dev-stub workflow.
-  - [ ] Add an integration test that triggers a scan and asserts a `scan_results` row materializes within 30s — guards against the contract drifting silently again.
-- **Acceptance criteria when DONE:**
-  1. `docker compose --profile scanner up -d` starts `registry-scanner` with zero operator config and the dev stub fires successfully.
-  2. `POST /tags/{tag}/scan` produces a `scan_results` row within ~30s.
-  3. Auto-scan via `push.completed` produces a row within ~30s of `docker push`.
-  4. Swap-plugin smoke test passes — replace `SCANNER_PLUGIN_PATH` + checksum, restart, scans still land. Proves any future scanner (Grype, customer-supplied) honors the contract.
+- **Affects:** `services/scanner`, `services/metadata`, `infra/docker-compose`, `proto/metadata/v1`, `frontend`, `docs/`
+- **Status:** **PHASE 1 DONE ✅** (commit `8debd29`, 2026-06-21). Phase 2 (admin UI for adapter selection + live swap + test scans) PENDING.
+- **Phase 1 acceptance criteria — verified live (2026-06-21):**
+  1. ✅ `docker compose --profile scanner up -d` starts `registry-scanner` zero-config; dev-stub adapter is the default and the entrypoint auto-computes the checksum.
+  2. ✅ `POST /tags/{tag}/scan` produces a `scan_results` row within ~5-10s on dev-stub; ~30s on Trivy first scan (DB download), ~1s on warm Trivy.
+  3. ✅ Auto-scan via `push.completed` produces a row via the same worker pool + write-path.
+  4. ✅ Swap-plugin smoke passes — `SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-trivy-adapter` + `--force-recreate` → real CVE detection on `dev/alpine:3.19` (10 findings: 2 HIGH, 5 MEDIUM, 3 LOW).
+- **What Phase 1 shipped:**
+  - `infra/scanner-plugins/dev-stub` + `trivy-adapter` Go binaries satisfying the JSON-RPC contract; both baked into the scanner image.
+  - `services/scanner/Dockerfile` + new `scripts/entrypoint.sh` — auto-fills `SCANNER_PLUGIN_CHECKSUM` from the active binary, operator-supplied values still win.
+  - **Backend gap fixed:** `proto/metadata/v1 UpdateScanStatusRequest` extended with `repo_id`/`manifest_digest`/`scanner_name`/`scanner_version`; repository `UpsertScanResult` is now a real `INSERT ... ON CONFLICT (id) DO UPDATE` so the first scan write creates the row (no separate CreatePending RPC needed).
+  - Pre-existing viper bug in `services/scanner/internal/config` fixed (Unmarshal couldn't see env vars without explicit `Set`).
+  - `frontend/src/components/security/scan-panel.tsx` — after 90s of pending with no row, the spinner card flips to "Scanner isn't producing results" with the docker compose command shown inline.
+  - `docs/SCANNER.md` — canonical reference: contract, both adapters, zero-config dev, production checksum override, swap procedure, write-your-own checklist, known limitations.
+- **Phase 1 known limitations (documented in `docs/SCANNER.md` §6):**
+  - Trivy adapter ignores whiteout files when flattening layers (overcount, never underreport).
+  - Stuck-pending detection in the UI is a 90s client-side heuristic; Phase 2 replaces it with a backend liveness probe.
+  - No integration test yet asserting `scan_results` lands within 30s of a trigger (manual verification only). Adding this is one of the Phase 2 must-haves.
+- **Phase 2 tasks (not started):**
+  - [ ] **Adapter registry concept:** scanner discovers installed adapters by scanning a directory (`/usr/local/bin/scanner-*`) or reading a sidecar manifest file, instead of one env var pointing at one binary.
+  - [ ] **New gRPC RPCs on `services/scanner`:** `ListInstalledAdapters`, `GetActiveAdapter`, `SetActiveAdapter` (persisted in a new `scanner_settings` table), `RunTestScan` (fires a deterministic test job against the active adapter, returns timing + finding counts).
+  - [ ] **Live adapter swap** without container restart — `process.ProcessPlugin` reloads its path via atomic pointer swap so the next scan picks up the new adapter.
+  - [ ] **Management BFF routes:** `GET /admin/scanners`, `GET /admin/scanners/active`, `PATCH /admin/scanners/active`, `POST /admin/scanners/test`. Platform-admin grant only.
+  - [ ] **Frontend `/admin/scanner` route** under platform-admin: adapter cards with name/version/checksum, "Active" badge, "Make active" action (confirm dialog), "Run test scan" button with inline result panel, per-adapter env-var config (TRIVY_* / GRYPE_* etc. — read-only-ish, surfaced from the running container's env).
+  - [ ] **Integration test:** triggers a scan via the gRPC test-scan RPC, asserts a `scan_results` row materializes within 30s. Guards against the JSON-RPC contract drifting silently.
+  - [ ] **Backend liveness probe** for the stuck-pending UI degradation: a `/admin/scanners/health` route the frontend can poll instead of guessing from elapsed time.
 
 ---
 

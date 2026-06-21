@@ -326,6 +326,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// executor + dry-run + events arrive in FE-API-040/038/041.
 	h.RegisterRepoRetention(mux, authMW)
 
+	// FE-API-038: dry-run + preview-window state. POST dry-run requires
+	// repo admin (same gate as PUT); GET preview requires repo reader.
+	// Both delegate to the metadata EvaluateRetention RPC — read-only,
+	// never persists.
+	h.RegisterRepoRetentionDryRun(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
