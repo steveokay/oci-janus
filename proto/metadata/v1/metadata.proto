@@ -237,7 +237,24 @@ message IncrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 
 // Scan requests
-message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
+//
+// UpdateScanStatusRequest is the scanner's write-back to metadata. The
+// row is upserted on scan_id so the first call (status="running" or
+// "complete") creates the row and subsequent calls update it — there's
+// no separate Create RPC. Fields 6-9 are required to satisfy the
+// scan_results NOT NULL columns on the initial insert; subsequent
+// updates may leave them empty and the existing values are kept.
+message UpdateScanStatusRequest {
+  string scan_id = 1;
+  string tenant_id = 2;
+  string status = 3;
+  bytes findings_json = 4;
+  map<string, int32> severity_counts = 5;
+  string repo_id = 6;
+  string manifest_digest = 7;
+  string scanner_name = 8;
+  string scanner_version = 9;
+}
 message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }
 
 // ─── FE-API-033: per-tag SBOM storage ────────────────────────────────────────

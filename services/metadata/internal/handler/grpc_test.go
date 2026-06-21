@@ -329,7 +329,7 @@ func (f *fakeRepo) DecrementTenantStorage(_ context.Context, _ string, _ int64) 
 	return f.decrStorageErr
 }
 
-func (f *fakeRepo) UpsertScanResult(_ context.Context, _, _, _ string, _ []byte, _ map[string]int32) error {
+func (f *fakeRepo) UpsertScanResult(_ context.Context, _, _, _ string, _ []byte, _ map[string]int32, _, _, _, _ string) error {
 	return f.upsertScanErr
 }
 

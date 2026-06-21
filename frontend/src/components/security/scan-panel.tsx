@@ -125,7 +125,58 @@ export function ScanPanel({
 
 // ─── status panels ──────────────────────────────────────────────────────────
 
+// STUCK_THRESHOLD_MS — how long a scan can sit in pending/running before
+// we degrade the "Scanning…" UI to "Scanner isn't producing results."
+// 90 seconds covers the realistic worst case for a small image (Trivy
+// DB download, layer extraction, scan). Anything past that almost
+// always means the scanner profile isn't running or the adapter
+// crashed silently — better to surface that than spin forever.
+const STUCK_THRESHOLD_MS = 90_000;
+
 function InFlightCard({ scan }: { scan: ScanResult }): React.ReactElement {
+  // Compute "stuck" client-side. Don't trust the started_at parse if
+  // it's malformed — fall back to "in flight" so a parse bug never
+  // turns into a permanent stuck banner.
+  const startedMs = Date.parse(scan.started_at);
+  const isStuck =
+    Number.isFinite(startedMs) && Date.now() - startedMs > STUCK_THRESHOLD_MS;
+
+  if (isStuck) {
+    return (
+      <Card accentBar="danger">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+              Vulnerability scan
+            </CardDescription>
+            <Badge tone="warning">
+              <Clock className="size-3" /> Stuck
+            </Badge>
+          </div>
+          <CardTitle className="!text-lg font-display !font-medium">
+            Scanner isn't producing results.
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-[var(--color-fg-muted)]">
+            We queued this scan {formatRelativeDate(scan.started_at)} but
+            the scanner hasn't written a result yet. The most common cause
+            in dev is that the scanner profile isn't running.
+          </p>
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3 font-mono text-xs">
+            docker compose --profile scanner up -d registry-scanner
+          </div>
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            See <code className="font-mono">docs/SCANNER.md</code> for the
+            adapter contract + how to swap between Trivy and the dev stub.
+            REM-011 tracks bringing this surface to first-class
+            "is the scanner alive?" detection on the backend.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card accentBar="warning">
       <CardHeader>

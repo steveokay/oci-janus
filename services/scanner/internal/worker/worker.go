@@ -168,12 +168,15 @@ func (p *Pool) runJob(ctx context.Context, job scanJob) {
 			"error", err,
 		)
 		p.scanStore.SetFailed(job.scanID)
-		p.persistScanStatus(ctx, job, "failed", nil, nil)
+		// Result is nil here — the plugin never completed. Pass it
+		// through so persistScanStatus can backfill placeholder
+		// scanner_name/version values to satisfy NOT NULL columns.
+		p.persistScanStatus(ctx, job, "failed", nil, nil, nil)
 		return
 	}
 
 	p.scanStore.SetComplete(job.scanID, result.SeverityCounts)
-	p.persistScanStatus(ctx, job, "complete", result.SeverityCounts, marshalFindings(result))
+	p.persistScanStatus(ctx, job, "complete", result.SeverityCounts, marshalFindings(result), result)
 
 	policyViolation := hasPolicyViolation(result)
 	p.publishScanCompleted(ctx, job, result, policyViolation)
@@ -218,11 +221,31 @@ func (p *Pool) doScan(ctx context.Context, job scanJob) (*plugin.ScanResult, err
 	})
 }
 
-// persistScanStatus calls metadata.UpdateScanStatus to persist the final result.
-func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string, counts map[string]int, findingsJSON []byte) {
+// persistScanStatus calls metadata.UpdateScanStatus to persist the
+// scan result. metadata.UpsertScanResult upserts on scan_id so the
+// first call (status="failed" without a plugin result, or "complete"
+// with one) creates the row using the identity fields below, and any
+// retry just updates the mutable columns.
+//
+// scannerName + scannerVersion are passed through from the plugin
+// response when available; an empty plugin run (failed before the
+// plugin returned a result) populates them with placeholders so the
+// NOT NULL columns are satisfied and the operator can still see which
+// scan_id failed.
+func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string, counts map[string]int, findingsJSON []byte, result *plugin.ScanResult) {
 	countsProto := make(map[string]int32, len(counts))
 	for k, v := range counts {
 		countsProto[k] = int32(v)
+	}
+
+	scannerName, scannerVersion := "unknown", "unknown"
+	if result != nil {
+		if result.ScannerName != "" {
+			scannerName = result.ScannerName
+		}
+		if result.ScannerVersion != "" {
+			scannerVersion = result.ScannerVersion
+		}
 	}
 
 	_, err := p.metaClient.UpdateScanStatus(ctx, &metadatav1.UpdateScanStatusRequest{
@@ -231,6 +254,10 @@ func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string
 		Status:         status,
 		FindingsJson:   findingsJSON,
 		SeverityCounts: countsProto,
+		RepoId:         job.repoID,
+		ManifestDigest: job.manifestDigest,
+		ScannerName:    scannerName,
+		ScannerVersion: scannerVersion,
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "UpdateScanStatus failed",

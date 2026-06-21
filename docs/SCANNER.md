@@ -1,0 +1,278 @@
+# SCANNER.md — Vulnerability Scanner Plugin Reference
+
+> **Audience:** operators choosing or swapping a vulnerability scanner;
+> developers writing a new adapter (e.g. Grype, customer-supplied
+> engine); reviewers asking "how does `registry-scanner` actually do its
+> job."
+>
+> **Status:** REM-011 Phase 1 — dev-stub + Trivy adapter shipped, both
+> work end-to-end against `docker compose --profile scanner up -d`.
+> Phase 2 (admin UI for adapter selection + test scans) is tracked
+> separately on the same REM line.
+
+---
+
+## 1. Architecture in one paragraph
+
+`registry-scanner` does not contain any CVE-detection logic of its own.
+It is an orchestrator: it consumes RabbitMQ events (`push.completed` or
+`scan.queued`), fetches the image layers from `registry-storage`, stages
+them into a temp directory, and then invokes an **adapter binary** as a
+subprocess. The adapter is whatever satisfies the JSON-RPC contract
+defined in [§3 below](#3-the-jsonrpc-plugin-contract). One adapter is
+active at a time, selected via `SCANNER_PLUGIN_PATH`. Swapping scanners
+— Trivy → Grype → customer-supplied — is one env-var change plus a
+restart.
+
+This is CLAUDE.md decision #5 ("external-process JSON-RPC, no Go
+plugins") materialized.
+
+---
+
+## 2. Adapters shipped today
+
+Both ship inside the `registry-scanner` Docker image; pick one by
+setting `SCANNER_PLUGIN_PATH` before bringing the profile up.
+
+| Adapter | Path inside image | Real CVE detection? | When to use |
+|---|---|---|---|
+| `dev-stub` | `/usr/local/bin/scanner-dev-stub` | **No** — returns 4 hardcoded findings (1 CRITICAL / 1 HIGH / 1 MEDIUM / 1 LOW) regardless of input | Local UI work, demos, CI smoke tests. Lets you exercise the full trigger → pending → complete → findings flow without waiting on a vuln DB download. |
+| `trivy-adapter` | `/usr/local/bin/scanner-trivy-adapter` | **Yes** — translates the JSON-RPC request into a `trivy rootfs` invocation against the staged layers | Real vulnerability scanning. First scan is slower (Trivy DB download), subsequent scans are fast. |
+
+Source: `infra/scanner-plugins/dev-stub/main.go`,
+`infra/scanner-plugins/trivy-adapter/main.go`.
+
+### Zero-config dev
+
+```sh
+docker compose --profile scanner up -d registry-scanner
+```
+
+That's it. The image's `ENV SCANNER_PLUGIN_PATH` defaults to
+`scanner-dev-stub`, and the entrypoint auto-computes the
+`SCANNER_PLUGIN_CHECKSUM` against the baked binary so neither env var
+needs to be set explicitly.
+
+### Switch to real Trivy
+
+```sh
+SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-trivy-adapter \
+  docker compose --profile scanner up -d --force-recreate registry-scanner
+```
+
+The entrypoint detects the swap, re-derives the checksum against the
+new binary, and starts the service. No restart of any other registry
+service is required.
+
+> **Note (Windows / Git-Bash):** prefix with `MSYS_NO_PATHCONV=1` so the
+> shell doesn't mangle the absolute path into a Windows path.
+
+### Production override (out-of-band checksum)
+
+In dev the entrypoint auto-fills the checksum from the binary in the
+image. In production you should pin it explicitly so a supply-chain
+attack on the image build is caught:
+
+```yaml
+environment:
+  SCANNER_PLUGIN_PATH: /usr/local/bin/scanner-trivy-adapter
+  SCANNER_PLUGIN_CHECKSUM: 8961abbcbc67d6d9e15589abea99f55b4a83dff0af29d38e5d83005595526789
+```
+
+The service refuses to start if `sha256sum(SCANNER_PLUGIN_PATH) !=
+SCANNER_PLUGIN_CHECKSUM` (`services/scanner/internal/plugin/process.go`).
+
+---
+
+## 3. The JSON-RPC plugin contract
+
+Every adapter is a subprocess that satisfies a one-shot, newline-
+delimited JSON-RPC request/response loop:
+
+```
+                          stdin                          stdout
+orchestrator ─────── rpcRequest ───────► adapter ────► rpcResponse ───►
+                       (1 request)                       (1 response,
+                                                          then exit)
+```
+
+The contract is defined in
+`services/scanner/internal/plugin/process.go` and the data types in
+`libs/scanner/plugin/plugin.go`. Both adapters this repo ships satisfy
+it; if you're writing a new one, you only need to match the wire
+shapes below.
+
+### Request (stdin)
+
+```json
+{
+  "id": "<opaque request id, echo back as-is>",
+  "method": "scan",
+  "params": {
+    "tenant_id": "<UUID>",
+    "manifest_digest": "sha256:<hex>",
+    "layers": [
+      {"Digest": "sha256:<hex>", "MediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "Size": 12345}
+    ],
+    "image_path": "/tmp/registry-scan-XXXXXX"
+  }
+}
+```
+
+- `image_path` is a host-local directory the orchestrator has
+  pre-populated with one file per layer, named by the layer digest's
+  hex part (no `sha256:` prefix). Read files from there; you never need
+  storage credentials.
+- `layers` is the manifest's layer descriptor list in order. Use this
+  ordering when flattening into a rootfs.
+
+### Response (stdout)
+
+Success:
+
+```json
+{
+  "id": "<the same id from the request>",
+  "result": {
+    "scanner_name": "trivy",
+    "scanner_version": "0.52.0",
+    "findings": [
+      {
+        "CVE": "CVE-2024-1234",
+        "Severity": "CRITICAL",
+        "Package": "openssl",
+        "Version": "3.0.7",
+        "FixedIn": "3.0.13",
+        "Description": "...",
+        "References": ["https://nvd.nist.gov/vuln/detail/CVE-2024-1234"]
+      }
+    ],
+    "severity_counts": {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+  }
+}
+```
+
+Failure:
+
+```json
+{"id": "<request id>", "error": "short error message"}
+```
+
+The `result` field key names are case-sensitive and MUST match exactly.
+`scanner_name` and `scanner_version` are echoed into the dashboard so
+operators can see which engine produced the findings.
+
+### Subprocess environment
+
+The orchestrator strips host secrets before invoking your adapter. Only
+these variables are forwarded:
+
+- `PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`
+- `USER`, `USERNAME`
+- `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`
+- Anything with the `TRIVY_` or `GRYPE_` prefix
+
+If your adapter needs additional config, namespace it under one of
+those prefixes (e.g. `TRIVY_CACHE_DIR`, `GRYPE_DB_PATH`).
+
+### Resource caps
+
+- `stdout` is capped at **10 MiB** by the orchestrator
+  (`io.LimitReader`). If your adapter emits more, the response will be
+  truncated and unmarshalling will fail.
+- Per-scan timeout is `SCANNER_JOB_TIMEOUT_SECS` (default 600s). The
+  orchestrator sends `SIGKILL` via `exec.CommandContext` when it
+  expires.
+
+---
+
+## 4. Writing a new adapter
+
+The dev-stub is intentionally small — read
+[`infra/scanner-plugins/dev-stub/main.go`](../infra/scanner-plugins/dev-stub/main.go)
+first; it's ~150 LOC and demonstrates the full contract with no
+external CVE engine to distract from the wire shape.
+
+The Trivy adapter is the realistic template if you're wrapping a real
+engine — read
+[`infra/scanner-plugins/trivy-adapter/main.go`](../infra/scanner-plugins/trivy-adapter/main.go).
+
+Quick checklist when adding `infra/scanner-plugins/grype-adapter/` (or
+your own):
+
+1. New directory with `go.mod` (separate module so it stays out of the
+   workspace; the build is reproducible from stdlib only).
+2. `main.go` implementing the JSON-RPC loop above.
+3. Add a build step to `services/scanner/Dockerfile` (mirror the
+   `WORKDIR /build/infra/scanner-plugins/trivy-adapter` block) and a
+   `COPY --from=builder` line into the final image.
+4. Operators point `SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-<your-adapter>`
+   and the entrypoint takes care of the checksum.
+
+No changes to the gRPC API, no migrations, no proto regen needed —
+adapter swap is purely an env-var flip.
+
+---
+
+## 5. End-to-end verification
+
+The acceptance criteria for REM-011 are:
+
+1. `docker compose --profile scanner up -d` starts `registry-scanner`
+   with zero operator config and the dev-stub fires successfully.
+2. `POST /tags/{tag}/scan` produces a `scan_results` row within ~30s.
+3. Auto-scan via `push.completed` produces a row within ~30s of a
+   `docker push`.
+4. Swap-plugin smoke test passes — replace `SCANNER_PLUGIN_PATH` +
+   checksum, restart, scans still land.
+
+Reproduce (1) and (2) with curl after `docker compose --profile
+scanner up -d registry-scanner`:
+
+```sh
+TOKEN=$(curl -sS -X POST http://localhost:8080/api/v1/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"Admin1234!dev","tenant_id":"98dbe36b-ef28-4903-b25c-bff1b2921c9e"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+# trigger
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8091/api/v1/repositories/dev/alpine/tags/latest/scan
+
+# poll
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8091/api/v1/repositories/dev/alpine/tags/latest/scan
+```
+
+You should see `status: complete` within ~10s on the dev-stub adapter
+(or ~30-90s on Trivy with a cold cache, depending on image size +
+network).
+
+---
+
+## 6. Known limitations + follow-ups
+
+These are not blockers for REM-011 Phase 1 but should be tracked when
+extending the surface:
+
+- **Trivy adapter layer flatten ignores whiteouts.** A package installed
+  in layer N and removed in layer N+1 is still reported. Documented
+  overcount; a correct overlayfs replay is a follow-up.
+- **No multi-platform manifest handling in the adapter.** The
+  orchestrator resolves a single manifest before invoking the adapter,
+  so this only matters if an adapter wants to scan all platforms in an
+  image-index. Out of scope today.
+- **`pull.image` events aren't emitted** by the audit consumer, so
+  `?metric=pulls` on the analytics endpoint is flat zero. Independent
+  gap, tracked separately.
+- **No UI for adapter swap.** Today the swap is an env-var change +
+  restart. Phase 2 of REM-011 adds an `/admin/scanner` page where a
+  platform admin can pick from pre-installed adapters and trigger a
+  test scan; the binaries still must be baked into the image (we don't
+  let the UI upload executable code).
+
+---
+
+> **Source of truth:** the wire contract lives in code, not docs. If
+> you change `process.go` or `libs/scanner/plugin/plugin.go`, update the
+> "Request"/"Response" sections of this file in the same commit.

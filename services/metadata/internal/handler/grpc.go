@@ -56,7 +56,7 @@ type metadataRepo interface {
 	// Tenant usage aggregate (FE-API-028) — storage + repo + org counts.
 	GetTenantUsage(ctx context.Context, tenantID string) (*metadatav1.TenantUsage, error)
 	// Scan results
-	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
+	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32, repoID, manifestDigest, scannerName, scannerVersion string) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
 	// Per-tag SBOM (FE-API-033) — keyed on the latest scan_results row for the
 	// (tenant_id, manifest_digest) pair.
@@ -323,7 +323,13 @@ func (h *MetadataHandler) DecrementTenantStorage(ctx context.Context, req *metad
 // ── Scan results ─────────────────────────────────────────────────────────────
 
 func (h *MetadataHandler) UpdateScanStatus(ctx context.Context, req *metadatav1.UpdateScanStatusRequest) (*emptypb.Empty, error) {
-	err := h.repo.UpsertScanResult(ctx, req.ScanId, req.TenantId, req.Status, req.FindingsJson, req.SeverityCounts)
+	err := h.repo.UpsertScanResult(
+		ctx,
+		req.ScanId, req.TenantId, req.Status,
+		req.FindingsJson, req.SeverityCounts,
+		req.RepoId, req.ManifestDigest,
+		req.ScannerName, req.ScannerVersion,
+	)
 	return &emptypb.Empty{}, mapErr(err)
 }
 

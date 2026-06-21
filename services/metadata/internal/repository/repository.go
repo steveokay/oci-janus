@@ -804,8 +804,21 @@ func (r *Repository) DecrementRepoStorage(ctx context.Context, tenantID, repoID 
 
 // ── Scan results ─────────────────────────────────────────────────────────────
 
-// UpsertScanResult inserts or updates a scan_results row identified by scan_id.
-func (r *Repository) UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error {
+// UpsertScanResult inserts or updates a scan_results row keyed on scan_id.
+//
+// The scanner enqueues a job, runs the plugin, and writes the result
+// back via this method — there is no separate Create step. The first
+// call for a given scan_id INSERTs (using repo_id, manifest_digest,
+// scanner_name, scanner_version to satisfy NOT NULL columns); a
+// subsequent call for the same scan_id UPDATEs the mutable columns
+// only. Identity columns (repo_id, manifest_digest, scanner_name,
+// scanner_version) are not overwritten by COALESCE so a re-emit can't
+// accidentally clobber them with empty values.
+//
+// Returns ErrNotFound only on a follow-up update where the scan_id
+// already exists in another tenant — that should be unreachable in
+// practice (scan_id is a fresh UUID per job) and signals a real bug.
+func (r *Repository) UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32, repoID, manifestDigest, scannerName, scannerVersion string) error {
 	countsJSON, err := json.Marshal(severityCounts)
 	if err != nil {
 		return fmt.Errorf("marshal severity counts: %w", err)
@@ -820,20 +833,45 @@ func (r *Repository) UpsertScanResult(ctx context.Context, scanID, tenantID, sta
 		completedAt = &now
 	}
 
+	// On INSERT we need every NOT NULL column. On UPDATE we keep the
+	// existing identity values (repo_id et al.) so a follow-up call
+	// with empty strings does no harm; only the mutable columns change.
 	const q = `
-		UPDATE scan_results
-		SET    status          = $1,
-		       findings        = $2,
-		       severity_counts = $3,
-		       started_at      = COALESCE(started_at, $4),
-		       completed_at    = $5
-		WHERE  id = $6 AND tenant_id = $7`
+		INSERT INTO scan_results (
+		    id, tenant_id, repo_id, manifest_digest,
+		    scanner_name, scanner_version,
+		    status, findings, severity_counts,
+		    started_at, completed_at
+		) VALUES (
+		    $1, $2, $3, $4,
+		    $5, $6,
+		    $7, $8, $9,
+		    $10, $11
+		)
+		ON CONFLICT (id) DO UPDATE
+		SET status          = EXCLUDED.status,
+		    findings        = EXCLUDED.findings,
+		    severity_counts = EXCLUDED.severity_counts,
+		    started_at      = COALESCE(scan_results.started_at, EXCLUDED.started_at),
+		    completed_at    = EXCLUDED.completed_at,
+		    scanner_name    = CASE WHEN EXCLUDED.scanner_name    <> '' THEN EXCLUDED.scanner_name    ELSE scan_results.scanner_name    END,
+		    scanner_version = CASE WHEN EXCLUDED.scanner_version <> '' THEN EXCLUDED.scanner_version ELSE scan_results.scanner_version END
+		WHERE scan_results.tenant_id = EXCLUDED.tenant_id`
 
-	tag, err := r.pool.Exec(ctx, q, status, findingsJSON, countsJSON, startedAt, completedAt, scanID, tenantID)
+	tag, err := r.pool.Exec(ctx, q,
+		scanID, tenantID, repoID, manifestDigest,
+		scannerName, scannerVersion,
+		status, findingsJSON, countsJSON,
+		startedAt, completedAt,
+	)
 	if err != nil {
-		return fmt.Errorf("update scan result: %w", err)
+		return fmt.Errorf("upsert scan result: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		// ON CONFLICT WHERE clause filtered the update — only possible
+		// if the scan_id is owned by a different tenant. Treat as a
+		// tenant-isolation breach and surface NotFound (don't leak the
+		// existence of the row to the caller).
 		return ErrNotFound
 	}
 	return nil

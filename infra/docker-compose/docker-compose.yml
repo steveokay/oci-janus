@@ -77,7 +77,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       POSTGRES_DB: registry_auth
       # init-multi-db.sh creates additional databases listed here
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -694,9 +694,17 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Scanner requires an external plugin binary — not started by default.
-  # Set SCANNER_PLUGIN_PATH and SCANNER_PLUGIN_CHECKSUM in .env, then:
+  # Scanner is opt-in via the `scanner` profile. Zero config required:
   #   docker compose --profile scanner up -d registry-scanner
+  #
+  # The image ships two adapters that satisfy the JSON-RPC plugin contract:
+  #   /usr/local/bin/scanner-dev-stub      (default — hardcoded findings, for UI demos)
+  #   /usr/local/bin/scanner-trivy-adapter (real CVE detection via Trivy)
+  #
+  # The entrypoint auto-computes SCANNER_PLUGIN_CHECKSUM from the active
+  # binary so neither env var needs a value in dev. Operators wanting real
+  # scans should set SCANNER_PLUGIN_PATH to the trivy adapter; the env
+  # default below empty-falls-through to the Dockerfile default.
   registry-scanner:
     build:
       context: ../../
@@ -710,8 +718,14 @@ services:
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
-      SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH}
-      SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM}
+      # Scanner owns its own Postgres schema (FE-API-018 scan policies +
+      # FE-API-019 compliance reports). Uses the platform-wide pg container.
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_scanner?sslmode=prefer
+      # Operator override → image default → adapter selection. Empty
+      # values fall through to the Dockerfile's ENV defaults; entrypoint
+      # auto-computes SCANNER_PLUGIN_CHECKSUM from the active binary.
+      SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH:-}
+      SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM:-}
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/scanner.crt
       MTLS_KEY_PATH: /certs/scanner.key

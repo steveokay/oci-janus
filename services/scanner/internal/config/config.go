@@ -8,6 +8,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -62,8 +64,20 @@ type Config struct {
 }
 
 // Load reads configuration from environment variables and validates required fields.
+//
+// Viper's AutomaticEnv alone is not enough: viper.Unmarshal walks the
+// struct via mapstructure tags but only finds keys that have been
+// previously Set or BindEnv'd. Without that step, env vars come through
+// as empty even though they're present in os.Environ. We explicitly
+// promote every env var into viper's key space — same pattern the gc
+// and audit services use — so Unmarshal sees everything.
 func Load() (*Config, error) {
 	viper.AutomaticEnv()
+	for _, e := range os.Environ() {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			viper.Set(k, v)
+		}
+	}
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
