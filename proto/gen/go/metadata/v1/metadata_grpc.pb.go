@@ -58,6 +58,11 @@ const (
 	MetadataService_UpsertRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
 	MetadataService_DeleteRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
 	MetadataService_EvaluateRetention_FullMethodName           = "/registry.metadata.v1.MetadataService/EvaluateRetention"
+	MetadataService_GetOrgRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/GetOrgRetentionPolicy"
+	MetadataService_UpsertOrgRetentionPolicy_FullMethodName    = "/registry.metadata.v1.MetadataService/UpsertOrgRetentionPolicy"
+	MetadataService_DeleteOrgRetentionPolicy_FullMethodName    = "/registry.metadata.v1.MetadataService/DeleteOrgRetentionPolicy"
+	MetadataService_GetEffectiveRetentionPolicy_FullMethodName = "/registry.metadata.v1.MetadataService/GetEffectiveRetentionPolicy"
+	MetadataService_LookupOrgIDByName_FullMethodName           = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -172,6 +177,37 @@ type MetadataServiceClient interface {
 	// (computed via SQL aggregate, not by counting the truncated slice) so the
 	// UI can render "showing 1000 of 47 312 candidates" honestly.
 	EvaluateRetention(ctx context.Context, in *EvaluateRetentionRequest, opts ...grpc.CallOption) (*EvaluateRetentionResponse, error)
+	// GetOrgRetentionPolicy returns the default retention policy attached to an
+	// org, or NotFound when none exists. The shape is identical to
+	// RetentionPolicy (with `org_id` populated and `repo_id` empty) so callers
+	// can render both per-repo and per-org policies with the same UI code.
+	GetOrgRetentionPolicy(ctx context.Context, in *GetOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error)
+	// UpsertOrgRetentionPolicy creates or updates the org default policy. Same
+	// preview_until semantics as UpsertRepoRetentionPolicy — the implementation
+	// owns the 24h window when a default is enabled or its rules change
+	// materially. The caller never sets preview_until directly.
+	UpsertOrgRetentionPolicy(ctx context.Context, in *UpsertOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error)
+	// DeleteOrgRetentionPolicy removes the org default. Repos that previously
+	// inherited fall back to "no policy" until either a new default is set or
+	// an explicit per-repo policy is created.
+	DeleteOrgRetentionPolicy(ctx context.Context, in *DeleteOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetEffectiveRetentionPolicy resolves what policy actually applies to a
+	// repository: the per-repo row if it exists, else the org default (only
+	// when enabled = TRUE), else NotFound. The `inherited_from` field on the
+	// response tells the BFF + UI whether to label the policy "(per-repo)" or
+	// "(inherited from org default)" without a second round-trip. A disabled
+	// org default deliberately does NOT propagate — falling back to a disabled
+	// default would surface a confusing "no enforcement, but here's a default"
+	// banner.
+	GetEffectiveRetentionPolicy(ctx context.Context, in *GetEffectiveRetentionPolicyRequest, opts ...grpc.CallOption) (*EffectiveRetentionPolicy, error)
+	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
+	// Read-only — unlike the repository-internal GetOrCreateOrganization
+	// which has insert semantics, this RPC returns NotFound when the org
+	// does not exist. Added in FE-API-039 so the management BFF can map
+	// /api/v1/orgs/{org}/policies/retention URLs (which carry the org name)
+	// to the org_id required by the per-org retention RPCs without an
+	// unintended side-effect.
+	LookupOrgIDByName(ctx context.Context, in *LookupOrgIDByNameRequest, opts ...grpc.CallOption) (*LookupOrgIDByNameResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -654,6 +690,56 @@ func (c *metadataServiceClient) EvaluateRetention(ctx context.Context, in *Evalu
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetOrgRetentionPolicy(ctx context.Context, in *GetOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetentionPolicy)
+	err := c.cc.Invoke(ctx, MetadataService_GetOrgRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpsertOrgRetentionPolicy(ctx context.Context, in *UpsertOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetentionPolicy)
+	err := c.cc.Invoke(ctx, MetadataService_UpsertOrgRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteOrgRetentionPolicy(ctx context.Context, in *DeleteOrgRetentionPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteOrgRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) GetEffectiveRetentionPolicy(ctx context.Context, in *GetEffectiveRetentionPolicyRequest, opts ...grpc.CallOption) (*EffectiveRetentionPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EffectiveRetentionPolicy)
+	err := c.cc.Invoke(ctx, MetadataService_GetEffectiveRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) LookupOrgIDByName(ctx context.Context, in *LookupOrgIDByNameRequest, opts ...grpc.CallOption) (*LookupOrgIDByNameResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupOrgIDByNameResponse)
+	err := c.cc.Invoke(ctx, MetadataService_LookupOrgIDByName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -766,6 +852,37 @@ type MetadataServiceServer interface {
 	// (computed via SQL aggregate, not by counting the truncated slice) so the
 	// UI can render "showing 1000 of 47 312 candidates" honestly.
 	EvaluateRetention(context.Context, *EvaluateRetentionRequest) (*EvaluateRetentionResponse, error)
+	// GetOrgRetentionPolicy returns the default retention policy attached to an
+	// org, or NotFound when none exists. The shape is identical to
+	// RetentionPolicy (with `org_id` populated and `repo_id` empty) so callers
+	// can render both per-repo and per-org policies with the same UI code.
+	GetOrgRetentionPolicy(context.Context, *GetOrgRetentionPolicyRequest) (*RetentionPolicy, error)
+	// UpsertOrgRetentionPolicy creates or updates the org default policy. Same
+	// preview_until semantics as UpsertRepoRetentionPolicy — the implementation
+	// owns the 24h window when a default is enabled or its rules change
+	// materially. The caller never sets preview_until directly.
+	UpsertOrgRetentionPolicy(context.Context, *UpsertOrgRetentionPolicyRequest) (*RetentionPolicy, error)
+	// DeleteOrgRetentionPolicy removes the org default. Repos that previously
+	// inherited fall back to "no policy" until either a new default is set or
+	// an explicit per-repo policy is created.
+	DeleteOrgRetentionPolicy(context.Context, *DeleteOrgRetentionPolicyRequest) (*emptypb.Empty, error)
+	// GetEffectiveRetentionPolicy resolves what policy actually applies to a
+	// repository: the per-repo row if it exists, else the org default (only
+	// when enabled = TRUE), else NotFound. The `inherited_from` field on the
+	// response tells the BFF + UI whether to label the policy "(per-repo)" or
+	// "(inherited from org default)" without a second round-trip. A disabled
+	// org default deliberately does NOT propagate — falling back to a disabled
+	// default would surface a confusing "no enforcement, but here's a default"
+	// banner.
+	GetEffectiveRetentionPolicy(context.Context, *GetEffectiveRetentionPolicyRequest) (*EffectiveRetentionPolicy, error)
+	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
+	// Read-only — unlike the repository-internal GetOrCreateOrganization
+	// which has insert semantics, this RPC returns NotFound when the org
+	// does not exist. Added in FE-API-039 so the management BFF can map
+	// /api/v1/orgs/{org}/policies/retention URLs (which carry the org name)
+	// to the org_id required by the per-org retention RPCs without an
+	// unintended side-effect.
+	LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -885,6 +1002,21 @@ func (UnimplementedMetadataServiceServer) DeleteRepoRetentionPolicy(context.Cont
 }
 func (UnimplementedMetadataServiceServer) EvaluateRetention(context.Context, *EvaluateRetentionRequest) (*EvaluateRetentionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EvaluateRetention not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetOrgRetentionPolicy(context.Context, *GetOrgRetentionPolicyRequest) (*RetentionPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOrgRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpsertOrgRetentionPolicy(context.Context, *UpsertOrgRetentionPolicyRequest) (*RetentionPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertOrgRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteOrgRetentionPolicy(context.Context, *DeleteOrgRetentionPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteOrgRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetEffectiveRetentionPolicy(context.Context, *GetEffectiveRetentionPolicyRequest) (*EffectiveRetentionPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEffectiveRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LookupOrgIDByName not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1594,6 +1726,96 @@ func _MetadataService_EvaluateRetention_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetOrgRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrgRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetOrgRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetOrgRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetOrgRetentionPolicy(ctx, req.(*GetOrgRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpsertOrgRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertOrgRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpsertOrgRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpsertOrgRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpsertOrgRetentionPolicy(ctx, req.(*UpsertOrgRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteOrgRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOrgRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteOrgRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteOrgRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteOrgRetentionPolicy(ctx, req.(*DeleteOrgRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_GetEffectiveRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEffectiveRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetEffectiveRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetEffectiveRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetEffectiveRetentionPolicy(ctx, req.(*GetEffectiveRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_LookupOrgIDByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupOrgIDByNameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).LookupOrgIDByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_LookupOrgIDByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).LookupOrgIDByName(ctx, req.(*LookupOrgIDByNameRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1736,6 +1958,26 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EvaluateRetention",
 			Handler:    _MetadataService_EvaluateRetention_Handler,
+		},
+		{
+			MethodName: "GetOrgRetentionPolicy",
+			Handler:    _MetadataService_GetOrgRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertOrgRetentionPolicy",
+			Handler:    _MetadataService_UpsertOrgRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteOrgRetentionPolicy",
+			Handler:    _MetadataService_DeleteOrgRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "GetEffectiveRetentionPolicy",
+			Handler:    _MetadataService_GetEffectiveRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "LookupOrgIDByName",
+			Handler:    _MetadataService_LookupOrgIDByName_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

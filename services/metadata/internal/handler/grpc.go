@@ -98,6 +98,25 @@ type metadataRepo interface {
 		candidate *metadatav1.RetentionPolicyCandidate,
 		maxDeleteResults, maxProtectedResults int,
 	) (*repository.EvaluationResult, error)
+	// FE-API-039: per-org default retention + inheritance resolution.
+	// GetOrgRetentionPolicy / UpsertOrgRetentionPolicy / DeleteOrgRetentionPolicy
+	// mirror the per-repo CRUD; GetEffectiveRetentionPolicy returns the
+	// per-repo row when present, else the org default (only when enabled),
+	// else ErrNotFound — wrapped with an inherited_from label.
+	GetOrgRetentionPolicy(ctx context.Context, tenantID, orgID string) (*metadatav1.RetentionPolicy, error)
+	UpsertOrgRetentionPolicy(
+		ctx context.Context,
+		tenantID, orgID string,
+		enabled bool,
+		rules []*metadatav1.RetentionRule,
+		protectedPatterns []string,
+		updatedBy string,
+	) (*metadatav1.RetentionPolicy, error)
+	DeleteOrgRetentionPolicy(ctx context.Context, tenantID, orgID string) error
+	GetEffectiveRetentionPolicy(ctx context.Context, tenantID, repoID string) (*repository.EffectivePolicyResult, error)
+	// FE-API-039: read-only org name → org_id lookup so the BFF can map
+	// /api/v1/orgs/{org}/... URLs without an unintended insert.
+	LookupOrgIDByName(ctx context.Context, tenantID, orgName string) (string, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.
