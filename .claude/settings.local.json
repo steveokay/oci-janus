@@ -60,7 +60,16 @@
       "Bash(GOWORK=* *)",
       "Bash(go *)",
       "Bash(buf *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(/tmp/dev-stub)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('id:',d['id']\\); print\\('counts:',d['result']['severity_counts']\\); print\\('findings_count:',len\\(d['result']['findings']\\)\\)\")",
+      "Bash(/tmp/trivy-adapter)",
+      "Bash(SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-trivy-adapter docker compose --profile scanner up -d --force-recreate registry-scanner)",
+      "Bash(MSYS_NO_PATHCONV=1 SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-trivy-adapter docker compose --profile scanner up -d --force-recreate registry-scanner)",
+      "Bash(curl -sS -X POST http://localhost:8080/api/v1/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Admin1234!dev\",\"tenant_id\":\"98dbe36b-ef28-4903-b25c-bff1b2921c9e\"}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('scanner:', d.get\\('scanner_name'\\), d.get\\('scanner_version'\\)\\); print\\('counts:', d.get\\('severity_counts'\\)\\); print\\('completed:', d.get\\('completed_at'\\)\\)\")",
+      "Read(//c/c/Users/Athelos/Desktop/claude/image-registry/proto/scanner/**)",
+      "Read(//c/c/Users/Athelos/Desktop/claude/image-registry/proto/**)"
     ]
   },
   "enableAllProjectMcpServers": true,
