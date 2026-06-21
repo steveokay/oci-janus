@@ -31,6 +31,10 @@ const (
 	adminToken     = "admin-token"
 	writerToken    = "writer-token"
 	readerToken    = "reader-token"
+	// ownerToken is used by FE-API-037 tests to assert that owner role on the
+	// repo's parent org is sufficient for retention PUT/DELETE — matching the
+	// admin-level gating.
+	ownerToken     = "owner-token"
 	testTenantID   = "00000000-0000-0000-0000-000000000001"
 	testUserID     = "00000000-0000-0000-0000-000000000099"
 	testRepoID     = "00000000-0000-0000-0000-000000000010"
@@ -55,6 +59,8 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "writer-user"}, nil
 	case readerToken:
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "reader-user"}, nil
+	case ownerToken:
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "owner-user"}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -77,6 +83,13 @@ func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUs
 			Roles: []string{"writer"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "assign-writer", UserId: "writer-user", Role: "writer", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
+	case "owner-user":
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"owner"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "assign-owner", UserId: "owner-user", Role: "owner", ScopeType: "org", ScopeValue: "myorg"},
 			},
 		}, nil
 	default:
@@ -547,6 +560,65 @@ func (s *fakeAuditServer) GetAnalytics(_ context.Context, req *auditv1.GetAnalyt
 		Total:      7,
 		RangeStart: timestamppb.New(rangeStart),
 	}, nil
+}
+
+// FE-API-037: per-repo retention policy fakes. Tests set the *Override
+// fields to drive the response; the *Call mirrors the most recent request
+// so the test can assert wiring. Both delete and get also support specific
+// gRPC errors via *Err so the 404/500 branches are exercisable.
+var (
+	getRetentionOverride *metadatav1.RetentionPolicy
+	getRetentionErr      error
+	upsertRetentionCall  *metadatav1.UpsertRepoRetentionPolicyRequest
+	upsertRetentionErr   error
+	deleteRetentionCall  *metadatav1.DeleteRepoRetentionPolicyRequest
+	deleteRetentionErr   error
+)
+
+func (s *fakeMetaServer) GetRepoRetentionPolicy(_ context.Context, req *metadatav1.GetRepoRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	if getRetentionErr != nil {
+		return nil, getRetentionErr
+	}
+	if getRetentionOverride != nil {
+		return getRetentionOverride, nil
+	}
+	// Default canned policy so the GET happy-path test has fields to inspect.
+	return &metadatav1.RetentionPolicy{
+		RepoId:               req.GetRepoId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              true,
+		Rules:                []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+		ProtectedTagPatterns: []string{"latest"},
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+	}, nil
+}
+
+func (s *fakeMetaServer) UpsertRepoRetentionPolicy(_ context.Context, req *metadatav1.UpsertRepoRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	upsertRetentionCall = req
+	if upsertRetentionErr != nil {
+		return nil, upsertRetentionErr
+	}
+	return &metadatav1.RetentionPolicy{
+		RepoId:               req.GetRepoId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              req.GetEnabled(),
+		Rules:                req.GetRules(),
+		ProtectedTagPatterns: req.GetProtectedTagPatterns(),
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+		UpdatedBy:            req.GetUpdatedBy(),
+	}, nil
+}
+
+func (s *fakeMetaServer) DeleteRepoRetentionPolicy(_ context.Context, req *metadatav1.DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error) {
+	deleteRetentionCall = req
+	if deleteRetentionErr != nil {
+		return nil, deleteRetentionErr
+	}
+	return &emptypb.Empty{}, nil
 }
 
 // fakeHealthServer always returns SERVING.

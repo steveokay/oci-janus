@@ -54,6 +54,9 @@ const (
 	MetadataService_ListTenantRemediations_FullMethodName      = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
 	MetadataService_GetTenantStorageBreakdown_FullMethodName   = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
 	MetadataService_GetTenantUsage_FullMethodName              = "/registry.metadata.v1.MetadataService/GetTenantUsage"
+	MetadataService_GetRepoRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
+	MetadataService_UpsertRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
+	MetadataService_DeleteRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -136,6 +139,19 @@ type MetadataServiceClient interface {
 	// quota_bytes=0 rather than NotFound, so the management layer can stitch
 	// the response together for newly-created tenants without push activity.
 	GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*TenantUsage, error)
+	// GetRepoRetentionPolicy returns the policy attached to a repository, or
+	// a typed NotFound when no policy row exists. The caller (registry-management)
+	// is responsible for falling back to the org default (FE-API-039) when
+	// NotFound is returned.
+	GetRepoRetentionPolicy(ctx context.Context, in *GetRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error)
+	// UpsertRepoRetentionPolicy creates or updates the policy. Setting
+	// enabled=true with no existing preview_until causes the implementation
+	// to set preview_until = now() + 24h (FE-API-038 mechanism). preview_until
+	// is otherwise client-readonly — the caller cannot set it directly.
+	UpsertRepoRetentionPolicy(ctx context.Context, in *UpsertRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error)
+	// DeleteRepoRetentionPolicy removes the per-repo override; the repo then
+	// falls back to the org default (FE-API-039).
+	DeleteRepoRetentionPolicy(ctx context.Context, in *DeleteRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type metadataServiceClient struct {
@@ -578,6 +594,36 @@ func (c *metadataServiceClient) GetTenantUsage(ctx context.Context, in *GetTenan
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetRepoRetentionPolicy(ctx context.Context, in *GetRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetentionPolicy)
+	err := c.cc.Invoke(ctx, MetadataService_GetRepoRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpsertRepoRetentionPolicy(ctx context.Context, in *UpsertRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetentionPolicy)
+	err := c.cc.Invoke(ctx, MetadataService_UpsertRepoRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteRepoRetentionPolicy(ctx context.Context, in *DeleteRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteRepoRetentionPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -658,6 +704,19 @@ type MetadataServiceServer interface {
 	// quota_bytes=0 rather than NotFound, so the management layer can stitch
 	// the response together for newly-created tenants without push activity.
 	GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error)
+	// GetRepoRetentionPolicy returns the policy attached to a repository, or
+	// a typed NotFound when no policy row exists. The caller (registry-management)
+	// is responsible for falling back to the org default (FE-API-039) when
+	// NotFound is returned.
+	GetRepoRetentionPolicy(context.Context, *GetRepoRetentionPolicyRequest) (*RetentionPolicy, error)
+	// UpsertRepoRetentionPolicy creates or updates the policy. Setting
+	// enabled=true with no existing preview_until causes the implementation
+	// to set preview_until = now() + 24h (FE-API-038 mechanism). preview_until
+	// is otherwise client-readonly — the caller cannot set it directly.
+	UpsertRepoRetentionPolicy(context.Context, *UpsertRepoRetentionPolicyRequest) (*RetentionPolicy, error)
+	// DeleteRepoRetentionPolicy removes the per-repo override; the repo then
+	// falls back to the org default (FE-API-039).
+	DeleteRepoRetentionPolicy(context.Context, *DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -765,6 +824,15 @@ func (UnimplementedMetadataServiceServer) GetTenantStorageBreakdown(context.Cont
 }
 func (UnimplementedMetadataServiceServer) GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantUsage not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetRepoRetentionPolicy(context.Context, *GetRepoRetentionPolicyRequest) (*RetentionPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRepoRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpsertRepoRetentionPolicy(context.Context, *UpsertRepoRetentionPolicyRequest) (*RetentionPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertRepoRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteRepoRetentionPolicy(context.Context, *DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteRepoRetentionPolicy not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1402,6 +1470,60 @@ func _MetadataService_GetTenantUsage_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetRepoRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepoRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetRepoRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetRepoRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetRepoRetentionPolicy(ctx, req.(*GetRepoRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpsertRepoRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertRepoRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpsertRepoRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpsertRepoRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpsertRepoRetentionPolicy(ctx, req.(*UpsertRepoRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteRepoRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRepoRetentionPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteRepoRetentionPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteRepoRetentionPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteRepoRetentionPolicy(ctx, req.(*DeleteRepoRetentionPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1528,6 +1650,18 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantUsage",
 			Handler:    _MetadataService_GetTenantUsage_Handler,
+		},
+		{
+			MethodName: "GetRepoRetentionPolicy",
+			Handler:    _MetadataService_GetRepoRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertRepoRetentionPolicy",
+			Handler:    _MetadataService_UpsertRepoRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteRepoRetentionPolicy",
+			Handler:    _MetadataService_DeleteRepoRetentionPolicy_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

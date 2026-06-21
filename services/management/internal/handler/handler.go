@@ -321,6 +321,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// h.tenant is nil (TENANT_GRPC_ADDR unset).
 	h.RegisterWorkspaceDomains(mux, authMW)
 
+	// Per-repo retention policy CRUD (FE-API-037). All routes require at
+	// least reader on the repo (GET) or repo admin (PUT/DELETE). The
+	// executor + dry-run + events arrive in FE-API-040/038/041.
+	h.RegisterRepoRetention(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
