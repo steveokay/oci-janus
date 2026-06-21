@@ -34,7 +34,7 @@ END $$;
 DROP INDEX IF EXISTS api_keys_sa_name_unique;
 DROP INDEX IF EXISTS api_keys_user_name_unique;
 DROP INDEX IF EXISTS idx_api_keys_sa;
-ALTER TABLE api_keys DROP CONSTRAINT api_keys_owner_exactly_one;
+ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_owner_exactly_one;
 ALTER TABLE api_keys DROP COLUMN service_account_id;
 ALTER TABLE api_keys ALTER COLUMN user_id SET NOT NULL;
 ALTER TABLE api_keys ADD CONSTRAINT api_keys_user_id_name_key UNIQUE (user_id, name);
