@@ -186,6 +186,52 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// FE-API-041: retention lifecycle. All three are system-actor events
+	// because the executor is gc's cron loop; when a user triggers
+	// TriggerRetentionRun the payload's triggered_by carries the user_id
+	// in metadata.raw so the dashboard can still attribute the sweep.
+	// Resource is the repository_id (or empty for cross-tenant grace
+	// sweeps) so the activity feed groups them next to push events.
+	case events.RoutingRetentionEvaluated:
+		var p events.RetentionEvaluatedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "retention.evaluated",
+			Resource:   p.RepositoryID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingRetentionApplied:
+		var p events.RetentionAppliedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "retention.applied",
+			Resource:   p.RepositoryID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingRetentionGraceCompleted:
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "retention.grace_completed",
+			Resource:   "", // cross-tenant or tenant-wide, no specific resource
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil

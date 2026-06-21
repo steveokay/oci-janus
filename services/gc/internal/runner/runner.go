@@ -18,9 +18,21 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
 	"github.com/steveokay/oci-janus/services/gc/internal/repository"
 )
+
+// EventPublisher is the narrow surface the retention executor needs on the
+// libs/rabbitmq/publisher.Publisher. Decoupling lets the executor accept a
+// nil publisher (no broker wired) and lets tests drop in a fake that
+// captures the routing key + event body without standing up RabbitMQ.
+//
+// Matches *publisher.Publisher.Publish exactly so the production wire is a
+// one-liner in server.go.
+type EventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
 
 // PersistedRunner reuses an existing collector but wraps every Run
 // invocation in a persisted gc_runs row. The same instance services
@@ -44,6 +56,10 @@ type PersistedRunner struct {
 	// caps). Defaults are wired in New; SetRetentionConfig swaps them in
 	// before CronLoop spawns.
 	retention RetentionConfig
+	// pub publishes retention.* events. Nil-safe: when unset (no broker
+	// configured) the executor logs a debug and skips the publish so a
+	// dev install without RABBITMQ_URL still drains queued retention rows.
+	pub EventPublisher
 	// finalizeHook / failHook are TEST-ONLY indirections so the retention
 	// executor's outcome-recording can be observed without standing up a
 	// real repository.Repository. In production both are nil and the
@@ -91,6 +107,15 @@ func New(col *collector.Collector, repo *repository.Repository, mode string) *Pe
 // Returns the runner for chained init.
 func (p *PersistedRunner) WithMetadataClient(c MetadataClient) *PersistedRunner {
 	p.metaClient = c
+	return p
+}
+
+// WithPublisher attaches a RabbitMQ event publisher to the retention
+// executor. Pass nil (or skip the call) to disable retention.* event
+// emission — useful for dev installs without a broker, and required by
+// the legacy non-persisted path. Returns the runner for chained init.
+func (p *PersistedRunner) WithPublisher(pub EventPublisher) *PersistedRunner {
+	p.pub = pub
 	return p
 }
 

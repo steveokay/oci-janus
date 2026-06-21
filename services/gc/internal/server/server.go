@@ -131,8 +131,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// way to call MarkPending / DeleteManifest / etc. The grace ticker fires
 	// every cfg.RetentionGraceIntervalHours; setting it to 0 disables the
 	// automatic finaliser sweep (operator can still trigger via the gRPC).
+	//
+	// FE-API-041: hand the same publisher used by the collector to the
+	// retention executor so retention.evaluated / .applied / .grace_completed
+	// events flow through one connection. WithPublisher accepts nil, so a
+	// future deployment without a broker still gets a working executor.
 	if persisted != nil {
-		persisted = persisted.WithMetadataClient(metadatav1.NewMetadataServiceClient(metaConn))
+		persisted = persisted.
+			WithMetadataClient(metadatav1.NewMetadataServiceClient(metaConn)).
+			WithPublisher(pub)
 		persisted.SetRetentionConfig(runner.RetentionConfig{
 			GraceWindow: time.Duration(cfg.RetentionGraceDays) * 24 * time.Hour,
 		})

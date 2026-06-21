@@ -19,9 +19,30 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/gc/internal/repository"
 )
+
+// ── fakePublisher ────────────────────────────────────────────────────────────
+
+// fakePublisher captures every (routingKey, Event) the executor publishes.
+// publishErr is returned from Publish so tests can exercise the
+// "publish error is logged but run still succeeds" path.
+type fakePublisher struct {
+	publishErr error
+	publishes  []capturedPublish
+}
+
+type capturedPublish struct {
+	routingKey string
+	event      events.Event
+}
+
+func (f *fakePublisher) Publish(_ context.Context, routingKey string, event events.Event) error {
+	f.publishes = append(f.publishes, capturedPublish{routingKey: routingKey, event: event})
+	return f.publishErr
+}
 
 // ── fakeMeta ─────────────────────────────────────────────────────────────────
 
@@ -353,5 +374,201 @@ func newTestRunner(meta MetadataClient) *PersistedRunner {
 		mode:       "full",
 		retention:  defaultRetentionConfig(),
 		metaClient: meta,
+	}
+}
+
+// newTestRunnerWithPub is the FE-API-041 variant — same as newTestRunner
+// but attaches a fake publisher so tests can assert on the routing key +
+// payload shape of every retention.* event the executor emits.
+func newTestRunnerWithPub(meta MetadataClient, pub EventPublisher) *PersistedRunner {
+	return &PersistedRunner{
+		mode:       "full",
+		retention:  defaultRetentionConfig(),
+		metaClient: meta,
+		pub:        pub,
+	}
+}
+
+// ── FE-API-041 publisher tests ──────────────────────────────────────────────
+
+// TestRunRetention_nilPublisher_doesNotPanic verifies the executor still
+// runs cleanly when no publisher is wired (dev install without RABBITMQ_URL).
+// Marks should still happen + finalise still records the outcome.
+func TestRunRetention_nilPublisher_doesNotPanic(t *testing.T) {
+	meta := &fakeMeta{
+		getEffectiveResp: &metadatav1.EffectiveRetentionPolicy{
+			Policy: &metadatav1.RetentionPolicy{
+				Enabled: true,
+				Rules:   []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+			},
+		},
+		evaluateResp: &metadatav1.EvaluateRetentionResponse{
+			WouldDelete: []*metadatav1.RetentionDeletionCandidate{{ManifestId: "m1"}},
+			TotalCount:  1,
+			TotalBytes:  4096,
+		},
+	}
+	// No publisher attached — the executor must treat it as a no-op.
+	p := newTestRunner(meta)
+	finalized := captureFinalize(p)
+
+	run := &repository.GCRun{RunID: uuid.New(), TenantID: uuid.New(), RepoID: uuid.New(), Mode: "retention"}
+	if err := p.RunRetention(context.Background(), run); err != nil {
+		t.Fatalf("RunRetention with nil publisher: %v", err)
+	}
+	if finalized.lastCount != 1 {
+		t.Errorf("expected markedCount=1, got %d", finalized.lastCount)
+	}
+}
+
+// TestRunRetention_publisherError_doesNotFailRun verifies that a publish
+// error is logged but the run still completes successfully. Events are a
+// best-effort observability signal — gc_runs is the source of truth.
+func TestRunRetention_publisherError_doesNotFailRun(t *testing.T) {
+	meta := &fakeMeta{
+		getEffectiveResp: &metadatav1.EffectiveRetentionPolicy{
+			Policy: &metadatav1.RetentionPolicy{
+				Enabled: true,
+				Rules:   []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+			},
+		},
+		evaluateResp: &metadatav1.EvaluateRetentionResponse{
+			WouldDelete: []*metadatav1.RetentionDeletionCandidate{{ManifestId: "m1"}},
+			TotalCount:  1,
+		},
+	}
+	pub := &fakePublisher{publishErr: errors.New("broker unreachable")}
+	p := newTestRunnerWithPub(meta, pub)
+	finalized := captureFinalize(p)
+
+	run := &repository.GCRun{RunID: uuid.New(), TenantID: uuid.New(), RepoID: uuid.New(), Mode: "retention"}
+	if err := p.RunRetention(context.Background(), run); err != nil {
+		t.Fatalf("RunRetention with failing publisher: %v", err)
+	}
+	if finalized.lastCount != 1 {
+		t.Errorf("publisher error must not affect finalised count: got %d", finalized.lastCount)
+	}
+	// Both attempted publishes (evaluated + applied) should have been tried
+	// even though the first one errored — log + continue, never short-circuit.
+	if len(pub.publishes) != 2 {
+		t.Errorf("expected 2 publish attempts (evaluated + applied), got %d", len(pub.publishes))
+	}
+}
+
+// TestRunRetention_publisherSuccess_emitsEvaluatedAndApplied verifies the
+// happy-path event shape — both retention.evaluated AND retention.applied
+// fire with the right routing key and tenant/repo IDs.
+func TestRunRetention_publisherSuccess_emitsEvaluatedAndApplied(t *testing.T) {
+	tenantID := uuid.New()
+	repoID := uuid.New()
+	meta := &fakeMeta{
+		getEffectiveResp: &metadatav1.EffectiveRetentionPolicy{
+			Policy: &metadatav1.RetentionPolicy{
+				Enabled: true,
+				Rules:   []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+			},
+		},
+		evaluateResp: &metadatav1.EvaluateRetentionResponse{
+			WouldDelete: []*metadatav1.RetentionDeletionCandidate{
+				{ManifestId: "m1"},
+				{ManifestId: "m2"},
+			},
+			TotalCount: 2,
+			TotalBytes: 8192,
+		},
+	}
+	pub := &fakePublisher{}
+	p := newTestRunnerWithPub(meta, pub)
+	_ = captureFinalize(p)
+
+	run := &repository.GCRun{
+		RunID:       uuid.New(),
+		TenantID:    tenantID,
+		RepoID:      repoID,
+		Mode:        "retention",
+		TriggeredBy: "cron",
+	}
+	if err := p.RunRetention(context.Background(), run); err != nil {
+		t.Fatalf("RunRetention: %v", err)
+	}
+	if len(pub.publishes) != 2 {
+		t.Fatalf("expected 2 publishes (evaluated + applied), got %d", len(pub.publishes))
+	}
+	if pub.publishes[0].routingKey != events.RoutingRetentionEvaluated {
+		t.Errorf("first publish routing key: got %q, want %q",
+			pub.publishes[0].routingKey, events.RoutingRetentionEvaluated)
+	}
+	if pub.publishes[1].routingKey != events.RoutingRetentionApplied {
+		t.Errorf("second publish routing key: got %q, want %q",
+			pub.publishes[1].routingKey, events.RoutingRetentionApplied)
+	}
+	// TenantID propagates onto the envelope as a string — consumers use it
+	// for the AMQP header filter without deserialising the body.
+	if pub.publishes[0].event.TenantID != tenantID.String() {
+		t.Errorf("evaluated envelope tenant_id: got %q, want %q",
+			pub.publishes[0].event.TenantID, tenantID.String())
+	}
+}
+
+// TestRunRetention_zeroMarks_skipsAppliedEvent verifies the "nothing
+// happened" gate: when no manifest was actually marked we still emit
+// retention.evaluated (subscribers want to know we checked) but NOT
+// retention.applied — there's nothing to apply.
+func TestRunRetention_zeroMarks_skipsAppliedEvent(t *testing.T) {
+	meta := &fakeMeta{
+		getEffectiveResp: &metadatav1.EffectiveRetentionPolicy{
+			Policy: &metadatav1.RetentionPolicy{
+				Enabled: true,
+				Rules:   []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+			},
+		},
+		evaluateResp: &metadatav1.EvaluateRetentionResponse{TotalCount: 0},
+	}
+	pub := &fakePublisher{}
+	p := newTestRunnerWithPub(meta, pub)
+	_ = captureFinalize(p)
+
+	run := &repository.GCRun{RunID: uuid.New(), TenantID: uuid.New(), RepoID: uuid.New(), Mode: "retention"}
+	if err := p.RunRetention(context.Background(), run); err != nil {
+		t.Fatalf("RunRetention: %v", err)
+	}
+	if len(pub.publishes) != 1 {
+		t.Fatalf("expected 1 publish (evaluated only), got %d", len(pub.publishes))
+	}
+	if pub.publishes[0].routingKey != events.RoutingRetentionEvaluated {
+		t.Errorf("expected evaluated-only, got %q", pub.publishes[0].routingKey)
+	}
+}
+
+// TestRunRetentionGrace_publisherSuccess_emitsEvaluatedAndGraceCompleted
+// verifies the finaliser also emits both events. Mode is "retention_grace"
+// on the evaluated payload so consumers can distinguish soft-delete from
+// hard-delete sweeps in their dashboards.
+func TestRunRetentionGrace_publisherSuccess_emitsEvaluatedAndGraceCompleted(t *testing.T) {
+	meta := &fakeMeta{
+		listPendingResp: &metadatav1.ListPendingDeleteManifestsResponse{
+			Manifests: []*metadatav1.PendingDeleteManifest{
+				{ManifestId: "m1", Digest: "sha256:aaaa", SizeBytes: 1024, TenantId: "t1", RepositoryId: "r1"},
+			},
+		},
+	}
+	pub := &fakePublisher{}
+	p := newTestRunnerWithPub(meta, pub)
+	_ = captureFinalize(p)
+
+	run := &repository.GCRun{RunID: uuid.New(), TenantID: uuid.Nil, Mode: "retention_grace"}
+	if err := p.RunRetentionGrace(context.Background(), run); err != nil {
+		t.Fatalf("RunRetentionGrace: %v", err)
+	}
+	if len(pub.publishes) != 2 {
+		t.Fatalf("expected 2 publishes (evaluated + grace_completed), got %d", len(pub.publishes))
+	}
+	if pub.publishes[0].routingKey != events.RoutingRetentionEvaluated {
+		t.Errorf("first publish key: got %q, want %q",
+			pub.publishes[0].routingKey, events.RoutingRetentionEvaluated)
+	}
+	if pub.publishes[1].routingKey != events.RoutingRetentionGraceCompleted {
+		t.Errorf("second publish key: got %q, want %q",
+			pub.publishes[1].routingKey, events.RoutingRetentionGraceCompleted)
 	}
 }
