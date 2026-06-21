@@ -46,6 +46,8 @@ type apiKeyRepo interface {
 	Create(ctx context.Context, req repository.CreateAPIKeyRequest) (*repository.APIKey, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*repository.APIKey, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]*repository.APIKey, error)
+	// ListByServiceAccount returns active keys owned by the given service account.
+	ListByServiceAccount(ctx context.Context, saID uuid.UUID) ([]*repository.APIKey, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	TouchLastUsed(ctx context.Context, id uuid.UUID) error
 }

@@ -186,7 +186,13 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 			return
 		}
-		userID = key.UserID.String()
+		// Resolve the owner identity for the JWT subject. For human-owned keys,
+		// UserID is non-nil. SA-owned key subject resolution (ServiceAccountID
+		// branching) is implemented in T9. All keys created through this HTTP
+		// endpoint today are human-owned, so UserID is guaranteed non-nil here.
+		if key.UserID != nil {
+			userID = key.UserID.String()
+		}
 		userTenantID = key.TenantID.String()
 	} else {
 		user, err := h.svc.AuthenticateUser(r.Context(), tenantID, username, password)
@@ -478,6 +484,16 @@ func (h *HTTPHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "CONFLICT", "api key with this name already exists")
 			return
 		}
+		// Log the actual error so a future regression doesn't recur in
+		// silence. The response stays generic per the never-leak-internals
+		// rule (CLAUDE.md §13), but the operator gets the real cause in
+		// the structured log.
+		slog.ErrorContext(r.Context(), "createAPIKey: service error",
+			"err", err,
+			"tenant_id", tenantID.String(),
+			"user_id", userID.String(),
+			"name", req.Name,
+		)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}

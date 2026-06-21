@@ -80,9 +80,17 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
+	// Resolve the owner identity for the gRPC response. For human-owned keys,
+	// UserID is non-nil. SA-owned key subject resolution (ServiceAccountID
+	// branching) is implemented in T9 — until then, all validated keys are
+	// human-owned so UserID is guaranteed non-nil here.
+	var ownerID string
+	if key.UserID != nil {
+		ownerID = key.UserID.String()
+	}
 	return &authv1.ValidateAPIKeyResponse{
 		Valid:     true,
-		UserId:    key.UserID.String(),
+		UserId:    ownerID,
 		TenantId:  key.TenantID.String(),
 		Access:    scopesToProto(key.Scopes),
 	}, nil

@@ -215,16 +215,17 @@ func newHandlerFakeAPIKeyRepo() *handlerFakeAPIKeyRepo {
 
 func (f *handlerFakeAPIKeyRepo) Create(_ context.Context, req repository.CreateAPIKeyRequest) (*repository.APIKey, error) {
 	k := &repository.APIKey{
-		ID:        uuid.New(),
-		TenantID:  req.TenantID,
-		UserID:    req.UserID,
-		Name:      req.Name,
-		KeyHash:   req.KeyHash,
-		KeyPrefix: req.KeyPrefix,
-		Scopes:    req.Scopes,
-		ExpiresAt: req.ExpiresAt,
-		IsActive:  true,
-		CreatedAt: time.Now(),
+		ID:               uuid.New(),
+		TenantID:         req.TenantID,
+		UserID:           req.UserID,
+		ServiceAccountID: req.ServiceAccountID,
+		Name:             req.Name,
+		KeyHash:          req.KeyHash,
+		KeyPrefix:        req.KeyPrefix,
+		Scopes:           req.Scopes,
+		ExpiresAt:        req.ExpiresAt,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
 	}
 	f.keys[k.ID] = k
 	return k, nil
@@ -241,7 +242,18 @@ func (f *handlerFakeAPIKeyRepo) GetByID(_ context.Context, id uuid.UUID) (*repos
 func (f *handlerFakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*repository.APIKey, error) {
 	var result []*repository.APIKey
 	for _, k := range f.keys {
-		if k.UserID == userID && k.IsActive {
+		// UserID is now a pointer; dereference safely before comparing.
+		if k.UserID != nil && *k.UserID == userID && k.IsActive {
+			result = append(result, k)
+		}
+	}
+	return result, nil
+}
+
+func (f *handlerFakeAPIKeyRepo) ListByServiceAccount(_ context.Context, saID uuid.UUID) ([]*repository.APIKey, error) {
+	var result []*repository.APIKey
+	for _, k := range f.keys {
+		if k.ServiceAccountID != nil && *k.ServiceAccountID == saID && k.IsActive {
 			result = append(result, k)
 		}
 	}
@@ -250,7 +262,8 @@ func (f *handlerFakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) 
 
 func (f *handlerFakeAPIKeyRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	k, ok := f.keys[id]
-	if !ok || k.UserID != userID {
+	// UserID is now a pointer; treat nil UserID as no match.
+	if !ok || k.UserID == nil || *k.UserID != userID {
 		return repository.ErrNotFound
 	}
 	delete(f.keys, id)

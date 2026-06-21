@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -212,17 +213,24 @@ func (f *fakeAPIKeyRepo) Create(_ context.Context, req repository.CreateAPIKeyRe
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
+	// Mirror the repository defence-in-depth check so fake behaviour matches real.
+	bothNil := req.UserID == nil && req.ServiceAccountID == nil
+	bothSet := req.UserID != nil && req.ServiceAccountID != nil
+	if bothNil || bothSet {
+		return nil, fmt.Errorf("apikey: exactly one of UserID/ServiceAccountID must be set")
+	}
 	k := &repository.APIKey{
-		ID:        uuid.New(),
-		TenantID:  req.TenantID,
-		UserID:    req.UserID,
-		Name:      req.Name,
-		KeyHash:   req.KeyHash,
-		KeyPrefix: req.KeyPrefix,
-		Scopes:    req.Scopes,
-		ExpiresAt: req.ExpiresAt,
-		IsActive:  true,
-		CreatedAt: time.Now(),
+		ID:               uuid.New(),
+		TenantID:         req.TenantID,
+		UserID:           req.UserID,
+		ServiceAccountID: req.ServiceAccountID,
+		Name:             req.Name,
+		KeyHash:          req.KeyHash,
+		KeyPrefix:        req.KeyPrefix,
+		Scopes:           req.Scopes,
+		ExpiresAt:        req.ExpiresAt,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
 	}
 	f.keys[k.ID] = k
 	return k, nil
@@ -242,7 +250,18 @@ func (f *fakeAPIKeyRepo) GetByID(_ context.Context, id uuid.UUID) (*repository.A
 func (f *fakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*repository.APIKey, error) {
 	var result []*repository.APIKey
 	for _, k := range f.keys {
-		if k.UserID == userID && k.IsActive {
+		// UserID is now a pointer; dereference safely before comparing.
+		if k.UserID != nil && *k.UserID == userID && k.IsActive {
+			result = append(result, k)
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeAPIKeyRepo) ListByServiceAccount(_ context.Context, saID uuid.UUID) ([]*repository.APIKey, error) {
+	var result []*repository.APIKey
+	for _, k := range f.keys {
+		if k.ServiceAccountID != nil && *k.ServiceAccountID == saID && k.IsActive {
 			result = append(result, k)
 		}
 	}
@@ -251,7 +270,8 @@ func (f *fakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*rep
 
 func (f *fakeAPIKeyRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	k, ok := f.keys[id]
-	if !ok || k.UserID != userID {
+	// UserID is now a pointer; treat a nil UserID as no match.
+	if !ok || k.UserID == nil || *k.UserID != userID {
 		return repository.ErrNotFound
 	}
 	delete(f.keys, id)
@@ -646,10 +666,11 @@ func TestValidateAPIKey_expiredKey_returnsKeyExpired(t *testing.T) {
 
 	// Directly insert an expired key into the fake repo.
 	past := time.Now().Add(-1 * time.Hour)
+	ownerID := uuid.New()
 	expiredKey := &repository.APIKey{
 		ID:        uuid.New(),
 		TenantID:  uuid.New(),
-		UserID:    uuid.New(),
+		UserID:    &ownerID, // UserID is now *uuid.UUID (FE-API-048 Task 6)
 		Name:      "expired",
 		KeyHash:   "hash",
 		IsActive:  true,

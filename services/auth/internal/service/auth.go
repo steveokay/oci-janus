@@ -301,9 +301,18 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, 
 		return nil, "", fmt.Errorf("hash secret: %w", err)
 	}
 
+	// Default nil scopes to an explicit empty slice so pgx serialises it
+	// as `'{}'` instead of SQL NULL. The api_keys.scopes column is
+	// NOT NULL DEFAULT '{}'; a nil slice from the JSON body (the frontend
+	// never sends `scopes` because the dialog has no UI for it yet) was
+	// hitting the constraint with a generic "internal error" — the
+	// handler logs the cause now (see http.go) so a recurrence surfaces.
+	if scopes == nil {
+		scopes = []string{}
+	}
 	key, err = s.apiKeys.Create(ctx, repository.CreateAPIKeyRequest{
 		TenantID:  tenantID,
-		UserID:    userID,
+		UserID:    &userID, // human-owned key — ServiceAccountID stays nil
 		Name:      name,
 		KeyHash:   hash,
 		KeyPrefix: rawSecret[:12], // first 12 chars for display, not a secret
