@@ -98,6 +98,24 @@ service MetadataService {
   // quota_bytes=0 rather than NotFound, so the management layer can stitch
   // the response together for newly-created tenants without push activity.
   rpc GetTenantUsage(GetTenantUsageRequest) returns (TenantUsage);
+
+  // ─── FE-API-037: per-repo retention policy CRUD ─────────────────────────
+
+  // GetRepoRetentionPolicy returns the policy attached to a repository, or
+  // a typed NotFound when no policy row exists. The caller (registry-management)
+  // is responsible for falling back to the org default (FE-API-039) when
+  // NotFound is returned.
+  rpc GetRepoRetentionPolicy(GetRepoRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // UpsertRepoRetentionPolicy creates or updates the policy. Setting
+  // enabled=true with no existing preview_until causes the implementation
+  // to set preview_until = now() + 24h (FE-API-038 mechanism). preview_until
+  // is otherwise client-readonly — the caller cannot set it directly.
+  rpc UpsertRepoRetentionPolicy(UpsertRepoRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // DeleteRepoRetentionPolicy removes the per-repo override; the repo then
+  // falls back to the org default (FE-API-039).
+  rpc DeleteRepoRetentionPolicy(DeleteRepoRetentionPolicyRequest) returns (google.protobuf.Empty);
 }
 
 message Repository {
@@ -463,4 +481,60 @@ message TenantUsage {
   int64 storage_quota_bytes = 2;
   int64 repository_count    = 3;
   int64 organization_count  = 4;
+}
+
+// ─── FE-API-037: per-repo retention policy CRUD ────────────────────────────
+
+// RetentionRule is a single rule entry on a retention policy. `kind` matches
+// the retention_rule_kind enum string (one of max_age_days, max_count,
+// max_size_bytes, dangling_grace_days, max_idle_days). `value` is the
+// per-kind threshold — days, count, or bytes — interpretation lives in the
+// executor (FE-API-040). The kind enum already includes max_idle_days even
+// though FE-API-040 cannot enforce it yet; the API persists it so FE-API-043
+// can light it up without a schema change.
+message RetentionRule {
+  string kind  = 1; // matches retention_rule_kind enum strings
+  int64  value = 2; // days / count / bytes — interpretation per kind
+}
+
+// RetentionPolicy is the wire form of one retention_policies row. `enabled`
+// gates the executor; `rules` is the ordered list of {kind, value} pairs;
+// `protected_tag_patterns` is the regex allowlist that protects e.g. release
+// tags from eviction; `preview_until` is the dry-run window (set when a
+// previously-disabled policy is enabled or rules change materially, otherwise
+// zero). The caller never sets preview_until directly — the implementation
+// owns it.
+message RetentionPolicy {
+  string                     repo_id                = 1;
+  string                     tenant_id              = 2;
+  bool                       enabled                = 3;
+  repeated RetentionRule     rules                  = 4;
+  repeated string            protected_tag_patterns = 5;
+  google.protobuf.Timestamp  preview_until          = 6; // zero when not in preview
+  google.protobuf.Timestamp  created_at             = 7;
+  google.protobuf.Timestamp  updated_at             = 8;
+  string                     updated_by             = 9; // user_id UUID
+}
+
+message GetRepoRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+// UpsertRepoRetentionPolicyRequest is the full-replace shape for the policy.
+// updated_by is the JWT-derived user_id forwarded by registry-management.
+// Note: clients cannot send preview_until — the metadata implementation sets
+// it when enabling a previously-disabled policy (FE-API-038 trigger).
+message UpsertRepoRetentionPolicyRequest {
+  string                  repo_id                = 1;
+  string                  tenant_id              = 2;
+  bool                    enabled                = 3;
+  repeated RetentionRule  rules                  = 4;
+  repeated string         protected_tag_patterns = 5;
+  string                  updated_by             = 6;
+}
+
+message DeleteRepoRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
 }

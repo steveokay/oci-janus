@@ -75,6 +75,18 @@ type metadataRepo interface {
 	ListTenantRemediations(ctx context.Context, tenantID, pageToken string, limit int) ([]repository.RemediationRow, string, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
+	// FE-API-037: per-repo retention policy CRUD. The handler enforces input
+	// validation; the repository owns the preview_until reset semantics.
+	GetRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) (*metadatav1.RetentionPolicy, error)
+	UpsertRepoRetentionPolicy(
+		ctx context.Context,
+		tenantID, repoID string,
+		enabled bool,
+		rules []*metadatav1.RetentionRule,
+		protectedPatterns []string,
+		updatedBy string,
+	) (*metadatav1.RetentionPolicy, error)
+	DeleteRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) error
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.

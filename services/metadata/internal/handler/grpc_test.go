@@ -148,6 +148,39 @@ type fakeRepo struct {
 	// Repository count
 	repoCount    int64
 	repoCountErr error
+	// FE-API-037: per-repo retention policy CRUD
+	getRetentionResult *metadatav1.RetentionPolicy
+	getRetentionErr    error
+	getRetentionCalls  []retentionGetCallArgs
+
+	upsertRetentionResult *metadatav1.RetentionPolicy
+	upsertRetentionErr    error
+	upsertRetentionCalls  []retentionUpsertCallArgs
+
+	deleteRetentionErr   error
+	deleteRetentionCalls []retentionDeleteCallArgs
+}
+
+// retentionGetCallArgs / retentionUpsertCallArgs / retentionDeleteCallArgs
+// capture what the handler forwarded so retention tests can assert wiring
+// without a real database.
+type retentionGetCallArgs struct {
+	tenantID string
+	repoID   string
+}
+
+type retentionUpsertCallArgs struct {
+	tenantID  string
+	repoID    string
+	enabled   bool
+	rules     []*metadatav1.RetentionRule
+	patterns  []string
+	updatedBy string
+}
+
+type retentionDeleteCallArgs struct {
+	tenantID string
+	repoID   string
 }
 
 // listVulnsCallArgs / listScansCallArgs capture what the handler forwards
@@ -349,6 +382,34 @@ func (f *fakeRepo) ListTenantRemediations(_ context.Context, tenantID, token str
 
 func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
 	return f.repoCount, f.repoCountErr
+}
+
+// FE-API-037 fake repo methods. Tests assert on the *Calls slices and set
+// the *Result / *Err fields to drive each branch (happy path, NotFound,
+// internal error). Pointer-typed proto results so a nil return is unambiguous.
+func (f *fakeRepo) GetRepoRetentionPolicy(_ context.Context, tenantID, repoID string) (*metadatav1.RetentionPolicy, error) {
+	f.getRetentionCalls = append(f.getRetentionCalls, retentionGetCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.getRetentionResult, f.getRetentionErr
+}
+
+func (f *fakeRepo) UpsertRepoRetentionPolicy(
+	_ context.Context,
+	tenantID, repoID string,
+	enabled bool,
+	rules []*metadatav1.RetentionRule,
+	patterns []string,
+	updatedBy string,
+) (*metadatav1.RetentionPolicy, error) {
+	f.upsertRetentionCalls = append(f.upsertRetentionCalls, retentionUpsertCallArgs{
+		tenantID: tenantID, repoID: repoID, enabled: enabled,
+		rules: rules, patterns: patterns, updatedBy: updatedBy,
+	})
+	return f.upsertRetentionResult, f.upsertRetentionErr
+}
+
+func (f *fakeRepo) DeleteRepoRetentionPolicy(_ context.Context, tenantID, repoID string) error {
+	f.deleteRetentionCalls = append(f.deleteRetentionCalls, retentionDeleteCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.deleteRetentionErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
