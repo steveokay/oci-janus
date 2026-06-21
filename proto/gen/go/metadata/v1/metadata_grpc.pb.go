@@ -57,6 +57,7 @@ const (
 	MetadataService_GetRepoRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
 	MetadataService_UpsertRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
 	MetadataService_DeleteRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
+	MetadataService_EvaluateRetention_FullMethodName           = "/registry.metadata.v1.MetadataService/EvaluateRetention"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -152,6 +153,25 @@ type MetadataServiceClient interface {
 	// DeleteRepoRetentionPolicy removes the per-repo override; the repo then
 	// falls back to the org default (FE-API-039).
 	DeleteRepoRetentionPolicy(ctx context.Context, in *DeleteRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ─── FE-API-038: retention policy dry-run + preview-window state ─────────
+	//
+	// EvaluateRetention is the read-only evaluation engine that powers both
+	// the dry-run (operator inspects a candidate policy before saving) and the
+	// preview-window state endpoint (UI countdown for an already-saved policy
+	// sitting in its 24h preview window).
+	//
+	// The handler does NOT persist the candidate — it merely materialises which
+	// manifests WOULD be selected for deletion (and which would be excluded by
+	// a protected_tag_patterns regex) given the current manifest + tag state of
+	// the repository. The executor (FE-API-040) is a separate ticket and is
+	// the only path that actually deletes.
+	//
+	// Caps: the returned `would_delete` list is truncated to the smaller of
+	// `max_delete_results` (default 1000, server cap 5000) and the full
+	// candidate set. `total_count` / `total_bytes` always reflect the full set
+	// (computed via SQL aggregate, not by counting the truncated slice) so the
+	// UI can render "showing 1000 of 47 312 candidates" honestly.
+	EvaluateRetention(ctx context.Context, in *EvaluateRetentionRequest, opts ...grpc.CallOption) (*EvaluateRetentionResponse, error)
 }
 
 type metadataServiceClient struct {
@@ -624,6 +644,16 @@ func (c *metadataServiceClient) DeleteRepoRetentionPolicy(ctx context.Context, i
 	return out, nil
 }
 
+func (c *metadataServiceClient) EvaluateRetention(ctx context.Context, in *EvaluateRetentionRequest, opts ...grpc.CallOption) (*EvaluateRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EvaluateRetentionResponse)
+	err := c.cc.Invoke(ctx, MetadataService_EvaluateRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -717,6 +747,25 @@ type MetadataServiceServer interface {
 	// DeleteRepoRetentionPolicy removes the per-repo override; the repo then
 	// falls back to the org default (FE-API-039).
 	DeleteRepoRetentionPolicy(context.Context, *DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error)
+	// ─── FE-API-038: retention policy dry-run + preview-window state ─────────
+	//
+	// EvaluateRetention is the read-only evaluation engine that powers both
+	// the dry-run (operator inspects a candidate policy before saving) and the
+	// preview-window state endpoint (UI countdown for an already-saved policy
+	// sitting in its 24h preview window).
+	//
+	// The handler does NOT persist the candidate — it merely materialises which
+	// manifests WOULD be selected for deletion (and which would be excluded by
+	// a protected_tag_patterns regex) given the current manifest + tag state of
+	// the repository. The executor (FE-API-040) is a separate ticket and is
+	// the only path that actually deletes.
+	//
+	// Caps: the returned `would_delete` list is truncated to the smaller of
+	// `max_delete_results` (default 1000, server cap 5000) and the full
+	// candidate set. `total_count` / `total_bytes` always reflect the full set
+	// (computed via SQL aggregate, not by counting the truncated slice) so the
+	// UI can render "showing 1000 of 47 312 candidates" honestly.
+	EvaluateRetention(context.Context, *EvaluateRetentionRequest) (*EvaluateRetentionResponse, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -833,6 +882,9 @@ func (UnimplementedMetadataServiceServer) UpsertRepoRetentionPolicy(context.Cont
 }
 func (UnimplementedMetadataServiceServer) DeleteRepoRetentionPolicy(context.Context, *DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteRepoRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) EvaluateRetention(context.Context, *EvaluateRetentionRequest) (*EvaluateRetentionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EvaluateRetention not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -1524,6 +1576,24 @@ func _MetadataService_DeleteRepoRetentionPolicy_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_EvaluateRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EvaluateRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).EvaluateRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_EvaluateRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).EvaluateRetention(ctx, req.(*EvaluateRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1662,6 +1732,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteRepoRetentionPolicy",
 			Handler:    _MetadataService_DeleteRepoRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "EvaluateRetention",
+			Handler:    _MetadataService_EvaluateRetention_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

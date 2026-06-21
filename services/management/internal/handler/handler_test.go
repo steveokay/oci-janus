@@ -621,6 +621,55 @@ func (s *fakeMetaServer) DeleteRepoRetentionPolicy(_ context.Context, req *metad
 	return &emptypb.Empty{}, nil
 }
 
+// FE-API-038 retention evaluator fake. evalRetentionCall captures the most
+// recent request so dry-run tests can assert candidate forwarding + cap
+// values, evalRetentionResp lets tests stub a custom response (would-delete
+// shape, totals, truncation flag), and evalRetentionErr exercises the
+// NotFound / Internal branches.
+var (
+	evalRetentionCall *metadatav1.EvaluateRetentionRequest
+	evalRetentionResp *metadatav1.EvaluateRetentionResponse
+	evalRetentionErr  error
+)
+
+func (s *fakeMetaServer) EvaluateRetention(_ context.Context, req *metadatav1.EvaluateRetentionRequest) (*metadatav1.EvaluateRetentionResponse, error) {
+	evalRetentionCall = req
+	if evalRetentionErr != nil {
+		return nil, evalRetentionErr
+	}
+	if evalRetentionResp != nil {
+		return evalRetentionResp, nil
+	}
+	// Default canned response so the happy-path dry-run + preview tests have
+	// a stable shape to inspect. One deletion candidate + one protected entry
+	// + small totals — enough to verify the JSON wire shape without flooding
+	// the test assertions.
+	return &metadatav1.EvaluateRetentionResponse{
+		WouldDelete: []*metadatav1.RetentionDeletionCandidate{
+			{
+				ManifestId:     "00000000-0000-0000-0000-000000000001",
+				ManifestDigest: "sha256:aaaa",
+				Tags:           []string{"v1.0"},
+				PushedAt:       timestamppb.New(time.Now().Add(-100 * 24 * time.Hour)),
+				SizeBytes:      1024,
+				Reasons:        []string{"max_age_days"},
+			},
+		},
+		ProtectedSkipped: []*metadatav1.RetentionProtectedManifest{
+			{
+				ManifestId:     "00000000-0000-0000-0000-000000000002",
+				ManifestDigest: "sha256:bbbb",
+				Tags:           []string{"latest"},
+				MatchedPattern: "latest",
+			},
+		},
+		TotalCount:   47,
+		TotalBytes:   1_234_567_890,
+		EvaluatedAt:  timestamppb.Now(),
+		Truncated:    false,
+	}, nil
+}
+
 // fakeHealthServer always returns SERVING.
 type fakeHealthServer struct {
 	healthpb.UnimplementedHealthServer

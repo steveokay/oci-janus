@@ -24,8 +24,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
 // validRetentionRuleKinds is the closed allowlist accepted by Upsert. It
@@ -159,6 +161,118 @@ func validateRetentionRules(enabled bool, rules []*metadatav1.RetentionRule) err
 		}
 	}
 	return nil
+}
+
+// ─── FE-API-038: dry-run evaluator ─────────────────────────────────────────
+
+// EvaluateRetention validates the candidate policy and forwards the
+// evaluation to the repository. The handler:
+//
+//   - Reuses validateRetentionRules / validateProtectedTagPatterns so the
+//     authoritative validation rules live in one place (also exercised by
+//     the Upsert tests, so we don't have two copies that can drift apart).
+//   - Clamps max_delete_results to [1, 5000] and max_protected_results to
+//     [1, 500]. A hostile client cannot trick the evaluator into
+//     materialising a huge response via inflated caps — the clamps land
+//     before the repository call.
+//   - Maps an empty repo (no manifests at all) to an empty would_delete
+//     response with total_count=0, NOT NotFound. The caller (management
+//     BFF) already resolved the repo_id via GetRepositoryByName; if THAT
+//     fails it surfaces NotFound. Treating empty-repo as NotFound would
+//     hide the legitimate "I just created an empty repo and want to dry-run
+//     a future policy" case.
+//
+// Tenant isolation: tenant_id is required and forwarded into the repository
+// SQL, where the manifests table is filtered on tenant_id directly.
+func (h *MetadataHandler) EvaluateRetention(ctx context.Context, req *metadatav1.EvaluateRetentionRequest) (*metadatav1.EvaluateRetentionResponse, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetRepoId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "repo_id is required")
+	}
+	cand := req.GetCandidate()
+	if cand == nil {
+		return nil, status.Error(codes.InvalidArgument, "candidate is required")
+	}
+	// Same validation as the Upsert path. We pass cand.GetEnabled() through
+	// so the "enabled + empty rules" case (silent no-op policy) is rejected
+	// on the dry-run path too. The UI relies on this so it can render a
+	// clean error before the operator commits to a useless policy.
+	if err := validateRetentionRules(cand.GetEnabled(), cand.GetRules()); err != nil {
+		return nil, err
+	}
+	if err := validateProtectedTagPatterns(cand.GetProtectedTagPatterns()); err != nil {
+		return nil, err
+	}
+
+	maxDelete := clampInt(int(req.GetMaxDeleteResults()), repository.DefaultMaxDeleteResults, 1, repository.MaxMaxDeleteResults)
+	maxProtected := clampInt(int(req.GetMaxProtectedResults()), repository.DefaultMaxProtectedResults, 1, repository.MaxMaxProtectedResults)
+
+	result, err := h.repo.EvaluateRetention(ctx, req.GetTenantId(), req.GetRepoId(), cand, maxDelete, maxProtected)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+
+	// Convert the in-Go EvaluationResult to the wire shape. Allocate
+	// non-nil slices so the wire response is always JSON arrays — keeps
+	// the BFF + dashboard JSON parsing trivial.
+	wd := make([]*metadatav1.RetentionDeletionCandidate, 0, len(result.WouldDelete))
+	for _, c := range result.WouldDelete {
+		tags := c.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		reasons := c.Reasons
+		if reasons == nil {
+			reasons = []string{}
+		}
+		wd = append(wd, &metadatav1.RetentionDeletionCandidate{
+			ManifestId:     c.ManifestID,
+			ManifestDigest: c.ManifestDigest,
+			Tags:           tags,
+			PushedAt:       timestamppb.New(c.PushedAt),
+			SizeBytes:      c.SizeBytes,
+			Reasons:        reasons,
+		})
+	}
+	ps := make([]*metadatav1.RetentionProtectedManifest, 0, len(result.ProtectedSkipped))
+	for _, p := range result.ProtectedSkipped {
+		tags := p.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		ps = append(ps, &metadatav1.RetentionProtectedManifest{
+			ManifestId:     p.ManifestID,
+			ManifestDigest: p.ManifestDigest,
+			Tags:           tags,
+			MatchedPattern: p.MatchedPattern,
+		})
+	}
+	return &metadatav1.EvaluateRetentionResponse{
+		WouldDelete:      wd,
+		ProtectedSkipped: ps,
+		TotalCount:       result.TotalCount,
+		TotalBytes:       result.TotalBytes,
+		EvaluatedAt:      timestamppb.New(result.EvaluatedAt),
+		Truncated:        result.Truncated,
+	}, nil
+}
+
+// clampInt returns `v` constrained to [min, max], substituting `def` when
+// v ≤ 0 (the proto zero-value path: caller didn't set the field). Pure
+// helper kept in this file so the handler is self-contained.
+func clampInt(v, def, min, max int) int {
+	if v <= 0 {
+		return def
+	}
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 // validateProtectedTagPatterns enforces the per-pattern invariants:

@@ -159,6 +159,24 @@ type fakeRepo struct {
 
 	deleteRetentionErr   error
 	deleteRetentionCalls []retentionDeleteCallArgs
+
+	// FE-API-038: retention policy dry-run evaluator. Tests can stub the
+	// repository's evaluation result + error, and assert on the captured
+	// call args (cap clamping, candidate forwarding).
+	evalRetentionResult *repository.EvaluationResult
+	evalRetentionErr    error
+	evalRetentionCalls  []retentionEvalCallArgs
+}
+
+// retentionEvalCallArgs records what EvaluateRetention forwarded so the
+// handler tests can verify cap clamping + candidate wiring without standing
+// up a real database.
+type retentionEvalCallArgs struct {
+	tenantID            string
+	repoID              string
+	candidate           *metadatav1.RetentionPolicyCandidate
+	maxDeleteResults    int
+	maxProtectedResults int
 }
 
 // retentionGetCallArgs / retentionUpsertCallArgs / retentionDeleteCallArgs
@@ -410,6 +428,25 @@ func (f *fakeRepo) UpsertRepoRetentionPolicy(
 func (f *fakeRepo) DeleteRepoRetentionPolicy(_ context.Context, tenantID, repoID string) error {
 	f.deleteRetentionCalls = append(f.deleteRetentionCalls, retentionDeleteCallArgs{tenantID: tenantID, repoID: repoID})
 	return f.deleteRetentionErr
+}
+
+// EvaluateRetention captures the clamped caps + candidate so tests can
+// assert the handler actually clamped over-large values and forwarded the
+// candidate verbatim.
+func (f *fakeRepo) EvaluateRetention(
+	_ context.Context,
+	tenantID, repoID string,
+	candidate *metadatav1.RetentionPolicyCandidate,
+	maxDeleteResults, maxProtectedResults int,
+) (*repository.EvaluationResult, error) {
+	f.evalRetentionCalls = append(f.evalRetentionCalls, retentionEvalCallArgs{
+		tenantID:            tenantID,
+		repoID:              repoID,
+		candidate:           candidate,
+		maxDeleteResults:    maxDeleteResults,
+		maxProtectedResults: maxProtectedResults,
+	})
+	return f.evalRetentionResult, f.evalRetentionErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
