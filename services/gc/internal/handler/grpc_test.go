@@ -36,6 +36,19 @@ type fakeRepo struct {
 	lastListToken  string
 	lastCreateMode string
 	lastCreateBy   string
+
+	// FE-API-040 retention executor fakes.
+	retentionCreateErr      error
+	retentionCreateOverride func(mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
+	lastRetentionMode       string
+	lastRetentionRepo       uuid.UUID
+	lastRetentionTenant     uuid.UUID
+	lastRetentionTriggered  string
+
+	getRunByIDResult *repository.GCRun
+	getRunByIDErr    error
+	lastGetRunID     uuid.UUID
+	lastGetTenantID  uuid.UUID
 }
 
 func (f *fakeRepo) CreateRun(_ context.Context, mode string, tenantID uuid.UUID, triggeredBy string) (*repository.GCRun, error) {
@@ -73,6 +86,41 @@ func (f *fakeRepo) ListRuns(_ context.Context, limit int, pageToken string) ([]*
 		return nil, "", f.listErr
 	}
 	return f.runs, f.listNext, nil
+}
+
+// FE-API-040 — retention executor fake methods.
+func (f *fakeRepo) CreateRetentionRun(_ context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error) {
+	f.lastRetentionMode = mode
+	f.lastRetentionRepo = repoID
+	f.lastRetentionTenant = tenantID
+	f.lastRetentionTriggered = triggeredBy
+	if f.retentionCreateOverride != nil {
+		return f.retentionCreateOverride(mode, tenantID, repoID, triggeredBy)
+	}
+	if f.retentionCreateErr != nil {
+		return nil, f.retentionCreateErr
+	}
+	return &repository.GCRun{
+		RunID:       uuid.New(),
+		TenantID:    tenantID,
+		RepoID:      repoID,
+		Mode:        mode,
+		Status:      "queued",
+		RequestedAt: time.Now().UTC(),
+		TriggeredBy: triggeredBy,
+	}, nil
+}
+
+func (f *fakeRepo) GetRunByID(_ context.Context, runID, tenantID uuid.UUID) (*repository.GCRun, error) {
+	f.lastGetRunID = runID
+	f.lastGetTenantID = tenantID
+	if f.getRunByIDErr != nil {
+		return nil, f.getRunByIDErr
+	}
+	if f.getRunByIDResult == nil {
+		return nil, repository.ErrNotFound
+	}
+	return f.getRunByIDResult, nil
 }
 
 // ─── GetStatus ──────────────────────────────────────────────────────────────

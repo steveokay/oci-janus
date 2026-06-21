@@ -117,6 +117,12 @@ type metadataRepo interface {
 	// FE-API-039: read-only org name → org_id lookup so the BFF can map
 	// /api/v1/orgs/{org}/... URLs without an unintended insert.
 	LookupOrgIDByName(ctx context.Context, tenantID, orgName string) (string, error)
+	// FE-API-040: retention executor primitives. MarkManifestRetentionPending
+	// is idempotent (the existing pending timestamp is preserved on re-run);
+	// ListPendingDeleteManifests is the grace-sweep candidate query.
+	MarkManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
+	ClearManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
+	ListPendingDeleteManifests(ctx context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.

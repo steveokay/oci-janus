@@ -166,6 +166,40 @@ service MetadataService {
   // banner.
   rpc GetEffectiveRetentionPolicy(GetEffectiveRetentionPolicyRequest) returns (EffectiveRetentionPolicy);
 
+  // ─── FE-API-040: retention executor support ─────────────────────────────────
+  //
+  // The executor lives in services/gc; these three RPCs are the metadata-side
+  // primitives it needs. MarkManifestRetentionPending is the soft-delete write
+  // (idempotent), ClearManifestRetentionPending is the undo write, and
+  // ListPendingDeleteManifests is the "what's past grace?" read used by the
+  // retention_grace finaliser sweep.
+
+  // MarkManifestRetentionPending sets retention_pending_delete_at = NOW on a
+  // single manifest. Called by services/gc's retention soft-delete pass for
+  // every manifest in EvaluateRetention's would_delete output.
+  //
+  // Idempotent: if retention_pending_delete_at is already set, the existing
+  // timestamp is preserved (a re-run does NOT extend the grace window).
+  rpc MarkManifestRetentionPending(MarkManifestRetentionPendingRequest) returns (google.protobuf.Empty);
+
+  // ClearManifestRetentionPending unmarks a manifest queued for retention
+  // deletion. Used by the "undo" UI affordance during the grace window, and
+  // also for tests that need to reset state between runs.
+  rpc ClearManifestRetentionPending(ClearManifestRetentionPendingRequest) returns (google.protobuf.Empty);
+
+  // ListPendingDeleteManifests returns manifests whose
+  // retention_pending_delete_at is older than `grace_window_secs`. Called by
+  // the retention_grace executor sweep to find candidates that have ridden
+  // out their grace window and are ready for hard deletion.
+  //
+  // tenant_id may be empty to scan all tenants (used by the cross-tenant
+  // grace ticker on services/gc); a non-empty tenant_id restricts the scan.
+  // The repo-blob digests needed for storage.DeleteBlob calls are NOT
+  // returned by this RPC — the executor calls DeleteManifest (existing RPC)
+  // which already cascades to blob cleanup via the orphan path. Keeps this
+  // RPC a single-table scan instead of an N-way join against blob_links.
+  rpc ListPendingDeleteManifests(ListPendingDeleteManifestsRequest) returns (ListPendingDeleteManifestsResponse);
+
   // LookupOrgIDByName resolves an org name to its UUID within a tenant.
   // Read-only — unlike the repository-internal GetOrCreateOrganization
   // which has insert semantics, this RPC returns NotFound when the org
@@ -750,4 +784,47 @@ message LookupOrgIDByNameRequest {
 
 message LookupOrgIDByNameResponse {
   string org_id = 1;
+}
+
+// ─── FE-API-040: retention executor messages ──────────────────────────────────
+
+message MarkManifestRetentionPendingRequest {
+  string manifest_id = 1;
+  string tenant_id   = 2;
+}
+
+message ClearManifestRetentionPendingRequest {
+  string manifest_id = 1;
+  string tenant_id   = 2;
+}
+
+// ListPendingDeleteManifestsRequest:
+//   - tenant_id: empty scans all tenants (admin / cross-tenant grace ticker),
+//     non-empty restricts the scan to a single tenant.
+//   - grace_window_secs: rows with retention_pending_delete_at < NOW -
+//     grace_window_secs survive. Clamped to >= 0 server-side.
+//   - limit: bounded by the executor at [1, 5000] with a default of 1000 so
+//     a single sweep can't materialise an unbounded result set.
+message ListPendingDeleteManifestsRequest {
+  string tenant_id         = 1;
+  int64  grace_window_secs = 2;
+  int32  limit             = 3;
+}
+
+message ListPendingDeleteManifestsResponse {
+  repeated PendingDeleteManifest manifests = 1;
+}
+
+// PendingDeleteManifest carries the fields the retention_grace executor
+// needs to call DeleteManifest. blob_digests is intentionally NOT included
+// — DeleteManifest cascades to the orphan-blob path, so the executor does
+// not need to enumerate layers here. Keeping the payload narrow lets the
+// scan stay on idx_manifests_retention_pending without joining blob_links.
+message PendingDeleteManifest {
+  string                    manifest_id   = 1;
+  string                    tenant_id     = 2;
+  string                    repository_id = 3;
+  string                    digest        = 4;
+  int64                     size_bytes    = 5;
+  google.protobuf.Timestamp pending_since = 6;
 }
