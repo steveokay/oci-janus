@@ -570,6 +570,10 @@ services:
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      # DB_DSN enables FE-API-032 — without it the gc gRPC handlers
+      # return FailedPrecondition "gc repository not configured" and
+      # the admin dashboard's GC card stays in its empty-state fallback.
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_gc?sslmode=prefer
       GC_MODE: full
       GC_RUN_INTERVAL_HOURS: "24"
       MTLS_CA_CERT_PATH: /certs/ca.crt
@@ -659,6 +663,11 @@ services:
       # gRPC calls fail until the scanner profile is up; the BFF
       # gracefully maps gRPC unavailable → 503 in that case.
       SCANNER_GRPC_ADDR: registry-scanner:50051
+      # GC_GRPC_ADDR enables FE-API-032 admin GC routes
+      # (/admin/gc/status, /admin/gc/runs, /admin/gc/run). Empty leaves
+      # them at 404 "route disabled" and the dashboard's GC card shows
+      # a friendly "GC visibility isn't wired" fallback.
+      GC_GRPC_ADDR: registry-gc:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
