@@ -12,6 +12,7 @@ import {
   Activity,
   KeyRound,
   Globe,
+  ScanLine,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -56,6 +57,14 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
         to: "/admin/tenants",
         label: "Tenants",
         icon: Building2,
+        adminOnly: true,
+      },
+      // REM-011 Phase 2 FE — platform-wide scanner adapter picker. Gated
+      // behind the platform-admin marker (same JWT check as Tenants).
+      {
+        to: "/admin/scanner",
+        label: "Scanner",
+        icon: ScanLine,
         adminOnly: true,
       },
     ],

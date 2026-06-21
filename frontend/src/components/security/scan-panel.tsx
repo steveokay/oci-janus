@@ -40,6 +40,7 @@ import {
   type SeverityKey,
   totalSeverityCount,
 } from "@/lib/api/scan";
+import { useScannerHealth } from "@/lib/api/admin-scanners";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 import type { ScanResult } from "@/lib/api/types";
 
@@ -125,21 +126,35 @@ export function ScanPanel({
 
 // ─── status panels ──────────────────────────────────────────────────────────
 
-// STUCK_THRESHOLD_MS — how long a scan can sit in pending/running before
-// we degrade the "Scanning…" UI to "Scanner isn't producing results."
+// STUCK_THRESHOLD_MS — fallback heuristic for callers without admin
+// liveness access. REM-011 Phase 2 (FE-API-047) added a real
+// "is the scanner alive?" signal via `useScannerHealth` — when the
+// caller can read it, we flip to "stuck" the moment `healthy=false`
+// instead of waiting 90 seconds. Non-admins (403) and dev stacks
+// without SCANNER_GRPC_ADDR (404) fall through to this timer.
+//
 // 90 seconds covers the realistic worst case for a small image (Trivy
-// DB download, layer extraction, scan). Anything past that almost
-// always means the scanner profile isn't running or the adapter
-// crashed silently — better to surface that than spin forever.
+// DB download, layer extraction, scan).
 const STUCK_THRESHOLD_MS = 90_000;
 
 function InFlightCard({ scan }: { scan: ScanResult }): React.ReactElement {
-  // Compute "stuck" client-side. Don't trust the started_at parse if
-  // it's malformed — fall back to "in flight" so a parse bug never
-  // turns into a permanent stuck banner.
+  // FE-API-047 — admin liveness signal. The hook tolerates 403/404 by
+  // resolving to `undefined`, so non-admin sessions skip the request
+  // entirely (avoids a 403 in the network tab on every tag page).
+  // When `data?.healthy === false` we know the scanner pool is dead and
+  // can flip to the stuck UI immediately; otherwise we honor the 90s
+  // client-side fallback below.
+  const healthQ = useScannerHealth({ refetchInterval: 15_000 });
+  const livenessSaysDead = healthQ.data?.healthy === false;
+
+  // Compute "stuck" client-side as a fallback. Don't trust the started_at
+  // parse if it's malformed — fall back to "in flight" so a parse bug
+  // never turns into a permanent stuck banner.
   const startedMs = Date.parse(scan.started_at);
-  const isStuck =
+  const timerSaysStuck =
     Number.isFinite(startedMs) && Date.now() - startedMs > STUCK_THRESHOLD_MS;
+
+  const isStuck = livenessSaysDead || timerSaysStuck;
 
   if (isStuck) {
     return (
