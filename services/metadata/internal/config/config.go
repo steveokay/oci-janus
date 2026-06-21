@@ -14,6 +14,12 @@ type Config struct {
 	RedisAddr     string `mapstructure:"REDIS_ADDR"`
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
 	RedisDB       int    `mapstructure:"REDIS_DB"`
+
+	// RabbitMQURL (FE-API-042) — required for the pull.image consumer that
+	// drives manifests.last_pulled_at updates. Optional in the sense that an
+	// empty string disables the consumer (handy for unit tests + offline
+	// dev), but the service logs a WARN on startup when it isn't set.
+	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 }
 
 // Load binds environment variables into Config and validates required fields.

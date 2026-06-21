@@ -97,3 +97,85 @@ func TestMapEvent_retentionRoutingKeys(t *testing.T) {
 		})
 	}
 }
+
+// TestMapEvent_pullImage_authenticated verifies the FE-API-042 happy path:
+// a pull with a known actor maps to a pull.image row with actor_type=user
+// and resource = "org/repo:tag" so it groups with the push.image events.
+func TestMapEvent_pullImage_authenticated(t *testing.T) {
+	tenantID := uuid.New()
+	payload, _ := json.Marshal(events.PullImagePayload{
+		TenantID:       tenantID.String(),
+		RepositoryID:   uuid.NewString(),
+		RepositoryName: "myorg/myimage",
+		ManifestDigest: "sha256:abc",
+		Tag:            "v1.0.0",
+		ActorID:        "user-42",
+		PulledAt:       time.Now().UTC(),
+	})
+	ev := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingPullImage,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+
+	ae := mapEvent(tenantID, ev)
+	if ae == nil {
+		t.Fatalf("mapEvent returned nil for pull.image — allowlist regression")
+	}
+	if ae.Action != "pull.image" {
+		t.Errorf("action: got %q, want pull.image", ae.Action)
+	}
+	if ae.ActorID != "user-42" {
+		t.Errorf("actor_id: got %q, want user-42", ae.ActorID)
+	}
+	if ae.ActorType != "user" {
+		t.Errorf("actor_type: got %q, want user", ae.ActorType)
+	}
+	if ae.Resource != "myorg/myimage:v1.0.0" {
+		t.Errorf("resource: got %q, want myorg/myimage:v1.0.0", ae.Resource)
+	}
+	if ae.Outcome != "success" {
+		t.Errorf("outcome: got %q, want success", ae.Outcome)
+	}
+}
+
+// TestMapEvent_pullImage_anonymous verifies an anonymous public pull (no JWT)
+// records actor_id="anonymous" so the dashboard's actor filter has a stable
+// non-empty value rather than a blank cell. Resource falls back to
+// "org/repo@sha256:..." when the GET resolved by digest (no tag in payload).
+func TestMapEvent_pullImage_anonymous(t *testing.T) {
+	tenantID := uuid.New()
+	payload, _ := json.Marshal(events.PullImagePayload{
+		TenantID:       tenantID.String(),
+		RepositoryID:   uuid.NewString(),
+		RepositoryName: "public/library",
+		ManifestDigest: "sha256:def",
+		// No Tag, no ActorID — anonymous pull-by-digest.
+		PulledAt: time.Now().UTC(),
+	})
+	ev := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingPullImage,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+
+	ae := mapEvent(tenantID, ev)
+	if ae == nil {
+		t.Fatalf("mapEvent returned nil for anonymous pull.image")
+	}
+	if ae.ActorID != "anonymous" {
+		t.Errorf("actor_id: got %q, want anonymous", ae.ActorID)
+	}
+	if ae.ActorType != "anonymous" {
+		t.Errorf("actor_type: got %q, want anonymous", ae.ActorType)
+	}
+	if ae.Resource != "public/library@sha256:def" {
+		t.Errorf("resource: got %q, want public/library@sha256:def", ae.Resource)
+	}
+}

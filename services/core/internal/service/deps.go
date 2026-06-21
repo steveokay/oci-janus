@@ -12,7 +12,9 @@ type EventPublisher = eventPublisher
 
 // newRegistryWithClients constructs a Registry from pre-built gRPC clients and
 // an eventPublisher. Used by tests in this package that wire up in-process fake
-// gRPC servers (via bufconn) without going through NewRegistry.
+// gRPC servers (via bufconn) without going through NewRegistry. The sampler
+// defaults to "always publish" so the existing push.completed flow is
+// unaffected; FE-API-042 pull-publish tests override it explicitly.
 func newRegistryWithClients(
 	meta metadatav1.MetadataServiceClient,
 	storage storagev1.StorageServiceClient,
@@ -21,11 +23,12 @@ func newRegistryWithClients(
 	pub eventPublisher,
 ) *Registry {
 	return &Registry{
-		metadata:  meta,
-		storage:   storage,
-		uploads:   uploads,
-		referrers: referrers,
-		publisher: pub,
+		metadata:   meta,
+		storage:    storage,
+		uploads:    uploads,
+		referrers:  referrers,
+		publisher:  pub,
+		pullSample: func() bool { return true },
 	}
 }
 

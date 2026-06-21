@@ -91,6 +91,15 @@ export const WEBHOOK_EVENT_CATALOG: Array<{
     label: "Push completed",
     description: "An image successfully landed in a repository.",
   },
+  // FE-API-042 — fires on every successful manifest GET. Sampling is
+  // controlled server-side via PULL_EVENT_SAMPLE_RATE; subscribers should
+  // expect high volume on busy registries and rate-limit accordingly.
+  {
+    key: "pull.image",
+    label: "Image pulled",
+    description:
+      "An image was successfully pulled. Fires from the registry on every manifest GET (sampling configurable server-side).",
+  },
   {
     key: "push.failed",
     label: "Push failed",
