@@ -130,6 +130,14 @@ func (r *ServiceAccountRepo) CreateAtomic(ctx context.Context, in CreateServiceA
 
 	// 1. Insert the shadow user. password_hash is intentionally empty — SA
 	//    authentication goes through API keys, never through the password path.
+	//
+	// NOTE: we do NOT map a unique violation here to ErrAlreadyExists. The
+	// shadow user's email (sa+<uuid>@internal.invalid) and username (sa-<8hex>)
+	// are derived from a freshly-generated UUID inside this function. A unique
+	// violation on this INSERT can only mean a UUID birthday collision
+	// (astronomically unlikely) or a caller bug — never a legitimate "name
+	// already taken" condition. The raw pg error (with its constraint name) is
+	// the most useful signal for debugging, so we wrap and return it directly.
 	var shadowID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO users (tenant_id, username, email, password_hash, kind)
@@ -137,9 +145,6 @@ func (r *ServiceAccountRepo) CreateAtomic(ctx context.Context, in CreateServiceA
 		RETURNING id`,
 		in.TenantID, syntheticUsername, syntheticEmail,
 	).Scan(&shadowID); err != nil {
-		if isUniqueViolation(err) {
-			return nil, uuid.Nil, ErrAlreadyExists
-		}
 		return nil, uuid.Nil, fmt.Errorf("service_account create: insert shadow user: %w", err)
 	}
 
@@ -197,6 +202,32 @@ func (r *ServiceAccountRepo) Get(ctx context.Context, id uuid.UUID) (*ServiceAcc
 	return sa, nil
 }
 
+// listSQL is the single fixed-template query for List. All variable conditions
+// are expressed as typed sentinel parameters so the SQL text never changes —
+// this satisfies the project convention (CLAUDE.md §11) that forbids using
+// fmt.Sprintf to build SQL.
+//
+// Parameter bindings (always passed, regardless of which conditions are active):
+//
+//	$1  tenantID        — always filters by tenant
+//	$2  includeDisabled — bool; when true the disabled_at IS NULL guard is skipped
+//	$3  cursorAt        — timestamptz or NULL; when NULL the keyset clause is skipped
+//	$4  cursorID        — uuid or nil; companion to $3
+//	$5  limit           — pageSize+1 so the caller can detect a next page
+const listSQL = `
+	SELECT sa.id, sa.tenant_id, sa.shadow_user_id, sa.name, sa.description,
+	       sa.allowed_scopes, sa.created_by, sa.created_at, sa.disabled_at,
+	       COALESCE(COUNT(ak.id) FILTER (WHERE ak.is_active = true), 0)::int AS active_key_count,
+	       MAX(ak.last_used_at) AS last_used_at
+	FROM   service_accounts sa
+	LEFT   JOIN api_keys ak ON ak.service_account_id = sa.id
+	WHERE  sa.tenant_id = $1
+	  AND  ($2::bool OR sa.disabled_at IS NULL)
+	  AND  ($3::timestamptz IS NULL OR (sa.created_at, sa.id) < ($3::timestamptz, $4::uuid))
+	GROUP  BY sa.id
+	ORDER  BY sa.created_at DESC, sa.id DESC
+	LIMIT  $5`
+
 // List returns service accounts for the given tenant, ordered by
 // (created_at DESC, id DESC) for stable keyset pagination.
 //
@@ -205,7 +236,8 @@ func (r *ServiceAccountRepo) Get(ctx context.Context, id uuid.UUID) (*ServiceAcc
 //
 // pageToken encodes the last-seen (created_at, id) pair as a base64 string; an
 // empty string means "start from the beginning". The returned nextToken is
-// empty when there are no more pages.
+// empty when there are no more pages. A malformed pageToken is treated as an
+// empty token and returns the first page.
 //
 // The returned ServiceAccountWithStats rows include a live count of active API
 // keys and the most recent last_used_at across those keys.
@@ -220,11 +252,11 @@ func (r *ServiceAccountRepo) List(
 		pageSize = 20
 	}
 
-	// Decode keyset cursor from pageToken.
+	// Decode keyset cursor from pageToken. A malformed token is silently treated
+	// as "no cursor" so the caller gets the first page rather than an error.
 	var (
-		cursorAt time.Time
-		cursorID uuid.UUID
-		useKeyset bool
+		cursorAt *time.Time
+		cursorID *uuid.UUID
 	)
 	if pageToken != "" {
 		raw, err := base64.StdEncoding.DecodeString(pageToken)
@@ -233,56 +265,25 @@ func (r *ServiceAccountRepo) List(
 			if len(parts) == 2 {
 				if t, err2 := time.Parse(time.RFC3339Nano, parts[0]); err2 == nil {
 					if id, err3 := uuid.Parse(parts[1]); err3 == nil {
-						cursorAt = t
-						cursorID = id
-						useKeyset = true
+						cursorAt = &t
+						cursorID = &id
 					}
 				}
 			}
 		}
 	}
 
-	// Build the WHERE clause dynamically based on flags.
-	// We use a LEFT JOIN on api_keys to compute active_key_count and last_used_at
+	// Use a LEFT JOIN on api_keys to compute active_key_count and last_used_at
 	// without a subquery so the planner can use the idx_api_keys_sa index.
-	var (
-		args      []any
-		whereParts []string
+	// All conditional logic is encoded as typed sentinel parameters (see listSQL
+	// above) — no fmt.Sprintf is used to construct the query text.
+	rows, err := r.pool.Query(ctx, listSQL,
+		tenantID,      // $1
+		includeDisabled, // $2 — true skips the disabled_at IS NULL guard
+		cursorAt,      // $3 — nil skips the keyset clause
+		cursorID,      // $4 — companion to $3
+		pageSize+1,    // $5 — fetch one extra row to detect "has next page"
 	)
-
-	args = append(args, tenantID)
-	whereParts = append(whereParts, fmt.Sprintf("sa.tenant_id = $%d", len(args)))
-
-	if !includeDisabled {
-		whereParts = append(whereParts, "sa.disabled_at IS NULL")
-	}
-
-	if useKeyset {
-		args = append(args, cursorAt, cursorID)
-		n := len(args)
-		whereParts = append(whereParts,
-			fmt.Sprintf("(sa.created_at, sa.id) < ($%d, $%d)", n-1, n))
-	}
-
-	where := "WHERE " + strings.Join(whereParts, " AND ")
-
-	// Fetch pageSize+1 rows so we can detect whether there is a next page.
-	args = append(args, pageSize+1)
-	limitParam := fmt.Sprintf("$%d", len(args))
-
-	q := fmt.Sprintf(`
-		SELECT sa.id, sa.tenant_id, sa.shadow_user_id, sa.name, sa.description,
-		       sa.allowed_scopes, sa.created_by, sa.created_at, sa.disabled_at,
-		       COALESCE(COUNT(ak.id) FILTER (WHERE ak.is_active = true), 0)::int AS active_key_count,
-		       MAX(ak.last_used_at) AS last_used_at
-		FROM   service_accounts sa
-		LEFT   JOIN api_keys ak ON ak.service_account_id = sa.id
-		%s
-		GROUP  BY sa.id
-		ORDER  BY sa.created_at DESC, sa.id DESC
-		LIMIT  %s`, where, limitParam)
-
-	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("service_account list: %w", err)
 	}
@@ -414,11 +415,22 @@ func (r *ServiceAccountRepo) Delete(ctx context.Context, id uuid.UUID) error {
 //
 // A count of 0 means the scope change is safe (no key grants more than the
 // proposed set allows).
+//
+// A nil proposed slice is treated as an empty slice (removing all scopes),
+// meaning every key with any scope is affected.
 func (r *ServiceAccountRepo) CountKeysAffectedByScopeShrink(
 	ctx context.Context,
 	saID uuid.UUID,
 	proposed []string,
 ) (int64, error) {
+	// Guard against nil: pgx encodes a nil slice as SQL NULL, and
+	// NOT (s = ANY(NULL)) evaluates to NULL (not TRUE) so the EXISTS clause
+	// would match nothing and return 0 — masking real affected keys. An empty
+	// non-nil slice encodes as '{}' which correctly matches no allowed scopes.
+	if proposed == nil {
+		proposed = []string{}
+	}
+
 	var n int64
 	err := r.pool.QueryRow(ctx, `
 		SELECT count(*)

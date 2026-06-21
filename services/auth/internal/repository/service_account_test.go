@@ -474,3 +474,43 @@ func TestServiceAccountRepo_CountKeysAffectedByScopeShrink(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, n, "all keys are affected when proposed scopes is empty")
 }
+
+// TestServiceAccountRepo_CountKeysAffectedByScopeShrink_NilProposed verifies
+// that a nil proposed slice is treated as an empty set (not SQL NULL), so every
+// active key that has at least one scope is counted as affected.
+//
+// This guards against the pgx nil-slice → SQL NULL footgun:
+//   - pgx encodes nil []string as SQL NULL
+//   - NOT (s = ANY(NULL)) evaluates to NULL (not TRUE) in Postgres
+//   - The EXISTS clause would therefore match nothing and return 0, incorrectly
+//     signalling "no keys affected" when in fact every key is affected.
+func TestServiceAccountRepo_CountKeysAffectedByScopeShrink_NilProposed(t *testing.T) {
+	ctx := context.Background()
+	pool, users, repo := setupSARepo(t, ctx)
+
+	tenant, creator := seedHuman(t, ctx, users, "admin10@example.com")
+
+	// Create a SA with some allowed scopes.
+	sa, _, err := repo.CreateAtomic(ctx, CreateServiceAccountInput{
+		TenantID:      tenant,
+		Name:          "nil-proposed-test",
+		AllowedScopes: []string{"pull", "push"},
+		CreatedBy:     creator,
+	})
+	require.NoError(t, err)
+
+	// Insert one active key that has a scope.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, service_account_id, name, key_hash, key_prefix, scopes, is_active)
+		VALUES ($1, $2, 'k-nil', 'hnil', 'pnil', $3, true)`,
+		tenant, sa.ID, []string{"pull"})
+	require.NoError(t, err)
+
+	// Passing nil as proposed must be treated as an empty scope set, meaning the
+	// key is affected (it holds "pull" which is absent from the empty proposed).
+	// Before the nil-guard fix this would return 0 due to the NULL encoding bug.
+	n, err := repo.CountKeysAffectedByScopeShrink(ctx, sa.ID, nil)
+	require.NoError(t, err)
+	require.Greater(t, n, int64(0),
+		"nil proposed must be treated as empty set — all keys with any scope are affected")
+}
