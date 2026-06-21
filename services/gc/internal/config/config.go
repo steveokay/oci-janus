@@ -29,7 +29,15 @@ type Config struct {
 
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
-	RabbitMQURL      string `mapstructure:"RABBITMQ_URL"`
+	// TenantGRPCAddr lets the collector enumerate tenants via the
+	// registry-tenant directory instead of streaming every repository row
+	// from metadata. Optional: when empty the collector falls back to
+	// scanning metadata.ListRepositories — that path used to crash with
+	// `invalid input syntax for type uuid: ""` because metadata's repo
+	// query rejects an empty tenant_id filter. Keep TENANT_GRPC_ADDR set
+	// in any compose / k8s deployment that has tenants.
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+	RabbitMQURL    string `mapstructure:"RABBITMQ_URL"`
 
 	// GCAdvisoryLockDBDSN is a PostgreSQL DSN used solely for pg_try_advisory_lock
 	// coordination. Optional — if unset, advisory locking is disabled (safe for

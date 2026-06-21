@@ -59,6 +59,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer storageConn.Close()
 
+	// Tenant directory dial — optional. When TENANT_GRPC_ADDR is set the
+	// collector uses tenant.ListTenants to enumerate sweep targets. When
+	// unset the collector falls back to scanning metadata, which fails in
+	// production but keeps the legacy unit tests green.
+	var tenantConn *grpc.ClientConn
+	if cfg.TenantGRPCAddr != "" {
+		tenantConn, err = grpc.NewClient(cfg.TenantGRPCAddr, creds)
+		if err != nil {
+			return fmt.Errorf("dial tenant: %w", err)
+		}
+		defer tenantConn.Close()
+	}
+
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
 		return fmt.Errorf("rabbitmq publisher: %w", err)
@@ -84,7 +97,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		cfg.GCMode,
 		cfg.BlobMinAgeHours,
 		cfg.ManifestMinAgeHours,
-	)
+	).WithTenantClient(tenantConn) // no-op when tenantConn is nil
 
 	// FE-API-032: optional persistence pool + repository. When DB_DSN
 	// is unset the gRPC service still starts but every RPC returns

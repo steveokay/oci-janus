@@ -569,6 +569,13 @@ services:
       OTEL_SERVICE_NAME: registry-gc
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
+      # TENANT_GRPC_ADDR lets the collector enumerate tenants via the
+      # tenant directory instead of trying to stream every repository
+      # row from metadata (which fails with "invalid input syntax for
+      # type uuid" because metadata's ListRepositories rejects empty
+      # tenant_id). Optional — when unset the collector falls back to
+      # the broken metadata path (kept for unit tests).
+      TENANT_GRPC_ADDR: registry-tenant:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # DB_DSN enables FE-API-032 — without it the gc gRPC handlers
       # return FailedPrecondition "gc repository not configured" and
