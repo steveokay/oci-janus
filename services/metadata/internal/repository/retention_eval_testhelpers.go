@@ -48,3 +48,28 @@ func (r *Repository) RawInsertManifestForTest(
 	}
 	return nil
 }
+
+// SetManifestLastPulledForTest stamps manifests.last_pulled_at directly for a
+// given digest within a (tenant, repo). The production path is the FE-API-042
+// 24h-debounced consumer; the FE-API-043 evaluator tests need to seed
+// arbitrary historical pull timestamps (including NULL via the explicit
+// nil-pointer caller path — but that's the default after RawInsertManifestForTest
+// so this helper only covers the "set to a specific time" case).
+//
+// DO NOT call from production code.
+func (r *Repository) SetManifestLastPulledForTest(
+	ctx context.Context,
+	repoID, tenantID, digest string,
+	pulledAt time.Time,
+) error {
+	const q = `
+		UPDATE manifests
+		   SET last_pulled_at = $4
+		 WHERE repo_id = $1
+		   AND tenant_id = $2
+		   AND digest = $3`
+	if _, err := r.pool.Exec(ctx, q, repoID, tenantID, digest, pulledAt); err != nil {
+		return fmt.Errorf("set last_pulled_at for test: %w", err)
+	}
+	return nil
+}

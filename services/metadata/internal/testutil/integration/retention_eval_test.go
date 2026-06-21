@@ -378,19 +378,137 @@ func TestEvaluateRetention_truncation_setsFlagAndTotals(t *testing.T) {
 	}
 }
 
-// TestEvaluateRetention_maxIdleDaysSilentlySkipped verifies a candidate with
-// only max_idle_days rules produces no selections (the rule is the
-// FE-API-043 stub) AND doesn't error.
-func TestEvaluateRetention_maxIdleDaysSilentlySkipped(t *testing.T) {
+// FE-API-043 max_idle_days rule. The combined gate (created_at < cutoff AND
+// (last_pulled_at IS NULL OR last_pulled_at < cutoff)) is the load-bearing
+// safety property — without it, every brand-new push with NULL
+// last_pulled_at would match immediately. Each test below pins one corner
+// of that gate.
+
+// TestEvaluateRetention_maxIdleDays_idleAndOld_selected: pulled 60d ago,
+// created 90d ago, threshold 30d → selected with reason "max_idle_days".
+func TestEvaluateRetention_maxIdleDays_idleAndOld_selected(t *testing.T) {
 	repo := buildRepo(t)
 	repoID := seedRetentionEvalRepo(t, repo)
 	now := time.Now().UTC()
-	seedManifest(t, repo, repoID, "idl", now.Add(-100*24*time.Hour), 100, []string{"old"})
+	digest := seedManifest(t, repo, repoID, "id1", now.Add(-90*24*time.Hour), 100, []string{"idle-old"})
+	if err := repo.SetManifestLastPulledForTest(context.Background(), repoID, devTenantID, digest, now.Add(-60*24*time.Hour)); err != nil {
+		t.Fatalf("seed last_pulled_at: %v", err)
+	}
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled: true,
+		Rules:   []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
+	if len(got.WouldDelete) != 1 {
+		t.Fatalf("expected 1 selection, got %d (%+v)", len(got.WouldDelete), got.WouldDelete)
+	}
+	if c := got.WouldDelete[0]; c.ManifestDigest != digest ||
+		len(c.Reasons) != 1 || c.Reasons[0] != "max_idle_days" {
+		t.Errorf("unexpected candidate: %+v", c)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDays_recentPullOldManifest_notSelected: a
+// 90-day-old manifest pulled 5 days ago is NOT idle — recent pull keeps it.
+func TestEvaluateRetention_maxIdleDays_recentPullOldManifest_notSelected(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	digest := seedManifest(t, repo, repoID, "id2", now.Add(-90*24*time.Hour), 100, []string{"recent-pull"})
+	if err := repo.SetManifestLastPulledForTest(context.Background(), repoID, devTenantID, digest, now.Add(-5*24*time.Hour)); err != nil {
+		t.Fatalf("seed last_pulled_at: %v", err)
+	}
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled: true,
+		Rules:   []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
+	if len(got.WouldDelete) != 0 {
+		t.Errorf("expected no selections (recent pull), got %+v", got.WouldDelete)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDays_neverPulledBrandNew_notSelected: pins the
+// chicken-and-egg gate. NULL last_pulled_at + created 5d ago + threshold 30d
+// → NOT selected (the manifest hasn't been around long enough to have been
+// pulled yet — otherwise deploying max_idle_days would nuke every recent
+// push that hasn't been pulled in its first few days).
+func TestEvaluateRetention_maxIdleDays_neverPulledBrandNew_notSelected(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	// No SetManifestLastPulledForTest call → last_pulled_at remains NULL.
+	seedManifest(t, repo, repoID, "id3", now.Add(-5*24*time.Hour), 100, []string{"new-never-pulled"})
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled: true,
+		Rules:   []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
+	if len(got.WouldDelete) != 0 {
+		t.Errorf("expected no selections (brand-new + NULL), got %+v", got.WouldDelete)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDays_neverPulledOldEnough_selected: NULL
+// last_pulled_at + created 60d ago + threshold 30d → selected. Captures the
+// "existed pre-pull-tracking and was never touched" case the gate explicitly
+// keeps actionable.
+func TestEvaluateRetention_maxIdleDays_neverPulledOldEnough_selected(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	digest := seedManifest(t, repo, repoID, "id4", now.Add(-60*24*time.Hour), 100, []string{"old-never-pulled"})
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled: true,
+		Rules:   []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
+	if len(got.WouldDelete) != 1 {
+		t.Fatalf("expected 1 selection, got %d (%+v)", len(got.WouldDelete), got.WouldDelete)
+	}
+	if c := got.WouldDelete[0]; c.ManifestDigest != digest ||
+		len(c.Reasons) != 1 || c.Reasons[0] != "max_idle_days" {
+		t.Errorf("unexpected candidate: %+v", c)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDaysAndMaxAgeDays_collectsBothReasons: verifies
+// OR composition with another date-based rule — a manifest matching both
+// rules carries both kinds in reasons[] (sorted).
+func TestEvaluateRetention_maxIdleDaysAndMaxAgeDays_collectsBothReasons(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	digest := seedManifest(t, repo, repoID, "id5", now.Add(-90*24*time.Hour), 100, []string{"old-idle"})
+	if err := repo.SetManifestLastPulledForTest(context.Background(), repoID, devTenantID, digest, now.Add(-60*24*time.Hour)); err != nil {
+		t.Fatalf("seed last_pulled_at: %v", err)
+	}
 	ctx := context.Background()
 
 	cand := &metadatav1.RetentionPolicyCandidate{
 		Enabled: true,
 		Rules: []*metadatav1.RetentionRule{
+			{Kind: "max_age_days", Value: 30},
 			{Kind: "max_idle_days", Value: 30},
 		},
 	}
@@ -398,7 +516,77 @@ func TestEvaluateRetention_maxIdleDaysSilentlySkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateRetention: %v", err)
 	}
+	if len(got.WouldDelete) != 1 {
+		t.Fatalf("expected 1 selection, got %d (%+v)", len(got.WouldDelete), got.WouldDelete)
+	}
+	c := got.WouldDelete[0]
+	// Reasons[] is sorted ascending by the evaluator — verify both kinds and
+	// stable ordering.
+	if len(c.Reasons) != 2 || c.Reasons[0] != "max_age_days" || c.Reasons[1] != "max_idle_days" {
+		t.Errorf("expected reasons [max_age_days max_idle_days], got %v", c.Reasons)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDays_protectedWins: a manifest that matches
+// max_idle_days but carries a protected tag goes to protected_skipped, not
+// would_delete. Protection runs first, regardless of rule kind.
+func TestEvaluateRetention_maxIdleDays_protectedWins(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	digest := seedManifest(t, repo, repoID, "id6", now.Add(-90*24*time.Hour), 100, []string{"latest"})
+	if err := repo.SetManifestLastPulledForTest(context.Background(), repoID, devTenantID, digest, now.Add(-60*24*time.Hour)); err != nil {
+		t.Fatalf("seed last_pulled_at: %v", err)
+	}
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled:              true,
+		Rules:                []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+		ProtectedTagPatterns: []string{"latest"},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
 	if len(got.WouldDelete) != 0 {
-		t.Errorf("expected no selections (max_idle_days is FE-API-043), got %+v", got.WouldDelete)
+		t.Errorf("expected zero deletions (tag protected), got %+v", got.WouldDelete)
+	}
+	if len(got.ProtectedSkipped) != 1 || got.ProtectedSkipped[0].ManifestDigest != digest {
+		t.Errorf("expected the manifest to be in protected_skipped, got %+v", got.ProtectedSkipped)
+	}
+}
+
+// TestEvaluateRetention_maxIdleDays_boundaryExact: last_pulled_at exactly N
+// days ago with rule N. Pinned semantics: strict "<" (Before) — at exactly
+// the boundary the manifest is KEPT, only strictly older than N days counts
+// as idle. Matches max_age_days' boundary so the two date-based rules are
+// internally consistent.
+func TestEvaluateRetention_maxIdleDays_boundaryExact(t *testing.T) {
+	repo := buildRepo(t)
+	repoID := seedRetentionEvalRepo(t, repo)
+	now := time.Now().UTC()
+	digest := seedManifest(t, repo, repoID, "id7", now.Add(-60*24*time.Hour), 100, []string{"boundary"})
+	// Seed last_pulled_at very slightly INSIDE the 30-day window (a few
+	// seconds shy of exactly 30 days ago). The test does not assert "exactly
+	// 30 days" because the evaluator captures `now` after seeding, which
+	// would race; instead the seeded timestamp is recent enough that the
+	// cutoff (now - 30d) is strictly older than it → NOT idle.
+	pulledAt := now.Add(-30*24*time.Hour + 5*time.Second)
+	if err := repo.SetManifestLastPulledForTest(context.Background(), repoID, devTenantID, digest, pulledAt); err != nil {
+		t.Fatalf("seed last_pulled_at: %v", err)
+	}
+	ctx := context.Background()
+
+	cand := &metadatav1.RetentionPolicyCandidate{
+		Enabled: true,
+		Rules:   []*metadatav1.RetentionRule{{Kind: "max_idle_days", Value: 30}},
+	}
+	got, err := repo.EvaluateRetention(ctx, devTenantID, repoID, cand, 0, 0)
+	if err != nil {
+		t.Fatalf("EvaluateRetention: %v", err)
+	}
+	if len(got.WouldDelete) != 0 {
+		t.Errorf("boundary: pulled within window must NOT be selected, got %+v", got.WouldDelete)
 	}
 }
