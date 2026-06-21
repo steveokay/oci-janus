@@ -241,6 +241,24 @@ func (r *Repository) GetOrCreateOrganization(ctx context.Context, tenantID, orgN
 	return orgID, nil
 }
 
+// LookupOrgIDByName returns the org_id for (tenant_id, name). Unlike
+// GetOrCreateOrganization this is a pure read — NotFound when the org does
+// not exist. Added in FE-API-039 so the management BFF can map org-name URLs
+// (e.g. /api/v1/orgs/{org}/policies/retention) to the org_id required by
+// the per-org retention RPCs without unintentionally creating the org.
+func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName string) (string, error) {
+	const q = `SELECT id::text FROM organizations WHERE tenant_id = $1 AND name = $2`
+	var orgID string
+	err := r.pool.QueryRow(ctx, q, tenantID, orgName).Scan(&orgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("lookup org by name: %w", err)
+	}
+	return orgID, nil
+}
+
 // ── Tags ────────────────────────────────────────────────────────────────────
 
 // tagSelectCols is the column list for every Tag row read.

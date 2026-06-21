@@ -166,40 +166,15 @@ func (r *Repository) UpsertRepoRetentionPolicy(
 		priorExists = true
 	}
 
-	// Decide preview_until. The default is "keep whatever was there"; only
-	// the enable-flip and material rules-change paths recompute it.
+	// Decide preview_until via the shared helper so the org-default upsert
+	// (FE-API-039) reuses the same enable-flip + material-rules-change rules.
 	rulesJSON, err := encodeRetentionRules(rules)
 	if err != nil {
 		return nil, fmt.Errorf("encode retention rules: %w", err)
 	}
-	var newPreviewUntil *time.Time
-	previewExpiry := time.Now().Add(retentionPreviewWindow)
-	switch {
-	case enabled && !priorExists:
-		// Fresh row, freshly enabled — start the preview window.
-		newPreviewUntil = &previewExpiry
-	case enabled && priorExists && !priorEnabled:
-		// Disabled → enabled transition — start the preview window.
-		newPreviewUntil = &previewExpiry
-	case enabled && priorExists && priorEnabled:
-		// Both enabled — compare rules. Different set ⇒ restart preview.
-		// Same set ⇒ keep existing preview_until (which may be nil, may be a
-		// past timestamp meaning preview already expired; either way the
-		// upsert should not silently restart enforcement gating).
-		changed, err := rulesChangedMaterially(priorRulesJSON, rulesJSON)
-		if err != nil {
-			return nil, err
-		}
-		if changed {
-			newPreviewUntil = &previewExpiry
-		} else {
-			newPreviewUntil = priorPreviewUntil
-		}
-	default:
-		// enabled=false on the new row. The preview window only protects an
-		// enabled policy from enforcement, so clear it on disable to keep
-		// the column truthful.
-		newPreviewUntil = nil
+	newPreviewUntil, err := decidePreviewUntil(enabled, priorExists, priorEnabled, priorRulesJSON, rulesJSON, priorPreviewUntil)
+	if err != nil {
+		return nil, err
 	}
 
 	// Normalise patterns to a non-nil slice so the TEXT[] column does not
@@ -361,6 +336,51 @@ func rulesChangedMaterially(priorJSON, newJSON []byte) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// decidePreviewUntil centralises the preview-window state machine shared
+// between per-repo (FE-API-037) and per-org-default (FE-API-039) upserts.
+//
+// The rules are:
+//   - enabled = false                ⇒ clear (preview gates enforcement; with
+//     enforcement off there is nothing to gate).
+//   - enabled = true, no prior row   ⇒ NOW() + retentionPreviewWindow.
+//   - enabled = true, prior disabled ⇒ NOW() + retentionPreviewWindow.
+//   - enabled = true, prior enabled  ⇒ if rules changed materially, restart
+//     the window; otherwise preserve whatever was there (which may be nil
+//     or in the past — either way the upsert must not silently restart
+//     enforcement gating for a no-op re-save).
+//
+// `priorRulesJSON` and `newRulesJSON` are the same JSONB shape persisted by
+// encodeRetentionRules — feeding raw JSON in keeps the helper pure (it does
+// not need a pgx connection) and matches how the callers already have the
+// data on hand.
+func decidePreviewUntil(
+	enabled, priorExists, priorEnabled bool,
+	priorRulesJSON, newRulesJSON []byte,
+	priorPreviewUntil *time.Time,
+) (*time.Time, error) {
+	if !enabled {
+		// Disabled — no preview gating needed. Always nil so the column
+		// stays truthful for the executor.
+		return nil, nil
+	}
+	previewExpiry := time.Now().Add(retentionPreviewWindow)
+	if !priorExists || !priorEnabled {
+		// Fresh insert OR disabled→enabled transition — start the window.
+		return &previewExpiry, nil
+	}
+	// Both prior + new are enabled. Inspect the rule set: a material change
+	// restarts the window so the new rules get their own 24h dry-run; a no-op
+	// re-save preserves the existing preview_until.
+	changed, err := rulesChangedMaterially(priorRulesJSON, newRulesJSON)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return &previewExpiry, nil
+	}
+	return priorPreviewUntil, nil
 }
 
 // normaliseRulesForComparison decodes a JSONB rules blob into a deterministic

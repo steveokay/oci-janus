@@ -670,6 +670,106 @@ func (s *fakeMetaServer) EvaluateRetention(_ context.Context, req *metadatav1.Ev
 	}, nil
 }
 
+// FE-API-039: per-org default retention + inheritance fakes.
+//
+// The package-level state mirrors the per-repo retention pattern above:
+// tests set the *Override fields to drive the GET response, the *Call
+// mirrors the most recent request so tests can assert wiring, and the
+// *Err fields exercise the 404 / 403 branches.
+//
+// effectiveRetentionOverride drives the per-repo GET's FE-API-039 fallback
+// path — when GetRepoRetentionPolicy returns NotFound, the BFF calls
+// GetEffectiveRetentionPolicy. Tests that want the inheritance fallback set
+// effectiveRetentionOverride; tests that want the "no policy anywhere"
+// behaviour leave it nil so the default fake returns NotFound.
+//
+// The "myorg" org name maps to testOrgID via lookupOrgIDByNameOverride —
+// tests that exercise the resolve-failure path set lookupOrgIDByNameErr.
+var (
+	getOrgRetentionOverride *metadatav1.RetentionPolicy
+	getOrgRetentionErr      error
+	upsertOrgRetentionCall  *metadatav1.UpsertOrgRetentionPolicyRequest
+	upsertOrgRetentionErr   error
+	deleteOrgRetentionCall  *metadatav1.DeleteOrgRetentionPolicyRequest
+	deleteOrgRetentionErr   error
+
+	effectiveRetentionOverride *metadatav1.EffectiveRetentionPolicy
+	effectiveRetentionErr      error
+
+	lookupOrgIDByNameErr error
+)
+
+func (s *fakeMetaServer) GetOrgRetentionPolicy(_ context.Context, req *metadatav1.GetOrgRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	if getOrgRetentionErr != nil {
+		return nil, getOrgRetentionErr
+	}
+	if getOrgRetentionOverride != nil {
+		return getOrgRetentionOverride, nil
+	}
+	// Default canned org default so the GET happy-path test has fields.
+	return &metadatav1.RetentionPolicy{
+		OrgId:                req.GetOrgId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              true,
+		Rules:                []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 90}},
+		ProtectedTagPatterns: []string{"latest"},
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+	}, nil
+}
+
+func (s *fakeMetaServer) UpsertOrgRetentionPolicy(_ context.Context, req *metadatav1.UpsertOrgRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	upsertOrgRetentionCall = req
+	if upsertOrgRetentionErr != nil {
+		return nil, upsertOrgRetentionErr
+	}
+	return &metadatav1.RetentionPolicy{
+		OrgId:                req.GetOrgId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              req.GetEnabled(),
+		Rules:                req.GetRules(),
+		ProtectedTagPatterns: req.GetProtectedTagPatterns(),
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+		UpdatedBy:            req.GetUpdatedBy(),
+	}, nil
+}
+
+func (s *fakeMetaServer) DeleteOrgRetentionPolicy(_ context.Context, req *metadatav1.DeleteOrgRetentionPolicyRequest) (*emptypb.Empty, error) {
+	deleteOrgRetentionCall = req
+	if deleteOrgRetentionErr != nil {
+		return nil, deleteOrgRetentionErr
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *fakeMetaServer) GetEffectiveRetentionPolicy(_ context.Context, req *metadatav1.GetEffectiveRetentionPolicyRequest) (*metadatav1.EffectiveRetentionPolicy, error) {
+	if effectiveRetentionErr != nil {
+		return nil, effectiveRetentionErr
+	}
+	if effectiveRetentionOverride != nil {
+		return effectiveRetentionOverride, nil
+	}
+	// Default: NotFound. The per-repo GET FE-API-039 fallback hits this when
+	// no test has primed an override, matching the "no policy anywhere" case.
+	return nil, status.Error(codes.NotFound, "not found")
+}
+
+func (s *fakeMetaServer) LookupOrgIDByName(_ context.Context, req *metadatav1.LookupOrgIDByNameRequest) (*metadatav1.LookupOrgIDByNameResponse, error) {
+	if lookupOrgIDByNameErr != nil {
+		return nil, lookupOrgIDByNameErr
+	}
+	// Map "myorg" → testOrgID so the FE-API-039 routes resolve without
+	// per-test setup. Any other name → NotFound so a typo'd path falls
+	// through to a clean 404.
+	if req.GetName() == "myorg" {
+		return &metadatav1.LookupOrgIDByNameResponse{OrgId: testOrgID}, nil
+	}
+	return nil, status.Error(codes.NotFound, "not found")
+}
+
 // fakeHealthServer always returns SERVING.
 type fakeHealthServer struct {
 	healthpb.UnimplementedHealthServer

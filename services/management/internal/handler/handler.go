@@ -332,6 +332,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// never persists.
 	h.RegisterRepoRetentionDryRun(mux, authMW)
 
+	// FE-API-039: per-org default retention policy. GET requires org reader;
+	// PUT/DELETE require org admin (writer not enough — retention is
+	// destructive). The per-repo GET above also gains an inheritance
+	// fallback so callers can read the org default through the repo URL
+	// when no per-repo policy exists.
+	h.RegisterOrgRetention(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.

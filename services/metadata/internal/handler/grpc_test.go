@@ -166,6 +166,28 @@ type fakeRepo struct {
 	evalRetentionResult *repository.EvaluationResult
 	evalRetentionErr    error
 	evalRetentionCalls  []retentionEvalCallArgs
+
+	// FE-API-039: per-org default retention policy.
+	getOrgRetentionResult *metadatav1.RetentionPolicy
+	getOrgRetentionErr    error
+	getOrgRetentionCalls  []orgRetentionGetCallArgs
+
+	upsertOrgRetentionResult *metadatav1.RetentionPolicy
+	upsertOrgRetentionErr    error
+	upsertOrgRetentionCalls  []orgRetentionUpsertCallArgs
+
+	deleteOrgRetentionErr   error
+	deleteOrgRetentionCalls []orgRetentionDeleteCallArgs
+
+	// FE-API-039: effective policy resolution.
+	effectiveRetentionResult *repository.EffectivePolicyResult
+	effectiveRetentionErr    error
+	effectiveRetentionCalls  []effectivePolicyCallArgs
+
+	// FE-API-039: org name → org_id lookup.
+	lookupOrgIDResult string
+	lookupOrgIDErr    error
+	lookupOrgIDCalls  []lookupOrgIDCallArgs
 }
 
 // retentionEvalCallArgs records what EvaluateRetention forwarded so the
@@ -199,6 +221,42 @@ type retentionUpsertCallArgs struct {
 type retentionDeleteCallArgs struct {
 	tenantID string
 	repoID   string
+}
+
+// FE-API-039 — per-org default retention call args. Same shape as the
+// per-repo equivalents, swapping repo_id for org_id.
+type orgRetentionGetCallArgs struct {
+	tenantID string
+	orgID    string
+}
+
+type orgRetentionUpsertCallArgs struct {
+	tenantID  string
+	orgID     string
+	enabled   bool
+	rules     []*metadatav1.RetentionRule
+	patterns  []string
+	updatedBy string
+}
+
+type orgRetentionDeleteCallArgs struct {
+	tenantID string
+	orgID    string
+}
+
+// effectivePolicyCallArgs captures the (tenant, repo) tuple passed to
+// GetEffectiveRetentionPolicy so tests can assert the lookup was scoped
+// correctly.
+type effectivePolicyCallArgs struct {
+	tenantID string
+	repoID   string
+}
+
+// lookupOrgIDCallArgs captures the (tenant, name) tuple passed to
+// LookupOrgIDByName so tests can assert the BFF forwarded the correct org.
+type lookupOrgIDCallArgs struct {
+	tenantID string
+	name     string
 }
 
 // listVulnsCallArgs / listScansCallArgs capture what the handler forwards
@@ -447,6 +505,44 @@ func (f *fakeRepo) EvaluateRetention(
 		maxProtectedResults: maxProtectedResults,
 	})
 	return f.evalRetentionResult, f.evalRetentionErr
+}
+
+// FE-API-039 fake repo methods. Same pattern as the per-repo fakes — tests
+// set the *Result / *Err fields and assert on the captured *Calls slices.
+
+func (f *fakeRepo) GetOrgRetentionPolicy(_ context.Context, tenantID, orgID string) (*metadatav1.RetentionPolicy, error) {
+	f.getOrgRetentionCalls = append(f.getOrgRetentionCalls, orgRetentionGetCallArgs{tenantID: tenantID, orgID: orgID})
+	return f.getOrgRetentionResult, f.getOrgRetentionErr
+}
+
+func (f *fakeRepo) UpsertOrgRetentionPolicy(
+	_ context.Context,
+	tenantID, orgID string,
+	enabled bool,
+	rules []*metadatav1.RetentionRule,
+	patterns []string,
+	updatedBy string,
+) (*metadatav1.RetentionPolicy, error) {
+	f.upsertOrgRetentionCalls = append(f.upsertOrgRetentionCalls, orgRetentionUpsertCallArgs{
+		tenantID: tenantID, orgID: orgID, enabled: enabled,
+		rules: rules, patterns: patterns, updatedBy: updatedBy,
+	})
+	return f.upsertOrgRetentionResult, f.upsertOrgRetentionErr
+}
+
+func (f *fakeRepo) DeleteOrgRetentionPolicy(_ context.Context, tenantID, orgID string) error {
+	f.deleteOrgRetentionCalls = append(f.deleteOrgRetentionCalls, orgRetentionDeleteCallArgs{tenantID: tenantID, orgID: orgID})
+	return f.deleteOrgRetentionErr
+}
+
+func (f *fakeRepo) GetEffectiveRetentionPolicy(_ context.Context, tenantID, repoID string) (*repository.EffectivePolicyResult, error) {
+	f.effectiveRetentionCalls = append(f.effectiveRetentionCalls, effectivePolicyCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.effectiveRetentionResult, f.effectiveRetentionErr
+}
+
+func (f *fakeRepo) LookupOrgIDByName(_ context.Context, tenantID, name string) (string, error) {
+	f.lookupOrgIDCalls = append(f.lookupOrgIDCalls, lookupOrgIDCallArgs{tenantID: tenantID, name: name})
+	return f.lookupOrgIDResult, f.lookupOrgIDErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────

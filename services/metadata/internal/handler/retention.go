@@ -19,7 +19,6 @@ package handler
 
 import (
 	"context"
-	"regexp"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,38 +29,10 @@ import (
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
-// validRetentionRuleKinds is the closed allowlist accepted by Upsert. It
-// mirrors the retention_rule_kind enum on the metadata DB. Keeping it as a
-// map (not a slice) is a single hash lookup per rule instead of a linear
-// scan; the set is tiny so memory cost is negligible.
-var validRetentionRuleKinds = map[string]bool{
-	"max_age_days":        true,
-	"max_count":           true,
-	"max_size_bytes":      true,
-	"dangling_grace_days": true,
-	// max_idle_days is accepted now even though the executor (FE-API-040)
-	// ignores it. FE-API-043 will switch enforcement on without any schema
-	// or API change.
-	"max_idle_days": true,
-}
-
-// retentionMaxValues caps each kind so a stray UI input can't persist a
-// nonsensical value. The numbers are generous — 100 years on day-based
-// rules, 10M manifests for max_count, 100 TiB for max_size_bytes — but
-// they prevent overflow surprises in the executor and clamp pathological
-// inputs at the API boundary.
-var retentionMaxValues = map[string]int64{
-	"max_age_days":        36500,                  // 100 years
-	"max_count":           10_000_000,             // 10M manifests
-	"max_size_bytes":      100 * 1024 * 1024 * 1024 * 1024, // 100 TiB
-	"dangling_grace_days": 365,
-	"max_idle_days":       36500, // 100 years
-}
-
-// maxProtectedTagPatternLen caps each protected_tag_pattern string so a
-// large regex (which the executor will compile per-rule) cannot blow up
-// memory.
-const maxProtectedTagPatternLen = 256
+// FE-API-039 refactor: the validation allowlist + value caps + pattern
+// helpers used to live here. They moved to retention_validation.go so both
+// per-repo and per-org-default handlers share a single source of truth.
+// See validateRetentionRules / validateProtectedTagPatterns there.
 
 // GetRepoRetentionPolicy returns the policy attached to a repository. NotFound
 // when no row exists; the BFF maps NotFound to "no per-repo policy" so the
@@ -127,40 +98,6 @@ func (h *MetadataHandler) DeleteRepoRetentionPolicy(ctx context.Context, req *me
 		return nil, mapErr(err)
 	}
 	return &emptypb.Empty{}, nil
-}
-
-// validateRetentionRules enforces the per-call invariants on the rule list:
-//   - When enabled, the rule list must be non-empty (a policy with no rules
-//     would be a silent no-op enforcement — operator surprise).
-//   - Each kind must be in the allowlist, each value > 0, each value below
-//     its kind's cap.
-//   - Each kind appears at most once.
-func validateRetentionRules(enabled bool, rules []*metadatav1.RetentionRule) error {
-	if enabled && len(rules) == 0 {
-		return status.Error(codes.InvalidArgument, "rules must be non-empty when enabled=true")
-	}
-	seen := make(map[string]bool, len(rules))
-	for _, rule := range rules {
-		kind := rule.GetKind()
-		if !validRetentionRuleKinds[kind] {
-			// Don't echo the kind value back — the response body is a
-			// candidate for log injection if the caller is hostile and the
-			// message is rendered without escaping. The frontend already
-			// renders the allowlist client-side.
-			return status.Error(codes.InvalidArgument, "unknown retention rule kind")
-		}
-		if seen[kind] {
-			return status.Error(codes.InvalidArgument, "duplicate retention rule kind")
-		}
-		seen[kind] = true
-		if rule.GetValue() <= 0 {
-			return status.Error(codes.InvalidArgument, "retention rule value must be > 0")
-		}
-		if cap, ok := retentionMaxValues[kind]; ok && rule.GetValue() > cap {
-			return status.Error(codes.InvalidArgument, "retention rule value exceeds maximum for kind")
-		}
-	}
-	return nil
 }
 
 // ─── FE-API-038: dry-run evaluator ─────────────────────────────────────────
@@ -275,20 +212,6 @@ func clampInt(v, def, min, max int) int {
 	return v
 }
 
-// validateProtectedTagPatterns enforces the per-pattern invariants:
-//   - max 256 chars (defends against pathological regex memory cost).
-//   - must compile with Go's regexp package — protected_tag_patterns is
-//     consumed at executor time as a Go regexp, so a malformed pattern would
-//     either crash the executor or silently match nothing. We reject at the
-//     write seam so the operator sees the error immediately.
-func validateProtectedTagPatterns(patterns []string) error {
-	for _, p := range patterns {
-		if len(p) > maxProtectedTagPatternLen {
-			return status.Error(codes.InvalidArgument, "protected_tag_pattern exceeds 256 characters")
-		}
-		if _, err := regexp.Compile(p); err != nil {
-			return status.Error(codes.InvalidArgument, "protected_tag_pattern is not a valid regex")
-		}
-	}
-	return nil
-}
+// validateProtectedTagPatterns now lives in retention_validation.go (shared
+// with FE-API-039's org-default upsert). Kept this stub comment so future
+// readers don't grep for it here in vain.

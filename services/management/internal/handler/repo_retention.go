@@ -40,8 +40,22 @@ type RetentionRuleResponse struct {
 // preview_until / created_at / updated_at use RFC3339 strings rather than
 // time.Time so they round-trip cleanly through the dashboard's JSON parser
 // and are omitted (rather than "0001-01-01") when zero.
+//
+// FE-API-039 additions:
+//
+//   - OrgID is set when the policy represents the org default (per-org PUT
+//     returns the upserted row with OrgID populated; the per-repo GET
+//     returns OrgID populated when it falls back to the org default).
+//     Empty for a pure per-repo policy.
+//   - InheritedFrom is "repo" when this response carries the per-repo row,
+//     "org" when it carries the org default returned via inheritance.
+//     The per-org PUT response sets it to "org" so the UI can render the
+//     source consistently regardless of which endpoint was hit.
+//     Existing clients that ignore the field still work; the response shape
+//     stays backwards-compatible.
 type RetentionPolicyResponse struct {
 	RepoID               string                  `json:"repo_id"`
+	OrgID                string                  `json:"org_id,omitempty"`
 	TenantID             string                  `json:"tenant_id"`
 	Enabled              bool                    `json:"enabled"`
 	Rules                []RetentionRuleResponse `json:"rules"`
@@ -50,6 +64,7 @@ type RetentionPolicyResponse struct {
 	CreatedAt            string                  `json:"created_at"`
 	UpdatedAt            string                  `json:"updated_at"`
 	UpdatedBy            string                  `json:"updated_by,omitempty"`
+	InheritedFrom        string                  `json:"inherited_from,omitempty"`
 }
 
 // updateRetentionBody is the PUT shape. updated_by is intentionally absent —
@@ -106,21 +121,44 @@ func (h *Handler) handleGetRepoRetention(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			// The absence is meaningful: surface a typed 404 so the dashboard
-			// (and FE-API-039 once it ships) can render the inherited-from-
-			// org-default state cleanly. We DO NOT synthesise a zero-value
-			// policy here.
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"code":    "no-policy",
-				"message": "no retention policy on this repository; falls back to org default once FE-API-039 ships",
+			// FE-API-039: no per-repo row → try the org-default fallback.
+			// We call GetEffectiveRetentionPolicy rather than a separate
+			// per-org GET so the disabled-default-doesn't-propagate rule
+			// is enforced in exactly one place (the metadata SQL). If the
+			// effective lookup also returns NotFound, we surface the
+			// existing "no-policy" body unchanged so existing clients keep
+			// working.
+			eff, effErr := h.meta.GetEffectiveRetentionPolicy(r.Context(), &metadatav1.GetEffectiveRetentionPolicyRequest{
+				TenantId: tenantID,
+				RepoId:   repo.GetRepoId(),
 			})
+			if effErr != nil {
+				if grpcCodeOf(effErr) == codes.NotFound {
+					// Neither per-repo nor org default — same body shape as
+					// before FE-API-039 so existing clients still parse.
+					writeJSON(w, http.StatusNotFound, map[string]string{
+						"code":    "no-policy",
+						"message": "no retention policy on this repository and no org default",
+					})
+					return
+				}
+				slog.Error("GetEffectiveRetentionPolicy", "err", effErr, "repo_id", repo.GetRepoId())
+				writeError(w, http.StatusInternalServerError, "failed to fetch retention policy")
+				return
+			}
+			// Inheritance hit. Echo the inherited_from label through to the
+			// JSON so the UI can render "(inherited from org default)"
+			// without a second round-trip.
+			writeJSON(w, http.StatusOK, retentionPolicyToResponseWith(eff.GetPolicy(), eff.GetInheritedFrom()))
 			return
 		}
 		slog.Error("GetRepoRetentionPolicy", "err", err, "repo_id", repo.GetRepoId())
 		writeError(w, http.StatusInternalServerError, "failed to fetch retention policy")
 		return
 	}
-	writeJSON(w, http.StatusOK, retentionPolicyToResponse(policy))
+	// Per-repo policy hit: emit inherited_from="repo" so the UI labels the
+	// source explicitly even when there's no fallback in play.
+	writeJSON(w, http.StatusOK, retentionPolicyToResponseWith(policy, "repo"))
 }
 
 // handlePutRepoRetention writes or replaces the policy. The JWT user_id is
@@ -244,7 +282,22 @@ func (h *Handler) handleDeleteRepoRetention(w http.ResponseWriter, r *http.Reque
 // retentionPolicyToResponse converts the proto policy into the JSON wire shape.
 // Always emits non-nil rules / protected_tag_patterns slices so the dashboard
 // can iterate without a null-check.
+//
+// FE-API-039: the proto carries both RepoId and OrgId; we map both through so
+// the per-repo response always has RepoID set and the per-org response
+// always has OrgID set. The inherited_from label is set by callers via
+// retentionPolicyToResponseWith — pass "" through this helper for the
+// implicit "repo" default.
 func retentionPolicyToResponse(p *metadatav1.RetentionPolicy) RetentionPolicyResponse {
+	return retentionPolicyToResponseWith(p, "")
+}
+
+// retentionPolicyToResponseWith is the same conversion with an explicit
+// inherited_from label. Used by the per-repo GET so it can emit
+// `inherited_from: "repo"` on the success path and `inherited_from: "org"`
+// on the org-default-fallback path. The org PUT response calls this with
+// "org" so the source label is always present on org-side writes.
+func retentionPolicyToResponseWith(p *metadatav1.RetentionPolicy, inheritedFrom string) RetentionPolicyResponse {
 	rules := make([]RetentionRuleResponse, 0, len(p.GetRules()))
 	for _, r := range p.GetRules() {
 		rules = append(rules, RetentionRuleResponse{Kind: r.GetKind(), Value: r.GetValue()})
@@ -255,11 +308,13 @@ func retentionPolicyToResponse(p *metadatav1.RetentionPolicy) RetentionPolicyRes
 	}
 	out := RetentionPolicyResponse{
 		RepoID:               p.GetRepoId(),
+		OrgID:                p.GetOrgId(),
 		TenantID:             p.GetTenantId(),
 		Enabled:              p.GetEnabled(),
 		Rules:                rules,
 		ProtectedTagPatterns: patterns,
 		UpdatedBy:            p.GetUpdatedBy(),
+		InheritedFrom:        inheritedFrom,
 	}
 	if ts := p.GetCreatedAt(); ts != nil {
 		out.CreatedAt = ts.AsTime().UTC().Format(time.RFC3339)

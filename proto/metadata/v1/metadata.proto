@@ -136,6 +136,44 @@ service MetadataService {
   // (computed via SQL aggregate, not by counting the truncated slice) so the
   // UI can render "showing 1000 of 47 312 candidates" honestly.
   rpc EvaluateRetention(EvaluateRetentionRequest) returns (EvaluateRetentionResponse);
+
+  // ─── FE-API-039: per-org default retention policy + inheritance ──────────
+
+  // GetOrgRetentionPolicy returns the default retention policy attached to an
+  // org, or NotFound when none exists. The shape is identical to
+  // RetentionPolicy (with `org_id` populated and `repo_id` empty) so callers
+  // can render both per-repo and per-org policies with the same UI code.
+  rpc GetOrgRetentionPolicy(GetOrgRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // UpsertOrgRetentionPolicy creates or updates the org default policy. Same
+  // preview_until semantics as UpsertRepoRetentionPolicy — the implementation
+  // owns the 24h window when a default is enabled or its rules change
+  // materially. The caller never sets preview_until directly.
+  rpc UpsertOrgRetentionPolicy(UpsertOrgRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // DeleteOrgRetentionPolicy removes the org default. Repos that previously
+  // inherited fall back to "no policy" until either a new default is set or
+  // an explicit per-repo policy is created.
+  rpc DeleteOrgRetentionPolicy(DeleteOrgRetentionPolicyRequest) returns (google.protobuf.Empty);
+
+  // GetEffectiveRetentionPolicy resolves what policy actually applies to a
+  // repository: the per-repo row if it exists, else the org default (only
+  // when enabled = TRUE), else NotFound. The `inherited_from` field on the
+  // response tells the BFF + UI whether to label the policy "(per-repo)" or
+  // "(inherited from org default)" without a second round-trip. A disabled
+  // org default deliberately does NOT propagate — falling back to a disabled
+  // default would surface a confusing "no enforcement, but here's a default"
+  // banner.
+  rpc GetEffectiveRetentionPolicy(GetEffectiveRetentionPolicyRequest) returns (EffectiveRetentionPolicy);
+
+  // LookupOrgIDByName resolves an org name to its UUID within a tenant.
+  // Read-only — unlike the repository-internal GetOrCreateOrganization
+  // which has insert semantics, this RPC returns NotFound when the org
+  // does not exist. Added in FE-API-039 so the management BFF can map
+  // /api/v1/orgs/{org}/policies/retention URLs (which carry the org name)
+  // to the org_id required by the per-org retention RPCs without an
+  // unintended side-effect.
+  rpc LookupOrgIDByName(LookupOrgIDByNameRequest) returns (LookupOrgIDByNameResponse);
 }
 
 message Repository {
@@ -551,6 +589,12 @@ message RetentionPolicy {
   google.protobuf.Timestamp  created_at             = 7;
   google.protobuf.Timestamp  updated_at             = 8;
   string                     updated_by             = 9; // user_id UUID
+  // FE-API-039: org_id is populated when this message represents an org
+  // default (repo_id is empty in that case) OR when an effective lookup
+  // resolved to an org default. For a per-repo policy, repo_id is set and
+  // org_id is empty. Reusing the same message keeps the read shape
+  // consistent so the UI doesn't need a parallel OrgRetentionPolicy type.
+  string                     org_id                 = 10;
 }
 
 message GetRepoRetentionPolicyRequest {
@@ -644,4 +688,66 @@ message EvaluateRetentionResponse {
   int64                               total_bytes       = 4;
   google.protobuf.Timestamp           evaluated_at      = 5;
   bool                                truncated         = 6;
+}
+
+// ─── FE-API-039: per-org default retention policy + inheritance ────────────
+
+// GetOrgRetentionPolicyRequest scopes to (org_id, tenant_id). The lookup
+// returns NotFound when no default row exists; the BFF maps NotFound to a
+// typed 404 ("no-org-default") so the UI can render the empty state.
+message GetOrgRetentionPolicyRequest {
+  string org_id    = 1;
+  string tenant_id = 2;
+}
+
+// UpsertOrgRetentionPolicyRequest is the full-replace shape for the org
+// default. The same fields as UpsertRepoRetentionPolicyRequest, swapping
+// repo_id for org_id. updated_by is the JWT-derived user_id forwarded by
+// registry-management; preview_until is owned server-side.
+message UpsertOrgRetentionPolicyRequest {
+  string                  org_id                 = 1;
+  string                  tenant_id              = 2;
+  bool                    enabled                = 3;
+  repeated RetentionRule  rules                  = 4;
+  repeated string         protected_tag_patterns = 5;
+  string                  updated_by             = 6;
+}
+
+message DeleteOrgRetentionPolicyRequest {
+  string org_id    = 1;
+  string tenant_id = 2;
+}
+
+// GetEffectiveRetentionPolicyRequest asks "what policy would apply to this
+// repo right now?" The repo_id and tenant_id together scope the lookup; the
+// implementation resolves the per-repo row first, then falls back to the
+// repo's parent org default (only when enabled = TRUE), then NotFound.
+message GetEffectiveRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+// EffectiveRetentionPolicy wraps the resolved policy with the inheritance
+// label so the BFF + UI know whether to render "per-repo" or "inherited
+// from org default" without a second lookup.
+//
+// `inherited_from` is "repo" when the resolution found a per-repo row,
+// "org" when it fell back to the org default. `org_id` is populated only
+// when `inherited_from == "org"` so the UI can link "(inherited from
+// myorg)" cleanly without an extra repository → org lookup.
+message EffectiveRetentionPolicy {
+  RetentionPolicy policy         = 1;
+  string          inherited_from = 2; // "repo" | "org"
+  string          org_id         = 3; // populated when inherited_from == "org"
+}
+
+// LookupOrgIDByNameRequest scopes to (tenant_id, name). The lookup is
+// read-only — NotFound when no organization row matches.
+message LookupOrgIDByNameRequest {
+  string tenant_id = 1;
+  string name      = 2;
+}
+
+message LookupOrgIDByNameResponse {
+  string org_id = 1;
 }
