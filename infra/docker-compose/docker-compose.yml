@@ -652,6 +652,13 @@ services:
       # SIGNER_GRPC_ADDR enables FE-API-003 /api/v1/.../signature. Empty leaves
       # the route at 404 "route disabled" — frontend renders the unsigned state.
       SIGNER_GRPC_ADDR: registry-signer:50051
+      # SCANNER_GRPC_ADDR enables REM-011 Phase 2 admin routes
+      # (FE-API-044..047 — adapter list / swap / test scan / health).
+      # Empty leaves the routes at 404 "route disabled". The scanner is
+      # opt-in via `--profile scanner`, so this addr resolves but the
+      # gRPC calls fail until the scanner profile is up; the BFF
+      # gracefully maps gRPC unavailable → 503 in that case.
+      SCANNER_GRPC_ADDR: registry-scanner:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.

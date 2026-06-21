@@ -361,6 +361,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/admin/gc/status", authMW(http.HandlerFunc(h.handleAdminGCStatus)))
 	mux.Handle("GET /api/v1/admin/gc/runs", authMW(http.HandlerFunc(h.handleAdminGCRuns)))
 	mux.Handle("POST /api/v1/admin/gc/run", authMW(http.HandlerFunc(h.handleAdminGCRun)))
+
+	// FE-API-044..047 — platform-admin scanner adapter management
+	// (REM-011 Phase 2). All five routes return 404 "route disabled"
+	// when SCANNER_GRPC_ADDR is unset and 403 when the caller lacks
+	// the platform-admin marker grant. See admin_scanners.go.
+	h.RegisterAdminScanners(mux, authMW)
 }
 
 // ---------------------------------------------------------------------------

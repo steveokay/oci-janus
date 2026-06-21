@@ -21,9 +21,13 @@ import (
 // Only methods that interact with the store (not the gRPC clients) can be
 // safely called on this pool — the background goroutine will fail silently
 // when it tries to use nil clients.
+//
+// scanner is left at its zero atomic.Pointer value (nil pointer); callers
+// that exercise the consumer path don't drive a real Scan(), so the nil
+// is never dereferenced. Tests that need a working scanner pointer
+// should set it explicitly with p.SetScanner(...) before running jobs.
 func buildMinimalPool(sc *store.Store) *Pool {
 	return &Pool{
-		scanner:     nil,
 		metaClient:  nil,
 		storageConn: (*grpc.ClientConn)(nil),
 		pub:         nil,

@@ -29,16 +29,35 @@ import (
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
 	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
+	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
 	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
 	"github.com/steveokay/oci-janus/services/scanner/internal/worker"
 
+	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 )
 
 // Run starts all service components and blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config) error {
+	// Discover adapter binaries on disk (REM-011 Phase 2). The registry
+	// is the source of truth for what SetActiveAdapter is allowed to
+	// switch to. Allowlist + prefixes mirror plugin.pluginEnv() so the
+	// UI's env_keys field matches what the plugin process will actually
+	// see at scan time.
+	adapterReg, err := scannerregistry.New(scannerregistry.Options{
+		EnvAllowlist: []string{
+			"PATH", "HOME", "TMPDIR", "TMP", "TEMP",
+			"USER", "USERNAME",
+			"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+		},
+		EnvPrefixes: []string{"TRIVY_", "GRYPE_"},
+	})
+	if err != nil {
+		return fmt.Errorf("scanner adapter registry: %w", err)
+	}
+
 	// Validate and load the scanner plugin binary (checksum verified here — service
 	// refuses to start if the binary has been tampered with).
 	scannerPlugin, err := internalPlugin.New(cfg.PluginPath, cfg.PluginChecksum)
@@ -82,6 +101,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	repo := repository.New(dbPool)
 
+	// Seed the registry's active selection. Order is:
+	//   1. scanner_settings row (operator's last SetActiveAdapter choice).
+	//   2. SCANNER_PLUGIN_PATH env var (Phase 1 behaviour preserved).
+	// Either path is validated against the registry — an unknown path
+	// (binary removed since last swap) logs a warning and falls back to
+	// the env-var default. If even that is unknown, the service still
+	// starts; SetActiveAdapter can bootstrap the selection at runtime.
+	if err := selectInitialAdapter(ctx, adapterReg, repo, cfg.PluginPath); err != nil {
+		slog.WarnContext(ctx, "selecting initial scanner adapter — using none", "err", err)
+	}
+
 	// RabbitMQ publisher for scan.completed / scan.policy_blocked events.
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
@@ -113,6 +143,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		cfg.WorkerCount,
 		time.Duration(cfg.JobTimeoutSecs)*time.Second,
 	)
+	// Wire the registry's RecordVersion hook so successful scans
+	// backfill the per-adapter version cache (otherwise the UI would
+	// always show "unknown" until a process restart with a different
+	// adapter discovery list).
+	pool.SetVersionRecorder(adapterReg)
 
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.
 	go pool.Start(ctx, cfg.WorkerCount)
@@ -142,11 +177,36 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 	}()
 
-	// gRPC server.
-	grpcSrv := grpc.NewServer()
+	// gRPC server — mTLS required when cert paths are configured (per
+	// CLAUDE.md §7). Falls back to plaintext with a WARN only when the
+	// operator left the cert paths empty (dev only). REM-011 Phase 2
+	// added a real internal caller (services/management) for this gRPC
+	// surface, so plaintext silently breaks the admin scanner routes
+	// with a "first record does not look like a TLS handshake" error
+	// at the management → scanner edge — make TLS the default.
+	var grpcOpts []grpc.ServerOption
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return fmt.Errorf("load mTLS server certs: %w", err)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("scanner gRPC server: mTLS not configured — running plaintext (dev only)")
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
-	scannerv1.RegisterScannerServiceServer(grpcSrv, handler.New(pool, scanStore).WithRepository(repo))
+	scannerv1.RegisterScannerServiceServer(grpcSrv,
+		handler.New(pool, scanStore).
+			WithRepository(repo).
+			WithAdapterRegistry(adapterReg).
+			WithMetadataClient(metadatav1.NewMetadataServiceClient(metaConn)).
+			WithTestScanFixture(handler.TestScanFixture{
+				TenantID:       cfg.TestScanTenantID,
+				RepositoryName: cfg.TestScanRepository,
+				ManifestRef:    cfg.TestScanManifestRef,
+			}))
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -223,6 +283,36 @@ func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
 	}
 	slog.Warn("mTLS not configured — scanner gRPC clients running without TLS (development mode only)")
 	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
+}
+
+// selectInitialAdapter resolves the active-adapter selection at boot:
+// the persisted choice in scanner_settings wins, then the env-var path.
+// Either path is verified against the discovered registry; an unknown
+// path falls through to the next candidate so a stale DB pointer (binary
+// removed from the image) doesn't brick the service.
+func selectInitialAdapter(ctx context.Context, reg *scannerregistry.Registry, repo *repository.Repository, envPath string) error {
+	// 1. Persisted choice (operator's last SetActiveAdapter call).
+	persistedPath, err := repo.GetActiveAdapter(ctx)
+	if err != nil {
+		// DB read failed (transient) — fall back to env-var path so the
+		// service can still start. The next SetActiveAdapter call will
+		// repopulate scanner_settings.
+		slog.WarnContext(ctx, "scanner_settings read failed — using env-var adapter", "err", err)
+	} else if persistedPath != "" {
+		if reg.FindByPath(persistedPath) != nil {
+			return reg.SetActive(persistedPath)
+		}
+		slog.WarnContext(ctx, "persisted adapter not in registry — falling back to env var",
+			"persisted_path", persistedPath)
+	}
+
+	// 2. Env-var fallback (Phase 1 behaviour).
+	if envPath != "" && reg.FindByPath(envPath) != nil {
+		return reg.SetActive(envPath)
+	}
+
+	// 3. No selection. Service still starts; SetActiveAdapter can bootstrap.
+	return fmt.Errorf("no active adapter selected (env path %q not in registry)", envPath)
 }
 
 // runMigrations runs goose SQL migrations against the scanner DB.

@@ -4,6 +4,7 @@ package registry.scanner.v1;
 
 option go_package = "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1;scannerv1";
 
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 service ScannerService {
@@ -34,6 +35,43 @@ service ScannerService {
   rpc GetComplianceReport(GetComplianceReportRequest) returns (ComplianceReport);
   // ListComplianceReports returns recent reports for a tenant, paginated.
   rpc ListComplianceReports(ListComplianceReportsRequest) returns (ListComplianceReportsResponse);
+
+  // --------------------------------------------------------------------------
+  // REM-011 Phase 2 — adapter management
+  //
+  // These RPCs let a platform admin discover which scanner adapter binaries
+  // are baked into the running image, pick which one services new scan jobs,
+  // exercise the active adapter with a deterministic test scan, and read
+  // worker-pool health for the UI's degradation logic.
+  //
+  // All five are platform-admin gated at the BFF (org=*, admin marker grant)
+  // because picking the active scanner affects every tenant on the deployment.
+  // --------------------------------------------------------------------------
+
+  // ListInstalledAdapters enumerates every executable binary the scanner
+  // service discovered at startup under its adapter directory (default
+  // /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
+  // dashboard can render a verifiable identity per binary.
+  rpc ListInstalledAdapters(google.protobuf.Empty) returns (ListInstalledAdaptersResponse);
+  // GetActiveAdapter returns the single adapter the worker pool is
+  // currently dispatching jobs to. NotFound when nothing is active
+  // (only possible during a misconfigured boot).
+  rpc GetActiveAdapter(google.protobuf.Empty) returns (Adapter);
+  // SetActiveAdapter atomically swaps the worker-pool scanner pointer
+  // and persists the choice in scanner_settings so the selection
+  // survives a restart. In-flight scans complete on their original
+  // adapter; the next job picks up the new one.
+  rpc SetActiveAdapter(SetActiveAdapterRequest) returns (Adapter);
+  // RunTestScan exercises the currently active adapter end-to-end
+  // (queue → plugin → metadata persist) using a known dev fixture
+  // and returns timing + severity counts so the admin UI can confirm
+  // the adapter is wired correctly after a swap.
+  rpc RunTestScan(google.protobuf.Empty) returns (TestScanResponse);
+  // GetScannerHealth returns liveness + recent-job stats sourced from
+  // in-memory worker pool state. The frontend uses last_successful_scan_at
+  // to replace the 90s client-side stuck-pending heuristic shipped in
+  // Phase 1.
+  rpc GetScannerHealth(google.protobuf.Empty) returns (ScannerHealthResponse);
 }
 
 message TriggerScanRequest {
@@ -154,4 +192,85 @@ message ListComplianceReportsRequest {
 message ListComplianceReportsResponse {
   repeated ComplianceReport reports = 1;
   string next_page_token = 2;
+}
+
+// ----------------------------------------------------------------------------
+// REM-011 Phase 2 — adapter management messages
+// ----------------------------------------------------------------------------
+
+// Adapter identifies one scanner plugin binary that the service has
+// discovered + verified. version stays "unknown" until the registry
+// observes a first successful scan from this adapter — the value comes
+// from the JSON-RPC response payload (no separate `version` RPC on the
+// plugin contract).
+message Adapter {
+  // name is derived from the filename (the suffix after "scanner-") so it
+  // is stable across rebuilds. The same logical adapter shipped in two
+  // separate images at different paths will report the same name.
+  string name = 1;
+  // version is the plugin's self-reported version, backfilled lazily.
+  string version = 2;
+  // path is the absolute on-disk location of the binary inside the
+  // scanner container.
+  string path = 3;
+  // checksum is the SHA-256 hex of the binary, computed at startup.
+  // Operators verify this against the build output before promoting
+  // an adapter to active.
+  string checksum = 4;
+  int64 size_bytes = 5;
+  // env_keys is the union of the orchestrator's pluginEnv() allowlist
+  // (PATH, HOME, etc.) and any TRIVY_/GRYPE_-prefixed env vars present
+  // in the scanner container at startup. The UI surfaces this so admins
+  // know which adapter-specific config keys the binary can see.
+  repeated string env_keys = 6;
+  bool active = 7;
+}
+
+message ListInstalledAdaptersResponse {
+  repeated Adapter adapters = 1;
+  // active_adapter_path is the absolute path of the currently active
+  // binary. Repeated in the envelope (in addition to Adapter.active)
+  // so a UI that only renders the active card doesn't need to iterate
+  // the full list.
+  string active_adapter_path = 2;
+}
+
+message SetActiveAdapterRequest {
+  // adapter_path must match one of the paths from ListInstalledAdapters.
+  // The service rejects unknown paths with InvalidArgument — the registry
+  // is the source of truth for what's allowed.
+  string adapter_path = 1;
+  // actor_user_id is the caller's user_id, persisted on scanner_settings
+  // so the audit trail records who made the swap.
+  string actor_user_id = 2;
+}
+
+message TestScanResponse {
+  bool ok = 1;
+  string scanner_name = 2;
+  string scanner_version = 3;
+  // duration_ms covers the full lifecycle: queue enqueue → adapter
+  // returns → scan_results row visible via metadata. Useful for
+  // verifying perf after a swap.
+  int64 duration_ms = 4;
+  map<string, int32> severity_counts = 5;
+  // error_message is populated when ok=false; safe to render verbatim
+  // in the admin UI (the dev fixture is well-known).
+  string error_message = 6;
+}
+
+message ScannerHealthResponse {
+  bool healthy = 1;
+  // last_successful_scan_at is unset (nil) until the pool completes
+  // its first scan after process start; the frontend treats nil as
+  // "no scans yet" rather than "stale".
+  google.protobuf.Timestamp last_successful_scan_at = 2;
+  // queue_depth is the count of jobs sitting in the worker pool's
+  // buffered channel waiting for a free worker.
+  int64 queue_depth = 3;
+  // in_flight_count is the number of scans currently running on
+  // worker goroutines.
+  int64 in_flight_count = 4;
+  string active_adapter_name = 5;
+  string active_adapter_version = 6;
 }
