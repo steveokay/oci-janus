@@ -189,8 +189,8 @@
 ---
 
 ### REM-011 — Scanner Plugin End-to-End Works in Dev + With Real Trivy
-- **Affects:** `services/scanner`, `services/metadata`, `infra/docker-compose`, `proto/metadata/v1`, `docs/`
-- **Status:** **PHASE 1 DONE ✅** (commit `8debd29`, 2026-06-21). Phase 2 (new gRPC RPCs for adapter management + live swap + test scans) PENDING.
+- **Affects:** `services/scanner`, `services/metadata`, `services/management`, `infra/docker-compose`, `proto/metadata/v1`, `proto/scanner/v1`, `docs/`
+- **Status:** **PHASE 1 + PHASE 2 BACKEND DONE ✅** — Phase 1 (`8debd29`, 2026-06-21), Phase 2 backend (`bd4ba1d`, 2026-06-21). Phase 2 frontend (`/admin/scanner` admin route) tracked in `FE-STATUS.md` → REM-011 P2 FE row; unblocked now that all FE-API-044..047 endpoints are live.
 - **Phase 1 acceptance criteria — verified live (2026-06-21):**
   1. ✅ `docker compose --profile scanner up -d` starts `registry-scanner` zero-config; dev-stub adapter is the default and the entrypoint auto-computes the checksum.
   2. ✅ `POST /tags/{tag}/scan` produces a `scan_results` row within ~5-10s on dev-stub; ~30s on Trivy first scan (DB download), ~1s on warm Trivy.
@@ -206,17 +206,27 @@
 - **Phase 1 known limitations:**
   - Trivy adapter ignores whiteout files when flattening layers (overcount, never underreport). Documented in `docs/SCANNER.md` §6.
   - No integration test yet asserting `scan_results` lands within 30s of a trigger (manual verification only). Listed as a Phase 2 must-have.
-- **Phase 2 backend tasks (not started):**
-  - [ ] **Adapter registry on `services/scanner`:** discover installed adapters by directory scan (`/usr/local/bin/scanner-*`) or sidecar manifest, instead of one env var pointing at one binary.
-  - [ ] **Live adapter swap:** `process.ProcessPlugin` reloads its path via atomic pointer swap so the next scan picks up the new adapter without container restart.
-  - [ ] **`scanner_settings` table + migration:** persists the active-adapter selection across restarts.
-  - [ ] **FE-API-044 — `GET /admin/scanners` + `GET /admin/scanners/active`** (scanner gRPC: `ListInstalledAdapters`, `GetActiveAdapter`). Platform-admin grant. Returns per-adapter `{name, version, path, checksum, env_keys[]}`.
-  - [ ] **FE-API-045 — `PATCH /admin/scanners/active`** (scanner gRPC: `SetActiveAdapter`). Platform-admin grant. Validates the target is in the registry, swaps in-memory + persists to `scanner_settings`.
-  - [ ] **FE-API-046 — `POST /admin/scanners/test`** (scanner gRPC: `RunTestScan`). Fires a deterministic test scan against the active adapter using a fixed tiny in-repo OCI fixture; returns `{ok, duration_ms, scanner_name, scanner_version, severity_counts}`. Platform-admin grant.
-  - [ ] **FE-API-047 — `GET /admin/scanners/health`** (scanner gRPC: `GetScannerHealth`). Read-only liveness + recent-job stats (last successful scan, queue depth, stuck-job count). Used by the UI to replace the 90s client-side stuck-pending heuristic.
-  - [ ] **Integration test:** triggers a scan via `RunTestScan` (or the existing trigger path) and asserts a `scan_results` row materializes within 30s. Guards against the JSON-RPC contract drifting silently.
+- **Phase 2 backend acceptance criteria — verified live (2026-06-21):**
+  1. ✅ `GET /api/v1/admin/scanners` → both `dev-stub` and `trivy-adapter` discovered with name/version/path/checksum/size_bytes/env_keys/active flag.
+  2. ✅ `GET /api/v1/admin/scanners/health` → `healthy=true`, `queue_depth=0`, `active_adapter_name=dev-stub`.
+  3. ✅ `PATCH /api/v1/admin/scanners/active {trivy-adapter}` → 200, `active=true`, in-memory swap atomic (no container restart).
+  4. ✅ `POST /api/v1/admin/scanners/test` → `ok=true`, `scanner=trivy 0.52.0`, `duration_ms=8010` (real Trivy scan against the dev fixture).
+  5. ✅ `docker compose --force-recreate registry-scanner` → trivy-adapter still active on restart (`scanner_settings` row persists).
+- **What Phase 2 shipped (backend):**
+  - **FE-API-044** `GET /admin/scanners` + `GET /admin/scanners/active` (scanner gRPC: `ListInstalledAdapters`, `GetActiveAdapter`).
+  - **FE-API-045** `PATCH /admin/scanners/active` (scanner gRPC: `SetActiveAdapter`). In-memory swap + DB persist in one call.
+  - **FE-API-046** `POST /admin/scanners/test` (scanner gRPC: `RunTestScan`). Fixture configurable via `SCANNER_TEST_TENANT_ID` / `SCANNER_TEST_REPOSITORY` / `SCANNER_TEST_MANIFEST_REF` (defaults to dev tenant + `dev/alpine:latest`).
+  - **FE-API-047** `GET /admin/scanners/health` (scanner gRPC: `GetScannerHealth`). Live liveness + queue depth + in-flight count + active adapter name/version.
+  - `services/scanner/internal/registry` — directory-scan discovery, atomic active-pointer, per-name version cache backfilled from successful scans via `worker.VersionRecorder`.
+  - `services/scanner/internal/worker` — `atomic.Pointer[plugin.Scanner]` + `SetScanner` for the in-flight-safe swap. `atomic.Pointer[VersionRecorder]` for the version backfill hook (the original `atomic.Value` panicked on dynamic-type drift — caught + fixed live).
+  - `scanner_settings` migration `20260621000001_scanner_settings.sql` — singleton table on the existing scanner DB.
+  - `services/scanner/internal/server/server.go` — finally wires mTLS on the inbound gRPC server (was plaintext — fine when only RabbitMQ consumers existed, broke the moment services/management started calling it).
+  - 7 new unit tests + 1 testcontainers integration covering registry discovery, atomic swap, version cache, and the scanner_settings round-trip.
+- **Phase 2 backend follow-ups (still open):**
+  - [ ] Integration test that triggers a scan via `RunTestScan` and asserts the `scan_results` row materializes within 30s end-to-end (today's tests cover the parts but not the wire). Guards against silent JSON-RPC contract drift.
+  - [ ] Stuck-job detection in `GetScannerHealth` (count jobs that have been `pending`/`running` for >2× the per-job timeout). Today the `healthy` flag is always `true` if the service is up; the FE liveness-driven degradation needs a real signal once Phase 2 FE lands.
 
-> Phase 2 frontend surface (`/admin/scanner` admin route, adapter cards, swap UI, test-scan button, liveness-driven degradation) is tracked in `FE-STATUS.md` — REM-011 P2 row.
+> Phase 2 frontend (`/admin/scanner` admin route, adapter cards, swap UI, test-scan button, liveness-driven `ScanPanel` upgrade) is tracked in `FE-STATUS.md` → REM-011 P2 FE. All backend dependencies (FE-API-044..047) are now live.
 
 ---
 
