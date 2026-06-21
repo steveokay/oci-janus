@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -133,4 +134,82 @@ func TestMigration_UserKind_RoundTrip(t *testing.T) {
 	).Scan(&hasCol)
 	require.NoError(t, err, "information_schema query should succeed")
 	require.False(t, hasCol, "kind column must be absent after Down migration")
+}
+
+// TestMigration_ServiceAccounts_UniqueAndCascade verifies the
+// 20260622000002_service_accounts migration:
+//   - UNIQUE (tenant_id, name) rejects a duplicate name within the same tenant;
+//   - ON DELETE SET NULL on created_by nulls the column when the creator is deleted;
+//   - ON DELETE CASCADE on shadow_user_id removes the service_accounts row when the
+//     shadow user is deleted.
+func TestMigration_ServiceAccounts_UniqueAndCascade(t *testing.T) {
+	ctx := context.Background()
+
+	// Start a fresh PostgreSQL container; containers.Postgres registers cleanup
+	// via t.Cleanup so no explicit teardown is needed here.
+	dsn := containers.Postgres(t)
+
+	// Build a pgx pool for the assertion queries below.
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	// Migrate up through the service_accounts migration.
+	gooseUpTo(t, dsn, "20260622000002")
+
+	tenant := uuid.New()
+
+	// Seed a "creator" human user whose deletion later nulls created_by.
+	var creatorID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'admin', 'admin@example.com', '', 'human')
+		RETURNING id`, tenant).Scan(&creatorID))
+
+	// Shadow user 1 — will be the backing identity for the first SA.
+	var shadow1 uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'sa-ci-prod', 'sa+1@internal.invalid', '', 'service_account')
+		RETURNING id`, tenant).Scan(&shadow1))
+
+	// Insert the first service account; capture its id for later assertions.
+	var sa1 uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO service_accounts (tenant_id, shadow_user_id, name, created_by)
+		VALUES ($1, $2, 'ci-prod', $3) RETURNING id`,
+		tenant, shadow1, creatorID).Scan(&sa1))
+
+	// Shadow user 2 — will be used in the duplicate-name attempt.
+	var shadow2 uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'sa-ci-prod-2', 'sa+2@internal.invalid', '', 'service_account')
+		RETURNING id`, tenant).Scan(&shadow2))
+
+	// A second SA with the same name in the same tenant must violate the UNIQUE
+	// constraint on (tenant_id, name).
+	_, err = pool.Exec(ctx, `
+		INSERT INTO service_accounts (tenant_id, shadow_user_id, name, created_by)
+		VALUES ($1, $2, 'ci-prod', $3)`, tenant, shadow2, creatorID)
+	require.Error(t, err, "UNIQUE (tenant_id, name) should reject duplicate name within tenant")
+
+	// Deleting the creator must set created_by to NULL (ON DELETE SET NULL).
+	_, err = pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, creatorID)
+	require.NoError(t, err)
+	var createdBy *uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT created_by FROM service_accounts WHERE id=$1`, sa1).Scan(&createdBy))
+	require.Nil(t, createdBy, "created_by must be NULL after creator user is deleted")
+
+	// Deleting the shadow user must cascade-delete the service_accounts row
+	// (ON DELETE CASCADE on shadow_user_id).
+	_, err = pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, shadow1)
+	require.NoError(t, err)
+	var saCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM service_accounts WHERE id=$1`, sa1).Scan(&saCount))
+	require.Equal(t, 0, saCount, "service_accounts row must cascade-delete when shadow user is deleted")
 }
