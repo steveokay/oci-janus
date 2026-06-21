@@ -27,8 +27,12 @@ export function SeverityBar({
   counts,
   className,
 }: SeverityBarProps): React.ReactElement {
+  // Backend may return null severity_counts for pending / failed scans —
+  // treat absence as all-zero so the UI degrades to "no findings" tone
+  // instead of crashing on `null.CRITICAL`.
+  const safeCounts = counts ?? ({} as ScanResult["severity_counts"]);
   const total = SEVERITY_ORDER.reduce(
-    (sum, k) => sum + (counts[k] ?? 0),
+    (sum, k) => sum + (safeCounts[k] ?? 0),
     0,
   );
 
@@ -48,7 +52,7 @@ export function SeverityBar({
     <div
       role="img"
       aria-label={`${total} findings: ${SEVERITY_ORDER.map(
-        (k) => `${counts[k] ?? 0} ${k.toLowerCase()}`,
+        (k) => `${safeCounts[k] ?? 0} ${k.toLowerCase()}`,
       ).join(", ")}`}
       className={cn(
         "flex h-2 w-full overflow-hidden rounded-full bg-[var(--color-surface-sunken)]",
@@ -56,7 +60,7 @@ export function SeverityBar({
       )}
     >
       {SEVERITY_ORDER.map((k) => {
-        const count = counts[k] ?? 0;
+        const count = safeCounts[k] ?? 0;
         if (count === 0) return null;
         const pct = (count / total) * 100;
         return (
@@ -84,10 +88,13 @@ export function SeverityLegend({
   counts,
   className,
 }: SeverityLegendProps): React.ReactElement {
+  // Same null guard as SeverityBar — backend may omit severity_counts for
+  // pending / failed scans.
+  const safeCounts = counts ?? ({} as ScanResult["severity_counts"]);
   return (
     <div className={cn("flex flex-wrap gap-x-4 gap-y-1.5", className)}>
       {SEVERITY_ORDER.map((k) => {
-        const count = counts[k] ?? 0;
+        const count = safeCounts[k] ?? 0;
         return (
           <div key={k} className="flex items-center gap-1.5 text-xs">
             <span

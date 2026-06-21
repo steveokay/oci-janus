@@ -23,9 +23,12 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/config"
 	"github.com/steveokay/oci-janus/services/metadata/internal/handler"
+	"github.com/steveokay/oci-janus/services/metadata/internal/pullconsumer"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 	metadatamigrations "github.com/steveokay/oci-janus/services/metadata/migrations"
 )
@@ -81,6 +84,33 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// ── 4. Handler ────────────────────────────────────────────────────────────
 	repo := repository.NewWithReplica(pool, readPool)
 	h := handler.New(repo)
+
+	// ── 4b. FE-API-042 pull.image consumer ────────────────────────────────────
+	// Drives manifests.last_pulled_at debounce-updates so the FE-API-043
+	// max_idle_days retention rule has data to evaluate. The consumer runs in
+	// its own goroutine with a dedicated queue ("metadata.pull.image") so it
+	// never competes with the audit "#" subscription for delivery.
+	if cfg.RabbitMQURL != "" {
+		pullCons, err := consumer.New(cfg.RabbitMQURL, consumer.Config{
+			Queue:      "metadata.pull.image",
+			RoutingKey: events.RoutingPullImage,
+			Exchange:   events.ExchangeEvents,
+			MaxRetries: 3,
+		})
+		if err != nil {
+			return fmt.Errorf("init pull.image consumer: %w", err)
+		}
+		defer pullCons.Close()
+		pc := pullconsumer.New(repo)
+		go func() {
+			slog.Info("metadata: starting pull.image consumer", "queue", "metadata.pull.image")
+			if err := pullCons.Consume(ctx, pc.HandleEvent); err != nil {
+				slog.Error("metadata: pull.image consumer stopped", "error", err)
+			}
+		}()
+	} else {
+		slog.Warn("RABBITMQ_URL not set — pull.image consumer disabled, last_pulled_at will not be updated (FE-API-042)")
+	}
 
 	// ── 5. gRPC server ────────────────────────────────────────────────────────
 	grpcOpts, err := buildGRPCOptions(cfg, rdb)

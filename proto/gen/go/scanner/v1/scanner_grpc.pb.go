@@ -11,6 +11,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -26,6 +27,11 @@ const (
 	ScannerService_GenerateComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
 	ScannerService_GetComplianceReport_FullMethodName      = "/registry.scanner.v1.ScannerService/GetComplianceReport"
 	ScannerService_ListComplianceReports_FullMethodName    = "/registry.scanner.v1.ScannerService/ListComplianceReports"
+	ScannerService_ListInstalledAdapters_FullMethodName    = "/registry.scanner.v1.ScannerService/ListInstalledAdapters"
+	ScannerService_GetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/GetActiveAdapter"
+	ScannerService_SetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/SetActiveAdapter"
+	ScannerService_RunTestScan_FullMethodName              = "/registry.scanner.v1.ScannerService/RunTestScan"
+	ScannerService_GetScannerHealth_FullMethodName         = "/registry.scanner.v1.ScannerService/GetScannerHealth"
 )
 
 // ScannerServiceClient is the client API for ScannerService service.
@@ -57,6 +63,30 @@ type ScannerServiceClient interface {
 	GetComplianceReport(ctx context.Context, in *GetComplianceReportRequest, opts ...grpc.CallOption) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(ctx context.Context, in *ListComplianceReportsRequest, opts ...grpc.CallOption) (*ListComplianceReportsResponse, error)
+	// ListInstalledAdapters enumerates every executable binary the scanner
+	// service discovered at startup under its adapter directory (default
+	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
+	// dashboard can render a verifiable identity per binary.
+	ListInstalledAdapters(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListInstalledAdaptersResponse, error)
+	// GetActiveAdapter returns the single adapter the worker pool is
+	// currently dispatching jobs to. NotFound when nothing is active
+	// (only possible during a misconfigured boot).
+	GetActiveAdapter(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*Adapter, error)
+	// SetActiveAdapter atomically swaps the worker-pool scanner pointer
+	// and persists the choice in scanner_settings so the selection
+	// survives a restart. In-flight scans complete on their original
+	// adapter; the next job picks up the new one.
+	SetActiveAdapter(ctx context.Context, in *SetActiveAdapterRequest, opts ...grpc.CallOption) (*Adapter, error)
+	// RunTestScan exercises the currently active adapter end-to-end
+	// (queue → plugin → metadata persist) using a known dev fixture
+	// and returns timing + severity counts so the admin UI can confirm
+	// the adapter is wired correctly after a swap.
+	RunTestScan(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*TestScanResponse, error)
+	// GetScannerHealth returns liveness + recent-job stats sourced from
+	// in-memory worker pool state. The frontend uses last_successful_scan_at
+	// to replace the 90s client-side stuck-pending heuristic shipped in
+	// Phase 1.
+	GetScannerHealth(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ScannerHealthResponse, error)
 }
 
 type scannerServiceClient struct {
@@ -137,6 +167,56 @@ func (c *scannerServiceClient) ListComplianceReports(ctx context.Context, in *Li
 	return out, nil
 }
 
+func (c *scannerServiceClient) ListInstalledAdapters(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListInstalledAdaptersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListInstalledAdaptersResponse)
+	err := c.cc.Invoke(ctx, ScannerService_ListInstalledAdapters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetActiveAdapter(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*Adapter, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Adapter)
+	err := c.cc.Invoke(ctx, ScannerService_GetActiveAdapter_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) SetActiveAdapter(ctx context.Context, in *SetActiveAdapterRequest, opts ...grpc.CallOption) (*Adapter, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Adapter)
+	err := c.cc.Invoke(ctx, ScannerService_SetActiveAdapter_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) RunTestScan(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*TestScanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestScanResponse)
+	err := c.cc.Invoke(ctx, ScannerService_RunTestScan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetScannerHealth(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ScannerHealthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScannerHealthResponse)
+	err := c.cc.Invoke(ctx, ScannerService_GetScannerHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ScannerServiceServer is the server API for ScannerService service.
 // All implementations should embed UnimplementedScannerServiceServer
 // for forward compatibility
@@ -166,6 +246,30 @@ type ScannerServiceServer interface {
 	GetComplianceReport(context.Context, *GetComplianceReportRequest) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error)
+	// ListInstalledAdapters enumerates every executable binary the scanner
+	// service discovered at startup under its adapter directory (default
+	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
+	// dashboard can render a verifiable identity per binary.
+	ListInstalledAdapters(context.Context, *emptypb.Empty) (*ListInstalledAdaptersResponse, error)
+	// GetActiveAdapter returns the single adapter the worker pool is
+	// currently dispatching jobs to. NotFound when nothing is active
+	// (only possible during a misconfigured boot).
+	GetActiveAdapter(context.Context, *emptypb.Empty) (*Adapter, error)
+	// SetActiveAdapter atomically swaps the worker-pool scanner pointer
+	// and persists the choice in scanner_settings so the selection
+	// survives a restart. In-flight scans complete on their original
+	// adapter; the next job picks up the new one.
+	SetActiveAdapter(context.Context, *SetActiveAdapterRequest) (*Adapter, error)
+	// RunTestScan exercises the currently active adapter end-to-end
+	// (queue → plugin → metadata persist) using a known dev fixture
+	// and returns timing + severity counts so the admin UI can confirm
+	// the adapter is wired correctly after a swap.
+	RunTestScan(context.Context, *emptypb.Empty) (*TestScanResponse, error)
+	// GetScannerHealth returns liveness + recent-job stats sourced from
+	// in-memory worker pool state. The frontend uses last_successful_scan_at
+	// to replace the 90s client-side stuck-pending heuristic shipped in
+	// Phase 1.
+	GetScannerHealth(context.Context, *emptypb.Empty) (*ScannerHealthResponse, error)
 }
 
 // UnimplementedScannerServiceServer should be embedded to have forward compatible implementations.
@@ -192,6 +296,21 @@ func (UnimplementedScannerServiceServer) GetComplianceReport(context.Context, *G
 }
 func (UnimplementedScannerServiceServer) ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListComplianceReports not implemented")
+}
+func (UnimplementedScannerServiceServer) ListInstalledAdapters(context.Context, *emptypb.Empty) (*ListInstalledAdaptersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListInstalledAdapters not implemented")
+}
+func (UnimplementedScannerServiceServer) GetActiveAdapter(context.Context, *emptypb.Empty) (*Adapter, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetActiveAdapter not implemented")
+}
+func (UnimplementedScannerServiceServer) SetActiveAdapter(context.Context, *SetActiveAdapterRequest) (*Adapter, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetActiveAdapter not implemented")
+}
+func (UnimplementedScannerServiceServer) RunTestScan(context.Context, *emptypb.Empty) (*TestScanResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunTestScan not implemented")
+}
+func (UnimplementedScannerServiceServer) GetScannerHealth(context.Context, *emptypb.Empty) (*ScannerHealthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetScannerHealth not implemented")
 }
 
 // UnsafeScannerServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -331,6 +450,96 @@ func _ScannerService_ListComplianceReports_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerService_ListInstalledAdapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).ListInstalledAdapters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_ListInstalledAdapters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).ListInstalledAdapters(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetActiveAdapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetActiveAdapter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetActiveAdapter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetActiveAdapter(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_SetActiveAdapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetActiveAdapterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).SetActiveAdapter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_SetActiveAdapter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).SetActiveAdapter(ctx, req.(*SetActiveAdapterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_RunTestScan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).RunTestScan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_RunTestScan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).RunTestScan(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetScannerHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetScannerHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetScannerHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetScannerHealth(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ScannerService_ServiceDesc is the grpc.ServiceDesc for ScannerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -365,6 +574,26 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListComplianceReports",
 			Handler:    _ScannerService_ListComplianceReports_Handler,
+		},
+		{
+			MethodName: "ListInstalledAdapters",
+			Handler:    _ScannerService_ListInstalledAdapters_Handler,
+		},
+		{
+			MethodName: "GetActiveAdapter",
+			Handler:    _ScannerService_GetActiveAdapter_Handler,
+		},
+		{
+			MethodName: "SetActiveAdapter",
+			Handler:    _ScannerService_SetActiveAdapter_Handler,
+		},
+		{
+			MethodName: "RunTestScan",
+			Handler:    _ScannerService_RunTestScan_Handler,
+		},
+		{
+			MethodName: "GetScannerHealth",
+			Handler:    _ScannerService_GetScannerHealth_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

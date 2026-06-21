@@ -331,3 +331,59 @@ func (r *Repository) FailReport(ctx context.Context, reportID uuid.UUID, errMess
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// scanner_settings — REM-011 Phase 2 active-adapter persistence
+// ---------------------------------------------------------------------------
+
+// GetActiveAdapter returns the path currently recorded as active in the
+// scanner_settings singleton row, or an empty string when no row has
+// been written yet. Empty string is treated by the caller as "fall back
+// to SCANNER_PLUGIN_PATH" rather than an error — a fresh deployment has
+// never had a SetActiveAdapter call and that is normal.
+func (r *Repository) GetActiveAdapter(ctx context.Context) (string, error) {
+	var path string
+	err := r.pool.QueryRow(ctx,
+		`SELECT active_adapter_path FROM scanner_settings WHERE singleton = TRUE`,
+	).Scan(&path)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// "no row" is a valid state on a fresh DB; return empty so the
+		// caller can fall back to the env-var default.
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("GetActiveAdapter: %w", err)
+	}
+	return path, nil
+}
+
+// SetActiveAdapter upserts the scanner_settings singleton row with the
+// given path. actor is recorded verbatim — pass the caller's user_id
+// (a UUID string) when the change comes from a SetActiveAdapter RPC, or
+// the literal "system" when applying a startup default.
+//
+// The single-row invariant is enforced by the table's PK (singleton
+// fixed TRUE) so ON CONFLICT (singleton) always hits the existing row.
+func (r *Repository) SetActiveAdapter(ctx context.Context, path, actor string) error {
+	if path == "" {
+		// The migration's NOT NULL constraint would catch this, but
+		// failing here gives a cleaner error message.
+		return fmt.Errorf("SetActiveAdapter: path must not be empty")
+	}
+	if actor == "" {
+		actor = "system"
+	}
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO scanner_settings (singleton, active_adapter_path, updated_at, updated_by)
+		 VALUES (TRUE, $1, NOW(), $2)
+		 ON CONFLICT (singleton) DO UPDATE SET
+		    active_adapter_path = EXCLUDED.active_adapter_path,
+		    updated_at          = NOW(),
+		    updated_by          = EXCLUDED.updated_by`,
+		path, actor,
+	)
+	if err != nil {
+		return fmt.Errorf("SetActiveAdapter: %w", err)
+	}
+	return nil
+}

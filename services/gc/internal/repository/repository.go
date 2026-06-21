@@ -29,10 +29,24 @@ var ErrNotFound = errors.New("not found")
 // GCRun mirrors the gc_runs table row. Nullable columns surface as zero
 // values here; callers branch on Status (not on a non-zero timestamp)
 // to know whether a sweep is queued, running, or finished.
+//
+// FE-API-040: retention modes piggyback on the same row by repurposing
+// existing columns. `manifests_deleted` carries:
+//   - the soft-delete count when mode = retention (matches "manifests
+//     marked for retention");
+//   - the hard-delete count when mode = retention_grace.
+//
+// The split is cosmetic — the retention summary RPC re-labels the values
+// when surfacing them to the client. RepoID is added so the per-repo
+// TriggerRetentionRun can record the target without inventing a separate
+// table.
 type GCRun struct {
-	RunID            uuid.UUID
+	RunID    uuid.UUID
 	// TenantID is uuid.Nil for cross-tenant cron sweeps.
-	TenantID         uuid.UUID
+	TenantID uuid.UUID
+	// RepoID is uuid.Nil for tenant-wide / cross-tenant sweeps. Populated
+	// for retention runs (which are always repo-scoped).
+	RepoID           uuid.UUID
 	Mode             string
 	Status           string
 	RequestedAt      time.Time
@@ -73,15 +87,30 @@ func nullableTenant(t uuid.UUID) any {
 // triggeredBy is recorded verbatim — `cron` for scheduled sweeps, a
 // stringified UUID for user-driven runs.
 func (r *Repository) CreateRun(ctx context.Context, mode string, tenantID uuid.UUID, triggeredBy string) (*GCRun, error) {
+	return r.createRun(ctx, mode, tenantID, uuid.Nil, triggeredBy)
+}
+
+// CreateRetentionRun is the repo-scoped sibling of CreateRun used by the
+// FE-API-040 retention executor. Pre-fills repo_id so GetRunByID can echo
+// the target back without a JOIN against metadata.
+func (r *Repository) CreateRetentionRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*GCRun, error) {
+	return r.createRun(ctx, mode, tenantID, repoID, triggeredBy)
+}
+
+// createRun is the shared INSERT used by both CreateRun (legacy tenant-wide
+// sweeps) and CreateRetentionRun (FE-API-040 repo-scoped sweeps). Splitting
+// the exported callers from the private helper keeps the call sites clear
+// about whether they're in retention land or general GC land.
+func (r *Repository) createRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*GCRun, error) {
 	id := uuid.New()
 	row, err := r.scanOne(ctx,
-		`INSERT INTO gc_runs (run_id, tenant_id, mode, status, triggered_by)
-		 VALUES ($1, $2, $3::gc_run_mode, 'queued', $4)
+		`INSERT INTO gc_runs (run_id, tenant_id, repo_id, mode, status, triggered_by)
+		 VALUES ($1, $2, $3, $4::gc_run_mode, 'queued', $5)
 		 RETURNING `+selectColumns,
-		id, nullableTenant(tenantID), mode, triggeredBy,
+		id, nullableTenant(tenantID), nullableTenant(repoID), mode, triggeredBy,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("CreateRun: %w", err)
+		return nil, fmt.Errorf("createRun: %w", err)
 	}
 	return row, nil
 }
@@ -252,6 +281,61 @@ func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string) 
 	return out, next, nil
 }
 
+// GetRunByID returns a specific row by id, optionally constrained to a
+// tenant. tenantID == uuid.Nil skips the tenant filter (the BFF uses this
+// when the caller already holds the platform-admin marker; the per-repo
+// retention status RPC passes the caller's tenant explicitly).
+//
+// Returns ErrNotFound when no row matches.
+func (r *Repository) GetRunByID(ctx context.Context, runID, tenantID uuid.UUID) (*GCRun, error) {
+	if tenantID == uuid.Nil {
+		return r.scanOne(ctx,
+			`SELECT `+selectColumns+` FROM gc_runs WHERE run_id = $1`,
+			runID,
+		)
+	}
+	return r.scanOne(ctx,
+		`SELECT `+selectColumns+` FROM gc_runs WHERE run_id = $1 AND tenant_id = $2`,
+		runID, tenantID,
+	)
+}
+
+// FinalizeRetentionRun records the result of a retention-mode sweep. Unlike
+// CompleteRun (which surfaces blobs/manifest counts) the retention case
+// only needs a marked count — both modes flow through manifests_deleted on
+// the column because retention runs do not interact with blobs directly.
+// (retention_grace's blob freeing piggybacks on the same field set by
+// design: see the GCRun doc comment for the cosmetic mapping.)
+func (r *Repository) FinalizeRetentionRun(
+	ctx context.Context,
+	runID uuid.UUID,
+	manifestsCount, blobsFreed, bytesFreed int64,
+	errMessage string,
+) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE gc_runs
+		    SET status            = 'succeeded',
+		        completed_at      = NOW(),
+		        duration_ms       = COALESCE(
+		                              EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000,
+		                              0
+		                            )::BIGINT,
+		        manifests_deleted = $2,
+		        blobs_freed       = $3,
+		        bytes_freed       = $4,
+		        error_message     = NULLIF($5, '')
+		  WHERE run_id = $1`,
+		runID, manifestsCount, blobsFreed, bytesFreed, errMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("FinalizeRetentionRun: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ClaimNextQueued atomically picks the oldest queued row and flips it
 // to `running` so the GC dispatcher loop can hand the work to the
 // collector. SELECT … FOR UPDATE SKIP LOCKED makes this safe across
@@ -307,10 +391,12 @@ func (r *Repository) ClaimNextQueued(ctx context.Context) (*GCRun, error) {
 //
 // COALESCE on the nullable timestamps lets pgx Scan into a non-nullable
 // time.Time field; callers branch on Status rather than on whether the
-// time is zero.
+// time is zero. repo_id (FE-API-040) is COALESCED to the zero UUID for
+// runs that pre-date the column or that don't carry a repo target.
 const selectColumns = `
 	run_id,
 	COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid),
+	COALESCE(repo_id,   '00000000-0000-0000-0000-000000000000'::uuid),
 	mode::TEXT,
 	status::TEXT,
 	requested_at,
@@ -329,6 +415,7 @@ func scanRow(scan func(dest ...any) error) (*GCRun, error) {
 	if err := scan(
 		&rec.RunID,
 		&rec.TenantID,
+		&rec.RepoID,
 		&rec.Mode,
 		&rec.Status,
 		&rec.RequestedAt,

@@ -413,7 +413,10 @@ func newCoreEnv(t *testing.T) *coreEnv {
 	uploadStore := service.NewUploadStore(rdb)
 	referrerStore := service.NewReferrerStore(rdb)
 	authClient := service.NewAuthClient(authConn, rdb)
-	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub)
+	// FE-API-042: sample rate 1.0 keeps the existing pull-path behaviour
+	// observable by the integration test (every pull publishes a pull.image
+	// event so the audit + metadata consumers always see traffic).
+	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub, 1.0)
 
 	h := handler.New(authClient, registry, "http://localhost/auth/token")
 	mux := http.NewServeMux()

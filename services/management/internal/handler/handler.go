@@ -321,6 +321,30 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// h.tenant is nil (TENANT_GRPC_ADDR unset).
 	h.RegisterWorkspaceDomains(mux, authMW)
 
+	// Per-repo retention policy CRUD (FE-API-037). All routes require at
+	// least reader on the repo (GET) or repo admin (PUT/DELETE). The
+	// executor + dry-run + events arrive in FE-API-040/038/041.
+	h.RegisterRepoRetention(mux, authMW)
+
+	// FE-API-038: dry-run + preview-window state. POST dry-run requires
+	// repo admin (same gate as PUT); GET preview requires repo reader.
+	// Both delegate to the metadata EvaluateRetention RPC — read-only,
+	// never persists.
+	h.RegisterRepoRetentionDryRun(mux, authMW)
+
+	// FE-API-040: retention executor trigger + per-run status. POST .../run
+	// requires repo admin / owner (writer not enough — retention deletes
+	// manifests). GET .../runs/{run_id} requires reader. Both return 404
+	// when GC_GRPC_ADDR is unset.
+	h.RegisterRepoRetentionRun(mux, authMW)
+
+	// FE-API-039: per-org default retention policy. GET requires org reader;
+	// PUT/DELETE require org admin (writer not enough — retention is
+	// destructive). The per-repo GET above also gains an inheritance
+	// fallback so callers can read the org default through the repo URL
+	// when no per-repo policy exists.
+	h.RegisterOrgRetention(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
@@ -343,6 +367,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/admin/gc/status", authMW(http.HandlerFunc(h.handleAdminGCStatus)))
 	mux.Handle("GET /api/v1/admin/gc/runs", authMW(http.HandlerFunc(h.handleAdminGCRuns)))
 	mux.Handle("POST /api/v1/admin/gc/run", authMW(http.HandlerFunc(h.handleAdminGCRun)))
+
+	// FE-API-044..047 — platform-admin scanner adapter management
+	// (REM-011 Phase 2). All five routes return 404 "route disabled"
+	// when SCANNER_GRPC_ADDR is unset and 403 when the caller lacks
+	// the platform-admin marker grant. See admin_scanners.go.
+	h.RegisterAdminScanners(mux, authMW)
 }
 
 // ---------------------------------------------------------------------------

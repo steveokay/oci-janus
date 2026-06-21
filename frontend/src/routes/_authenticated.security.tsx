@@ -16,7 +16,6 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/ui/error-state";
-import { ComingSoon } from "@/components/common/coming-soon";
 import { Badge } from "@/components/ui/badge";
 import { useStats } from "@/lib/api/stats";
 import {
@@ -25,6 +24,11 @@ import {
 } from "@/components/security/severity-bar";
 import { VulnerabilitiesTable } from "@/components/security/vulnerabilities-table";
 import { ScanHistoryTable } from "@/components/security/scan-history-table";
+// S9.5 — six FE-API surfaces that replaced the prior ComingSoon panels.
+import { RemediationTable } from "@/components/security/remediation-table";
+import { ScanPolicyEditor } from "@/components/security/scan-policy-editor";
+import { ReportsPanel } from "@/components/security/reports-panel";
+import { CoverageCard } from "@/components/security/coverage-card";
 import type { ScanResult } from "@/lib/api/types";
 
 export const Route = createFileRoute("/_authenticated/security")({
@@ -126,6 +130,9 @@ function SecurityPage(): React.ReactElement {
             </CardHeader>
             <CardContent className="pt-0">
               <ul className="space-y-2">
+                {/* S9.5 — every surface here is now live. We retain the
+                    directory so the operator sees the breadth of the page
+                    without scrolling, but the "deferred" tone is gone. */}
                 {[
                   {
                     label: "Inspect every open CVE across the workspace",
@@ -138,14 +145,19 @@ function SecurityPage(): React.ReactElement {
                     hint: "Scans tab",
                   },
                   {
-                    label: "Find remediation paths grouped by base image",
-                    tone: "deferred" as const,
-                    hint: "FE-API-017",
+                    label: "Find remediation paths grouped by upgrade",
+                    tone: "live" as const,
+                    hint: "Remediation tab",
                   },
                   {
                     label: "Configure block-on-severity scan policies",
-                    tone: "deferred" as const,
-                    hint: "FE-API-018",
+                    tone: "live" as const,
+                    hint: "Policies tab",
+                  },
+                  {
+                    label: "Generate downloadable compliance reports",
+                    tone: "live" as const,
+                    hint: "Reports tab",
                   },
                 ].map((row) => (
                   <li
@@ -156,10 +168,10 @@ function SecurityPage(): React.ReactElement {
                     <span className="flex-1 text-sm text-[var(--color-fg)]">
                       {row.label}
                     </span>
-                    <Badge
-                      tone={row.tone === "live" ? "success" : "accent"}
-                      className={row.tone === "deferred" ? "font-mono" : ""}
-                    >
+                    {/* Tone is uniformly "live" now that S9.5 fulfilled
+                        every formerly-deferred row — kept the field around
+                        in case a future surface ships in two stages. */}
+                    <Badge tone={row.tone === "live" ? "success" : "accent"}>
                       {row.hint}
                     </Badge>
                   </li>
@@ -177,6 +189,9 @@ function SecurityPage(): React.ReactElement {
           <TabsTrigger value="scans">Scans</TabsTrigger>
           <TabsTrigger value="remediation">Remediation</TabsTrigger>
           <TabsTrigger value="policies">Policies</TabsTrigger>
+          {/* S9.5 — new tab. Sits after Policies so the read-only / write
+              / async-job ordering reads left → right. */}
+          <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -204,16 +219,8 @@ function SecurityPage(): React.ReactElement {
               </CardContent>
             </Card>
 
-            <ComingSoon
-              apiId="FE-API-020"
-              title="Scan coverage + freshness"
-              description="The remaining overview tiles need the snapshot endpoint — they're more than what the stats call returns today."
-              highlights={[
-                "Scan coverage % — tags scanned ÷ tags total",
-                "Days since last scan, with worst-offender repos called out",
-                "Recent scan run count over the last 24h / 7d",
-              ]}
-            />
+            {/* FE-API-020 — coverage + freshness snapshot. */}
+            <CoverageCard />
           </div>
         </TabsContent>
 
@@ -225,30 +232,19 @@ function SecurityPage(): React.ReactElement {
           <ScanHistoryTable />
         </TabsContent>
 
+        {/* FE-API-017 — remediation rollups grouped by upgrade path. */}
         <TabsContent value="remediation">
-          <ComingSoon
-            apiId="FE-API-017"
-            title="Actionable remediation queue"
-            description="Findings rolled up by base image upgrade path. `Bump alpine:3.18 → 3.20 to close 4 CVEs across 7 images` — the kind of action a platform team can actually take in a sprint."
-            highlights={[
-              "Grouped by upgrade path, not by raw CVE list",
-              "Affected (repo, tag) pairs per recommendation",
-              "Estimated CVE count closed per upgrade",
-            ]}
-          />
+          <RemediationTable />
         </TabsContent>
 
+        {/* FE-API-018 — block-on-severity policy editor. */}
         <TabsContent value="policies">
-          <ComingSoon
-            apiId="FE-API-018"
-            title="Scan policy editor"
-            description="Auto-scan on push toggles, fail-on-severity gates that reject pushes with criticals, exempt-CVE list, and scanner version pin. The same backing table the scanner consults on every push."
-            highlights={[
-              "Block-on-severity gate (CRITICAL / HIGH / MEDIUM)",
-              "Exempt-CVE allowlist with reason field",
-              "Scanner plugin + version pin",
-            ]}
-          />
+          <ScanPolicyEditor />
+        </TabsContent>
+
+        {/* FE-API-019 — async compliance report generation + download. */}
+        <TabsContent value="reports">
+          <ReportsPanel />
         </TabsContent>
       </Tabs>
     </div>

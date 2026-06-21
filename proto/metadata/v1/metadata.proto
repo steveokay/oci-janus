@@ -98,6 +98,116 @@ service MetadataService {
   // quota_bytes=0 rather than NotFound, so the management layer can stitch
   // the response together for newly-created tenants without push activity.
   rpc GetTenantUsage(GetTenantUsageRequest) returns (TenantUsage);
+
+  // ─── FE-API-037: per-repo retention policy CRUD ─────────────────────────
+
+  // GetRepoRetentionPolicy returns the policy attached to a repository, or
+  // a typed NotFound when no policy row exists. The caller (registry-management)
+  // is responsible for falling back to the org default (FE-API-039) when
+  // NotFound is returned.
+  rpc GetRepoRetentionPolicy(GetRepoRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // UpsertRepoRetentionPolicy creates or updates the policy. Setting
+  // enabled=true with no existing preview_until causes the implementation
+  // to set preview_until = now() + 24h (FE-API-038 mechanism). preview_until
+  // is otherwise client-readonly — the caller cannot set it directly.
+  rpc UpsertRepoRetentionPolicy(UpsertRepoRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // DeleteRepoRetentionPolicy removes the per-repo override; the repo then
+  // falls back to the org default (FE-API-039).
+  rpc DeleteRepoRetentionPolicy(DeleteRepoRetentionPolicyRequest) returns (google.protobuf.Empty);
+
+  // ─── FE-API-038: retention policy dry-run + preview-window state ─────────
+  //
+  // EvaluateRetention is the read-only evaluation engine that powers both
+  // the dry-run (operator inspects a candidate policy before saving) and the
+  // preview-window state endpoint (UI countdown for an already-saved policy
+  // sitting in its 24h preview window).
+  //
+  // The handler does NOT persist the candidate — it merely materialises which
+  // manifests WOULD be selected for deletion (and which would be excluded by
+  // a protected_tag_patterns regex) given the current manifest + tag state of
+  // the repository. The executor (FE-API-040) is a separate ticket and is
+  // the only path that actually deletes.
+  //
+  // Caps: the returned `would_delete` list is truncated to the smaller of
+  // `max_delete_results` (default 1000, server cap 5000) and the full
+  // candidate set. `total_count` / `total_bytes` always reflect the full set
+  // (computed via SQL aggregate, not by counting the truncated slice) so the
+  // UI can render "showing 1000 of 47 312 candidates" honestly.
+  rpc EvaluateRetention(EvaluateRetentionRequest) returns (EvaluateRetentionResponse);
+
+  // ─── FE-API-039: per-org default retention policy + inheritance ──────────
+
+  // GetOrgRetentionPolicy returns the default retention policy attached to an
+  // org, or NotFound when none exists. The shape is identical to
+  // RetentionPolicy (with `org_id` populated and `repo_id` empty) so callers
+  // can render both per-repo and per-org policies with the same UI code.
+  rpc GetOrgRetentionPolicy(GetOrgRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // UpsertOrgRetentionPolicy creates or updates the org default policy. Same
+  // preview_until semantics as UpsertRepoRetentionPolicy — the implementation
+  // owns the 24h window when a default is enabled or its rules change
+  // materially. The caller never sets preview_until directly.
+  rpc UpsertOrgRetentionPolicy(UpsertOrgRetentionPolicyRequest) returns (RetentionPolicy);
+
+  // DeleteOrgRetentionPolicy removes the org default. Repos that previously
+  // inherited fall back to "no policy" until either a new default is set or
+  // an explicit per-repo policy is created.
+  rpc DeleteOrgRetentionPolicy(DeleteOrgRetentionPolicyRequest) returns (google.protobuf.Empty);
+
+  // GetEffectiveRetentionPolicy resolves what policy actually applies to a
+  // repository: the per-repo row if it exists, else the org default (only
+  // when enabled = TRUE), else NotFound. The `inherited_from` field on the
+  // response tells the BFF + UI whether to label the policy "(per-repo)" or
+  // "(inherited from org default)" without a second round-trip. A disabled
+  // org default deliberately does NOT propagate — falling back to a disabled
+  // default would surface a confusing "no enforcement, but here's a default"
+  // banner.
+  rpc GetEffectiveRetentionPolicy(GetEffectiveRetentionPolicyRequest) returns (EffectiveRetentionPolicy);
+
+  // ─── FE-API-040: retention executor support ─────────────────────────────────
+  //
+  // The executor lives in services/gc; these three RPCs are the metadata-side
+  // primitives it needs. MarkManifestRetentionPending is the soft-delete write
+  // (idempotent), ClearManifestRetentionPending is the undo write, and
+  // ListPendingDeleteManifests is the "what's past grace?" read used by the
+  // retention_grace finaliser sweep.
+
+  // MarkManifestRetentionPending sets retention_pending_delete_at = NOW on a
+  // single manifest. Called by services/gc's retention soft-delete pass for
+  // every manifest in EvaluateRetention's would_delete output.
+  //
+  // Idempotent: if retention_pending_delete_at is already set, the existing
+  // timestamp is preserved (a re-run does NOT extend the grace window).
+  rpc MarkManifestRetentionPending(MarkManifestRetentionPendingRequest) returns (google.protobuf.Empty);
+
+  // ClearManifestRetentionPending unmarks a manifest queued for retention
+  // deletion. Used by the "undo" UI affordance during the grace window, and
+  // also for tests that need to reset state between runs.
+  rpc ClearManifestRetentionPending(ClearManifestRetentionPendingRequest) returns (google.protobuf.Empty);
+
+  // ListPendingDeleteManifests returns manifests whose
+  // retention_pending_delete_at is older than `grace_window_secs`. Called by
+  // the retention_grace executor sweep to find candidates that have ridden
+  // out their grace window and are ready for hard deletion.
+  //
+  // tenant_id may be empty to scan all tenants (used by the cross-tenant
+  // grace ticker on services/gc); a non-empty tenant_id restricts the scan.
+  // The repo-blob digests needed for storage.DeleteBlob calls are NOT
+  // returned by this RPC — the executor calls DeleteManifest (existing RPC)
+  // which already cascades to blob cleanup via the orphan path. Keeps this
+  // RPC a single-table scan instead of an N-way join against blob_links.
+  rpc ListPendingDeleteManifests(ListPendingDeleteManifestsRequest) returns (ListPendingDeleteManifestsResponse);
+
+  // LookupOrgIDByName resolves an org name to its UUID within a tenant.
+  // Read-only — unlike the repository-internal GetOrCreateOrganization
+  // which has insert semantics, this RPC returns NotFound when the org
+  // does not exist. Added in FE-API-039 so the management BFF can map
+  // /api/v1/orgs/{org}/policies/retention URLs (which carry the org name)
+  // to the org_id required by the per-org retention RPCs without an
+  // unintended side-effect.
+  rpc LookupOrgIDByName(LookupOrgIDByNameRequest) returns (LookupOrgIDByNameResponse);
 }
 
 message Repository {
@@ -219,7 +329,24 @@ message IncrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 message DecrementTenantStorageRequest { string tenant_id = 1; int64 bytes = 2; }
 
 // Scan requests
-message UpdateScanStatusRequest { string scan_id = 1; string tenant_id = 2; string status = 3; bytes findings_json = 4; map<string, int32> severity_counts = 5; }
+//
+// UpdateScanStatusRequest is the scanner's write-back to metadata. The
+// row is upserted on scan_id so the first call (status="running" or
+// "complete") creates the row and subsequent calls update it — there's
+// no separate Create RPC. Fields 6-9 are required to satisfy the
+// scan_results NOT NULL columns on the initial insert; subsequent
+// updates may leave them empty and the existing values are kept.
+message UpdateScanStatusRequest {
+  string scan_id = 1;
+  string tenant_id = 2;
+  string status = 3;
+  bytes findings_json = 4;
+  map<string, int32> severity_counts = 5;
+  string repo_id = 6;
+  string manifest_digest = 7;
+  string scanner_name = 8;
+  string scanner_version = 9;
+}
 message GetScanResultRequest { string manifest_digest = 1; string repo_id = 2; string tenant_id = 3; }
 
 // ─── FE-API-033: per-tag SBOM storage ────────────────────────────────────────
@@ -463,4 +590,241 @@ message TenantUsage {
   int64 storage_quota_bytes = 2;
   int64 repository_count    = 3;
   int64 organization_count  = 4;
+}
+
+// ─── FE-API-037: per-repo retention policy CRUD ────────────────────────────
+
+// RetentionRule is a single rule entry on a retention policy. `kind` matches
+// the retention_rule_kind enum string (one of max_age_days, max_count,
+// max_size_bytes, dangling_grace_days, max_idle_days). `value` is the
+// per-kind threshold — days, count, or bytes — interpretation lives in the
+// executor (FE-API-040). The kind enum already includes max_idle_days even
+// though FE-API-040 cannot enforce it yet; the API persists it so FE-API-043
+// can light it up without a schema change.
+message RetentionRule {
+  string kind  = 1; // matches retention_rule_kind enum strings
+  int64  value = 2; // days / count / bytes — interpretation per kind
+}
+
+// RetentionPolicy is the wire form of one retention_policies row. `enabled`
+// gates the executor; `rules` is the ordered list of {kind, value} pairs;
+// `protected_tag_patterns` is the regex allowlist that protects e.g. release
+// tags from eviction; `preview_until` is the dry-run window (set when a
+// previously-disabled policy is enabled or rules change materially, otherwise
+// zero). The caller never sets preview_until directly — the implementation
+// owns it.
+message RetentionPolicy {
+  string                     repo_id                = 1;
+  string                     tenant_id              = 2;
+  bool                       enabled                = 3;
+  repeated RetentionRule     rules                  = 4;
+  repeated string            protected_tag_patterns = 5;
+  google.protobuf.Timestamp  preview_until          = 6; // zero when not in preview
+  google.protobuf.Timestamp  created_at             = 7;
+  google.protobuf.Timestamp  updated_at             = 8;
+  string                     updated_by             = 9; // user_id UUID
+  // FE-API-039: org_id is populated when this message represents an org
+  // default (repo_id is empty in that case) OR when an effective lookup
+  // resolved to an org default. For a per-repo policy, repo_id is set and
+  // org_id is empty. Reusing the same message keeps the read shape
+  // consistent so the UI doesn't need a parallel OrgRetentionPolicy type.
+  string                     org_id                 = 10;
+}
+
+message GetRepoRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+// UpsertRepoRetentionPolicyRequest is the full-replace shape for the policy.
+// updated_by is the JWT-derived user_id forwarded by registry-management.
+// Note: clients cannot send preview_until — the metadata implementation sets
+// it when enabling a previously-disabled policy (FE-API-038 trigger).
+message UpsertRepoRetentionPolicyRequest {
+  string                  repo_id                = 1;
+  string                  tenant_id              = 2;
+  bool                    enabled                = 3;
+  repeated RetentionRule  rules                  = 4;
+  repeated string         protected_tag_patterns = 5;
+  string                  updated_by             = 6;
+}
+
+message DeleteRepoRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+// ─── FE-API-038: retention policy dry-run + preview-window state ───────────
+
+// RetentionPolicyCandidate is the policy shape passed to EvaluateRetention.
+// It mirrors the persisted policy on the rules + protected_tag_patterns axes
+// but is NEVER written to the DB by this RPC — the evaluator only reads from
+// the manifests/tags tables. For the preview-window endpoint, the management
+// BFF loads the saved row and passes it through this same field so the
+// metadata API surface stays small (one read path, one write path).
+message RetentionPolicyCandidate {
+  bool                   enabled                = 1;
+  repeated RetentionRule rules                  = 2;
+  repeated string        protected_tag_patterns = 3;
+}
+
+// RetentionDeletionCandidate is one manifest the evaluator would select for
+// deletion under the candidate policy. `reasons` is the list of rule kinds
+// that selected it — a manifest can match multiple rules (e.g. both
+// max_age_days and max_count) and the UI surfaces all of them so the
+// operator understands why each candidate appears.
+message RetentionDeletionCandidate {
+  string                    manifest_id     = 1;
+  string                    manifest_digest = 2;
+  repeated string           tags            = 3;
+  google.protobuf.Timestamp pushed_at       = 4;
+  int64                     size_bytes      = 5;
+  repeated string           reasons         = 6;
+}
+
+// RetentionProtectedManifest is one manifest the evaluator excluded because
+// at least one of its tags matched a protected_tag_patterns regex. Only the
+// FIRST matching pattern is returned — the UI just needs to show "skipped
+// because tag X matched pattern Y", not the full intersection.
+message RetentionProtectedManifest {
+  string          manifest_id     = 1;
+  string          manifest_digest = 2;
+  repeated string tags            = 3;
+  string          matched_pattern = 4;
+}
+
+// EvaluateRetentionRequest carries the candidate policy + caps. `repo_id`
+// scopes the manifest set; tenant_id is required for RLS even though every
+// manifest is already FK-attached to repositories.tenant_id.
+//
+// `max_delete_results` defaults to 1000 server-side and is clamped to
+// [1, 5000]. `max_protected_results` defaults to 100 and is clamped to
+// [1, 500]. Clamping happens in the handler so a hostile client cannot
+// trick the evaluator into materialising a huge response.
+message EvaluateRetentionRequest {
+  string                   repo_id               = 1;
+  string                   tenant_id             = 2;
+  RetentionPolicyCandidate candidate             = 3;
+  int32                    max_delete_results    = 4;
+  int32                    max_protected_results = 5;
+}
+
+// EvaluateRetentionResponse contains the materialised dry-run output.
+// `total_count` / `total_bytes` reflect the full set even when
+// `would_delete` is truncated — the UI relies on this to render an
+// honest counter. `truncated` is set when `would_delete` was capped;
+// the protected list is capped without a flag because the dashboard
+// doesn't render protected-skipped as a primary affordance.
+message EvaluateRetentionResponse {
+  repeated RetentionDeletionCandidate would_delete      = 1;
+  repeated RetentionProtectedManifest protected_skipped = 2;
+  int64                               total_count       = 3;
+  int64                               total_bytes       = 4;
+  google.protobuf.Timestamp           evaluated_at      = 5;
+  bool                                truncated         = 6;
+}
+
+// ─── FE-API-039: per-org default retention policy + inheritance ────────────
+
+// GetOrgRetentionPolicyRequest scopes to (org_id, tenant_id). The lookup
+// returns NotFound when no default row exists; the BFF maps NotFound to a
+// typed 404 ("no-org-default") so the UI can render the empty state.
+message GetOrgRetentionPolicyRequest {
+  string org_id    = 1;
+  string tenant_id = 2;
+}
+
+// UpsertOrgRetentionPolicyRequest is the full-replace shape for the org
+// default. The same fields as UpsertRepoRetentionPolicyRequest, swapping
+// repo_id for org_id. updated_by is the JWT-derived user_id forwarded by
+// registry-management; preview_until is owned server-side.
+message UpsertOrgRetentionPolicyRequest {
+  string                  org_id                 = 1;
+  string                  tenant_id              = 2;
+  bool                    enabled                = 3;
+  repeated RetentionRule  rules                  = 4;
+  repeated string         protected_tag_patterns = 5;
+  string                  updated_by             = 6;
+}
+
+message DeleteOrgRetentionPolicyRequest {
+  string org_id    = 1;
+  string tenant_id = 2;
+}
+
+// GetEffectiveRetentionPolicyRequest asks "what policy would apply to this
+// repo right now?" The repo_id and tenant_id together scope the lookup; the
+// implementation resolves the per-repo row first, then falls back to the
+// repo's parent org default (only when enabled = TRUE), then NotFound.
+message GetEffectiveRetentionPolicyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+// EffectiveRetentionPolicy wraps the resolved policy with the inheritance
+// label so the BFF + UI know whether to render "per-repo" or "inherited
+// from org default" without a second lookup.
+//
+// `inherited_from` is "repo" when the resolution found a per-repo row,
+// "org" when it fell back to the org default. `org_id` is populated only
+// when `inherited_from == "org"` so the UI can link "(inherited from
+// myorg)" cleanly without an extra repository → org lookup.
+message EffectiveRetentionPolicy {
+  RetentionPolicy policy         = 1;
+  string          inherited_from = 2; // "repo" | "org"
+  string          org_id         = 3; // populated when inherited_from == "org"
+}
+
+// LookupOrgIDByNameRequest scopes to (tenant_id, name). The lookup is
+// read-only — NotFound when no organization row matches.
+message LookupOrgIDByNameRequest {
+  string tenant_id = 1;
+  string name      = 2;
+}
+
+message LookupOrgIDByNameResponse {
+  string org_id = 1;
+}
+
+// ─── FE-API-040: retention executor messages ──────────────────────────────────
+
+message MarkManifestRetentionPendingRequest {
+  string manifest_id = 1;
+  string tenant_id   = 2;
+}
+
+message ClearManifestRetentionPendingRequest {
+  string manifest_id = 1;
+  string tenant_id   = 2;
+}
+
+// ListPendingDeleteManifestsRequest:
+//   - tenant_id: empty scans all tenants (admin / cross-tenant grace ticker),
+//     non-empty restricts the scan to a single tenant.
+//   - grace_window_secs: rows with retention_pending_delete_at < NOW -
+//     grace_window_secs survive. Clamped to >= 0 server-side.
+//   - limit: bounded by the executor at [1, 5000] with a default of 1000 so
+//     a single sweep can't materialise an unbounded result set.
+message ListPendingDeleteManifestsRequest {
+  string tenant_id         = 1;
+  int64  grace_window_secs = 2;
+  int32  limit             = 3;
+}
+
+message ListPendingDeleteManifestsResponse {
+  repeated PendingDeleteManifest manifests = 1;
+}
+
+// PendingDeleteManifest carries the fields the retention_grace executor
+// needs to call DeleteManifest. blob_digests is intentionally NOT included
+// — DeleteManifest cascades to the orphan-blob path, so the executor does
+// not need to enumerate layers here. Keeping the payload narrow lets the
+// scan stay on idx_manifests_retention_pending without joining blob_links.
+message PendingDeleteManifest {
+  string                    manifest_id   = 1;
+  string                    tenant_id     = 2;
+  string                    repository_id = 3;
+  string                    digest        = 4;
+  int64                     size_bytes    = 5;
+  google.protobuf.Timestamp pending_since = 6;
 }

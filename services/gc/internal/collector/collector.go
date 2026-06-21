@@ -19,6 +19,7 @@ import (
 	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 )
 
 // Result summarises a completed GC run.
@@ -33,8 +34,13 @@ type Result struct {
 
 // Collector orchestrates the mark-sweep GC algorithm.
 type Collector struct {
-	meta           metadatav1.MetadataServiceClient
-	storage        storagev1.StorageServiceClient
+	meta    metadatav1.MetadataServiceClient
+	storage storagev1.StorageServiceClient
+	// tenant is the optional tenant-directory client. When set, listTenants
+	// uses it instead of streaming every repository row from metadata.
+	// nil keeps the legacy fallback alive for unit tests that exercise the
+	// collector against a fake metadata server.
+	tenant         tenantv1.TenantServiceClient
 	pub            *publisher.Publisher
 	locker         *advisory.Locker // nil = advisory locking disabled
 	mode           string
@@ -62,6 +68,18 @@ func New(
 		blobMinAge:     time.Duration(blobMinAgeHours) * time.Hour,
 		manifestMinAge: time.Duration(manifestMinAgeHours) * time.Hour,
 	}
+}
+
+// WithTenantClient wires the registry-tenant directory so listTenants
+// uses the proper paginated ListTenants RPC instead of streaming every
+// repository row from metadata. Optional — when unset the collector
+// falls back to the metadata stream path (broken in production today,
+// kept alive for unit tests). Returns the Collector for fluent setup.
+func (c *Collector) WithTenantClient(conn *grpc.ClientConn) *Collector {
+	if conn != nil {
+		c.tenant = tenantv1.NewTenantServiceClient(conn)
+	}
+	return c
 }
 
 // Run executes one full GC cycle and returns a summary.
@@ -107,8 +125,24 @@ func (c *Collector) Run(ctx context.Context) (*Result, error) {
 	return res, nil
 }
 
-// listTenants returns the set of tenant IDs across all repositories.
+// listTenants returns the set of tenant IDs the collector should sweep.
+//
+// Preferred path: query the tenant directory directly when a tenant
+// gRPC client is wired (production / compose). This returns every
+// provisioned tenant — even ones with zero repositories yet — which
+// is harmless: runForTenant short-circuits when there's nothing to
+// collect.
+//
+// Fallback path: stream metadata.ListRepositories and dedupe by
+// tenant_id. Kept so unit tests built around a fake metadata server
+// keep working; in real deployments this path is broken anyway
+// (metadata's ListRepositories rejects an empty tenant_id filter
+// with `invalid input syntax for type uuid: ""`), which is exactly
+// the bug the tenant-directory path fixes.
 func (c *Collector) listTenants(ctx context.Context) (map[string]struct{}, error) {
+	if c.tenant != nil {
+		return c.listTenantsViaDirectory(ctx)
+	}
 	stream, err := c.meta.ListRepositories(ctx, &metadatav1.ListRepositoriesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("list repositories: %w", err)
@@ -125,6 +159,37 @@ func (c *Collector) listTenants(ctx context.Context) (map[string]struct{}, error
 		tenants[repo.TenantId] = struct{}{}
 	}
 	return tenants, nil
+}
+
+// listTenantsViaDirectory pages through registry-tenant.ListTenants.
+// The page size is the server-clamped maximum (200) so even fleets in
+// the thousands need only a handful of round-trips per sweep.
+func (c *Collector) listTenantsViaDirectory(ctx context.Context) (map[string]struct{}, error) {
+	tenants := map[string]struct{}{}
+	var pageToken string
+	// Hard upper bound on pages so a runaway pagination loop can't
+	// trap the sweep forever. 5000 pages * 200 per page = 1M tenants
+	// is well past any realistic deployment.
+	const maxPages = 5000
+	for i := 0; i < maxPages; i++ {
+		resp, err := c.tenant.ListTenants(ctx, &tenantv1.ListTenantsRequest{
+			PageSize:  200,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("tenant.ListTenants: %w", err)
+		}
+		for _, t := range resp.GetTenants() {
+			if id := t.GetTenantId(); id != "" {
+				tenants[id] = struct{}{}
+			}
+		}
+		pageToken = resp.GetNextPageToken()
+		if pageToken == "" {
+			return tenants, nil
+		}
+	}
+	return tenants, fmt.Errorf("tenant.ListTenants: exceeded %d-page safety cap", maxPages)
 }
 
 // runForTenant runs a full GC pass for a single tenant, acquiring an advisory

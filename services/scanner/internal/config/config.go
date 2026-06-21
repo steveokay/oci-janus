@@ -8,6 +8,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -59,11 +61,36 @@ type Config struct {
 	// scans for pending jobs. Five seconds gives a generous safety margin
 	// for tests + dev seeds; production may want shorter.
 	ReportPollIntervalSecs int `mapstructure:"REPORT_POLL_INTERVAL_SECS"`
+
+	// REM-011 Phase 2 — RunTestScan fixture.
+	//
+	// RunTestScan exercises the active adapter end-to-end against a
+	// pre-determined repo+tag pair on a real tenant. The dev compose
+	// stack seeds dev/alpine:latest under the dev tenant, so those are
+	// the defaults baked into the binary. Production deployments should
+	// override these to point at an in-house "scan canary" image so the
+	// admin UI's "run test scan" button continues to work without
+	// leaning on the dev seed data.
+	TestScanTenantID    string `mapstructure:"SCANNER_TEST_TENANT_ID"`
+	TestScanRepository  string `mapstructure:"SCANNER_TEST_REPOSITORY"`
+	TestScanManifestRef string `mapstructure:"SCANNER_TEST_MANIFEST_REF"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
+//
+// Viper's AutomaticEnv alone is not enough: viper.Unmarshal walks the
+// struct via mapstructure tags but only finds keys that have been
+// previously Set or BindEnv'd. Without that step, env vars come through
+// as empty even though they're present in os.Environ. We explicitly
+// promote every env var into viper's key space — same pattern the gc
+// and audit services use — so Unmarshal sees everything.
 func Load() (*Config, error) {
 	viper.AutomaticEnv()
+	for _, e := range os.Environ() {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			viper.Set(k, v)
+		}
+	}
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("LOG_FORMAT", "json")
 	viper.SetDefault("GRPC_ADDR", ":50051")
@@ -76,6 +103,12 @@ func Load() (*Config, error) {
 	viper.SetDefault("DB_MAX_CONNS", 20)
 	viper.SetDefault("REPORT_OUTPUT_DIR", "/tmp/reports")
 	viper.SetDefault("REPORT_POLL_INTERVAL_SECS", 5)
+	// Dev defaults — the dev-compose seed publishes dev/alpine:latest
+	// under this tenant ID. Production deployments must override all
+	// three to a real "scan canary" image.
+	viper.SetDefault("SCANNER_TEST_TENANT_ID", "98dbe36b-ef28-4903-b25c-bff1b2921c9e")
+	viper.SetDefault("SCANNER_TEST_REPOSITORY", "dev/alpine")
+	viper.SetDefault("SCANNER_TEST_MANIFEST_REF", "latest")
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

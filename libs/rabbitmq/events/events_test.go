@@ -152,6 +152,7 @@ func TestRoutingConstants_nonEmpty(t *testing.T) {
 		RoutingTenantCreated,
 		RoutingTenantDomainVerified,
 		RoutingStoreQueued,
+		RoutingPullImage,
 	}
 	for _, k := range keys {
 		if k == "" {
@@ -167,6 +168,75 @@ func TestExchangeConstants_nonEmpty(t *testing.T) {
 	}
 	if ExchangeDLX == "" {
 		t.Error("ExchangeDLX is empty")
+	}
+}
+
+// TestPullImagePayload_marshalRoundTrip verifies the FE-API-042 payload survives
+// a JSON round-trip with all fields intact — the optional fields (manifest_id,
+// tag, actor_id) carry omitempty so they only round-trip cleanly when populated.
+func TestPullImagePayload_marshalRoundTrip(t *testing.T) {
+	now := time.Date(2026, 6, 21, 10, 30, 0, 0, time.UTC)
+	orig := PullImagePayload{
+		TenantID:       "tenant-abc",
+		RepositoryID:   "repo-uuid-123",
+		RepositoryName: "myorg/myimage",
+		ManifestDigest: "sha256:abc123",
+		ManifestID:     "manifest-uuid-456",
+		Tag:            "v1.0.0",
+		ActorID:        "user-xyz",
+		PulledAt:       now,
+	}
+
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got PullImagePayload
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.TenantID != orig.TenantID || got.RepositoryID != orig.RepositoryID ||
+		got.RepositoryName != orig.RepositoryName || got.ManifestDigest != orig.ManifestDigest ||
+		got.ManifestID != orig.ManifestID || got.Tag != orig.Tag || got.ActorID != orig.ActorID {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", got, orig)
+	}
+	if !got.PulledAt.Equal(orig.PulledAt) {
+		t.Errorf("PulledAt: got %v, want %v", got.PulledAt, orig.PulledAt)
+	}
+}
+
+// TestPullImagePayload_omitemptyOptionals verifies that the optional fields are
+// elided from JSON when empty. An anonymous pull (no JWT) must not embed an
+// empty actor_id; a digest-direct pull must not embed an empty tag.
+func TestPullImagePayload_omitemptyOptionals(t *testing.T) {
+	p := PullImagePayload{
+		TenantID:       "tenant-1",
+		RepositoryID:   "repo-1",
+		RepositoryName: "org/repo",
+		ManifestDigest: "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000",
+		PulledAt:       time.Now().UTC(),
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	for _, field := range []string{"manifest_id", "tag", "actor_id"} {
+		if _, ok := m[field]; ok {
+			t.Errorf("field %q should be omitted when empty, but found in JSON", field)
+		}
+	}
+}
+
+// TestRoutingPullImage_constant verifies the FE-API-042 routing key matches the
+// documented wire shape so consumers (audit, metadata) and the webhook catalog
+// stay aligned without runtime lookup.
+func TestRoutingPullImage_constant(t *testing.T) {
+	if RoutingPullImage != "pull.image" {
+		t.Errorf("RoutingPullImage: got %q, want %q", RoutingPullImage, "pull.image")
 	}
 }
 

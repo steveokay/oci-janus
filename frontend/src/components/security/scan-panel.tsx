@@ -40,6 +40,7 @@ import {
   type SeverityKey,
   totalSeverityCount,
 } from "@/lib/api/scan";
+import { useScannerHealth } from "@/lib/api/admin-scanners";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 import type { ScanResult } from "@/lib/api/types";
 
@@ -125,7 +126,72 @@ export function ScanPanel({
 
 // ─── status panels ──────────────────────────────────────────────────────────
 
+// STUCK_THRESHOLD_MS — fallback heuristic for callers without admin
+// liveness access. REM-011 Phase 2 (FE-API-047) added a real
+// "is the scanner alive?" signal via `useScannerHealth` — when the
+// caller can read it, we flip to "stuck" the moment `healthy=false`
+// instead of waiting 90 seconds. Non-admins (403) and dev stacks
+// without SCANNER_GRPC_ADDR (404) fall through to this timer.
+//
+// 90 seconds covers the realistic worst case for a small image (Trivy
+// DB download, layer extraction, scan).
+const STUCK_THRESHOLD_MS = 90_000;
+
 function InFlightCard({ scan }: { scan: ScanResult }): React.ReactElement {
+  // FE-API-047 — admin liveness signal. The hook tolerates 403/404 by
+  // resolving to `undefined`, so non-admin sessions skip the request
+  // entirely (avoids a 403 in the network tab on every tag page).
+  // When `data?.healthy === false` we know the scanner pool is dead and
+  // can flip to the stuck UI immediately; otherwise we honor the 90s
+  // client-side fallback below.
+  const healthQ = useScannerHealth({ refetchInterval: 15_000 });
+  const livenessSaysDead = healthQ.data?.healthy === false;
+
+  // Compute "stuck" client-side as a fallback. Don't trust the started_at
+  // parse if it's malformed — fall back to "in flight" so a parse bug
+  // never turns into a permanent stuck banner.
+  const startedMs = Date.parse(scan.started_at);
+  const timerSaysStuck =
+    Number.isFinite(startedMs) && Date.now() - startedMs > STUCK_THRESHOLD_MS;
+
+  const isStuck = livenessSaysDead || timerSaysStuck;
+
+  if (isStuck) {
+    return (
+      <Card accentBar="danger">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+              Vulnerability scan
+            </CardDescription>
+            <Badge tone="warning">
+              <Clock className="size-3" /> Stuck
+            </Badge>
+          </div>
+          <CardTitle className="!text-lg font-display !font-medium">
+            Scanner isn't producing results.
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-[var(--color-fg-muted)]">
+            We queued this scan {formatRelativeDate(scan.started_at)} but
+            the scanner hasn't written a result yet. The most common cause
+            in dev is that the scanner profile isn't running.
+          </p>
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3 font-mono text-xs">
+            docker compose --profile scanner up -d registry-scanner
+          </div>
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            See <code className="font-mono">docs/SCANNER.md</code> for the
+            adapter contract + how to swap between Trivy and the dev stub.
+            REM-011 tracks bringing this surface to first-class
+            "is the scanner alive?" detection on the backend.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card accentBar="warning">
       <CardHeader>
@@ -214,10 +280,12 @@ function CompleteCard({
 
   // Tone the card based on whether anything CRITICAL or HIGH was found —
   // operator's eye lands on the right thing without reading numbers.
+  // Backend may return null severity_counts on pending / failed scans;
+  // optional chaining keeps the card from crashing in that state.
   const accentBar =
-    (scan.severity_counts.CRITICAL ?? 0) > 0
+    (scan.severity_counts?.CRITICAL ?? 0) > 0
       ? "danger"
-      : (scan.severity_counts.HIGH ?? 0) > 0
+      : (scan.severity_counts?.HIGH ?? 0) > 0
         ? "warning"
         : "success";
 

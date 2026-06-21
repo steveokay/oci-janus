@@ -374,6 +374,31 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(manifest.GetRawJson())), 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(manifest.GetRawJson())
+
+	// FE-API-042: publish a pull.image event after the body write so audit
+	// gets a row and metadata's last_pulled_at picks up the debounced update.
+	// Placed at the end of the handler so 404 / 401 / 5xx paths above have
+	// already returned — only successful 200s record a pull. The publish is
+	// fire-and-forget with a bounded 2s context, so a slow broker cannot
+	// extend the client's perceived response time materially.
+	//
+	// `reference` may be either a tag name or a digest. Tag is recorded only
+	// when the GET resolved by tag; otherwise empty so audit can attribute
+	// digest-direct pulls correctly.
+	tag := ""
+	if !digestRE.MatchString(reference) {
+		tag = reference
+	}
+	h.registry.RecordPull(
+		r.Context(),
+		tenantID,
+		repo.GetRepoId(),
+		name,
+		manifest.GetDigest(),
+		manifest.GetManifestId(),
+		tag,
+		claims.UserID,
+	)
 }
 
 func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, name, reference string) {

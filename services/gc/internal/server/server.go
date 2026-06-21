@@ -33,6 +33,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
+	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
 	"github.com/steveokay/oci-janus/services/gc/internal/config"
@@ -57,6 +58,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("dial storage: %w", err)
 	}
 	defer storageConn.Close()
+
+	// Tenant directory dial — optional. When TENANT_GRPC_ADDR is set the
+	// collector uses tenant.ListTenants to enumerate sweep targets. When
+	// unset the collector falls back to scanning metadata, which fails in
+	// production but keeps the legacy unit tests green.
+	var tenantConn *grpc.ClientConn
+	if cfg.TenantGRPCAddr != "" {
+		tenantConn, err = grpc.NewClient(cfg.TenantGRPCAddr, creds)
+		if err != nil {
+			return fmt.Errorf("dial tenant: %w", err)
+		}
+		defer tenantConn.Close()
+	}
 
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
@@ -83,7 +97,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		cfg.GCMode,
 		cfg.BlobMinAgeHours,
 		cfg.ManifestMinAgeHours,
-	)
+	).WithTenantClient(tenantConn) // no-op when tenantConn is nil
 
 	// FE-API-032: optional persistence pool + repository. When DB_DSN
 	// is unset the gRPC service still starts but every RPC returns
@@ -125,12 +139,32 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.Warn("DB_DSN not set — gc sweeps will not be persisted; GCService gRPC surface disabled")
 	}
 
+	// FE-API-040: wire the retention executor. We attach the metadata gRPC
+	// stub so the dispatcher's retention / retention_grace branches have a
+	// way to call MarkPending / DeleteManifest / etc. The grace ticker fires
+	// every cfg.RetentionGraceIntervalHours; setting it to 0 disables the
+	// automatic finaliser sweep (operator can still trigger via the gRPC).
+	//
+	// FE-API-041: hand the same publisher used by the collector to the
+	// retention executor so retention.evaluated / .applied / .grace_completed
+	// events flow through one connection. WithPublisher accepts nil, so a
+	// future deployment without a broker still gets a working executor.
+	if persisted != nil {
+		persisted = persisted.
+			WithMetadataClient(metadatav1.NewMetadataServiceClient(metaConn)).
+			WithPublisher(pub)
+		persisted.SetRetentionConfig(runner.RetentionConfig{
+			GraceWindow: time.Duration(cfg.RetentionGraceDays) * 24 * time.Hour,
+		})
+	}
+
 	// Cron loop: persisted path goes through runner so every sweep
 	// records a gc_runs row; the legacy path keeps the old in-memory
 	// behaviour for deployments that haven't enabled DB_DSN yet.
 	interval := time.Duration(cfg.GCRunIntervalHours) * time.Hour
+	graceInterval := time.Duration(cfg.RetentionGraceIntervalHours) * time.Hour
 	if persisted != nil {
-		go persisted.CronLoop(ctx, interval, runRequests)
+		go persisted.CronLoop(ctx, interval, graceInterval, runRequests)
 	} else {
 		go runLoop(ctx, col, interval)
 	}

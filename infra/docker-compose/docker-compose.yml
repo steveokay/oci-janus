@@ -77,7 +77,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       POSTGRES_DB: registry_auth
       # init-multi-db.sh creates additional databases listed here
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -569,7 +569,18 @@ services:
       OTEL_SERVICE_NAME: registry-gc
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
+      # TENANT_GRPC_ADDR lets the collector enumerate tenants via the
+      # tenant directory instead of trying to stream every repository
+      # row from metadata (which fails with "invalid input syntax for
+      # type uuid" because metadata's ListRepositories rejects empty
+      # tenant_id). Optional — when unset the collector falls back to
+      # the broken metadata path (kept for unit tests).
+      TENANT_GRPC_ADDR: registry-tenant:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      # DB_DSN enables FE-API-032 — without it the gc gRPC handlers
+      # return FailedPrecondition "gc repository not configured" and
+      # the admin dashboard's GC card stays in its empty-state fallback.
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_gc?sslmode=prefer
       GC_MODE: full
       GC_RUN_INTERVAL_HOURS: "24"
       MTLS_CA_CERT_PATH: /certs/ca.crt
@@ -652,6 +663,18 @@ services:
       # SIGNER_GRPC_ADDR enables FE-API-003 /api/v1/.../signature. Empty leaves
       # the route at 404 "route disabled" — frontend renders the unsigned state.
       SIGNER_GRPC_ADDR: registry-signer:50051
+      # SCANNER_GRPC_ADDR enables REM-011 Phase 2 admin routes
+      # (FE-API-044..047 — adapter list / swap / test scan / health).
+      # Empty leaves the routes at 404 "route disabled". The scanner is
+      # opt-in via `--profile scanner`, so this addr resolves but the
+      # gRPC calls fail until the scanner profile is up; the BFF
+      # gracefully maps gRPC unavailable → 503 in that case.
+      SCANNER_GRPC_ADDR: registry-scanner:50051
+      # GC_GRPC_ADDR enables FE-API-032 admin GC routes
+      # (/admin/gc/status, /admin/gc/runs, /admin/gc/run). Empty leaves
+      # them at 404 "route disabled" and the dashboard's GC card shows
+      # a friendly "GC visibility isn't wired" fallback.
+      GC_GRPC_ADDR: registry-gc:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
@@ -694,9 +717,17 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Scanner requires an external plugin binary — not started by default.
-  # Set SCANNER_PLUGIN_PATH and SCANNER_PLUGIN_CHECKSUM in .env, then:
+  # Scanner is opt-in via the `scanner` profile. Zero config required:
   #   docker compose --profile scanner up -d registry-scanner
+  #
+  # The image ships two adapters that satisfy the JSON-RPC plugin contract:
+  #   /usr/local/bin/scanner-dev-stub      (default — hardcoded findings, for UI demos)
+  #   /usr/local/bin/scanner-trivy-adapter (real CVE detection via Trivy)
+  #
+  # The entrypoint auto-computes SCANNER_PLUGIN_CHECKSUM from the active
+  # binary so neither env var needs a value in dev. Operators wanting real
+  # scans should set SCANNER_PLUGIN_PATH to the trivy adapter; the env
+  # default below empty-falls-through to the Dockerfile default.
   registry-scanner:
     build:
       context: ../../
@@ -710,8 +741,14 @@ services:
       METADATA_GRPC_ADDR: registry-metadata:50051
       STORAGE_GRPC_ADDR: registry-storage:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
-      SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH}
-      SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM}
+      # Scanner owns its own Postgres schema (FE-API-018 scan policies +
+      # FE-API-019 compliance reports). Uses the platform-wide pg container.
+      DB_DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_scanner?sslmode=prefer
+      # Operator override → image default → adapter selection. Empty
+      # values fall through to the Dockerfile's ENV defaults; entrypoint
+      # auto-computes SCANNER_PLUGIN_CHECKSUM from the active binary.
+      SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH:-}
+      SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM:-}
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/scanner.crt
       MTLS_KEY_PATH: /certs/scanner.key

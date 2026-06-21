@@ -148,17 +148,21 @@ export function useScanHistory({
 // Map backend lowercase severity_counts → the SeverityBar's uppercase keys.
 // SeverityBar already exists and consumes Partial<Record<"CRITICAL"...>>;
 // this keeps the scan-history rows compatible with it.
-export function toSeverityBarCounts(c: ScanSeverityCounts): {
+export function toSeverityBarCounts(c: ScanSeverityCounts | null | undefined): {
   CRITICAL: number;
   HIGH: number;
   MEDIUM: number;
   LOW: number;
 } {
+  // Backend may return null severity_counts on pending / failed scans —
+  // collapse to all-zero so callers (e.g. ScanRow's `.CRITICAL + .HIGH + ...`)
+  // never crash on a null read.
+  if (!c) return { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
   return {
-    CRITICAL: c.critical,
-    HIGH: c.high,
-    MEDIUM: c.medium,
-    LOW: c.low,
+    CRITICAL: c.critical ?? 0,
+    HIGH: c.high ?? 0,
+    MEDIUM: c.medium ?? 0,
+    LOW: c.low ?? 0,
   };
 }
 

@@ -56,6 +56,17 @@ export interface TestDispatchResult {
   duration_ms: number;
 }
 
+// FE-API-035 — per-delivery detail. Strict superset of WebhookDelivery
+// with the three payload fields. signature_header and response_body are
+// reserved on the wire today but the dispatcher hasn't been patched to
+// fill them yet — see status.md FE-API-035. Modelling them as empty
+// strings (not nulls) keeps the UI render path uniform.
+export interface WebhookDeliveryDetail extends WebhookDelivery {
+  payload_json: string;
+  signature_header: string;
+  response_body: string;
+}
+
 interface ListResponse {
   endpoints: WebhookEndpoint[];
 }
@@ -79,6 +90,15 @@ export const WEBHOOK_EVENT_CATALOG: Array<{
     key: "push.completed",
     label: "Push completed",
     description: "An image successfully landed in a repository.",
+  },
+  // FE-API-042 — fires on every successful manifest GET. Sampling is
+  // controlled server-side via PULL_EVENT_SAMPLE_RATE; subscribers should
+  // expect high volume on busy registries and rate-limit accordingly.
+  {
+    key: "pull.image",
+    label: "Image pulled",
+    description:
+      "An image was successfully pulled. Fires from the registry on every manifest GET (sampling configurable server-side).",
   },
   {
     key: "push.failed",
@@ -110,6 +130,27 @@ export const WEBHOOK_EVENT_CATALOG: Array<{
     label: "Image signed",
     description: "A Cosign or Notary v2 signature was attached to an image.",
   },
+  // FE-API-041 — retention lifecycle. Operators subscribe to surface
+  // "this policy is about to delete N manifests" notifications in their
+  // incident channels rather than tailing gc_runs.
+  {
+    key: "retention.evaluated",
+    label: "Retention evaluated",
+    description:
+      "A retention sweep evaluated a policy and computed the would-delete set.",
+  },
+  {
+    key: "retention.applied",
+    label: "Retention applied",
+    description:
+      "A retention sweep soft-deleted manifests; grace window starts now.",
+  },
+  {
+    key: "retention.grace_completed",
+    label: "Retention grace completed",
+    description:
+      "A retention grace sweep hard-deleted manifests + freed blobs.",
+  },
 ];
 
 // ── Key factory ─────────────────────────────────────────────────────────────
@@ -119,6 +160,11 @@ export const webhookKeys = {
   list: () => [...webhookKeys.all, "list"] as const,
   detail: (id: string) => [...webhookKeys.all, "detail", id] as const,
   deliveries: (id: string) => [...webhookKeys.all, "deliveries", id] as const,
+  // FE-API-035 — single delivery detail. Keyed by both the endpoint id
+  // and delivery id so two webhooks that share a delivery id (unlikely
+  // but possible during re-seeding) don't share cache entries.
+  delivery: (id: string, deliveryId: string) =>
+    [...webhookKeys.all, "delivery", id, deliveryId] as const,
 };
 
 // ── Hooks ───────────────────────────────────────────────────────────────────
@@ -245,6 +291,32 @@ export function useTestWebhook() {
       );
       return data;
     },
+  });
+}
+
+// FE-API-035 — fetch the full payload for a single delivery. The list
+// route deliberately omits `payload_json` to keep the response small; this
+// route is the one to call when the operator clicks into a row.
+//
+// `enabled` is keyed on both ids being present so the hook can mount in
+// the dialog before the user has picked a row — common with controlled
+// dialogs that initialise to `null` selection.
+export function useDelivery(
+  endpointId: string | undefined,
+  deliveryId: string | undefined,
+) {
+  return useQuery({
+    queryKey: webhookKeys.delivery(endpointId ?? "", deliveryId ?? ""),
+    enabled: Boolean(endpointId && deliveryId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<WebhookDeliveryDetail>(
+        `/webhooks/${encodeURIComponent(endpointId as string)}/deliveries/${encodeURIComponent(deliveryId as string)}`,
+      );
+      return data;
+    },
+    // Payload data is immutable once a delivery row is written, so we can
+    // be generous with staleTime — only re-fetch on explicit invalidation.
+    staleTime: 60_000,
   });
 }
 

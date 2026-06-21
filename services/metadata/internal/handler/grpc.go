@@ -56,7 +56,7 @@ type metadataRepo interface {
 	// Tenant usage aggregate (FE-API-028) — storage + repo + org counts.
 	GetTenantUsage(ctx context.Context, tenantID string) (*metadatav1.TenantUsage, error)
 	// Scan results
-	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32) error
+	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32, repoID, manifestDigest, scannerName, scannerVersion string) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
 	// Per-tag SBOM (FE-API-033) — keyed on the latest scan_results row for the
 	// (tenant_id, manifest_digest) pair.
@@ -75,6 +75,54 @@ type metadataRepo interface {
 	ListTenantRemediations(ctx context.Context, tenantID, pageToken string, limit int) ([]repository.RemediationRow, string, error)
 	// Repository count
 	CountRepositories(ctx context.Context, tenantID string) (int64, error)
+	// FE-API-037: per-repo retention policy CRUD. The handler enforces input
+	// validation; the repository owns the preview_until reset semantics.
+	GetRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) (*metadatav1.RetentionPolicy, error)
+	UpsertRepoRetentionPolicy(
+		ctx context.Context,
+		tenantID, repoID string,
+		enabled bool,
+		rules []*metadatav1.RetentionRule,
+		protectedPatterns []string,
+		updatedBy string,
+	) (*metadatav1.RetentionPolicy, error)
+	DeleteRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) error
+	// FE-API-038: read-only evaluator. Materialises the would-delete /
+	// protected-skipped sets for a candidate policy without persisting it.
+	// Used by both the dry-run endpoint and the preview-window state endpoint
+	// (which loads the saved policy and feeds it back through this same RPC
+	// so the metadata API surface stays small).
+	EvaluateRetention(
+		ctx context.Context,
+		tenantID, repoID string,
+		candidate *metadatav1.RetentionPolicyCandidate,
+		maxDeleteResults, maxProtectedResults int,
+	) (*repository.EvaluationResult, error)
+	// FE-API-039: per-org default retention + inheritance resolution.
+	// GetOrgRetentionPolicy / UpsertOrgRetentionPolicy / DeleteOrgRetentionPolicy
+	// mirror the per-repo CRUD; GetEffectiveRetentionPolicy returns the
+	// per-repo row when present, else the org default (only when enabled),
+	// else ErrNotFound — wrapped with an inherited_from label.
+	GetOrgRetentionPolicy(ctx context.Context, tenantID, orgID string) (*metadatav1.RetentionPolicy, error)
+	UpsertOrgRetentionPolicy(
+		ctx context.Context,
+		tenantID, orgID string,
+		enabled bool,
+		rules []*metadatav1.RetentionRule,
+		protectedPatterns []string,
+		updatedBy string,
+	) (*metadatav1.RetentionPolicy, error)
+	DeleteOrgRetentionPolicy(ctx context.Context, tenantID, orgID string) error
+	GetEffectiveRetentionPolicy(ctx context.Context, tenantID, repoID string) (*repository.EffectivePolicyResult, error)
+	// FE-API-039: read-only org name → org_id lookup so the BFF can map
+	// /api/v1/orgs/{org}/... URLs without an unintended insert.
+	LookupOrgIDByName(ctx context.Context, tenantID, orgName string) (string, error)
+	// FE-API-040: retention executor primitives. MarkManifestRetentionPending
+	// is idempotent (the existing pending timestamp is preserved on re-run);
+	// ListPendingDeleteManifests is the grace-sweep candidate query.
+	MarkManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
+	ClearManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
+	ListPendingDeleteManifests(ctx context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.
@@ -311,7 +359,13 @@ func (h *MetadataHandler) DecrementTenantStorage(ctx context.Context, req *metad
 // ── Scan results ─────────────────────────────────────────────────────────────
 
 func (h *MetadataHandler) UpdateScanStatus(ctx context.Context, req *metadatav1.UpdateScanStatusRequest) (*emptypb.Empty, error) {
-	err := h.repo.UpsertScanResult(ctx, req.ScanId, req.TenantId, req.Status, req.FindingsJson, req.SeverityCounts)
+	err := h.repo.UpsertScanResult(
+		ctx,
+		req.ScanId, req.TenantId, req.Status,
+		req.FindingsJson, req.SeverityCounts,
+		req.RepoId, req.ManifestDigest,
+		req.ScannerName, req.ScannerVersion,
+	)
 	return &emptypb.Empty{}, mapErr(err)
 }
 

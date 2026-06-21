@@ -29,7 +29,15 @@ type Config struct {
 
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
-	RabbitMQURL      string `mapstructure:"RABBITMQ_URL"`
+	// TenantGRPCAddr lets the collector enumerate tenants via the
+	// registry-tenant directory instead of streaming every repository row
+	// from metadata. Optional: when empty the collector falls back to
+	// scanning metadata.ListRepositories — that path used to crash with
+	// `invalid input syntax for type uuid: ""` because metadata's repo
+	// query rejects an empty tenant_id filter. Keep TENANT_GRPC_ADDR set
+	// in any compose / k8s deployment that has tenants.
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+	RabbitMQURL    string `mapstructure:"RABBITMQ_URL"`
 
 	// GCAdvisoryLockDBDSN is a PostgreSQL DSN used solely for pg_try_advisory_lock
 	// coordination. Optional — if unset, advisory locking is disabled (safe for
@@ -58,6 +66,20 @@ type Config struct {
 	BlobMinAgeHours int `mapstructure:"GC_BLOB_MIN_AGE_HOURS"`
 	// ManifestMinAgeHours prevents deleting manifests pushed moments before a tag is attached.
 	ManifestMinAgeHours int `mapstructure:"GC_MANIFEST_MIN_AGE_HOURS"`
+
+	// ─── FE-API-040: retention executor ──────────────────────────────────────
+	//
+	// RetentionGraceDays is the soft-delete window before retention_grace mode
+	// hard-deletes a manifest. Defaults to 7 days — long enough to recover
+	// from an accidental retention policy via the ClearManifestRetentionPending
+	// UI affordance, short enough that forgetting about the window doesn't
+	// leak storage indefinitely.
+	RetentionGraceDays int `mapstructure:"RETENTION_GRACE_DAYS"`
+	// RetentionGraceIntervalHours is the cadence at which the cross-tenant
+	// grace ticker fires a retention_grace sweep. Defaults to 6h — a sweet
+	// spot between "operator sees the grace window count down clearly" and
+	// "we're not putting unbounded pressure on the manifests scan".
+	RetentionGraceIntervalHours int `mapstructure:"RETENTION_GRACE_INTERVAL_HOURS"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -80,6 +102,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("GC_BLOB_MIN_AGE_HOURS", 1)
 	viper.SetDefault("GC_MANIFEST_MIN_AGE_HOURS", 24)
 	viper.SetDefault("DB_MAX_CONNS", 10)
+	// FE-API-040 retention executor defaults.
+	viper.SetDefault("RETENTION_GRACE_DAYS", 7)
+	viper.SetDefault("RETENTION_GRACE_INTERVAL_HOURS", 6)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {

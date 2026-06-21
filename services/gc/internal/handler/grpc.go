@@ -36,6 +36,9 @@ type Repository interface {
 	CreateRun(ctx context.Context, mode string, tenantID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	GetLatest(ctx context.Context) (*repository.GCRun, error)
 	ListRuns(ctx context.Context, limit int, pageToken string) ([]*repository.GCRun, string, error)
+	// FE-API-040 — retention executor surface.
+	CreateRetentionRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
+	GetRunByID(ctx context.Context, runID, tenantID uuid.UUID) (*repository.GCRun, error)
 }
 
 // validModes mirrors the allowlist from the GC_MODE config flag.
@@ -291,4 +294,124 @@ func tsFromOptional(t time.Time) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
+}
+
+// ---------------------------------------------------------------------------
+// FE-API-040 — retention executor RPCs
+// ---------------------------------------------------------------------------
+
+// TriggerRetentionRun queues a retention soft-delete sweep for one repo.
+// The executor runs asynchronously; this RPC returns {run_id, status:"queued"}
+// immediately. The BFF maps it onto POST
+// /api/v1/repositories/{org}/{repo}/policies/retention/run, gated on repo
+// admin / owner since retention eventually deletes manifests.
+func (h *GRPCHandler) TriggerRetentionRun(ctx context.Context, req *gcv1.TriggerRetentionRunRequest) (*gcv1.TriggerRetentionRunResponse, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "gc repository not configured")
+	}
+	if h.runRequests == nil {
+		return nil, status.Error(codes.FailedPrecondition, "gc dispatcher not configured")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetRepoId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "repo_id is required")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	repoID, err := uuid.Parse(req.GetRepoId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "repo_id must be a UUID")
+	}
+	if req.GetTriggeredBy() == "" {
+		return nil, status.Error(codes.InvalidArgument, "triggered_by is required")
+	}
+	if _, err := uuid.Parse(req.GetTriggeredBy()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "triggered_by must be a UUID")
+	}
+
+	rec, err := h.repo.CreateRetentionRun(ctx, "retention", tenantID, repoID, req.GetTriggeredBy())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "create retention run: %v", err)
+	}
+	// Best-effort dispatcher notify. The persisted row is the source of
+	// truth — a full channel just means the dispatcher will pick up the row
+	// on its next poll instead.
+	select {
+	case h.runRequests <- rec.RunID:
+	default:
+	}
+	return &gcv1.TriggerRetentionRunResponse{
+		RunId:  rec.RunID.String(),
+		Status: "queued",
+	}, nil
+}
+
+// GetRetentionRunStatus reads back a single retention run row by id. Tenant
+// scoping is enforced server-side via the GetRunByID query so a caller can
+// only see their own tenant's runs.
+func (h *GRPCHandler) GetRetentionRunStatus(ctx context.Context, req *gcv1.GetRetentionRunStatusRequest) (*gcv1.RetentionRunSummary, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "gc repository not configured")
+	}
+	if req.GetRunId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "run_id is required")
+	}
+	runID, err := uuid.Parse(req.GetRunId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "run_id must be a UUID")
+	}
+	var tenantID uuid.UUID
+	if req.GetTenantId() != "" {
+		tenantID, err = uuid.Parse(req.GetTenantId())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+		}
+	}
+
+	rec, err := h.repo.GetRunByID(ctx, runID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "run not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get run: %v", err)
+	}
+
+	out := &gcv1.RetentionRunSummary{
+		RunId:        rec.RunID.String(),
+		RepoId:       rec.RepoID.String(),
+		Mode:         rec.Mode,
+		Status:       rec.Status,
+		RequestedAt:  timestamppb.New(rec.RequestedAt),
+		ErrorMessage: rec.ErrorMessage,
+		TriggeredBy:  rec.TriggeredBy,
+	}
+	if ts := tsFromOptional(rec.StartedAt); ts != nil {
+		out.StartedAt = ts
+	}
+	if ts := tsFromOptional(rec.CompletedAt); ts != nil {
+		out.CompletedAt = ts
+	}
+	// Mode-specific counter mapping. The gc_runs row carries one
+	// manifests_deleted column; the retention executor stores marks +
+	// hard-deletes in the same place but the wire shape splits them for
+	// dashboard clarity.
+	switch rec.Mode {
+	case "retention":
+		out.ManifestsMarked = rec.ManifestsDeleted
+	case "retention_grace":
+		out.ManifestsDeleted = rec.ManifestsDeleted
+		out.BlobsFreed = rec.BlobsFreed
+		out.BytesFreed = rec.BytesFreed
+	}
+	// Zero RepoID on the wire surfaces the empty string rather than the
+	// zero-UUID sentinel — the BFF and dashboard expect "" for cross-tenant
+	// rows.
+	if rec.RepoID == uuid.Nil {
+		out.RepoId = ""
+	}
+	return out, nil
 }

@@ -21,7 +21,9 @@ import {
   type DeliveryStatus,
   type WebhookDelivery,
 } from "@/lib/api/webhooks";
-import { ComingSoonHint } from "@/components/common/coming-soon-hint";
+// FE-API-035 — payload reveal dialog. Rows in the panel are clickable
+// and open the dialog with the delivery's full request + response detail.
+import { DeliveryDetailDialog } from "@/components/webhooks/delivery-detail-dialog";
 import { cn } from "@/lib/utils";
 
 interface DeliveriesPanelProps {
@@ -49,6 +51,12 @@ export function DeliveriesPanel({
     id: endpointId,
     limit: 50,
   });
+  // FE-API-035 — `selected` drives the detail dialog. We keep a separate
+  // `dialogOpen` flag so Radix's onOpenChange(false) close animation
+  // doesn't immediately clear `selected` (otherwise the badge / id flicker
+  // mid-fade-out as the data unmounts a frame too early).
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = React.useState(false);
 
   if (isError) {
     return (
@@ -90,47 +98,84 @@ export function DeliveriesPanel({
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-            Recent deliveries
-          </CardDescription>
-          <span className="text-xs text-[var(--color-fg-muted)]">
-            {data.length} {data.length === 1 ? "event" : "events"}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <ol className="relative space-y-5">
-          {/* Vertical rail behind the status dots */}
-          <span
-            aria-hidden
-            className="absolute left-[7px] top-2 bottom-2 w-px bg-[var(--color-border)]"
-          />
-          {data.map((d) => (
-            <DeliveryRow key={d.delivery_id} delivery={d} />
-          ))}
-        </ol>
-        <ComingSoonHint apiId="FE-API-035">
-          Expand-row will show the request payload + response body in monospace
-          blocks for debugging. Today the list deliberately omits payload to
-          keep the response small.
-        </ComingSoonHint>
-      </CardContent>
-    </Card>
+    <>
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+              Recent deliveries
+            </CardDescription>
+            <span className="text-xs text-[var(--color-fg-muted)]">
+              {data.length} {data.length === 1 ? "event" : "events"}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ol className="relative space-y-5">
+            {/* Vertical rail behind the status dots */}
+            <span
+              aria-hidden
+              className="absolute left-[7px] top-2 bottom-2 w-px bg-[var(--color-border)]"
+            />
+            {data.map((d) => (
+              <DeliveryRow
+                key={d.delivery_id}
+                delivery={d}
+                onSelect={() => {
+                  setSelected(d.delivery_id);
+                  setDialogOpen(true);
+                }}
+              />
+            ))}
+          </ol>
+          <p className="text-[11px] text-[var(--color-fg-subtle)]">
+            Click any row for the request payload + response body.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* FE-API-035 — payload + signature + response detail. */}
+      <DeliveryDetailDialog
+        open={dialogOpen}
+        onOpenChange={(o) => {
+          setDialogOpen(o);
+          // Defer clearing the selection until the next tick so the
+          // close animation doesn't unmount the badge/id mid-fade.
+          if (!o) window.setTimeout(() => setSelected(null), 200);
+        }}
+        endpointId={endpointId}
+        deliveryId={selected ?? undefined}
+      />
+    </>
   );
 }
 
 function DeliveryRow({
   delivery,
+  onSelect,
 }: {
   delivery: WebhookDelivery;
+  onSelect: () => void;
 }): React.ReactElement {
   const meta = STATUS_META[delivery.status];
   const Icon = meta.icon;
   return (
-    <li className="relative flex gap-4">
+    // The whole row is a button so keyboard users (Enter / Space) reach the
+    // dialog too — wrapping the timeline marker + content in <button> would
+    // collapse the layout, so we render a <li> with role="button" instead.
+    <li
+      className="relative flex cursor-pointer gap-4 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-surface-sunken)]"
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      aria-label={`Open delivery ${delivery.delivery_id}`}
+    >
       <span
         aria-hidden
         className={cn(

@@ -31,9 +31,11 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	GCService_GetStatus_FullMethodName = "/registry.gc.v1.GCService/GetStatus"
-	GCService_RunNow_FullMethodName    = "/registry.gc.v1.GCService/RunNow"
-	GCService_ListRuns_FullMethodName  = "/registry.gc.v1.GCService/ListRuns"
+	GCService_GetStatus_FullMethodName             = "/registry.gc.v1.GCService/GetStatus"
+	GCService_RunNow_FullMethodName                = "/registry.gc.v1.GCService/RunNow"
+	GCService_ListRuns_FullMethodName              = "/registry.gc.v1.GCService/ListRuns"
+	GCService_TriggerRetentionRun_FullMethodName   = "/registry.gc.v1.GCService/TriggerRetentionRun"
+	GCService_GetRetentionRunStatus_FullMethodName = "/registry.gc.v1.GCService/GetRetentionRunStatus"
 )
 
 // GCServiceClient is the client API for GCService service.
@@ -59,6 +61,21 @@ type GCServiceClient interface {
 	// so an in-flight run sits at the top of the list. Pagination is
 	// opaque base64 keyset on (completed_at, run_id).
 	ListRuns(ctx context.Context, in *ListRunsRequest, opts ...grpc.CallOption) (*ListRunsResponse, error)
+	// TriggerRetentionRun queues a soft-delete pass for a specific repository.
+	// The CronLoop dispatcher picks up the queued row, calls
+	// metadata.GetEffectiveRetentionPolicy + metadata.EvaluateRetention against
+	// the saved policy, and marks every matched manifest with
+	// retention_pending_delete_at. Returns the run_id immediately; the run
+	// executes asynchronously.
+	//
+	// A separate RPC (rather than overloading RunNow) because the semantics
+	// differ: RunNow is tenant-wide and platform-admin-only, TriggerRetentionRun
+	// is repo-scoped and gated on repo admin / owner.
+	TriggerRetentionRun(ctx context.Context, in *TriggerRetentionRunRequest, opts ...grpc.CallOption) (*TriggerRetentionRunResponse, error)
+	// GetRetentionRunStatus reads back a single retention run row by id. Lets
+	// a repo admin poll their own retention sweeps without needing the
+	// platform-admin marker required by ListRuns.
+	GetRetentionRunStatus(ctx context.Context, in *GetRetentionRunStatusRequest, opts ...grpc.CallOption) (*RetentionRunSummary, error)
 }
 
 type gCServiceClient struct {
@@ -99,6 +116,26 @@ func (c *gCServiceClient) ListRuns(ctx context.Context, in *ListRunsRequest, opt
 	return out, nil
 }
 
+func (c *gCServiceClient) TriggerRetentionRun(ctx context.Context, in *TriggerRetentionRunRequest, opts ...grpc.CallOption) (*TriggerRetentionRunResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TriggerRetentionRunResponse)
+	err := c.cc.Invoke(ctx, GCService_TriggerRetentionRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gCServiceClient) GetRetentionRunStatus(ctx context.Context, in *GetRetentionRunStatusRequest, opts ...grpc.CallOption) (*RetentionRunSummary, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RetentionRunSummary)
+	err := c.cc.Invoke(ctx, GCService_GetRetentionRunStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GCServiceServer is the server API for GCService service.
 // All implementations should embed UnimplementedGCServiceServer
 // for forward compatibility
@@ -122,6 +159,21 @@ type GCServiceServer interface {
 	// so an in-flight run sits at the top of the list. Pagination is
 	// opaque base64 keyset on (completed_at, run_id).
 	ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error)
+	// TriggerRetentionRun queues a soft-delete pass for a specific repository.
+	// The CronLoop dispatcher picks up the queued row, calls
+	// metadata.GetEffectiveRetentionPolicy + metadata.EvaluateRetention against
+	// the saved policy, and marks every matched manifest with
+	// retention_pending_delete_at. Returns the run_id immediately; the run
+	// executes asynchronously.
+	//
+	// A separate RPC (rather than overloading RunNow) because the semantics
+	// differ: RunNow is tenant-wide and platform-admin-only, TriggerRetentionRun
+	// is repo-scoped and gated on repo admin / owner.
+	TriggerRetentionRun(context.Context, *TriggerRetentionRunRequest) (*TriggerRetentionRunResponse, error)
+	// GetRetentionRunStatus reads back a single retention run row by id. Lets
+	// a repo admin poll their own retention sweeps without needing the
+	// platform-admin marker required by ListRuns.
+	GetRetentionRunStatus(context.Context, *GetRetentionRunStatusRequest) (*RetentionRunSummary, error)
 }
 
 // UnimplementedGCServiceServer should be embedded to have forward compatible implementations.
@@ -136,6 +188,12 @@ func (UnimplementedGCServiceServer) RunNow(context.Context, *RunNowRequest) (*Ru
 }
 func (UnimplementedGCServiceServer) ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListRuns not implemented")
+}
+func (UnimplementedGCServiceServer) TriggerRetentionRun(context.Context, *TriggerRetentionRunRequest) (*TriggerRetentionRunResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TriggerRetentionRun not implemented")
+}
+func (UnimplementedGCServiceServer) GetRetentionRunStatus(context.Context, *GetRetentionRunStatusRequest) (*RetentionRunSummary, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRetentionRunStatus not implemented")
 }
 
 // UnsafeGCServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -203,6 +261,42 @@ func _GCService_ListRuns_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GCService_TriggerRetentionRun_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TriggerRetentionRunRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GCServiceServer).TriggerRetentionRun(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GCService_TriggerRetentionRun_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GCServiceServer).TriggerRetentionRun(ctx, req.(*TriggerRetentionRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GCService_GetRetentionRunStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRetentionRunStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GCServiceServer).GetRetentionRunStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GCService_GetRetentionRunStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GCServiceServer).GetRetentionRunStatus(ctx, req.(*GetRetentionRunStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GCService_ServiceDesc is the grpc.ServiceDesc for GCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -221,6 +315,14 @@ var GCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListRuns",
 			Handler:    _GCService_ListRuns_Handler,
+		},
+		{
+			MethodName: "TriggerRetentionRun",
+			Handler:    _GCService_TriggerRetentionRun_Handler,
+		},
+		{
+			MethodName: "GetRetentionRunStatus",
+			Handler:    _GCService_GetRetentionRunStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

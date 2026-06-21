@@ -31,6 +31,10 @@ const (
 	adminToken     = "admin-token"
 	writerToken    = "writer-token"
 	readerToken    = "reader-token"
+	// ownerToken is used by FE-API-037 tests to assert that owner role on the
+	// repo's parent org is sufficient for retention PUT/DELETE — matching the
+	// admin-level gating.
+	ownerToken     = "owner-token"
 	testTenantID   = "00000000-0000-0000-0000-000000000001"
 	testUserID     = "00000000-0000-0000-0000-000000000099"
 	testRepoID     = "00000000-0000-0000-0000-000000000010"
@@ -55,6 +59,8 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "writer-user"}, nil
 	case readerToken:
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "reader-user"}, nil
+	case ownerToken:
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "owner-user"}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -77,6 +83,13 @@ func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUs
 			Roles: []string{"writer"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "assign-writer", UserId: "writer-user", Role: "writer", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
+	case "owner-user":
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"owner"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "assign-owner", UserId: "owner-user", Role: "owner", ScopeType: "org", ScopeValue: "myorg"},
 			},
 		}, nil
 	default:
@@ -547,6 +560,214 @@ func (s *fakeAuditServer) GetAnalytics(_ context.Context, req *auditv1.GetAnalyt
 		Total:      7,
 		RangeStart: timestamppb.New(rangeStart),
 	}, nil
+}
+
+// FE-API-037: per-repo retention policy fakes. Tests set the *Override
+// fields to drive the response; the *Call mirrors the most recent request
+// so the test can assert wiring. Both delete and get also support specific
+// gRPC errors via *Err so the 404/500 branches are exercisable.
+var (
+	getRetentionOverride *metadatav1.RetentionPolicy
+	getRetentionErr      error
+	upsertRetentionCall  *metadatav1.UpsertRepoRetentionPolicyRequest
+	upsertRetentionErr   error
+	deleteRetentionCall  *metadatav1.DeleteRepoRetentionPolicyRequest
+	deleteRetentionErr   error
+)
+
+func (s *fakeMetaServer) GetRepoRetentionPolicy(_ context.Context, req *metadatav1.GetRepoRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	if getRetentionErr != nil {
+		return nil, getRetentionErr
+	}
+	if getRetentionOverride != nil {
+		return getRetentionOverride, nil
+	}
+	// Default canned policy so the GET happy-path test has fields to inspect.
+	return &metadatav1.RetentionPolicy{
+		RepoId:               req.GetRepoId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              true,
+		Rules:                []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+		ProtectedTagPatterns: []string{"latest"},
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+	}, nil
+}
+
+func (s *fakeMetaServer) UpsertRepoRetentionPolicy(_ context.Context, req *metadatav1.UpsertRepoRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	upsertRetentionCall = req
+	if upsertRetentionErr != nil {
+		return nil, upsertRetentionErr
+	}
+	return &metadatav1.RetentionPolicy{
+		RepoId:               req.GetRepoId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              req.GetEnabled(),
+		Rules:                req.GetRules(),
+		ProtectedTagPatterns: req.GetProtectedTagPatterns(),
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+		UpdatedBy:            req.GetUpdatedBy(),
+	}, nil
+}
+
+func (s *fakeMetaServer) DeleteRepoRetentionPolicy(_ context.Context, req *metadatav1.DeleteRepoRetentionPolicyRequest) (*emptypb.Empty, error) {
+	deleteRetentionCall = req
+	if deleteRetentionErr != nil {
+		return nil, deleteRetentionErr
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// FE-API-038 retention evaluator fake. evalRetentionCall captures the most
+// recent request so dry-run tests can assert candidate forwarding + cap
+// values, evalRetentionResp lets tests stub a custom response (would-delete
+// shape, totals, truncation flag), and evalRetentionErr exercises the
+// NotFound / Internal branches.
+var (
+	evalRetentionCall *metadatav1.EvaluateRetentionRequest
+	evalRetentionResp *metadatav1.EvaluateRetentionResponse
+	evalRetentionErr  error
+)
+
+func (s *fakeMetaServer) EvaluateRetention(_ context.Context, req *metadatav1.EvaluateRetentionRequest) (*metadatav1.EvaluateRetentionResponse, error) {
+	evalRetentionCall = req
+	if evalRetentionErr != nil {
+		return nil, evalRetentionErr
+	}
+	if evalRetentionResp != nil {
+		return evalRetentionResp, nil
+	}
+	// Default canned response so the happy-path dry-run + preview tests have
+	// a stable shape to inspect. One deletion candidate + one protected entry
+	// + small totals — enough to verify the JSON wire shape without flooding
+	// the test assertions.
+	return &metadatav1.EvaluateRetentionResponse{
+		WouldDelete: []*metadatav1.RetentionDeletionCandidate{
+			{
+				ManifestId:     "00000000-0000-0000-0000-000000000001",
+				ManifestDigest: "sha256:aaaa",
+				Tags:           []string{"v1.0"},
+				PushedAt:       timestamppb.New(time.Now().Add(-100 * 24 * time.Hour)),
+				SizeBytes:      1024,
+				Reasons:        []string{"max_age_days"},
+			},
+		},
+		ProtectedSkipped: []*metadatav1.RetentionProtectedManifest{
+			{
+				ManifestId:     "00000000-0000-0000-0000-000000000002",
+				ManifestDigest: "sha256:bbbb",
+				Tags:           []string{"latest"},
+				MatchedPattern: "latest",
+			},
+		},
+		TotalCount:   47,
+		TotalBytes:   1_234_567_890,
+		EvaluatedAt:  timestamppb.Now(),
+		Truncated:    false,
+	}, nil
+}
+
+// FE-API-039: per-org default retention + inheritance fakes.
+//
+// The package-level state mirrors the per-repo retention pattern above:
+// tests set the *Override fields to drive the GET response, the *Call
+// mirrors the most recent request so tests can assert wiring, and the
+// *Err fields exercise the 404 / 403 branches.
+//
+// effectiveRetentionOverride drives the per-repo GET's FE-API-039 fallback
+// path — when GetRepoRetentionPolicy returns NotFound, the BFF calls
+// GetEffectiveRetentionPolicy. Tests that want the inheritance fallback set
+// effectiveRetentionOverride; tests that want the "no policy anywhere"
+// behaviour leave it nil so the default fake returns NotFound.
+//
+// The "myorg" org name maps to testOrgID via lookupOrgIDByNameOverride —
+// tests that exercise the resolve-failure path set lookupOrgIDByNameErr.
+var (
+	getOrgRetentionOverride *metadatav1.RetentionPolicy
+	getOrgRetentionErr      error
+	upsertOrgRetentionCall  *metadatav1.UpsertOrgRetentionPolicyRequest
+	upsertOrgRetentionErr   error
+	deleteOrgRetentionCall  *metadatav1.DeleteOrgRetentionPolicyRequest
+	deleteOrgRetentionErr   error
+
+	effectiveRetentionOverride *metadatav1.EffectiveRetentionPolicy
+	effectiveRetentionErr      error
+
+	lookupOrgIDByNameErr error
+)
+
+func (s *fakeMetaServer) GetOrgRetentionPolicy(_ context.Context, req *metadatav1.GetOrgRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	if getOrgRetentionErr != nil {
+		return nil, getOrgRetentionErr
+	}
+	if getOrgRetentionOverride != nil {
+		return getOrgRetentionOverride, nil
+	}
+	// Default canned org default so the GET happy-path test has fields.
+	return &metadatav1.RetentionPolicy{
+		OrgId:                req.GetOrgId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              true,
+		Rules:                []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 90}},
+		ProtectedTagPatterns: []string{"latest"},
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+	}, nil
+}
+
+func (s *fakeMetaServer) UpsertOrgRetentionPolicy(_ context.Context, req *metadatav1.UpsertOrgRetentionPolicyRequest) (*metadatav1.RetentionPolicy, error) {
+	upsertOrgRetentionCall = req
+	if upsertOrgRetentionErr != nil {
+		return nil, upsertOrgRetentionErr
+	}
+	return &metadatav1.RetentionPolicy{
+		OrgId:                req.GetOrgId(),
+		TenantId:             req.GetTenantId(),
+		Enabled:              req.GetEnabled(),
+		Rules:                req.GetRules(),
+		ProtectedTagPatterns: req.GetProtectedTagPatterns(),
+		PreviewUntil:         timestamppb.New(time.Now().Add(24 * time.Hour)),
+		CreatedAt:            timestamppb.Now(),
+		UpdatedAt:            timestamppb.Now(),
+		UpdatedBy:            req.GetUpdatedBy(),
+	}, nil
+}
+
+func (s *fakeMetaServer) DeleteOrgRetentionPolicy(_ context.Context, req *metadatav1.DeleteOrgRetentionPolicyRequest) (*emptypb.Empty, error) {
+	deleteOrgRetentionCall = req
+	if deleteOrgRetentionErr != nil {
+		return nil, deleteOrgRetentionErr
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *fakeMetaServer) GetEffectiveRetentionPolicy(_ context.Context, req *metadatav1.GetEffectiveRetentionPolicyRequest) (*metadatav1.EffectiveRetentionPolicy, error) {
+	if effectiveRetentionErr != nil {
+		return nil, effectiveRetentionErr
+	}
+	if effectiveRetentionOverride != nil {
+		return effectiveRetentionOverride, nil
+	}
+	// Default: NotFound. The per-repo GET FE-API-039 fallback hits this when
+	// no test has primed an override, matching the "no policy anywhere" case.
+	return nil, status.Error(codes.NotFound, "not found")
+}
+
+func (s *fakeMetaServer) LookupOrgIDByName(_ context.Context, req *metadatav1.LookupOrgIDByNameRequest) (*metadatav1.LookupOrgIDByNameResponse, error) {
+	if lookupOrgIDByNameErr != nil {
+		return nil, lookupOrgIDByNameErr
+	}
+	// Map "myorg" → testOrgID so the FE-API-039 routes resolve without
+	// per-test setup. Any other name → NotFound so a typo'd path falls
+	// through to a clean 404.
+	if req.GetName() == "myorg" {
+		return &metadatav1.LookupOrgIDByNameResponse{OrgId: testOrgID}, nil
+	}
+	return nil, status.Error(codes.NotFound, "not found")
 }
 
 // fakeHealthServer always returns SERVING.

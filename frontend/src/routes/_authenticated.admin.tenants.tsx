@@ -16,7 +16,8 @@ import { CreateTenantDialog } from "@/components/admin/create-tenant-dialog";
 import { SetQuotaDialog } from "@/components/admin/set-quota-dialog";
 import { DeleteTenantDialog } from "@/components/admin/delete-tenant-dialog";
 import { TenantDetailDrawer } from "@/components/admin/tenant-detail-drawer";
-import { ComingSoon } from "@/components/common/coming-soon";
+// S9.5 — FE-API-032 replaces the prior ComingSoon panel for GC visibility.
+import { GCCard } from "@/components/admin/gc-card";
 import {
   useAdminTenants,
   type AdminTenant,
@@ -116,18 +117,8 @@ function AdminTenantsPage(): React.ReactElement {
         />
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ComingSoon
-          apiId="FE-API-032"
-          title="Housekeeping — garbage collection"
-          description="services/gc runs as a cron today with no read API. A status RPC plus an optional on-demand trigger surface this card so platform admins can see what was freed last night."
-          highlights={[
-            "Last run: mode, duration, blobs freed, manifests deleted",
-            "Next scheduled run time",
-            "Run-now CTA gated behind type-to-confirm — full GC is expensive",
-          ]}
-        />
-      </div>
+      {/* FE-API-032 — GC status + history + run-now. */}
+      <GCCard />
 
       <CreateTenantDialog
         open={createOpen}

@@ -2,6 +2,10 @@
 
 > Living tracker for the frontend rebuild on branch `feat/frontend-rebuild`.
 > Started 2026-06-19. Owner: AI-assisted build. Aesthetic codename: **Beacon**.
+>
+> Related: [`status.md`](status.md) (backend), [`futures.md`](futures.md)
+> (prioritized backlog of unsprinted items — MFA, tag immutability,
+> admission policy, SCIM, etc. — that don't yet have FE-API numbers).
 
 ---
 
@@ -60,7 +64,10 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S9.1 | Tag-detail signing + supply chain | DONE ✅ (`8a7271f`) | FE-API-025 verify-on-demand, FE-API-026 sign-from-UI dialog, FE-API-033 SBOM download |
 | S9.2 | Workspace metadata + notifications + custom domains | DONE ✅ (`52178b1`) | FE-API-007/009 workspace identity, FE-API-008 notifications topbar bell + `/activity` live feed, FE-API-027 `/workspace/domains` CRUD |
 | S9.3 | Workspace-wide security center | DONE ✅ (`5968bf0`) | FE-API-014 vulnerabilities table, FE-API-015 scan history timeline |
-| S9 | Remaining stubs (S9.4+) | IN PROGRESS | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-030 analytics charts, FE-API-031 storage breakdown, FE-API-032 admin GC, FE-API-034 SSO admin / login |
+| S9.4 | Analytics + storage + admin tenant detail + bulk delete | DONE ✅ (`2e983fc`) | FE-API-028 admin tenant drawer, FE-API-029 rename/plan edit, FE-API-030 analytics sparkline (dashboard + repo), FE-API-031 storage breakdown card, FE-API-036 bulk tag delete |
+| S9.5 | Remaining stubs (mop-up) | DONE ✅ (this commit) | FE-API-017 remediation table, FE-API-018 scan policy editor (Switch + radio + chip CVEs), FE-API-019 compliance reports tab with generate + PDF/SBOM download + smart polling, FE-API-020 scan coverage + freshness card, FE-API-032 admin GC card (status + history + type-to-confirm run-now), FE-API-035 webhook delivery payload reveal dialog. Every ComingSoon panel for a backend-DONE surface is gone. |
+| REM-011 P1 FE | Stuck-scan graceful degradation on tag detail | DONE ✅ (`8debd29`) | `ScanPanel` flips to "Scanner isn't producing results" after 90s of `pending` with no row; surfaces the `docker compose --profile scanner up` command inline. Client-side heuristic only — replaced by FE-API-047 liveness in P2. Backend tracked in `status.md` → REM-011 Phase 1. |
+| REM-011 P2 FE | Platform-admin scanner adapter page | DONE ✅ (this commit) | New `/admin/scanner` route — health card up top (worker pool status, queue depth, in-flight, last-success), adapter grid below with `accentBar="success"` + "Active" badge on the chosen one, "Make active" type-to-confirm dialog on the rest, "Run test scan" button on the active card with inline result panel (SeverityBar + duration + scanner version), sidebar entry gated on platform-admin marker grant. `ScanPanel` upgraded — `InFlightCard` now reads `useScannerHealth({ refetchInterval: 15s })` and flips to "Scanner isn't producing results" immediately on `healthy=false`, falling back to the old 90s heuristic for non-admins / 404 BFFs. |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
 | S11 | Retention policies | NOT STARTED | per-repo "Retention" tab on repo-detail (FE-API-037 CRUD + FE-API-038 dry-run + FE-API-043 activity rule); per-org "Default retention" section on org page (FE-API-039); "Pending deletion" badges on tag rows; gc admin "Retention" tile (FE-API-040 housekeeping summary). **RBAC**: repo `admin`/`owner` writes per-repo policy; org `admin`/`owner` writes org default; readers see "(inherited from org default)" labelling — never platform-admin tier. |
 
@@ -68,7 +75,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 
 ## Snapshot (as of 2026-06-21)
 
-> Sprint 9 sub-passes 9.1/9.2/9.3 landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`). Remaining S9 work (remediation, scan policies CRUD, compliance reports, analytics charts, storage breakdown, admin GC, SSO admin) tracked in S9.4+.
+> Sprint 9 sub-passes 9.1/9.2/9.3/9.4 all landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`), analytics + storage breakdown + admin tenant drawer + bulk tag delete (`2e983fc`). **REM-011 fully shipped** — Phase 1 (`8debd29`) backend + FE stuck-pending degradation, Phase 2 backend (`bd4ba1d`) adapter registry + live swap + 5 admin RPCs, Phase 2 FE (this commit) `/admin/scanner` route + liveness-driven `ScanPanel` upgrade. Next FE work: S9.5 mop-up (FE-API-017/018/019/020/032/035), S8 polish, or S10 docs.
 
 **Routes shipped & wired against real backend (no stubs):**
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,25 @@ import (
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 )
 
+// VersionRecorder is the narrow contract the worker needs to backfill the
+// adapter registry's per-name version cache after a successful scan. The
+// real adapter registry satisfies this; tests pass a no-op or fake.
+//
+// Kept tiny + behind an interface so the worker package doesn't have to
+// import services/scanner/internal/registry (which would risk cycles —
+// the registry has no business depending on the worker, but Go's import
+// cycle rules treat the reverse just as carefully).
+type VersionRecorder interface {
+	RecordVersion(name, version string)
+}
+
+// noopVersionRecorder is the default when SetVersionRecorder hasn't been
+// called yet (e.g. existing tests that construct Pool without wiring the
+// registry). Keeps doScan/runJob branch-free.
+type noopVersionRecorder struct{}
+
+func (noopVersionRecorder) RecordVersion(string, string) {}
+
 // ociManifest is the minimal subset of an OCI/Docker manifest we need to extract layer digests.
 type ociManifest struct {
 	Layers []struct {
@@ -32,14 +52,38 @@ type ociManifest struct {
 }
 
 // Pool manages a fixed-size pool of scan worker goroutines.
+//
+// scanner is an atomic.Pointer so SetScanner can swap the active adapter
+// without restarting the worker goroutines or interrupting in-flight scans
+// (REM-011 Phase 2). Each call to doScan reads the pointer exactly once
+// per job, so a swap mid-batch causes the next job to pick up the new
+// adapter while running jobs finish on their original adapter.
+//
+// inFlight + lastSuccessAt are maintained for GetScannerHealth. They are
+// atomic because runJob is the only writer and many gRPC handlers can be
+// reading concurrently.
 type Pool struct {
-	scanner    plugin.Scanner
-	metaClient metadatav1.MetadataServiceClient
+	scanner atomic.Pointer[plugin.Scanner]
+	// versionRec is an atomic.Pointer so swap-time the dynamic type stays
+	// constant (atomic.Value panics if subsequent Stores present a
+	// different concrete type than the first one — the original
+	// implementation hit that with noopVersionRecorder vs *registry.Registry).
+	// Always non-nil after NewPool; defaults to a pointer to the no-op.
+	versionRec  atomic.Pointer[VersionRecorder]
+	metaClient  metadatav1.MetadataServiceClient
 	storageConn *grpc.ClientConn
-	pub        *publisher.Publisher
-	scanStore  *store.Store
-	jobs       chan scanJob
-	timeout    time.Duration
+	pub         *publisher.Publisher
+	scanStore   *store.Store
+	jobs        chan scanJob
+	timeout     time.Duration
+
+	// inFlight is the number of scans currently executing on a worker
+	// goroutine. Incremented at runJob entry, decremented on exit.
+	inFlight atomic.Int64
+	// lastSuccessAtNanos is the UnixNano of the most recent successful
+	// scan completion. Zero means "never". Read atomically; converted
+	// back to time.Time at read by the gRPC handler.
+	lastSuccessAtNanos atomic.Int64
 }
 
 type scanJob struct {
@@ -52,6 +96,10 @@ type scanJob struct {
 }
 
 // NewPool creates a Pool with workerCount goroutines ready to process jobs.
+//
+// scanner is the initial active adapter; SetScanner can replace it later
+// without restarting the pool. The pointer indirection is internal — callers
+// just pass the same plugin.Scanner they always have.
 func NewPool(
 	scanner plugin.Scanner,
 	metaConn *grpc.ClientConn,
@@ -61,8 +109,7 @@ func NewPool(
 	workerCount int,
 	jobTimeout time.Duration,
 ) *Pool {
-	return &Pool{
-		scanner:     scanner,
+	p := &Pool{
 		metaClient:  metadatav1.NewMetadataServiceClient(metaConn),
 		storageConn: storageConn,
 		pub:         pub,
@@ -70,6 +117,62 @@ func NewPool(
 		jobs:        make(chan scanJob, workerCount*2),
 		timeout:     jobTimeout,
 	}
+	p.scanner.Store(&scanner)
+	// Default to a no-op recorder so doScan never has to nil-check.
+	var noop VersionRecorder = noopVersionRecorder{}
+	p.versionRec.Store(&noop)
+	return p
+}
+
+// SetScanner atomically replaces the active scanner adapter. In-flight
+// scans complete on their pre-swap adapter; the next job picks up the
+// new one. Safe to call concurrently with Enqueue / runJob.
+//
+// Pass a non-nil scanner — a nil here would surface as a nil-deref
+// inside doScan, which is harder to debug than a clear panic at the
+// call site. Production callers (server.Run handling SetActiveAdapter)
+// always build the scanner first via plugin.New, which itself rejects
+// nil.
+func (p *Pool) SetScanner(s plugin.Scanner) {
+	if s == nil {
+		panic("worker.Pool.SetScanner: nil scanner")
+	}
+	p.scanner.Store(&s)
+}
+
+// SetVersionRecorder wires the adapter registry's RecordVersion hook so
+// successful scans backfill the registry's per-adapter version cache.
+// Safe to call once at startup; concurrent calls are also fine.
+func (p *Pool) SetVersionRecorder(v VersionRecorder) {
+	if v == nil {
+		v = noopVersionRecorder{}
+	}
+	p.versionRec.Store(&v)
+}
+
+// activeScanner returns the currently active adapter, read atomically.
+// Loop bodies in doScan use this exactly once per job to make the swap
+// semantics obvious.
+func (p *Pool) activeScanner() plugin.Scanner {
+	return *p.scanner.Load()
+}
+
+// QueueDepth is the number of jobs waiting in the buffered channel.
+// Cheap len() on a channel — safe to call from any goroutine.
+func (p *Pool) QueueDepth() int { return len(p.jobs) }
+
+// InFlightCount is the number of scans currently executing on worker
+// goroutines.
+func (p *Pool) InFlightCount() int64 { return p.inFlight.Load() }
+
+// LastSuccessAt returns the timestamp of the most recent successful scan,
+// or the zero time when no scan has succeeded since process start.
+func (p *Pool) LastSuccessAt() time.Time {
+	n := p.lastSuccessAtNanos.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n).UTC()
 }
 
 // Start launches workerCount goroutines that consume from the internal jobs channel.
@@ -154,7 +257,14 @@ func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) erro
 }
 
 // runJob executes the full scan lifecycle for one job.
+//
+// in-flight counter is incremented before any work and deferred back so
+// even a panic in doScan leaves the counter consistent for the next
+// GetScannerHealth call.
 func (p *Pool) runJob(ctx context.Context, job scanJob) {
+	p.inFlight.Add(1)
+	defer p.inFlight.Add(-1)
+
 	jobCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
@@ -168,12 +278,29 @@ func (p *Pool) runJob(ctx context.Context, job scanJob) {
 			"error", err,
 		)
 		p.scanStore.SetFailed(job.scanID)
-		p.persistScanStatus(ctx, job, "failed", nil, nil)
+		// Result is nil here — the plugin never completed. Pass it
+		// through so persistScanStatus can backfill placeholder
+		// scanner_name/version values to satisfy NOT NULL columns.
+		p.persistScanStatus(ctx, job, "failed", nil, nil, nil)
 		return
 	}
 
 	p.scanStore.SetComplete(job.scanID, result.SeverityCounts)
-	p.persistScanStatus(ctx, job, "complete", result.SeverityCounts, marshalFindings(result))
+	p.persistScanStatus(ctx, job, "complete", result.SeverityCounts, marshalFindings(result), result)
+	// Mark the timestamp only after the full success path including
+	// the persist call — partial success (plugin returned but metadata
+	// write failed) should not bump health stats.
+	p.lastSuccessAtNanos.Store(time.Now().UnixNano())
+	// Backfill the registry's per-adapter version cache so the next
+	// GetScannerHealth / ListInstalledAdapters call shows a real
+	// version string instead of "unknown". Cheap RWLock write; no-op
+	// when the recorder hasn't been wired (existing tests).
+	// versionRec is an *atomic.Pointer[VersionRecorder]; deref the
+	// loaded pointer to get back the interface value. Always non-nil
+	// after NewPool (defaults to noopVersionRecorder).
+	if recPtr := p.versionRec.Load(); recPtr != nil {
+		(*recPtr).RecordVersion(result.ScannerName, result.ScannerVersion)
+	}
 
 	policyViolation := hasPolicyViolation(result)
 	p.publishScanCompleted(ctx, job, result, policyViolation)
@@ -209,7 +336,12 @@ func (p *Pool) doScan(ctx context.Context, job scanJob) (*plugin.ScanResult, err
 	}
 
 	fetcher := blobfetcher.New(p.storageConn, job.tenantID)
-	return p.scanner.Scan(ctx, plugin.ScanRequest{
+	// Read the active scanner once at the top of the call so a SetScanner
+	// midway through this job has no effect on this job's outcome (the
+	// invariant the SetActiveAdapter contract advertises). The next
+	// scanJob popped off the channel will see the new pointer.
+	scanner := p.activeScanner()
+	return scanner.Scan(ctx, plugin.ScanRequest{
 		TenantID:       job.tenantID,
 		RepositoryName: job.repositoryName,
 		ManifestDigest: job.manifestDigest,
@@ -218,11 +350,31 @@ func (p *Pool) doScan(ctx context.Context, job scanJob) (*plugin.ScanResult, err
 	})
 }
 
-// persistScanStatus calls metadata.UpdateScanStatus to persist the final result.
-func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string, counts map[string]int, findingsJSON []byte) {
+// persistScanStatus calls metadata.UpdateScanStatus to persist the
+// scan result. metadata.UpsertScanResult upserts on scan_id so the
+// first call (status="failed" without a plugin result, or "complete"
+// with one) creates the row using the identity fields below, and any
+// retry just updates the mutable columns.
+//
+// scannerName + scannerVersion are passed through from the plugin
+// response when available; an empty plugin run (failed before the
+// plugin returned a result) populates them with placeholders so the
+// NOT NULL columns are satisfied and the operator can still see which
+// scan_id failed.
+func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string, counts map[string]int, findingsJSON []byte, result *plugin.ScanResult) {
 	countsProto := make(map[string]int32, len(counts))
 	for k, v := range counts {
 		countsProto[k] = int32(v)
+	}
+
+	scannerName, scannerVersion := "unknown", "unknown"
+	if result != nil {
+		if result.ScannerName != "" {
+			scannerName = result.ScannerName
+		}
+		if result.ScannerVersion != "" {
+			scannerVersion = result.ScannerVersion
+		}
 	}
 
 	_, err := p.metaClient.UpdateScanStatus(ctx, &metadatav1.UpdateScanStatusRequest{
@@ -231,6 +383,10 @@ func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string
 		Status:         status,
 		FindingsJson:   findingsJSON,
 		SeverityCounts: countsProto,
+		RepoId:         job.repoID,
+		ManifestDigest: job.manifestDigest,
+		ScannerName:    scannerName,
+		ScannerVersion: scannerVersion,
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "UpdateScanStatus failed",

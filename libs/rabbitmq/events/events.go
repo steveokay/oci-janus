@@ -32,6 +32,34 @@ const (
 	// RBAC audit events — consumed by registry-audit to record membership changes.
 	RoutingRBACRoleGranted = "rbac.role_granted"
 	RoutingRBACRoleRevoked = "rbac.role_revoked"
+
+	// Retention events (FE-API-041) — published by services/gc's retention
+	// executor so audit + webhook + dashboards can observe a sweep without
+	// polling gc_runs. Three keys mirror the executor lifecycle:
+	//
+	//   evaluated       — start of a sweep, carries the would-delete totals.
+	//                     Subscribers see "this is about to happen" before
+	//                     any state changes. Also fires during a preview
+	//                     window so operators can confirm the projection.
+	//   applied         — soft-delete sweep finished and stamped at least
+	//                     one manifest with retention_pending_delete_at.
+	//   grace_completed — finaliser sweep hard-deleted manifests that have
+	//                     ridden out the grace window.
+	RoutingRetentionEvaluated      = "retention.evaluated"
+	RoutingRetentionApplied        = "retention.applied"
+	RoutingRetentionGraceCompleted = "retention.grace_completed"
+
+	// RoutingPullImage (FE-API-042) fires from services/core after a successful
+	// manifest GET. Carries the manifest identity + actor so services/audit can
+	// record one audit_events row per pull (closing the FE-API-030 analytics
+	// `metric=pulls` gap) and services/metadata can debounce-update
+	// manifests.last_pulled_at for the FE-API-043 max_idle_days retention rule.
+	//
+	// Sampling is controlled per-publisher via PULL_EVENT_SAMPLE_RATE on
+	// services/core — analytics precision degrades proportionally when sampling
+	// is < 1.0, but the 24h debounce on metadata keeps last_pulled_at accurate
+	// to within a day regardless of sample rate so long as it is > 0.
+	RoutingPullImage = "pull.image"
 )
 
 // Exchange names
@@ -148,4 +176,94 @@ type ImageSignedPayload struct {
 	KeyID           string `json:"key_id"`
 	SignatureDigest string `json:"signature_digest"`
 	SignedBy        string `json:"signed_by"` // user_id of the caller
+}
+
+// RetentionEvaluatedPayload is the wire shape of retention.evaluated.
+//
+// Mirrors the run summary plus the would-delete totals so a subscriber
+// can render "X manifests / Y bytes would be deleted" without a callback.
+// Fires at the START of a retention sweep — before any manifests are
+// marked — so subscribers see "this is about to happen". When the policy
+// is in a preview window the executor still emits this event with
+// PolicyPreviewUntil set so subscribers see "we would have done X but
+// we're in preview". Mode is "retention" for soft-delete sweeps and
+// "retention_grace" for finaliser sweeps.
+type RetentionEvaluatedPayload struct {
+	RunID              string     `json:"run_id"`
+	TenantID           string     `json:"tenant_id"`
+	RepositoryID       string     `json:"repository_id"`
+	Mode               string     `json:"mode"`        // "retention" | "retention_grace"
+	EvaluatedAt        time.Time  `json:"evaluated_at"`
+	WouldDeleteCount   int64      `json:"would_delete_count"`
+	WouldDeleteBytes   int64      `json:"would_delete_bytes"`
+	PolicyPreviewUntil *time.Time `json:"policy_preview_until,omitempty"` // when in preview window
+	TriggeredBy        string     `json:"triggered_by"`                   // "cron" or user_id
+}
+
+// RetentionAppliedPayload is the wire shape of retention.applied.
+//
+// Fires after a successful soft-delete sweep that stamped at least one
+// manifest's retention_pending_delete_at column. The grace window starts
+// counting from CompletedAt — subscribers building "manifests pending
+// deletion" UIs can derive the hard-delete ETA from this timestamp plus
+// the configured grace window.
+type RetentionAppliedPayload struct {
+	RunID               string    `json:"run_id"`
+	TenantID            string    `json:"tenant_id"`
+	RepositoryID        string    `json:"repository_id"`
+	CompletedAt         time.Time `json:"completed_at"`
+	ManifestsMarked     int64     `json:"manifests_marked"`
+	ManifestsConsidered int64     `json:"manifests_considered"`
+	TriggeredBy         string    `json:"triggered_by"`
+}
+
+// PullImagePayload is the wire shape of pull.image (FE-API-042).
+//
+// Published by services/core after a successful manifest GET. Two consumers
+// land it today:
+//   - services/audit writes one audit_events row per pull (action=pull.image)
+//     so the FE-API-030 analytics `metric=pulls` query returns real bucket
+//     counts instead of zeros.
+//   - services/metadata debounce-updates manifests.last_pulled_at (at most
+//     one Postgres write per (manifest, 24h)) so the FE-API-043 max_idle_days
+//     retention rule has a column to evaluate.
+//
+// ManifestID is the metadata service's internal UUID — services/core does not
+// always have it cached, so the field is optional. The consumer in
+// services/metadata MUST fall back to (repo_id, manifest_digest) lookup when
+// ManifestID is empty.
+//
+// Tag is non-empty only when the GET resolved a tag name (vs a digest-direct
+// pull). Audit + analytics use it to attribute pulls to specific tags.
+//
+// ActorID is the user_id UUID from the JWT; empty when the pull came in via
+// an anonymous public-pull path (the JWT carried no `sub`). Operators that
+// want IP / UA attribution should subscribe to the matching webhook delivery
+// — this payload deliberately avoids carrying request-level identifiers.
+type PullImagePayload struct {
+	TenantID       string    `json:"tenant_id"`
+	RepositoryID   string    `json:"repository_id"`
+	RepositoryName string    `json:"repository_name"` // "org/repo" composite
+	ManifestDigest string    `json:"manifest_digest"`
+	ManifestID     string    `json:"manifest_id,omitempty"`
+	Tag            string    `json:"tag,omitempty"`
+	ActorID        string    `json:"actor_id,omitempty"`
+	PulledAt       time.Time `json:"pulled_at"`
+}
+
+// RetentionGraceCompletedPayload is the wire shape of
+// retention.grace_completed.
+//
+// Fires after a successful finaliser sweep. BlobsFreed will normally be
+// zero because the orphan-blob sweep runs separately and owns the blob
+// counter — but the field exists so a future executor change can
+// populate it without a payload migration.
+type RetentionGraceCompletedPayload struct {
+	RunID            string    `json:"run_id"`
+	TenantID         string    `json:"tenant_id"`
+	CompletedAt      time.Time `json:"completed_at"`
+	ManifestsDeleted int64     `json:"manifests_deleted"`
+	BlobsFreed       int64     `json:"blobs_freed"`
+	BytesFreed       int64     `json:"bytes_freed"`
+	TriggeredBy      string    `json:"triggered_by"`
 }

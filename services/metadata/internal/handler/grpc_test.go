@@ -148,6 +148,137 @@ type fakeRepo struct {
 	// Repository count
 	repoCount    int64
 	repoCountErr error
+	// FE-API-037: per-repo retention policy CRUD
+	getRetentionResult *metadatav1.RetentionPolicy
+	getRetentionErr    error
+	getRetentionCalls  []retentionGetCallArgs
+
+	upsertRetentionResult *metadatav1.RetentionPolicy
+	upsertRetentionErr    error
+	upsertRetentionCalls  []retentionUpsertCallArgs
+
+	deleteRetentionErr   error
+	deleteRetentionCalls []retentionDeleteCallArgs
+
+	// FE-API-038: retention policy dry-run evaluator. Tests can stub the
+	// repository's evaluation result + error, and assert on the captured
+	// call args (cap clamping, candidate forwarding).
+	evalRetentionResult *repository.EvaluationResult
+	evalRetentionErr    error
+	evalRetentionCalls  []retentionEvalCallArgs
+
+	// FE-API-039: per-org default retention policy.
+	getOrgRetentionResult *metadatav1.RetentionPolicy
+	getOrgRetentionErr    error
+	getOrgRetentionCalls  []orgRetentionGetCallArgs
+
+	upsertOrgRetentionResult *metadatav1.RetentionPolicy
+	upsertOrgRetentionErr    error
+	upsertOrgRetentionCalls  []orgRetentionUpsertCallArgs
+
+	deleteOrgRetentionErr   error
+	deleteOrgRetentionCalls []orgRetentionDeleteCallArgs
+
+	// FE-API-039: effective policy resolution.
+	effectiveRetentionResult *repository.EffectivePolicyResult
+	effectiveRetentionErr    error
+	effectiveRetentionCalls  []effectivePolicyCallArgs
+
+	// FE-API-039: org name → org_id lookup.
+	lookupOrgIDResult string
+	lookupOrgIDErr    error
+	lookupOrgIDCalls  []lookupOrgIDCallArgs
+
+	// FE-API-040: retention executor primitives.
+	markPendingErr    error
+	markPendingCalls  []pendingCallArgs
+	clearPendingErr   error
+	clearPendingCalls []pendingCallArgs
+	listPendingResult []*metadatav1.PendingDeleteManifest
+	listPendingErr    error
+	listPendingCalls  []listPendingCallArgs
+}
+
+// retentionEvalCallArgs records what EvaluateRetention forwarded so the
+// handler tests can verify cap clamping + candidate wiring without standing
+// up a real database.
+type retentionEvalCallArgs struct {
+	tenantID            string
+	repoID              string
+	candidate           *metadatav1.RetentionPolicyCandidate
+	maxDeleteResults    int
+	maxProtectedResults int
+}
+
+// retentionGetCallArgs / retentionUpsertCallArgs / retentionDeleteCallArgs
+// capture what the handler forwarded so retention tests can assert wiring
+// without a real database.
+type retentionGetCallArgs struct {
+	tenantID string
+	repoID   string
+}
+
+type retentionUpsertCallArgs struct {
+	tenantID  string
+	repoID    string
+	enabled   bool
+	rules     []*metadatav1.RetentionRule
+	patterns  []string
+	updatedBy string
+}
+
+type retentionDeleteCallArgs struct {
+	tenantID string
+	repoID   string
+}
+
+// FE-API-039 — per-org default retention call args. Same shape as the
+// per-repo equivalents, swapping repo_id for org_id.
+type orgRetentionGetCallArgs struct {
+	tenantID string
+	orgID    string
+}
+
+type orgRetentionUpsertCallArgs struct {
+	tenantID  string
+	orgID     string
+	enabled   bool
+	rules     []*metadatav1.RetentionRule
+	patterns  []string
+	updatedBy string
+}
+
+type orgRetentionDeleteCallArgs struct {
+	tenantID string
+	orgID    string
+}
+
+// effectivePolicyCallArgs captures the (tenant, repo) tuple passed to
+// GetEffectiveRetentionPolicy so tests can assert the lookup was scoped
+// correctly.
+type effectivePolicyCallArgs struct {
+	tenantID string
+	repoID   string
+}
+
+// pendingCallArgs / listPendingCallArgs capture what the FE-API-040 retention
+// executor primitives forwarded so tests can assert tenant scoping + clamping.
+type pendingCallArgs struct {
+	tenantID   string
+	manifestID string
+}
+
+type listPendingCallArgs struct {
+	tenantID        string
+	graceWindowSecs int64
+	limit           int
+}
+
+// lookupOrgIDCallArgs captures the (tenant, name) tuple passed to
+// LookupOrgIDByName so tests can assert the BFF forwarded the correct org.
+type lookupOrgIDCallArgs struct {
+	tenantID string
+	name     string
 }
 
 // listVulnsCallArgs / listScansCallArgs capture what the handler forwards
@@ -296,7 +427,7 @@ func (f *fakeRepo) DecrementTenantStorage(_ context.Context, _ string, _ int64) 
 	return f.decrStorageErr
 }
 
-func (f *fakeRepo) UpsertScanResult(_ context.Context, _, _, _ string, _ []byte, _ map[string]int32) error {
+func (f *fakeRepo) UpsertScanResult(_ context.Context, _, _, _ string, _ []byte, _ map[string]int32, _, _, _, _ string) error {
 	return f.upsertScanErr
 }
 
@@ -349,6 +480,110 @@ func (f *fakeRepo) ListTenantRemediations(_ context.Context, tenantID, token str
 
 func (f *fakeRepo) CountRepositories(_ context.Context, _ string) (int64, error) {
 	return f.repoCount, f.repoCountErr
+}
+
+// FE-API-037 fake repo methods. Tests assert on the *Calls slices and set
+// the *Result / *Err fields to drive each branch (happy path, NotFound,
+// internal error). Pointer-typed proto results so a nil return is unambiguous.
+func (f *fakeRepo) GetRepoRetentionPolicy(_ context.Context, tenantID, repoID string) (*metadatav1.RetentionPolicy, error) {
+	f.getRetentionCalls = append(f.getRetentionCalls, retentionGetCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.getRetentionResult, f.getRetentionErr
+}
+
+func (f *fakeRepo) UpsertRepoRetentionPolicy(
+	_ context.Context,
+	tenantID, repoID string,
+	enabled bool,
+	rules []*metadatav1.RetentionRule,
+	patterns []string,
+	updatedBy string,
+) (*metadatav1.RetentionPolicy, error) {
+	f.upsertRetentionCalls = append(f.upsertRetentionCalls, retentionUpsertCallArgs{
+		tenantID: tenantID, repoID: repoID, enabled: enabled,
+		rules: rules, patterns: patterns, updatedBy: updatedBy,
+	})
+	return f.upsertRetentionResult, f.upsertRetentionErr
+}
+
+func (f *fakeRepo) DeleteRepoRetentionPolicy(_ context.Context, tenantID, repoID string) error {
+	f.deleteRetentionCalls = append(f.deleteRetentionCalls, retentionDeleteCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.deleteRetentionErr
+}
+
+// EvaluateRetention captures the clamped caps + candidate so tests can
+// assert the handler actually clamped over-large values and forwarded the
+// candidate verbatim.
+func (f *fakeRepo) EvaluateRetention(
+	_ context.Context,
+	tenantID, repoID string,
+	candidate *metadatav1.RetentionPolicyCandidate,
+	maxDeleteResults, maxProtectedResults int,
+) (*repository.EvaluationResult, error) {
+	f.evalRetentionCalls = append(f.evalRetentionCalls, retentionEvalCallArgs{
+		tenantID:            tenantID,
+		repoID:              repoID,
+		candidate:           candidate,
+		maxDeleteResults:    maxDeleteResults,
+		maxProtectedResults: maxProtectedResults,
+	})
+	return f.evalRetentionResult, f.evalRetentionErr
+}
+
+// FE-API-039 fake repo methods. Same pattern as the per-repo fakes — tests
+// set the *Result / *Err fields and assert on the captured *Calls slices.
+
+func (f *fakeRepo) GetOrgRetentionPolicy(_ context.Context, tenantID, orgID string) (*metadatav1.RetentionPolicy, error) {
+	f.getOrgRetentionCalls = append(f.getOrgRetentionCalls, orgRetentionGetCallArgs{tenantID: tenantID, orgID: orgID})
+	return f.getOrgRetentionResult, f.getOrgRetentionErr
+}
+
+func (f *fakeRepo) UpsertOrgRetentionPolicy(
+	_ context.Context,
+	tenantID, orgID string,
+	enabled bool,
+	rules []*metadatav1.RetentionRule,
+	patterns []string,
+	updatedBy string,
+) (*metadatav1.RetentionPolicy, error) {
+	f.upsertOrgRetentionCalls = append(f.upsertOrgRetentionCalls, orgRetentionUpsertCallArgs{
+		tenantID: tenantID, orgID: orgID, enabled: enabled,
+		rules: rules, patterns: patterns, updatedBy: updatedBy,
+	})
+	return f.upsertOrgRetentionResult, f.upsertOrgRetentionErr
+}
+
+func (f *fakeRepo) DeleteOrgRetentionPolicy(_ context.Context, tenantID, orgID string) error {
+	f.deleteOrgRetentionCalls = append(f.deleteOrgRetentionCalls, orgRetentionDeleteCallArgs{tenantID: tenantID, orgID: orgID})
+	return f.deleteOrgRetentionErr
+}
+
+func (f *fakeRepo) GetEffectiveRetentionPolicy(_ context.Context, tenantID, repoID string) (*repository.EffectivePolicyResult, error) {
+	f.effectiveRetentionCalls = append(f.effectiveRetentionCalls, effectivePolicyCallArgs{tenantID: tenantID, repoID: repoID})
+	return f.effectiveRetentionResult, f.effectiveRetentionErr
+}
+
+func (f *fakeRepo) LookupOrgIDByName(_ context.Context, tenantID, name string) (string, error) {
+	f.lookupOrgIDCalls = append(f.lookupOrgIDCalls, lookupOrgIDCallArgs{tenantID: tenantID, name: name})
+	return f.lookupOrgIDResult, f.lookupOrgIDErr
+}
+
+// FE-API-040 retention-pending stubs. Each method captures its call args so a
+// test can assert the handler forwarded the intended tenant/manifest IDs, and
+// the configurable error / result fields let cases simulate "no row" /
+// repository errors without standing up Postgres.
+func (f *fakeRepo) MarkManifestRetentionPending(_ context.Context, tenantID, manifestID string) error {
+	f.markPendingCalls = append(f.markPendingCalls, pendingCallArgs{tenantID: tenantID, manifestID: manifestID})
+	return f.markPendingErr
+}
+
+func (f *fakeRepo) ClearManifestRetentionPending(_ context.Context, tenantID, manifestID string) error {
+	f.clearPendingCalls = append(f.clearPendingCalls, pendingCallArgs{tenantID: tenantID, manifestID: manifestID})
+	return f.clearPendingErr
+}
+
+func (f *fakeRepo) ListPendingDeleteManifests(_ context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error) {
+	f.listPendingCalls = append(f.listPendingCalls, listPendingCallArgs{tenantID: tenantID, graceWindowSecs: graceWindowSecs, limit: limit})
+	return f.listPendingResult, f.listPendingErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
