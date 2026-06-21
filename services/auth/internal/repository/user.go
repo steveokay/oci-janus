@@ -20,6 +20,12 @@ import (
 // check for nil rather than treating empty-string as "unset" so they can
 // distinguish "user set name to empty" (impossible — handler enforces 1..128)
 // from "user has no display name yet".
+//
+// Kind holds the value of the users.kind column (migration 20260622000001):
+// "human" for interactive accounts, "service_account" for machine identities
+// that back a service_accounts row. All single-row lookups on the human login
+// path use GetHuman* variants so the kind guard is enforced at the repository
+// layer rather than scattered across callers.
 type User struct {
 	ID           uuid.UUID
 	TenantID     uuid.UUID
@@ -33,6 +39,8 @@ type User struct {
 	LastLoginAt  *time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// Kind is "human" or "service_account" (added by migration 20260622000001).
+	Kind string
 }
 
 // CreateUserRequest carries the validated inputs for creating a new user.
@@ -41,6 +49,10 @@ type CreateUserRequest struct {
 	Username     string
 	Email        string
 	PasswordHash string // pre-hashed with argon2id
+	// Kind sets the users.kind column; defaults to "human" when empty.
+	// Pass "service_account" only when creating a shadow user for a
+	// service_accounts row — all other callers should leave this unset.
+	Kind string
 }
 
 // UserRepository performs all database operations on the users table.
@@ -60,21 +72,32 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 // 20260619000001) materialise as the empty string in User.Email rather than
 // failing the pgx scan into a non-nullable string. display_name is genuinely
 // nullable in Go (*string) so it is scanned directly.
+//
+// req.Kind defaults to "human" when the zero-value is passed; callers that
+// create shadow users for service accounts must pass "service_account"
+// explicitly.
 func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*User, error) {
+	// Default the kind to "human" so existing callers that do not set the field
+	// continue to work after migration 20260622000001 added the column.
+	kind := req.Kind
+	if kind == "" {
+		kind = "human"
+	}
+
 	const q = `
-		INSERT INTO users (tenant_id, username, email, password_hash)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at`
+		          last_login_at, created_at, updated_at, kind`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
-		req.TenantID, req.Username, req.Email, req.PasswordHash,
+		req.TenantID, req.Username, req.Email, req.PasswordHash, kind,
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -85,48 +108,44 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 	return &u, nil
 }
 
-// GetByUsername returns the user with the given username in the given tenant.
+// GetByUsername returns the user with the given username in the given tenant,
+// regardless of kind. Prefer GetHumanByUsername on the login path so that a
+// service-account shadow user cannot authenticate as a human.
 // Returns ErrNotFound if no such user exists.
 func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, username string) (*User, error) {
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at
+		       last_login_at, created_at, updated_at, kind
 		FROM   users
 		WHERE  tenant_id = $1 AND username = $2`
 
 	return r.scanOne(ctx, q, tenantID, username)
 }
 
-// GetByID returns the user with the given primary key.
+// GetByID returns the user with the given primary key, regardless of kind.
+// Callers on the human authentication path should use GetHumanByID so that a
+// service-account shadow user cannot be loaded as a human identity. This
+// variant is kept for internal usage (e.g. RBAC lookups that apply to both
+// humans and service accounts).
 // Returns ErrNotFound if no such user exists.
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
-	const q = `
-		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
-		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at
-		FROM   users
-		WHERE  id = $1`
-
-	return r.scanOne(ctx, q, id)
+	return r.GetUserAnyKind(ctx, id)
 }
 
-// GetByEmail returns the user with the given email in the given tenant.
+// GetByEmail returns the user with the given email in the given tenant,
+// regardless of kind. Prefer GetHumanByEmail on the SSO/login path so that
+// service-account synthetic emails (sa+N@internal.invalid) cannot match.
 // Used by the FE-API-034 SSO callback to match an IdP-provided email to an
 // existing account before deciding whether to auto-provision. Email match is
 // case-insensitive at the application layer — IdPs are inconsistent about
 // casing so we compare lowercase.
 //
 // Returns ErrNotFound if no row matches.
+//
+// Deprecated: use GetHumanByEmail on the human authentication path.
 func (r *UserRepository) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
-	const q = `
-		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
-		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at
-		FROM   users
-		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2)`
-
-	return r.scanOne(ctx, q, tenantID, email)
+	return r.GetHumanByEmail(ctx, tenantID, email)
 }
 
 // CreateSSOUserRequest carries the validated inputs for provisioning an
@@ -145,17 +164,20 @@ type CreateSSOUserRequest struct {
 // cannot succeed for this account (ValidatePassword rejects "" and Argon2
 // verify never returns true against an empty hash).
 //
+// SSO users always have kind='human'; they are interactive accounts driven
+// by a human at an IdP, never machine identities.
+//
 // Returns ErrAlreadyExists on a (tenant_id, username) or (tenant_id, email)
 // collision — the caller may then re-query by email and treat that row as
 // the same user (race with another concurrent SSO callback).
 func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserRequest) (*User, error) {
 	const q = `
 		INSERT INTO users (tenant_id, username, email, password_hash,
-		                   display_name, sso_provider_id)
-		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5)
+		                   display_name, sso_provider_id, kind)
+		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, 'human')
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at`
+		          last_login_at, created_at, updated_at, kind`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -163,7 +185,7 @@ func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserReq
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -209,13 +231,121 @@ func (r *UserRepository) LockUntil(ctx context.Context, id uuid.UUID, until time
 // CountByTenant returns the number of user rows in the tenant (FE-API-028).
 // The count intentionally includes inactive users so the platform-admin
 // dashboard surfaces the total headcount, not just currently-active sessions.
+//
+// Deprecated: use CountHumans so that service-account shadow rows are
+// excluded from the headcount. This wrapper is kept until all callers are
+// migrated (end of Task 6, FE-API-048).
 func (r *UserRepository) CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error) {
-	const q = `SELECT COUNT(*) FROM users WHERE tenant_id = $1`
+	return r.CountHumans(ctx, tenantID)
+}
+
+// ── kind-guarded helpers (FE-API-048, spec §4.1) ──────────────────────────────
+//
+// These methods enforce kind='human' at the SQL layer so every caller on the
+// human authentication and management paths inherits the guard without
+// additional application-level checks. Service-account shadow users are
+// silently excluded from all …Human… results.
+
+// ListHumans returns all users with kind='human' in the given tenant, ordered
+// by created_at descending. Service-account shadow rows (kind='service_account')
+// are excluded at the SQL layer. The count includes inactive users so the
+// management UI can surface deactivated accounts.
+//
+// opts is reserved for future pagination support and is currently unused.
+func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opts ListOpts) ([]User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind
+		FROM   users
+		WHERE  tenant_id = $1 AND kind = 'human'
+		ORDER  BY created_at DESC`
+
+	rows, err := r.pool.Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list humans: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(
+			&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
+			&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
+			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		); err != nil {
+			return nil, fmt.Errorf("scan human user: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// ListOpts carries optional parameters for list queries. Currently a
+// placeholder; pagination fields (page_size, page_token) will be added here
+// in a later task so callers do not need to change their signatures.
+type ListOpts struct{}
+
+// GetHumanByEmail returns the human user with the given email in the given
+// tenant. Service-account synthetic emails (sa+N@internal.invalid) are
+// excluded by the kind='human' guard so they can never match.
+//
+// Email comparison is case-insensitive — IdPs are inconsistent about casing.
+// Returns ErrNotFound if no human row matches.
+func (r *UserRepository) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind
+		FROM   users
+		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2) AND kind = 'human'`
+
+	return r.scanOne(ctx, q, tenantID, email)
+}
+
+// GetHumanByID returns the user with the given primary key only when its
+// kind='human'. If the ID belongs to a service-account shadow user
+// (kind='service_account') the method returns ErrNotFound, preventing SA
+// credentials from being loaded onto a human identity context.
+func (r *UserRepository) GetHumanByID(ctx context.Context, id uuid.UUID) (*User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind
+		FROM   users
+		WHERE  id = $1 AND kind = 'human'`
+
+	return r.scanOne(ctx, q, id)
+}
+
+// CountHumans returns the number of users with kind='human' in the given
+// tenant. Service-account shadow rows are excluded so the count reflects
+// the real human headcount for billing / plan limits.
+// Inactive human users are included (same rationale as CountByTenant).
+func (r *UserRepository) CountHumans(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	const q = `SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND kind = 'human'`
 	var n int64
 	if err := r.pool.QueryRow(ctx, q, tenantID).Scan(&n); err != nil {
-		return 0, fmt.Errorf("count tenant users: %w", err)
+		return 0, fmt.Errorf("count humans: %w", err)
 	}
 	return n, nil
+}
+
+// GetUserAnyKind returns the user with the given primary key regardless of
+// kind. Use this only when the caller genuinely needs to load a
+// service-account shadow user (e.g. the SA management handlers). All
+// human-facing authentication paths must use GetHumanByID instead.
+// Returns ErrNotFound if no row with that ID exists.
+func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind
+		FROM   users
+		WHERE  id = $1`
+
+	return r.scanOne(ctx, q, id)
 }
 
 // ResetFailedLogins clears failed_logins and locked_until and records the login time.
@@ -231,12 +361,14 @@ func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) er
 }
 
 // scanOne executes query with args and scans a single User row.
+// Every SELECT that feeds into this helper must include 'kind' as the last
+// column in the select list (migration 20260622000001 added the column).
 func (r *UserRepository) scanOne(ctx context.Context, query string, args ...any) (*User, error) {
 	var u User
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -299,13 +431,13 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, req Up
 		WHERE  id = $1
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at`
+		          last_login_at, created_at, updated_at, kind`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q, id, setName, nameVal, setEmail, emailVal).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
