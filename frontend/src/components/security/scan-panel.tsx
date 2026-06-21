@@ -265,10 +265,12 @@ function CompleteCard({
 
   // Tone the card based on whether anything CRITICAL or HIGH was found —
   // operator's eye lands on the right thing without reading numbers.
+  // Backend may return null severity_counts on pending / failed scans;
+  // optional chaining keeps the card from crashing in that state.
   const accentBar =
-    (scan.severity_counts.CRITICAL ?? 0) > 0
+    (scan.severity_counts?.CRITICAL ?? 0) > 0
       ? "danger"
-      : (scan.severity_counts.HIGH ?? 0) > 0
+      : (scan.severity_counts?.HIGH ?? 0) > 0
         ? "warning"
         : "success";
 
