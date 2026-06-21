@@ -136,6 +136,25 @@ func TestMigration_UserKind_RoundTrip(t *testing.T) {
 	require.False(t, hasCol, "kind column must be absent after Down migration")
 }
 
+// gooseDownToErr is like gooseDownTo but returns the error instead of calling
+// t.Fatalf.  Used by tests that expect the down migration to refuse.
+func gooseDownToErr(t *testing.T, dsn string, versionPrefix string) error {
+	t.Helper()
+
+	var version int64
+	if _, err := fmt.Sscanf(versionPrefix, "%d", &version); err != nil {
+		t.Fatalf("gooseDownToErr: parse version %q: %v", versionPrefix, err)
+	}
+
+	sqlDB := openSQLDB(t, dsn)
+
+	goose.SetBaseFS(authmigrations.FS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatalf("goose.SetDialect: %v", err)
+	}
+	return goose.DownTo(sqlDB, ".", version)
+}
+
 // TestMigration_ServiceAccounts_UniqueAndCascade verifies the
 // 20260622000002_service_accounts migration:
 //   - UNIQUE (tenant_id, name) rejects a duplicate name within the same tenant;
@@ -212,4 +231,146 @@ func TestMigration_ServiceAccounts_UniqueAndCascade(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT count(*) FROM service_accounts WHERE id=$1`, sa1).Scan(&saCount))
 	require.Equal(t, 0, saCount, "service_accounts row must cascade-delete when shadow user is deleted")
+}
+
+// TestMigration_ApiKeysPolymorphic_CHECK verifies that the CHECK constraint
+// api_keys_owner_exactly_one enforces exactly one of user_id / service_account_id:
+//   - neither set → rejected;
+//   - both set → rejected;
+//   - exactly one set → accepted (implicitly verified by later tests).
+func TestMigration_ApiKeysPolymorphic_CHECK(t *testing.T) {
+	ctx := context.Background()
+
+	// Fresh container + pool for this test.
+	dsn := containers.Postgres(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	gooseUpTo(t, dsn, "20260622000003")
+
+	tenant := uuid.New()
+
+	// Insert a human user to act as one of the possible owners.
+	var human uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'human-check', 'h@example.com', '', 'human')
+		RETURNING id`, tenant).Scan(&human))
+
+	// Neither owner set → CHECK must reject.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix)
+		VALUES ($1, 'k1', '', '')`, tenant)
+	require.Error(t, err, "CHECK should reject NULL/NULL (neither owner set)")
+
+	// Both owners set → CHECK must reject.
+	// First, create a shadow user + service account.
+	var shadow, sa uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'sa-check', 'sa+x@internal.invalid', '', 'service_account')
+		RETURNING id`, tenant).Scan(&shadow))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO service_accounts (tenant_id, shadow_user_id, name)
+		VALUES ($1, $2, 'sa-x') RETURNING id`, tenant, shadow).Scan(&sa))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, user_id, service_account_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, $3, 'k2', '', '')`, tenant, human, sa)
+	require.Error(t, err, "CHECK should reject both user_id and service_account_id set")
+}
+
+// TestMigration_ApiKeysPolymorphic_PartialUnique verifies that the two partial
+// unique indexes allow human + SA to share the same key name, while blocking
+// duplicate names within the same owner type.
+func TestMigration_ApiKeysPolymorphic_PartialUnique(t *testing.T) {
+	ctx := context.Background()
+
+	dsn := containers.Postgres(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	gooseUpTo(t, dsn, "20260622000003")
+
+	tenant := uuid.New()
+
+	// Human user.
+	var human uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'human-uniq', 'h@example.com', '', 'human')
+		RETURNING id`, tenant).Scan(&human))
+
+	// Shadow user + service account.
+	var shadow, sa uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'sa-uniq', 'sa+y@internal.invalid', '', 'service_account')
+		RETURNING id`, tenant).Scan(&shadow))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO service_accounts (tenant_id, shadow_user_id, name)
+		VALUES ($1, $2, 'sa-y') RETURNING id`, tenant, shadow).Scan(&sa))
+
+	// Human key named 'ci-prod' → allowed.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, user_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, 'ci-prod', 'h1', 'h1p1')`, tenant, human)
+	require.NoError(t, err, "human key 'ci-prod' should be inserted without error")
+
+	// SA key also named 'ci-prod' → allowed (different partial index).
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, service_account_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, 'ci-prod', 's1', 's1p1')`, tenant, sa)
+	require.NoError(t, err, "SA and human may share the name 'ci-prod'")
+
+	// Second SA key also named 'ci-prod' → must conflict via api_keys_sa_name_unique.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, service_account_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, 'ci-prod', 's2', 's2p1')`, tenant, sa)
+	require.Error(t, err, "partial UNIQUE should block a second SA key with the same name")
+}
+
+// TestMigration_ApiKeysPolymorphic_DownRefuses verifies that the DO $$ guard in
+// the Down migration raises an exception (and therefore returns an error) when
+// any api_keys rows are owned by a service account.
+func TestMigration_ApiKeysPolymorphic_DownRefuses(t *testing.T) {
+	ctx := context.Background()
+
+	dsn := containers.Postgres(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	gooseUpTo(t, dsn, "20260622000003")
+
+	tenant := uuid.New()
+
+	// Shadow user + service account.
+	var shadow, sa uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, username, email, password_hash, kind)
+		VALUES ($1, 'sa-down', 'sa+z@internal.invalid', '', 'service_account')
+		RETURNING id`, tenant).Scan(&shadow))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO service_accounts (tenant_id, shadow_user_id, name)
+		VALUES ($1, $2, 'sa-z') RETURNING id`, tenant, shadow).Scan(&sa))
+
+	// Insert an SA-owned key so the down guard has something to object to.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO api_keys (tenant_id, service_account_id, name, key_hash, key_prefix)
+		VALUES ($1, $2, 'k', 'h', 'p')`, tenant, sa)
+	require.NoError(t, err, "SA key should insert cleanly before rollback attempt")
+
+	// Attempt to roll back to migration 20260622000002; the DO $$ guard must refuse.
+	downErr := gooseDownToErr(t, dsn, "20260622000002")
+	require.Error(t, downErr, "down migration must refuse when SA keys exist")
+	require.Contains(t, downErr.Error(), "cannot rollback",
+		"error message must indicate why the rollback was refused")
 }
