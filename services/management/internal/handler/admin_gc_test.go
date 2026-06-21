@@ -56,6 +56,15 @@ type fakeGCServer struct {
 	runNowErr     error
 	runNowReturn  *gcv1.RunNowResponse
 	lastRunNowReq *gcv1.RunNowRequest
+
+	// FE-API-040 — retention executor RPCs.
+	triggerRetentionErr    error
+	triggerRetentionReturn *gcv1.TriggerRetentionRunResponse
+	lastTriggerRetentionReq *gcv1.TriggerRetentionRunRequest
+
+	getRetentionStatusErr    error
+	getRetentionStatusReturn *gcv1.RetentionRunSummary
+	lastGetRetentionStatusReq *gcv1.GetRetentionRunStatusRequest
 }
 
 func (s *fakeGCServer) GetStatus(_ context.Context, _ *gcv1.GetStatusRequest) (*gcv1.GCStatus, error) {
@@ -91,6 +100,33 @@ func (s *fakeGCServer) RunNow(_ context.Context, req *gcv1.RunNowRequest) (*gcv1
 		return s.runNowReturn, nil
 	}
 	return &gcv1.RunNowResponse{RunId: "fake-run-id", Status: "queued"}, nil
+}
+
+// FE-API-040 — retention executor server stubs.
+func (s *fakeGCServer) TriggerRetentionRun(_ context.Context, req *gcv1.TriggerRetentionRunRequest) (*gcv1.TriggerRetentionRunResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastTriggerRetentionReq = req
+	if s.triggerRetentionErr != nil {
+		return nil, s.triggerRetentionErr
+	}
+	if s.triggerRetentionReturn != nil {
+		return s.triggerRetentionReturn, nil
+	}
+	return &gcv1.TriggerRetentionRunResponse{RunId: "fake-retention-run", Status: "queued"}, nil
+}
+
+func (s *fakeGCServer) GetRetentionRunStatus(_ context.Context, req *gcv1.GetRetentionRunStatusRequest) (*gcv1.RetentionRunSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastGetRetentionStatusReq = req
+	if s.getRetentionStatusErr != nil {
+		return nil, s.getRetentionStatusErr
+	}
+	if s.getRetentionStatusReturn != nil {
+		return s.getRetentionStatusReturn, nil
+	}
+	return &gcv1.RetentionRunSummary{RunId: req.GetRunId(), Mode: "retention", Status: "succeeded"}, nil
 }
 
 // newGCEnv stands up a bufconn stack with a wired-in GCService client

@@ -332,6 +332,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// never persists.
 	h.RegisterRepoRetentionDryRun(mux, authMW)
 
+	// FE-API-040: retention executor trigger + per-run status. POST .../run
+	// requires repo admin / owner (writer not enough — retention deletes
+	// manifests). GET .../runs/{run_id} requires reader. Both return 404
+	// when GC_GRPC_ADDR is unset.
+	h.RegisterRepoRetentionRun(mux, authMW)
+
 	// FE-API-039: per-org default retention policy. GET requires org reader;
 	// PUT/DELETE require org admin (writer not enough — retention is
 	// destructive). The per-repo GET above also gains an inheritance

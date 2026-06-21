@@ -188,6 +188,15 @@ type fakeRepo struct {
 	lookupOrgIDResult string
 	lookupOrgIDErr    error
 	lookupOrgIDCalls  []lookupOrgIDCallArgs
+
+	// FE-API-040: retention executor primitives.
+	markPendingErr    error
+	markPendingCalls  []pendingCallArgs
+	clearPendingErr   error
+	clearPendingCalls []pendingCallArgs
+	listPendingResult []*metadatav1.PendingDeleteManifest
+	listPendingErr    error
+	listPendingCalls  []listPendingCallArgs
 }
 
 // retentionEvalCallArgs records what EvaluateRetention forwarded so the
@@ -250,6 +259,19 @@ type orgRetentionDeleteCallArgs struct {
 type effectivePolicyCallArgs struct {
 	tenantID string
 	repoID   string
+}
+
+// pendingCallArgs / listPendingCallArgs capture what the FE-API-040 retention
+// executor primitives forwarded so tests can assert tenant scoping + clamping.
+type pendingCallArgs struct {
+	tenantID   string
+	manifestID string
+}
+
+type listPendingCallArgs struct {
+	tenantID        string
+	graceWindowSecs int64
+	limit           int
 }
 
 // lookupOrgIDCallArgs captures the (tenant, name) tuple passed to
@@ -543,6 +565,25 @@ func (f *fakeRepo) GetEffectiveRetentionPolicy(_ context.Context, tenantID, repo
 func (f *fakeRepo) LookupOrgIDByName(_ context.Context, tenantID, name string) (string, error) {
 	f.lookupOrgIDCalls = append(f.lookupOrgIDCalls, lookupOrgIDCallArgs{tenantID: tenantID, name: name})
 	return f.lookupOrgIDResult, f.lookupOrgIDErr
+}
+
+// FE-API-040 retention-pending stubs. Each method captures its call args so a
+// test can assert the handler forwarded the intended tenant/manifest IDs, and
+// the configurable error / result fields let cases simulate "no row" /
+// repository errors without standing up Postgres.
+func (f *fakeRepo) MarkManifestRetentionPending(_ context.Context, tenantID, manifestID string) error {
+	f.markPendingCalls = append(f.markPendingCalls, pendingCallArgs{tenantID: tenantID, manifestID: manifestID})
+	return f.markPendingErr
+}
+
+func (f *fakeRepo) ClearManifestRetentionPending(_ context.Context, tenantID, manifestID string) error {
+	f.clearPendingCalls = append(f.clearPendingCalls, pendingCallArgs{tenantID: tenantID, manifestID: manifestID})
+	return f.clearPendingErr
+}
+
+func (f *fakeRepo) ListPendingDeleteManifests(_ context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error) {
+	f.listPendingCalls = append(f.listPendingCalls, listPendingCallArgs{tenantID: tenantID, graceWindowSecs: graceWindowSecs, limit: limit})
+	return f.listPendingResult, f.listPendingErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────

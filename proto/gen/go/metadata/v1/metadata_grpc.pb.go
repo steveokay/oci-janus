@@ -20,49 +20,52 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	MetadataService_CreateRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/CreateRepository"
-	MetadataService_GetRepository_FullMethodName               = "/registry.metadata.v1.MetadataService/GetRepository"
-	MetadataService_GetRepositoryByName_FullMethodName         = "/registry.metadata.v1.MetadataService/GetRepositoryByName"
-	MetadataService_ListRepositories_FullMethodName            = "/registry.metadata.v1.MetadataService/ListRepositories"
-	MetadataService_DeleteRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/DeleteRepository"
-	MetadataService_UpdateRepositoryQuota_FullMethodName       = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
-	MetadataService_UpdateRepository_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateRepository"
-	MetadataService_PutTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/PutTag"
-	MetadataService_GetTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/GetTag"
-	MetadataService_ListTags_FullMethodName                    = "/registry.metadata.v1.MetadataService/ListTags"
-	MetadataService_DeleteTag_FullMethodName                   = "/registry.metadata.v1.MetadataService/DeleteTag"
-	MetadataService_PutManifest_FullMethodName                 = "/registry.metadata.v1.MetadataService/PutManifest"
-	MetadataService_GetManifest_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetManifest"
-	MetadataService_DeleteManifest_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteManifest"
-	MetadataService_ListUntaggedManifests_FullMethodName       = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
-	MetadataService_LinkBlob_FullMethodName                    = "/registry.metadata.v1.MetadataService/LinkBlob"
-	MetadataService_UnlinkBlob_FullMethodName                  = "/registry.metadata.v1.MetadataService/UnlinkBlob"
-	MetadataService_ListOrphanedBlobs_FullMethodName           = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
-	MetadataService_GetTenantQuotaUsage_FullMethodName         = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
-	MetadataService_UpdateTenantQuota_FullMethodName           = "/registry.metadata.v1.MetadataService/UpdateTenantQuota"
-	MetadataService_IncrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
-	MetadataService_DecrementTenantStorage_FullMethodName      = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
-	MetadataService_UpdateScanStatus_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
-	MetadataService_GetScanResult_FullMethodName               = "/registry.metadata.v1.MetadataService/GetScanResult"
-	MetadataService_UpsertScanSBOM_FullMethodName              = "/registry.metadata.v1.MetadataService/UpsertScanSBOM"
-	MetadataService_GetScanSBOM_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetScanSBOM"
-	MetadataService_GetTenantVulnerabilityCount_FullMethodName = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
-	MetadataService_CountRepositories_FullMethodName           = "/registry.metadata.v1.MetadataService/CountRepositories"
-	MetadataService_GetSecurityOverview_FullMethodName         = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
-	MetadataService_ListTenantVulnerabilities_FullMethodName   = "/registry.metadata.v1.MetadataService/ListTenantVulnerabilities"
-	MetadataService_ListScanHistory_FullMethodName             = "/registry.metadata.v1.MetadataService/ListScanHistory"
-	MetadataService_ListTenantRemediations_FullMethodName      = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
-	MetadataService_GetTenantStorageBreakdown_FullMethodName   = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
-	MetadataService_GetTenantUsage_FullMethodName              = "/registry.metadata.v1.MetadataService/GetTenantUsage"
-	MetadataService_GetRepoRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
-	MetadataService_UpsertRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
-	MetadataService_DeleteRepoRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
-	MetadataService_EvaluateRetention_FullMethodName           = "/registry.metadata.v1.MetadataService/EvaluateRetention"
-	MetadataService_GetOrgRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/GetOrgRetentionPolicy"
-	MetadataService_UpsertOrgRetentionPolicy_FullMethodName    = "/registry.metadata.v1.MetadataService/UpsertOrgRetentionPolicy"
-	MetadataService_DeleteOrgRetentionPolicy_FullMethodName    = "/registry.metadata.v1.MetadataService/DeleteOrgRetentionPolicy"
-	MetadataService_GetEffectiveRetentionPolicy_FullMethodName = "/registry.metadata.v1.MetadataService/GetEffectiveRetentionPolicy"
-	MetadataService_LookupOrgIDByName_FullMethodName           = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
+	MetadataService_CreateRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/CreateRepository"
+	MetadataService_GetRepository_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetRepository"
+	MetadataService_GetRepositoryByName_FullMethodName           = "/registry.metadata.v1.MetadataService/GetRepositoryByName"
+	MetadataService_ListRepositories_FullMethodName              = "/registry.metadata.v1.MetadataService/ListRepositories"
+	MetadataService_DeleteRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteRepository"
+	MetadataService_UpdateRepositoryQuota_FullMethodName         = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
+	MetadataService_UpdateRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateRepository"
+	MetadataService_PutTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/PutTag"
+	MetadataService_GetTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/GetTag"
+	MetadataService_ListTags_FullMethodName                      = "/registry.metadata.v1.MetadataService/ListTags"
+	MetadataService_DeleteTag_FullMethodName                     = "/registry.metadata.v1.MetadataService/DeleteTag"
+	MetadataService_PutManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/PutManifest"
+	MetadataService_GetManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetManifest"
+	MetadataService_DeleteManifest_FullMethodName                = "/registry.metadata.v1.MetadataService/DeleteManifest"
+	MetadataService_ListUntaggedManifests_FullMethodName         = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
+	MetadataService_LinkBlob_FullMethodName                      = "/registry.metadata.v1.MetadataService/LinkBlob"
+	MetadataService_UnlinkBlob_FullMethodName                    = "/registry.metadata.v1.MetadataService/UnlinkBlob"
+	MetadataService_ListOrphanedBlobs_FullMethodName             = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
+	MetadataService_GetTenantQuotaUsage_FullMethodName           = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
+	MetadataService_UpdateTenantQuota_FullMethodName             = "/registry.metadata.v1.MetadataService/UpdateTenantQuota"
+	MetadataService_IncrementTenantStorage_FullMethodName        = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
+	MetadataService_DecrementTenantStorage_FullMethodName        = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
+	MetadataService_UpdateScanStatus_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
+	MetadataService_GetScanResult_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetScanResult"
+	MetadataService_UpsertScanSBOM_FullMethodName                = "/registry.metadata.v1.MetadataService/UpsertScanSBOM"
+	MetadataService_GetScanSBOM_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetScanSBOM"
+	MetadataService_GetTenantVulnerabilityCount_FullMethodName   = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
+	MetadataService_CountRepositories_FullMethodName             = "/registry.metadata.v1.MetadataService/CountRepositories"
+	MetadataService_GetSecurityOverview_FullMethodName           = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
+	MetadataService_ListTenantVulnerabilities_FullMethodName     = "/registry.metadata.v1.MetadataService/ListTenantVulnerabilities"
+	MetadataService_ListScanHistory_FullMethodName               = "/registry.metadata.v1.MetadataService/ListScanHistory"
+	MetadataService_ListTenantRemediations_FullMethodName        = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
+	MetadataService_GetTenantStorageBreakdown_FullMethodName     = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
+	MetadataService_GetTenantUsage_FullMethodName                = "/registry.metadata.v1.MetadataService/GetTenantUsage"
+	MetadataService_GetRepoRetentionPolicy_FullMethodName        = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
+	MetadataService_UpsertRepoRetentionPolicy_FullMethodName     = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
+	MetadataService_DeleteRepoRetentionPolicy_FullMethodName     = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
+	MetadataService_EvaluateRetention_FullMethodName             = "/registry.metadata.v1.MetadataService/EvaluateRetention"
+	MetadataService_GetOrgRetentionPolicy_FullMethodName         = "/registry.metadata.v1.MetadataService/GetOrgRetentionPolicy"
+	MetadataService_UpsertOrgRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/UpsertOrgRetentionPolicy"
+	MetadataService_DeleteOrgRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/DeleteOrgRetentionPolicy"
+	MetadataService_GetEffectiveRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/GetEffectiveRetentionPolicy"
+	MetadataService_MarkManifestRetentionPending_FullMethodName  = "/registry.metadata.v1.MetadataService/MarkManifestRetentionPending"
+	MetadataService_ClearManifestRetentionPending_FullMethodName = "/registry.metadata.v1.MetadataService/ClearManifestRetentionPending"
+	MetadataService_ListPendingDeleteManifests_FullMethodName    = "/registry.metadata.v1.MetadataService/ListPendingDeleteManifests"
+	MetadataService_LookupOrgIDByName_FullMethodName             = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -200,6 +203,29 @@ type MetadataServiceClient interface {
 	// default would surface a confusing "no enforcement, but here's a default"
 	// banner.
 	GetEffectiveRetentionPolicy(ctx context.Context, in *GetEffectiveRetentionPolicyRequest, opts ...grpc.CallOption) (*EffectiveRetentionPolicy, error)
+	// MarkManifestRetentionPending sets retention_pending_delete_at = NOW on a
+	// single manifest. Called by services/gc's retention soft-delete pass for
+	// every manifest in EvaluateRetention's would_delete output.
+	//
+	// Idempotent: if retention_pending_delete_at is already set, the existing
+	// timestamp is preserved (a re-run does NOT extend the grace window).
+	MarkManifestRetentionPending(ctx context.Context, in *MarkManifestRetentionPendingRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ClearManifestRetentionPending unmarks a manifest queued for retention
+	// deletion. Used by the "undo" UI affordance during the grace window, and
+	// also for tests that need to reset state between runs.
+	ClearManifestRetentionPending(ctx context.Context, in *ClearManifestRetentionPendingRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ListPendingDeleteManifests returns manifests whose
+	// retention_pending_delete_at is older than `grace_window_secs`. Called by
+	// the retention_grace executor sweep to find candidates that have ridden
+	// out their grace window and are ready for hard deletion.
+	//
+	// tenant_id may be empty to scan all tenants (used by the cross-tenant
+	// grace ticker on services/gc); a non-empty tenant_id restricts the scan.
+	// The repo-blob digests needed for storage.DeleteBlob calls are NOT
+	// returned by this RPC — the executor calls DeleteManifest (existing RPC)
+	// which already cascades to blob cleanup via the orphan path. Keeps this
+	// RPC a single-table scan instead of an N-way join against blob_links.
+	ListPendingDeleteManifests(ctx context.Context, in *ListPendingDeleteManifestsRequest, opts ...grpc.CallOption) (*ListPendingDeleteManifestsResponse, error)
 	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
 	// Read-only — unlike the repository-internal GetOrCreateOrganization
 	// which has insert semantics, this RPC returns NotFound when the org
@@ -730,6 +756,36 @@ func (c *metadataServiceClient) GetEffectiveRetentionPolicy(ctx context.Context,
 	return out, nil
 }
 
+func (c *metadataServiceClient) MarkManifestRetentionPending(ctx context.Context, in *MarkManifestRetentionPendingRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_MarkManifestRetentionPending_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ClearManifestRetentionPending(ctx context.Context, in *ClearManifestRetentionPendingRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_ClearManifestRetentionPending_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListPendingDeleteManifests(ctx context.Context, in *ListPendingDeleteManifestsRequest, opts ...grpc.CallOption) (*ListPendingDeleteManifestsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPendingDeleteManifestsResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListPendingDeleteManifests_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) LookupOrgIDByName(ctx context.Context, in *LookupOrgIDByNameRequest, opts ...grpc.CallOption) (*LookupOrgIDByNameResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupOrgIDByNameResponse)
@@ -875,6 +931,29 @@ type MetadataServiceServer interface {
 	// default would surface a confusing "no enforcement, but here's a default"
 	// banner.
 	GetEffectiveRetentionPolicy(context.Context, *GetEffectiveRetentionPolicyRequest) (*EffectiveRetentionPolicy, error)
+	// MarkManifestRetentionPending sets retention_pending_delete_at = NOW on a
+	// single manifest. Called by services/gc's retention soft-delete pass for
+	// every manifest in EvaluateRetention's would_delete output.
+	//
+	// Idempotent: if retention_pending_delete_at is already set, the existing
+	// timestamp is preserved (a re-run does NOT extend the grace window).
+	MarkManifestRetentionPending(context.Context, *MarkManifestRetentionPendingRequest) (*emptypb.Empty, error)
+	// ClearManifestRetentionPending unmarks a manifest queued for retention
+	// deletion. Used by the "undo" UI affordance during the grace window, and
+	// also for tests that need to reset state between runs.
+	ClearManifestRetentionPending(context.Context, *ClearManifestRetentionPendingRequest) (*emptypb.Empty, error)
+	// ListPendingDeleteManifests returns manifests whose
+	// retention_pending_delete_at is older than `grace_window_secs`. Called by
+	// the retention_grace executor sweep to find candidates that have ridden
+	// out their grace window and are ready for hard deletion.
+	//
+	// tenant_id may be empty to scan all tenants (used by the cross-tenant
+	// grace ticker on services/gc); a non-empty tenant_id restricts the scan.
+	// The repo-blob digests needed for storage.DeleteBlob calls are NOT
+	// returned by this RPC — the executor calls DeleteManifest (existing RPC)
+	// which already cascades to blob cleanup via the orphan path. Keeps this
+	// RPC a single-table scan instead of an N-way join against blob_links.
+	ListPendingDeleteManifests(context.Context, *ListPendingDeleteManifestsRequest) (*ListPendingDeleteManifestsResponse, error)
 	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
 	// Read-only — unlike the repository-internal GetOrCreateOrganization
 	// which has insert semantics, this RPC returns NotFound when the org
@@ -1014,6 +1093,15 @@ func (UnimplementedMetadataServiceServer) DeleteOrgRetentionPolicy(context.Conte
 }
 func (UnimplementedMetadataServiceServer) GetEffectiveRetentionPolicy(context.Context, *GetEffectiveRetentionPolicyRequest) (*EffectiveRetentionPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetEffectiveRetentionPolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) MarkManifestRetentionPending(context.Context, *MarkManifestRetentionPendingRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkManifestRetentionPending not implemented")
+}
+func (UnimplementedMetadataServiceServer) ClearManifestRetentionPending(context.Context, *ClearManifestRetentionPendingRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClearManifestRetentionPending not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListPendingDeleteManifests(context.Context, *ListPendingDeleteManifestsRequest) (*ListPendingDeleteManifestsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPendingDeleteManifests not implemented")
 }
 func (UnimplementedMetadataServiceServer) LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupOrgIDByName not implemented")
@@ -1798,6 +1886,60 @@ func _MetadataService_GetEffectiveRetentionPolicy_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_MarkManifestRetentionPending_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkManifestRetentionPendingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).MarkManifestRetentionPending(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_MarkManifestRetentionPending_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).MarkManifestRetentionPending(ctx, req.(*MarkManifestRetentionPendingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ClearManifestRetentionPending_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearManifestRetentionPendingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ClearManifestRetentionPending(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ClearManifestRetentionPending_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ClearManifestRetentionPending(ctx, req.(*ClearManifestRetentionPendingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListPendingDeleteManifests_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPendingDeleteManifestsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListPendingDeleteManifests(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListPendingDeleteManifests_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListPendingDeleteManifests(ctx, req.(*ListPendingDeleteManifestsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_LookupOrgIDByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LookupOrgIDByNameRequest)
 	if err := dec(in); err != nil {
@@ -1974,6 +2116,18 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetEffectiveRetentionPolicy",
 			Handler:    _MetadataService_GetEffectiveRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "MarkManifestRetentionPending",
+			Handler:    _MetadataService_MarkManifestRetentionPending_Handler,
+		},
+		{
+			MethodName: "ClearManifestRetentionPending",
+			Handler:    _MetadataService_ClearManifestRetentionPending_Handler,
+		},
+		{
+			MethodName: "ListPendingDeleteManifests",
+			Handler:    _MetadataService_ListPendingDeleteManifests_Handler,
 		},
 		{
 			MethodName: "LookupOrgIDByName",

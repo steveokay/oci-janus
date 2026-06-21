@@ -38,6 +38,25 @@ service GCService {
   // so an in-flight run sits at the top of the list. Pagination is
   // opaque base64 keyset on (completed_at, run_id).
   rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+
+  // ─── FE-API-040: retention executor ─────────────────────────────────────────
+
+  // TriggerRetentionRun queues a soft-delete pass for a specific repository.
+  // The CronLoop dispatcher picks up the queued row, calls
+  // metadata.GetEffectiveRetentionPolicy + metadata.EvaluateRetention against
+  // the saved policy, and marks every matched manifest with
+  // retention_pending_delete_at. Returns the run_id immediately; the run
+  // executes asynchronously.
+  //
+  // A separate RPC (rather than overloading RunNow) because the semantics
+  // differ: RunNow is tenant-wide and platform-admin-only, TriggerRetentionRun
+  // is repo-scoped and gated on repo admin / owner.
+  rpc TriggerRetentionRun(TriggerRetentionRunRequest) returns (TriggerRetentionRunResponse);
+
+  // GetRetentionRunStatus reads back a single retention run row by id. Lets
+  // a repo admin poll their own retention sweeps without needing the
+  // platform-admin marker required by ListRuns.
+  rpc GetRetentionRunStatus(GetRetentionRunStatusRequest) returns (RetentionRunSummary);
 }
 
 // GCStatus describes the latest GC run summary and the next scheduled
@@ -120,4 +139,47 @@ message ListRunsRequest {
 message ListRunsResponse {
   repeated GCRun runs            = 1;
   string         next_page_token = 2;
+}
+
+// ─── FE-API-040: retention executor messages ──────────────────────────────────
+
+// TriggerRetentionRunRequest scopes a retention sweep to one repository.
+// `triggered_by` is the caller's user_id (UUID), forwarded by the BFF after
+// the repo admin / owner gate fires.
+message TriggerRetentionRunRequest {
+  string repo_id      = 1;
+  string tenant_id    = 2;
+  string triggered_by = 3; // user_id UUID
+}
+
+message TriggerRetentionRunResponse {
+  string run_id = 1;
+  string status = 2; // always "queued"
+}
+
+message GetRetentionRunStatusRequest {
+  string run_id    = 1;
+  string tenant_id = 2;
+}
+
+// RetentionRunSummary mirrors the gc_runs row for retention modes. The shape
+// overlaps with GCRun deliberately — retention runs are stored in the same
+// table as the existing dry-run / manifests / blobs sweeps — but the fields
+// most relevant to retention are surfaced explicitly so the dashboard does
+// not have to overload `manifests_deleted` to mean two different things
+// depending on `mode`.
+message RetentionRunSummary {
+  string                    run_id              = 1;
+  string                    repo_id             = 2;
+  string                    mode                = 3; // "retention" | "retention_grace"
+  string                    status              = 4; // queued | running | succeeded | failed
+  google.protobuf.Timestamp requested_at        = 5;
+  google.protobuf.Timestamp started_at          = 6;
+  google.protobuf.Timestamp completed_at        = 7;
+  int64                     manifests_marked    = 8;  // populated when mode = retention
+  int64                     manifests_deleted   = 9;  // populated when mode = retention_grace
+  int64                     blobs_freed         = 10; // populated when mode = retention_grace
+  int64                     bytes_freed         = 11; // populated when mode = retention_grace
+  string                    error_message       = 12;
+  string                    triggered_by        = 13;
 }
