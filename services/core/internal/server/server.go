@@ -79,7 +79,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	uploadStore := service.NewUploadStore(rdb)
 	referrerStore := service.NewReferrerStore(rdb)
 	authClient := service.NewAuthClient(authConn, rdb)
-	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub)
+	// FE-API-042: PullEventSampleRate gates the pull.image publish on every
+	// successful manifest GET. Validated at startup to be in [0.0, 1.0].
+	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub, cfg.PullEventSampleRate)
 
 	// HTTP handler
 	h := handler.New(authClient, registry, cfg.AuthRealm)

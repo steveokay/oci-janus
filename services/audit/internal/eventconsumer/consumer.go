@@ -73,6 +73,38 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
+	// FE-API-042: each successful manifest GET on services/core publishes a
+	// pull.image event so the analytics `metric=pulls` query (FE-API-030) has
+	// concrete audit_events rows to bucket. ActorID is empty for anonymous
+	// public pulls — we record "anonymous" so the dashboard's actor filter
+	// has a stable value rather than a blank cell. Resource mirrors push.image
+	// so push + pull events group together in the activity feed.
+	case events.RoutingPullImage:
+		var p events.PullImagePayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "anonymous"
+			actorType = "anonymous"
+		}
+		resource := p.RepositoryName
+		if p.Tag != "" {
+			resource = p.RepositoryName + ":" + p.Tag
+		} else if p.ManifestDigest != "" {
+			resource = p.RepositoryName + "@" + p.ManifestDigest
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "pull.image",
+			Resource:   resource,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
 	case events.RoutingPushFailed:
 		// FE-API-008: surfaced in the notifications bell so users see a failed
 		// push without tailing logs. Reuses PushCompletedPayload since the

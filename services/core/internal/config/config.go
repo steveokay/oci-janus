@@ -33,6 +33,15 @@ type Config struct {
 
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
+	// PullEventSampleRate (FE-API-042) sets the probability that a successful
+	// manifest GET publishes a pull.image event. Range [0.0, 1.0]; default 1.0
+	// (every pull). Reducing this loses FE-API-030 analytics precision
+	// proportionally — but the FE-API-043 max_idle_days retention rule rides
+	// services/metadata's 24h-debounced last_pulled_at update so its accuracy
+	// is preserved as long as sample rate is > 0. Set to 0.0 to disable the
+	// publish entirely (analytics returns zeros + max_idle_days stops working).
+	PullEventSampleRate float64 `mapstructure:"PULL_EVENT_SAMPLE_RATE"`
+
 	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
 	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
 	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
@@ -60,6 +69,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("AUTH_REALM", "http://localhost:8080/auth/token")
 	viper.SetDefault("METADATA_GRPC_ADDR", "registry-metadata:50051")
 	viper.SetDefault("STORAGE_GRPC_ADDR", "registry-storage:50051")
+	// FE-API-042: every successful manifest GET publishes a pull.image event by default.
+	viper.SetDefault("PULL_EVENT_SAMPLE_RATE", 1.0)
 
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
@@ -85,6 +96,12 @@ func validate(cfg *Config) error {
 	// realm in production would leak credentials over the network.
 	if err := validateAuthRealm(cfg.AuthRealm, cfg.OTELEnvironment); err != nil {
 		return err
+	}
+	// FE-API-042: refuse out-of-range sample rates at startup so a typo in the
+	// helm values (e.g. "10" instead of "1.0") doesn't silently disable the
+	// publish or burn CPU on a coin flip that's always heads.
+	if cfg.PullEventSampleRate < 0.0 || cfg.PullEventSampleRate > 1.0 {
+		return fmt.Errorf("PULL_EVENT_SAMPLE_RATE must be in [0.0, 1.0], got %v", cfg.PullEventSampleRate)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"regexp"
 	"strings"
 	"time"
@@ -36,6 +37,11 @@ type eventPublisher interface {
 // Ensure *publisher.Publisher satisfies the interface at compile time.
 var _ eventPublisher = (*publisher.Publisher)(nil)
 
+// pullSampler decides whether to publish a pull.image event for a given pull.
+// Kept as an injectable function (not a raw float) so tests can pin the
+// decision deterministically without seeding the global rand.
+type pullSampler func() bool
+
 // Registry is the core OCI registry service.
 type Registry struct {
 	metadata  metadatav1.MetadataServiceClient
@@ -43,23 +49,44 @@ type Registry struct {
 	uploads   *UploadStore
 	referrers *ReferrerStore
 	publisher eventPublisher
+	// pullSample (FE-API-042) gates pull.image publishes. Defaults to a
+	// rand.Float64() < sampleRate check, but tests inject deterministic samplers.
+	pullSample pullSampler
 }
 
-// NewRegistry constructs a Registry.
+// NewRegistry constructs a Registry. PullEventSampleRate=1.0 publishes every
+// pull (the default); <1.0 thins the stream to dial back analytics CPU/IO on
+// massive registries.
 func NewRegistry(
 	metaConn *grpc.ClientConn,
 	storageConn *grpc.ClientConn,
 	uploads *UploadStore,
 	referrers *ReferrerStore,
 	pub *publisher.Publisher,
+	pullEventSampleRate float64,
 ) *Registry {
 	return &Registry{
-		metadata:  metadatav1.NewMetadataServiceClient(metaConn),
-		storage:   storagev1.NewStorageServiceClient(storageConn),
-		uploads:   uploads,
-		referrers: referrers,
-		publisher: pub,
+		metadata:   metadatav1.NewMetadataServiceClient(metaConn),
+		storage:    storagev1.NewStorageServiceClient(storageConn),
+		uploads:    uploads,
+		referrers:  referrers,
+		publisher:  pub,
+		pullSample: defaultPullSampler(pullEventSampleRate),
 	}
+}
+
+// defaultPullSampler returns a sampler that uses the package-level rand source.
+// Edge cases are short-circuited so 0.0 never publishes and 1.0 always does —
+// rand.Float64() returns values in [0, 1), so a naive comparison would skip
+// a sample at exactly 1.0 on rare boundary values.
+func defaultPullSampler(rate float64) pullSampler {
+	if rate <= 0.0 {
+		return func() bool { return false }
+	}
+	if rate >= 1.0 {
+		return func() bool { return true }
+	}
+	return func() bool { return rand.Float64() < rate } //nolint:gosec // analytics sampling, not crypto
 }
 
 // ValidateName ensures the name is org/repo format and matches allowed characters.
@@ -489,6 +516,70 @@ func (r *Registry) GetReferrers(ctx context.Context, tenantID, repoName, subject
 		}
 	}
 	return filtered, true, nil
+}
+
+// RecordPull (FE-API-042) publishes a pull.image event for a successful manifest
+// GET. The call is fire-and-forget — it never returns an error and never blocks
+// the response — because:
+//
+//   - the pull itself has already succeeded (the response body was written),
+//   - a slow/dead broker must not latency-poison the pull hot path,
+//   - the analytics + retention consumers can tolerate dropped events.
+//
+// The sample-rate gate (`pullSample()`) and the bounded 2s publish context
+// together cap the worst-case overhead a misconfigured broker can impose.
+//
+// `manifestID` and `tag` are optional — pass empty strings when the handler
+// resolved the pull by digest or the metadata service did not surface the
+// internal UUID. `actorID` is empty for anonymous public pulls; downstream
+// consumers (audit) record those as actor_id="anonymous".
+func (r *Registry) RecordPull(
+	ctx context.Context,
+	tenantID, repoID, repoName, manifestDigest, manifestID, tag, actorID string,
+) {
+	// Skip publish entirely when the sample rate gate trips. Cheaper than
+	// building the payload and bailing later, and matches the spec's
+	// "if rand.Float64() < cfg.PullEventSampleRate { publish }" shape.
+	if r.pullSample == nil || !r.pullSample() {
+		return
+	}
+
+	payload, err := json.Marshal(events.PullImagePayload{
+		TenantID:       tenantID,
+		RepositoryID:   repoID,
+		RepositoryName: repoName,
+		ManifestDigest: manifestDigest,
+		ManifestID:     manifestID,
+		Tag:            tag,
+		ActorID:        actorID,
+		PulledAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		// Marshalling our own struct cannot realistically fail, but log so a
+		// future schema change doesn't silently break analytics.
+		slog.WarnContext(ctx, "pull.image marshal failed (best-effort)", "error", err)
+		return
+	}
+
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingPullImage,
+		TenantID:   tenantID,
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+
+	// 2s timeout deliberately tighter than the 5s used by push.completed.
+	// A pull is a read-mostly operation and we want to keep the worst-case
+	// added latency well below the HTTP read timeout (30s) on a flaky broker.
+	pubCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := r.publisher.Publish(pubCtx, events.RoutingPullImage, evt); err != nil {
+		// Best-effort: the manifest body has already been written to the
+		// client. Logging at WARN matches the push.completed pattern.
+		slog.WarnContext(ctx, "pull.image publish failed (best-effort)", "error", err)
+	}
 }
 
 // GetManifest retrieves a manifest by digest or tag reference.
