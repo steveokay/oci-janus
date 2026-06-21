@@ -129,6 +129,10 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 // variant is kept for internal usage (e.g. RBAC lookups that apply to both
 // humans and service accounts).
 // Returns ErrNotFound if no such user exists.
+//
+// Deprecated: use GetHumanByID on the human-auth path or GetUserAnyKind when
+// the caller explicitly needs to see shadow users. Wrapper will be removed
+// once all callers are migrated (FE-API-048 cleanup, Task 10+).
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return r.GetUserAnyKind(ctx, id)
 }
