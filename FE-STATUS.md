@@ -60,7 +60,10 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S9.1 | Tag-detail signing + supply chain | DONE ✅ (`8a7271f`) | FE-API-025 verify-on-demand, FE-API-026 sign-from-UI dialog, FE-API-033 SBOM download |
 | S9.2 | Workspace metadata + notifications + custom domains | DONE ✅ (`52178b1`) | FE-API-007/009 workspace identity, FE-API-008 notifications topbar bell + `/activity` live feed, FE-API-027 `/workspace/domains` CRUD |
 | S9.3 | Workspace-wide security center | DONE ✅ (`5968bf0`) | FE-API-014 vulnerabilities table, FE-API-015 scan history timeline |
-| S9 | Remaining stubs (S9.4+) | IN PROGRESS | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-030 analytics charts, FE-API-031 storage breakdown, FE-API-032 admin GC, FE-API-034 SSO admin / login |
+| S9.4 | Analytics + storage + admin tenant detail + bulk delete | DONE ✅ (`2e983fc`) | FE-API-028 admin tenant drawer, FE-API-029 rename/plan edit, FE-API-030 analytics sparkline (dashboard + repo), FE-API-031 storage breakdown card, FE-API-036 bulk tag delete |
+| S9.5 | Remaining stubs (mop-up) | NOT STARTED | FE-API-017 remediation, FE-API-018 scan policies CRUD, FE-API-019 compliance reports, FE-API-020 scan coverage tile, FE-API-032 admin GC, FE-API-035 webhook delivery payload |
+| REM-011 P1 | Scanner pipeline works end-to-end (backend + small FE) | DONE ✅ (`8debd29`) | Adapters live (`infra/scanner-plugins/dev-stub` + `trivy-adapter`); scanner image bakes both; UpdateScanStatus now upserts so first scan write creates the row; FE ScanPanel auto-degrades to "Scanner isn't producing results" after 90s of pending. Real CVE detection verified live on `dev/alpine:3.19` (10 findings via Trivy adapter). |
+| REM-011 P2 | Admin UI for adapter selection + live swap + test scans | PLANNED | New `services/scanner` RPCs (`ListInstalledAdapters` / `GetActiveAdapter` / `SetActiveAdapter` / `RunTestScan`); new `/admin/scanner` platform-admin route with adapter cards, "Make active" + "Run test scan"; backend liveness probe to replace the 90s client heuristic |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
 | S11 | Retention policies | NOT STARTED | per-repo "Retention" tab on repo-detail (FE-API-037 CRUD + FE-API-038 dry-run + FE-API-043 activity rule); per-org "Default retention" section on org page (FE-API-039); "Pending deletion" badges on tag rows; gc admin "Retention" tile (FE-API-040 housekeeping summary). **RBAC**: repo `admin`/`owner` writes per-repo policy; org `admin`/`owner` writes org default; readers see "(inherited from org default)" labelling — never platform-admin tier. |
 
@@ -68,7 +71,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 
 ## Snapshot (as of 2026-06-21)
 
-> Sprint 9 sub-passes 9.1/9.2/9.3 landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`). Remaining S9 work (remediation, scan policies CRUD, compliance reports, analytics charts, storage breakdown, admin GC, SSO admin) tracked in S9.4+.
+> Sprint 9 sub-passes 9.1/9.2/9.3/9.4 all landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`), analytics + storage breakdown + admin tenant drawer + bulk tag delete (`2e983fc`). REM-011 Phase 1 also shipped (`8debd29`) — scanner pipeline now actually works end-to-end against `docker compose --profile scanner up`; real CVE detection via Trivy adapter verified live. Next: REM-011 Phase 2 (admin UI for adapter selection + live swap + test scans) or S9.5 mop-up (FE-API-017/018/019/020/032/035).
 
 **Routes shipped & wired against real backend (no stubs):**
 
