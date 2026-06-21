@@ -27,6 +27,11 @@
 
 ---
 
+## Related trackers
+
+- [`FE-STATUS.md`](FE-STATUS.md) — frontend route + sprint status, by convention status.md is backend-only.
+- [`futures.md`](futures.md) — prioritized backlog of items not yet sprinted, with tiering rationale + promotion workflow. New cross-cutting work (MFA, tag immutability, admission policy, SCIM, etc.) starts there before getting an FE-API or REM number.
+
 ## Legend
 
 | Status | Meaning |

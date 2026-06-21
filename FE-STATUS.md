@@ -2,6 +2,10 @@
 
 > Living tracker for the frontend rebuild on branch `feat/frontend-rebuild`.
 > Started 2026-06-19. Owner: AI-assisted build. Aesthetic codename: **Beacon**.
+>
+> Related: [`status.md`](status.md) (backend), [`futures.md`](futures.md)
+> (prioritized backlog of unsprinted items — MFA, tag immutability,
+> admission policy, SCIM, etc. — that don't yet have FE-API numbers).
 
 ---
 
