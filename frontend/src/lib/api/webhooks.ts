@@ -110,6 +110,27 @@ export const WEBHOOK_EVENT_CATALOG: Array<{
     label: "Image signed",
     description: "A Cosign or Notary v2 signature was attached to an image.",
   },
+  // FE-API-041 — retention lifecycle. Operators subscribe to surface
+  // "this policy is about to delete N manifests" notifications in their
+  // incident channels rather than tailing gc_runs.
+  {
+    key: "retention.evaluated",
+    label: "Retention evaluated",
+    description:
+      "A retention sweep evaluated a policy and computed the would-delete set.",
+  },
+  {
+    key: "retention.applied",
+    label: "Retention applied",
+    description:
+      "A retention sweep soft-deleted manifests; grace window starts now.",
+  },
+  {
+    key: "retention.grace_completed",
+    label: "Retention grace completed",
+    description:
+      "A retention grace sweep hard-deleted manifests + freed blobs.",
+  },
 ];
 
 // ── Key factory ─────────────────────────────────────────────────────────────

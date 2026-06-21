@@ -17,14 +17,16 @@
 // the ad-hoc TriggerRetentionRun RPC share one execution surface — same
 // gc_runs lifecycle, same metrics, same logging.
 //
-// Event emission is stubbed: publishRetentionApplied / publishRetentionGraceCompleted
-// log a slog.Info today and return. FE-API-041 will wire them through the
-// libs/rabbitmq publisher; until then the executor still records every run
-// in gc_runs so the dashboard has visibility.
+// FE-API-041 wired the publish helpers through libs/rabbitmq/publisher. A nil
+// publisher (no RABBITMQ_URL configured) is a no-op so the executor still
+// drains queued runs in a dev install without a broker; publish errors are
+// logged but never fail the run — events are best-effort, the gc_runs row
+// is the system of record.
 package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,6 +38,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 	"github.com/steveokay/oci-janus/services/gc/internal/repository"
@@ -173,6 +176,20 @@ func (p *PersistedRunner) RunRetention(ctx context.Context, run *repository.GCRu
 		if previewUntil.After(time.Now()) {
 			slog.InfoContext(ctx, "retention: preview window active, skipping",
 				"run_id", run.RunID, "preview_until", previewUntil)
+			// Still evaluate so subscribers see "we WOULD have deleted X". The
+			// preview event carries PolicyPreviewUntil so consumers can render
+			// "X manifests would be deleted after <date>".
+			previewEval, evalErr := p.metaClient.EvaluateRetention(ctx, &metadatav1.EvaluateRetentionRequest{
+				TenantId:            tenantID,
+				RepoId:              repoID,
+				Candidate:           policyToCandidate(policy),
+				MaxDeleteResults:    int32(p.retention.MaxEvaluatedCandidates),
+				MaxProtectedResults: 0,
+			})
+			if evalErr == nil && previewEval != nil {
+				p.publishRetentionEvaluated(ctx, run, "retention",
+					previewEval.GetTotalCount(), previewEval.GetTotalBytes(), &previewUntil)
+			}
 			return p.finalize(ctx, run.RunID, 0, 0, 0,
 				fmt.Sprintf("preview window active until %s", previewUntil.UTC().Format(time.RFC3339)))
 		}
@@ -181,22 +198,23 @@ func (p *PersistedRunner) RunRetention(ctx context.Context, run *repository.GCRu
 	// Convert the persisted policy back into a candidate so the same
 	// EvaluateRetention path used by the dry-run UI drives the executor.
 	// Single source of truth — no parallel evaluator path.
-	cand := &metadatav1.RetentionPolicyCandidate{
-		Enabled:              policy.GetEnabled(),
-		Rules:                policy.GetRules(),
-		ProtectedTagPatterns: policy.GetProtectedTagPatterns(),
-	}
 	maxDelete := int32(p.retention.MaxEvaluatedCandidates)
 	resp, err := p.metaClient.EvaluateRetention(ctx, &metadatav1.EvaluateRetentionRequest{
-		TenantId:           tenantID,
-		RepoId:             repoID,
-		Candidate:          cand,
-		MaxDeleteResults:   maxDelete,
+		TenantId:            tenantID,
+		RepoId:              repoID,
+		Candidate:           policyToCandidate(policy),
+		MaxDeleteResults:    maxDelete,
 		MaxProtectedResults: 0, // executor doesn't need the protected list.
 	})
 	if err != nil {
 		return p.fail(ctx, run.RunID, fmt.Sprintf("evaluate retention: %v", err))
 	}
+
+	// FE-API-041: fire retention.evaluated BEFORE marking so subscribers see
+	// "this is about to happen" and can render the projection. Best-effort —
+	// publish errors don't abort the sweep.
+	p.publishRetentionEvaluated(ctx, run, "retention",
+		resp.GetTotalCount(), resp.GetTotalBytes(), nil)
 
 	candidates := resp.GetWouldDelete()
 	var markedCount int64
@@ -218,8 +236,13 @@ func (p *PersistedRunner) RunRetention(ctx context.Context, run *repository.GCRu
 		"run_id", run.RunID, "repo_id", repoID,
 		"marked", markedCount, "would_delete_total", resp.GetTotalCount())
 
-	// TODO(FE-API-041): publish retention.applied event with run summary.
-	publishRetentionApplied(ctx, run, markedCount, resp.GetTotalCount())
+	// FE-API-041: only emit retention.applied when we actually stamped at
+	// least one manifest. A zero-mark sweep already shows up as a gc_runs
+	// row + retention.evaluated event, no need for a second "nothing
+	// happened" signal.
+	if markedCount > 0 {
+		p.publishRetentionApplied(ctx, run, markedCount, resp.GetTotalCount())
+	}
 
 	return p.finalize(ctx, run.RunID, markedCount, 0, 0, "")
 }
@@ -257,9 +280,19 @@ func (p *PersistedRunner) RunRetentionGrace(ctx context.Context, run *repository
 	}
 
 	pending := resp.GetManifests()
+	// Aggregate the would-delete totals for the evaluated event before the
+	// finaliser actually touches anything — same "subscriber sees it about
+	// to happen" contract as the soft-delete sweep.
+	var wouldDeleteBytes int64
+	for _, m := range pending {
+		wouldDeleteBytes += m.GetSizeBytes()
+	}
+	p.publishRetentionEvaluated(ctx, run, "retention_grace",
+		int64(len(pending)), wouldDeleteBytes, nil)
+
 	var (
-		deleted   int64
-		blobs     int64
+		deleted    int64
+		blobs      int64
 		bytesFreed int64
 	)
 	for _, m := range pending {
@@ -285,36 +318,167 @@ func (p *PersistedRunner) RunRetentionGrace(ctx context.Context, run *repository
 		"run_id", run.RunID, "deleted", deleted, "bytes_freed", bytesFreed,
 		"considered", len(pending))
 
-	// TODO(FE-API-041): publish retention.grace_completed event.
-	publishRetentionGraceCompleted(ctx, run, deleted, bytesFreed)
+	// FE-API-041: only emit retention.grace_completed when something was
+	// actually hard-deleted. Mirrors the retention.applied gate.
+	if deleted > 0 {
+		p.publishRetentionGraceCompleted(ctx, run, deleted, blobs, bytesFreed)
+	}
 
 	return p.finalize(ctx, run.RunID, deleted, blobs, bytesFreed, "")
 }
 
-// ─── Event stubs (FE-API-041 wires these to RabbitMQ) ───────────────────────
+// ─── Event publishers (FE-API-041) ──────────────────────────────────────────
+//
+// All three helpers share the same nil-safe contract: when p.pub is nil
+// the helper logs at debug + returns so a dev install without a broker
+// still drains queued retention runs cleanly. On publish error we log at
+// warn + return — the gc_runs row already recorded the run's outcome so
+// the event is a best-effort observability signal, not the source of
+// truth. This matches the collector's publishStarted/publishCompleted
+// behaviour upstream and keeps the executor focused on the metadata
+// state machine.
 
-// publishRetentionApplied logs the event today; FE-API-041 will replace this
-// with libs/rabbitmq/publisher.Publish. We deliberately keep the call sites
-// stable so the wire-up is one edit, not a refactor across two files.
-func publishRetentionApplied(ctx context.Context, run *repository.GCRun, marked, considered int64) {
-	slog.InfoContext(ctx, "retention.applied event would fire (stub for FE-API-041)",
-		"run_id", run.RunID,
-		"repo_id", run.RepoID,
-		"tenant_id", run.TenantID,
-		"manifests_marked", marked,
-		"manifests_considered", considered,
-	)
+// publishRetentionEvaluated emits retention.evaluated at the START of a
+// sweep with the would-delete totals. previewUntil is non-nil only when
+// the policy is in its FE-API-038 preview window — subscribers can use
+// the timestamp to render "would delete after <date>" rather than a hard
+// "deleted X manifests".
+func (p *PersistedRunner) publishRetentionEvaluated(
+	ctx context.Context,
+	run *repository.GCRun,
+	mode string,
+	wouldDeleteCount, wouldDeleteBytes int64,
+	previewUntil *time.Time,
+) {
+	if p.pub == nil {
+		slog.DebugContext(ctx, "retention.evaluated: publisher not configured, skipping",
+			"run_id", run.RunID)
+		return
+	}
+	payload, _ := json.Marshal(events.RetentionEvaluatedPayload{
+		RunID:              run.RunID.String(),
+		TenantID:           tenantString(run.TenantID),
+		RepositoryID:       repoString(run.RepoID),
+		Mode:               mode,
+		EvaluatedAt:        time.Now().UTC(),
+		WouldDeleteCount:   wouldDeleteCount,
+		WouldDeleteBytes:   wouldDeleteBytes,
+		PolicyPreviewUntil: previewUntil,
+		TriggeredBy:        run.TriggeredBy,
+	})
+	evt := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingRetentionEvaluated,
+		TenantID:   tenantString(run.TenantID),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := p.pub.Publish(ctx, events.RoutingRetentionEvaluated, evt); err != nil {
+		slog.WarnContext(ctx, "retention.evaluated publish failed",
+			"run_id", run.RunID, "err", err)
+	}
 }
 
-// publishRetentionGraceCompleted is the grace-sweep counterpart. Same stub
-// contract — FE-API-041 will replace the body with a typed Publish call.
-func publishRetentionGraceCompleted(ctx context.Context, run *repository.GCRun, deleted, bytesFreed int64) {
-	slog.InfoContext(ctx, "retention.grace_completed event would fire (stub for FE-API-041)",
-		"run_id", run.RunID,
-		"tenant_id", run.TenantID,
-		"manifests_deleted", deleted,
-		"bytes_freed", bytesFreed,
-	)
+// publishRetentionApplied emits retention.applied after a successful
+// soft-delete sweep. Called only when markedCount > 0 — see RunRetention.
+func (p *PersistedRunner) publishRetentionApplied(
+	ctx context.Context,
+	run *repository.GCRun,
+	marked, considered int64,
+) {
+	if p.pub == nil {
+		slog.DebugContext(ctx, "retention.applied: publisher not configured, skipping",
+			"run_id", run.RunID)
+		return
+	}
+	payload, _ := json.Marshal(events.RetentionAppliedPayload{
+		RunID:               run.RunID.String(),
+		TenantID:            tenantString(run.TenantID),
+		RepositoryID:        repoString(run.RepoID),
+		CompletedAt:         time.Now().UTC(),
+		ManifestsMarked:     marked,
+		ManifestsConsidered: considered,
+		TriggeredBy:         run.TriggeredBy,
+	})
+	evt := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingRetentionApplied,
+		TenantID:   tenantString(run.TenantID),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := p.pub.Publish(ctx, events.RoutingRetentionApplied, evt); err != nil {
+		slog.WarnContext(ctx, "retention.applied publish failed",
+			"run_id", run.RunID, "err", err)
+	}
+}
+
+// publishRetentionGraceCompleted emits retention.grace_completed after a
+// finaliser sweep that hard-deleted at least one manifest. blobs is
+// always zero today (the orphan-blob sweep owns that counter) but the
+// field is on the wire so a future change can populate it without
+// breaking subscribers.
+func (p *PersistedRunner) publishRetentionGraceCompleted(
+	ctx context.Context,
+	run *repository.GCRun,
+	deleted, blobs, bytesFreed int64,
+) {
+	if p.pub == nil {
+		slog.DebugContext(ctx, "retention.grace_completed: publisher not configured, skipping",
+			"run_id", run.RunID)
+		return
+	}
+	payload, _ := json.Marshal(events.RetentionGraceCompletedPayload{
+		RunID:            run.RunID.String(),
+		TenantID:         tenantString(run.TenantID),
+		CompletedAt:      time.Now().UTC(),
+		ManifestsDeleted: deleted,
+		BlobsFreed:       blobs,
+		BytesFreed:       bytesFreed,
+		TriggeredBy:      run.TriggeredBy,
+	})
+	evt := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingRetentionGraceCompleted,
+		TenantID:   tenantString(run.TenantID),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := p.pub.Publish(ctx, events.RoutingRetentionGraceCompleted, evt); err != nil {
+		slog.WarnContext(ctx, "retention.grace_completed publish failed",
+			"run_id", run.RunID, "err", err)
+	}
+}
+
+// policyToCandidate copies the persisted policy back into the candidate
+// shape EvaluateRetention expects. Used by the preview-window branch where
+// we still want a dry-run to populate the retention.evaluated payload.
+func policyToCandidate(policy *metadatav1.RetentionPolicy) *metadatav1.RetentionPolicyCandidate {
+	return &metadatav1.RetentionPolicyCandidate{
+		Enabled:              policy.GetEnabled(),
+		Rules:                policy.GetRules(),
+		ProtectedTagPatterns: policy.GetProtectedTagPatterns(),
+	}
+}
+
+// tenantString returns "" for uuid.Nil (cross-tenant runs) so consumers
+// can distinguish a platform-wide grace sweep from a tenant-scoped one.
+func tenantString(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
+// repoString returns "" for uuid.Nil (tenant-wide or cross-tenant runs).
+func repoString(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // IsRetentionMode reports whether a gc_runs mode value corresponds to a
