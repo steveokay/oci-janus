@@ -189,32 +189,34 @@
 ---
 
 ### REM-011 — Scanner Plugin End-to-End Works in Dev + With Real Trivy
-- **Affects:** `services/scanner`, `services/metadata`, `infra/docker-compose`, `proto/metadata/v1`, `frontend`, `docs/`
-- **Status:** **PHASE 1 DONE ✅** (commit `8debd29`, 2026-06-21). Phase 2 (admin UI for adapter selection + live swap + test scans) PENDING.
+- **Affects:** `services/scanner`, `services/metadata`, `infra/docker-compose`, `proto/metadata/v1`, `docs/`
+- **Status:** **PHASE 1 DONE ✅** (commit `8debd29`, 2026-06-21). Phase 2 (new gRPC RPCs for adapter management + live swap + test scans) PENDING.
 - **Phase 1 acceptance criteria — verified live (2026-06-21):**
   1. ✅ `docker compose --profile scanner up -d` starts `registry-scanner` zero-config; dev-stub adapter is the default and the entrypoint auto-computes the checksum.
   2. ✅ `POST /tags/{tag}/scan` produces a `scan_results` row within ~5-10s on dev-stub; ~30s on Trivy first scan (DB download), ~1s on warm Trivy.
   3. ✅ Auto-scan via `push.completed` produces a row via the same worker pool + write-path.
   4. ✅ Swap-plugin smoke passes — `SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-trivy-adapter` + `--force-recreate` → real CVE detection on `dev/alpine:3.19` (10 findings: 2 HIGH, 5 MEDIUM, 3 LOW).
-- **What Phase 1 shipped:**
+- **What Phase 1 shipped (backend):**
   - `infra/scanner-plugins/dev-stub` + `trivy-adapter` Go binaries satisfying the JSON-RPC contract; both baked into the scanner image.
   - `services/scanner/Dockerfile` + new `scripts/entrypoint.sh` — auto-fills `SCANNER_PLUGIN_CHECKSUM` from the active binary, operator-supplied values still win.
   - **Backend gap fixed:** `proto/metadata/v1 UpdateScanStatusRequest` extended with `repo_id`/`manifest_digest`/`scanner_name`/`scanner_version`; repository `UpsertScanResult` is now a real `INSERT ... ON CONFLICT (id) DO UPDATE` so the first scan write creates the row (no separate CreatePending RPC needed).
   - Pre-existing viper bug in `services/scanner/internal/config` fixed (Unmarshal couldn't see env vars without explicit `Set`).
-  - `frontend/src/components/security/scan-panel.tsx` — after 90s of pending with no row, the spinner card flips to "Scanner isn't producing results" with the docker compose command shown inline.
   - `docs/SCANNER.md` — canonical reference: contract, both adapters, zero-config dev, production checksum override, swap procedure, write-your-own checklist, known limitations.
-- **Phase 1 known limitations (documented in `docs/SCANNER.md` §6):**
-  - Trivy adapter ignores whiteout files when flattening layers (overcount, never underreport).
-  - Stuck-pending detection in the UI is a 90s client-side heuristic; Phase 2 replaces it with a backend liveness probe.
-  - No integration test yet asserting `scan_results` lands within 30s of a trigger (manual verification only). Adding this is one of the Phase 2 must-haves.
-- **Phase 2 tasks (not started):**
-  - [ ] **Adapter registry concept:** scanner discovers installed adapters by scanning a directory (`/usr/local/bin/scanner-*`) or reading a sidecar manifest file, instead of one env var pointing at one binary.
-  - [ ] **New gRPC RPCs on `services/scanner`:** `ListInstalledAdapters`, `GetActiveAdapter`, `SetActiveAdapter` (persisted in a new `scanner_settings` table), `RunTestScan` (fires a deterministic test job against the active adapter, returns timing + finding counts).
-  - [ ] **Live adapter swap** without container restart — `process.ProcessPlugin` reloads its path via atomic pointer swap so the next scan picks up the new adapter.
-  - [ ] **Management BFF routes:** `GET /admin/scanners`, `GET /admin/scanners/active`, `PATCH /admin/scanners/active`, `POST /admin/scanners/test`. Platform-admin grant only.
-  - [ ] **Frontend `/admin/scanner` route** under platform-admin: adapter cards with name/version/checksum, "Active" badge, "Make active" action (confirm dialog), "Run test scan" button with inline result panel, per-adapter env-var config (TRIVY_* / GRYPE_* etc. — read-only-ish, surfaced from the running container's env).
-  - [ ] **Integration test:** triggers a scan via the gRPC test-scan RPC, asserts a `scan_results` row materializes within 30s. Guards against the JSON-RPC contract drifting silently.
-  - [ ] **Backend liveness probe** for the stuck-pending UI degradation: a `/admin/scanners/health` route the frontend can poll instead of guessing from elapsed time.
+  - Frontend graceful-degradation (90s stuck-pending detection) shipped in the same commit but tracked in `FE-STATUS.md` — Phase 1 frontend mop-up.
+- **Phase 1 known limitations:**
+  - Trivy adapter ignores whiteout files when flattening layers (overcount, never underreport). Documented in `docs/SCANNER.md` §6.
+  - No integration test yet asserting `scan_results` lands within 30s of a trigger (manual verification only). Listed as a Phase 2 must-have.
+- **Phase 2 backend tasks (not started):**
+  - [ ] **Adapter registry on `services/scanner`:** discover installed adapters by directory scan (`/usr/local/bin/scanner-*`) or sidecar manifest, instead of one env var pointing at one binary.
+  - [ ] **Live adapter swap:** `process.ProcessPlugin` reloads its path via atomic pointer swap so the next scan picks up the new adapter without container restart.
+  - [ ] **`scanner_settings` table + migration:** persists the active-adapter selection across restarts.
+  - [ ] **FE-API-044 — `GET /admin/scanners` + `GET /admin/scanners/active`** (scanner gRPC: `ListInstalledAdapters`, `GetActiveAdapter`). Platform-admin grant. Returns per-adapter `{name, version, path, checksum, env_keys[]}`.
+  - [ ] **FE-API-045 — `PATCH /admin/scanners/active`** (scanner gRPC: `SetActiveAdapter`). Platform-admin grant. Validates the target is in the registry, swaps in-memory + persists to `scanner_settings`.
+  - [ ] **FE-API-046 — `POST /admin/scanners/test`** (scanner gRPC: `RunTestScan`). Fires a deterministic test scan against the active adapter using a fixed tiny in-repo OCI fixture; returns `{ok, duration_ms, scanner_name, scanner_version, severity_counts}`. Platform-admin grant.
+  - [ ] **FE-API-047 — `GET /admin/scanners/health`** (scanner gRPC: `GetScannerHealth`). Read-only liveness + recent-job stats (last successful scan, queue depth, stuck-job count). Used by the UI to replace the 90s client-side stuck-pending heuristic.
+  - [ ] **Integration test:** triggers a scan via `RunTestScan` (or the existing trigger path) and asserts a `scan_results` row materializes within 30s. Guards against the JSON-RPC contract drifting silently.
+
+> Phase 2 frontend surface (`/admin/scanner` admin route, adapter cards, swap UI, test-scan button, liveness-driven degradation) is tracked in `FE-STATUS.md` — REM-011 P2 row.
 
 ---
 
