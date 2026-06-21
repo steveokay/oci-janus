@@ -31,11 +31,10 @@
 //     own created_at as the proxy for "has been dangling for at least N days
 //     from the operator's perspective." When FE-API-040's executor lands it
 //     can do better by writing a tag-removed-at column.
-//   - max_idle_days requires pull-activity tracking (FE-API-042) which does
-//     not exist yet. Rules of kind max_idle_days are silently skipped so a
-//     policy that combines max_age_days with max_idle_days can still be
-//     saved + dry-run; only the max_age_days portion contributes to the
-//     would_delete output.
+//   - max_idle_days (FE-API-043) uses manifests.last_pulled_at (populated by
+//     the FE-API-042 24h-debounced pull consumer) gated by a combined
+//     created_at + last_pulled_at predicate — see buildMaxIdleSet for the
+//     full rationale on why the gate is mandatory.
 package repository
 
 import (
@@ -118,18 +117,24 @@ const (
 	ruleKindMaxCount          = "max_count"
 	ruleKindMaxSizeBytes      = "max_size_bytes"
 	ruleKindDanglingGraceDays = "dangling_grace_days"
-	ruleKindMaxIdleDays       = "max_idle_days" // FE-API-043 — silently skipped here.
+	ruleKindMaxIdleDays       = "max_idle_days"
 )
 
 // evalManifest is the per-row decoded shape produced by the SQL load step.
 // It carries enough context to feed into the rule passes without keeping
 // the result-set alive — the slice of evalManifest IS the working set.
+//
+// lastPulledAt is a pointer so the NULL-vs-zero distinction survives into
+// Go: a non-nil zero time would be indistinguishable from "never pulled",
+// and max_idle_days' chicken-and-egg gate (see buildMaxIdleSet) treats NULL
+// distinctly. The pointer is nil when the column is NULL on disk.
 type evalManifest struct {
-	manifestID string
-	digest     string
-	sizeBytes  int64
-	createdAt  time.Time
-	tags       []string
+	manifestID   string
+	digest       string
+	sizeBytes    int64
+	createdAt    time.Time
+	lastPulledAt *time.Time
+	tags         []string
 }
 
 // EvaluateRetention materialises the would-delete + protected-skipped sets
@@ -250,12 +255,29 @@ func (r *Repository) EvaluateRetention(
 				}
 			}
 		}
-		// max_idle_days: silently skipped until FE-API-043 wires up pull
-		// activity tracking. Leaving an explicit no-op branch (rather than
-		// not mentioning the kind at all) so future contributors don't
-		// "fix" the omission and accidentally enforce a half-implemented
-		// rule.
-		_ = rulesByKind[ruleKindMaxIdleDays]
+		// max_idle_days (FE-API-043): "delete manifests that haven't been
+		// pulled in N days." The naive predicate (last_pulled_at < cutoff OR
+		// last_pulled_at IS NULL) is a foot-gun — a brand-new push with NULL
+		// last_pulled_at would match immediately because pull tracking only
+		// started after FE-API-042. We gate on created_at AS WELL so a
+		// manifest is only "idle" when it has had a real chance to be
+		// pulled: it must be at least N days old, AND there must be no
+		// pull within the last N days. NULL last_pulled_at on a manifest
+		// that's at least N days old IS idle — that's the intended outcome
+		// (manifests that existed pre-pull-tracking but were never touched).
+		if rule, ok := rulesByKind[ruleKindMaxIdleDays]; ok {
+			cutoff := now.Add(-time.Duration(rule.GetValue()) * 24 * time.Hour)
+			// Combined gate: created_at < cutoff (manifest old enough to have
+			// been pulled) AND (last_pulled_at IS NULL OR last_pulled_at <
+			// cutoff). Strict "<" matches max_age_days boundary semantics —
+			// at exactly N days we keep, only strictly older than N days
+			// counts as idle. Documented at the file head.
+			if m.createdAt.Before(cutoff) {
+				if m.lastPulledAt == nil || m.lastPulledAt.Before(cutoff) {
+					reasons = append(reasons, ruleKindMaxIdleDays)
+				}
+			}
+		}
 
 		if len(reasons) == 0 {
 			continue
@@ -315,11 +337,15 @@ func (r *Repository) EvaluateRetention(
 // constrain on m.tenant_id directly here so a misuse of repoID across
 // tenants cannot leak rows.
 func (r *Repository) loadManifestsForEval(ctx context.Context, tenantID, repoID string) ([]evalManifest, error) {
+	// last_pulled_at is selected as a nullable timestamp — FE-API-043's
+	// max_idle_days rule treats NULL distinctly from "an old timestamp", so
+	// the scan decodes it through a *time.Time on evalManifest below.
 	const q = `
 		SELECT m.id::text,
 		       m.digest,
 		       m.image_size_bytes,
 		       m.created_at,
+		       m.last_pulled_at,
 		       COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), '{}'::text[]) AS tag_names
 		FROM   manifests m
 		LEFT JOIN tags t
@@ -327,7 +353,7 @@ func (r *Repository) loadManifestsForEval(ctx context.Context, tenantID, repoID 
 		      AND t.manifest_digest = m.digest
 		WHERE  m.repo_id = $1
 		  AND  m.tenant_id = $2
-		GROUP BY m.id, m.digest, m.image_size_bytes, m.created_at
+		GROUP BY m.id, m.digest, m.image_size_bytes, m.created_at, m.last_pulled_at
 		ORDER BY m.created_at DESC, m.digest ASC`
 
 	// Route to the read replica when available — the evaluator is a
@@ -342,7 +368,10 @@ func (r *Repository) loadManifestsForEval(ctx context.Context, tenantID, repoID 
 	out := make([]evalManifest, 0, 256)
 	for rows.Next() {
 		var m evalManifest
-		if err := rows.Scan(&m.manifestID, &m.digest, &m.sizeBytes, &m.createdAt, &m.tags); err != nil {
+		// last_pulled_at is nullable on disk — scan into a *time.Time so the
+		// max_idle_days rule can distinguish "never pulled" (nil) from
+		// "pulled long ago" (non-nil, older than threshold).
+		if err := rows.Scan(&m.manifestID, &m.digest, &m.sizeBytes, &m.createdAt, &m.lastPulledAt, &m.tags); err != nil {
 			return nil, fmt.Errorf("scan eval manifest: %w", err)
 		}
 		// COALESCE(... '{}'::text[]) produces a non-nil slice; nil-guard
