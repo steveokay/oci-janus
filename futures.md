@@ -206,19 +206,22 @@ quickly in real operator workflows.
   shipped) surfaces the list with bulk-revoke action. Platform admin can
   configure the interval per tenant via a new settings field.
 
-### FUT-005: Wire ActivityService audit gRPC client — small follow-up
-- **Why:** FE-API-048 T11 implemented `service.ActivityService` and T15 added
-  the `GET /api/v1/access/activity` route, but the production server bootstrap
-  in `services/auth/internal/server/server.go` doesn't construct the service
-  (it needs an `auditv1.AuditServiceClient` dial that doesn't exist on the
-  auth side today). The route returns informative 501 in production until
-  this is wired. Tests pass because they use an in-process bufconn audit
-  client (`activity_integration_test.go` inlines the audit migrations).
-- **What:** Add `AUDIT_GRPC_ADDR` (and `AUDIT_GRPC_CA_CERT_PATH`/`AUDIT_GRPC_CLIENT_CERT_PATH`/`AUDIT_GRPC_CLIENT_KEY_PATH` matching the mTLS pattern used elsewhere) to `services/auth/internal/config`. Dial it at startup, instantiate
-  `service.NewActivityService(usersRepo, auditClient)`, call
-  `httpH.WithActivityService(activitySvc)`. ~30–60 min. Smoke: admin
-  `GET /api/v1/access/activity?principal_user_id=<self>&limit=5` returns 200
-  with the empty list (no events yet) instead of 501.
+### FUT-005: Wire ActivityService audit gRPC client — DONE (sprint-11 maint batch 1)
+- **Resolution:** Closed 2026-06-22. Added `AUDIT_GRPC_ADDR` to
+  `services/auth/internal/config` and a `buildClientCreds` helper mirroring
+  the existing server-side mTLS pattern (reuses `MTLS_CA_CERT_PATH` /
+  `MTLS_CERT_PATH` / `MTLS_KEY_PATH`). `services/auth/internal/server/server.go`
+  now dials registry-audit when the address is set, constructs
+  `service.NewActivityService(users, auditClient)`, and registers it via
+  `httpH.WithActivityService(...)`. Falls back to a `slog.Warn` (route stays
+  501) when the address is empty so dev stacks without audit still boot.
+  Snake-case JSON tags added to `service.PrincipalActivity` so the
+  Beacon-themed activity table consumes the response without renaming.
+  `infra/docker-compose/docker-compose.yml` sets
+  `AUDIT_GRPC_ADDR: registry-audit:50051` on `registry-auth`.
+  **Live verification:** admin `GET /api/v1/access/activity?limit=5` returns
+  200 with real audit data (`push.image` event for `dev/nginx` already
+  visible in the dev stack).
 
 ### FUT-006: `/users/me` SA-key authentication — design + small impl
 - **Why:** FE-API-048 T16 added the SA principal envelope branch to

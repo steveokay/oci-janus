@@ -19,16 +19,20 @@ interface StorageBreakdownCardProps {
 }
 
 // FE-API-031 — top-N repos by storage, with each row's bar widthed by
-// percent_of_tenant. Lives on the dashboard; default cap is the top 8 so
-// the card stays readable without taking over the page. Each row links
-// to /repositories/$org/$repo so an admin can act on the heaviest
-// offenders in two clicks.
+// percent_of_tenant. Lives on the dashboard; default cap is the top 6
+// (S-MAINT-1 P1: was top 8) so the card stays readable without taking
+// over the page. Each row links to /repositories/$org/$repo so an admin
+// can act on the heaviest offenders in two clicks.
 export function StorageBreakdownCard({
-  limit = 8,
+  limit = 6,
 }: StorageBreakdownCardProps): React.ReactElement {
   const { data, isLoading, isError, refetch } = useStorageBreakdown();
   const repos = (data?.repositories ?? []).slice(0, limit);
-  const tenantTotal = data?.tenant_storage_used_bytes ?? 0;
+  const tenantUsed = data?.tenant_storage_used_bytes ?? 0;
+  // S-MAINT-1 P1: render "used / total" when quota is set so admins can
+  // see capacity headroom at a glance. Falls back to just-usage when the
+  // quota field is missing or zero (lazily-created tenants).
+  const tenantQuota = data?.tenant_storage_quota_bytes ?? 0;
   const extraCount = Math.max(0, (data?.repositories.length ?? 0) - repos.length);
 
   return (
@@ -40,7 +44,16 @@ export function StorageBreakdownCard({
           </CardDescription>
           {!isLoading && data ? (
             <span className="text-xs text-[var(--color-fg-muted)]">
-              {formatBytes(tenantTotal)} total
+              {tenantQuota > 0 ? (
+                <>
+                  {formatBytes(tenantUsed)}{" "}
+                  <span className="text-[var(--color-fg-subtle)]">
+                    / {formatBytes(tenantQuota)} total
+                  </span>
+                </>
+              ) : (
+                <>{formatBytes(tenantUsed)} total</>
+              )}
             </span>
           ) : null}
         </div>

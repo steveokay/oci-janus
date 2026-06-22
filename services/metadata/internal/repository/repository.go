@@ -50,21 +50,36 @@ func (r *Repository) reader() *pgxpool.Pool {
 // Always joined against organizations so callers receive the parent org name —
 // FE-API-010 needs `org` to render `/repositories/{org}/{leaf}` links without
 // a second lookup.
+//
+// S-MAINT-1 B3 (2026-06-22): storage_used is computed from manifests rather
+// than read from the column on `repositories`. The column is never updated
+// in production — `IncrementRepoStorage` / `IncrementTenantStorage` RPCs
+// exist on the proto but `services/core` (the push path) does not call
+// either of them, so `repositories.storage_used` is stuck at 0. The
+// per-repo storage meter and the tenant storage breakdown both depended
+// on that column and rendered 0% for every repo as a result. Computing on
+// read removes the drift class entirely. Cost is one indexed subquery on
+// `manifests(repo_id)` per row — cheap for typical repo sizes.
 const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-	r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
+	r.storage_quota,
+	COALESCE((SELECT SUM(image_size_bytes) FROM manifests WHERE repo_id = r.id), 0) AS storage_used,
+	r.created_at, o.name, r.description`
 
 // CreateRepository inserts a new repository row.
 func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
 	// Two-step insert: the RETURNING clause cannot reference the joined
 	// organizations row, so we fetch the org name in the same query via a CTE.
+	//
+	// storage_used reads through the same computed expression as repoSelectCols
+	// — a brand-new repo has no manifests so the SUM is 0, but using the same
+	// shape here keeps the contract symmetrical with subsequent reads.
 	const q = `
 		WITH inserted AS (
 			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description
 		)
-		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
+		SELECT ` + repoSelectCols + `
 		FROM inserted r
 		JOIN organizations o ON o.id = r.org_id`
 
@@ -86,15 +101,21 @@ func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name
 // UpdateRepository patches mutable fields on a repository. Currently only
 // description is mutable — quota has its own RPC to preserve audit intent.
 func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error) {
+	// CTE-then-select so RETURNING doesn't have to reach the manifests
+	// subquery in repoSelectCols. The UPDATE materialises the new row;
+	// the outer SELECT applies the standard read shape so storage_used
+	// stays consistent with GetRepository's response.
 	const q = `
-		UPDATE repositories r
-		SET    description = $1
-		FROM   organizations o
-		WHERE  r.id        = $2
-		  AND  r.tenant_id = $3
-		  AND  o.id        = r.org_id
-		RETURNING r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-		          r.storage_quota, r.storage_used, r.created_at, o.name, r.description`
+		WITH updated AS (
+			UPDATE repositories
+			SET    description = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public,
+			          storage_quota, created_at, description
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
 	repo, err := r.scanOneRepo(ctx, q, description, repoID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("update repository: %w", err)
@@ -740,10 +761,12 @@ func (r *Repository) ListOrphanedBlobs(ctx context.Context) ([]*metadatav1.BlobR
 // total cap without any admin action — tenant-level quota is the canonical model
 // and is bumped per customer via UpdateTenantQuota.
 func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (*metadatav1.QuotaUsage, error) {
+	// S-MAINT-1 B3: used_bytes sums image_size_bytes on manifests directly
+	// rather than the unmaintained `repositories.storage_used` column.
 	const q = `
 		SELECT
-		    COALESCE((SELECT SUM(storage_used) FROM repositories WHERE tenant_id = $1), 0) AS used_bytes,
-		    t.storage_quota                                                                AS quota_bytes
+		    COALESCE((SELECT SUM(image_size_bytes) FROM manifests WHERE tenant_id = $1), 0) AS used_bytes,
+		    t.storage_quota                                                                  AS quota_bytes
 		FROM   tenants t
 		WHERE  t.id = $1`
 
@@ -766,25 +789,36 @@ func (r *Repository) GetTenantQuotaUsage(ctx context.Context, tenantID string) (
 // Capped at 50 rows. The top-N is itself the answer; pagination is intentionally
 // not exposed for v1.
 func (r *Repository) GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error) {
+	// S-MAINT-1 B3: per-repo bytes + tenant total both compute from
+	// manifests.image_size_bytes. The `repo_sizes` CTE groups by repo_id
+	// once so the outer SELECT can LEFT JOIN against it (repos with zero
+	// manifests still appear via the LEFT JOIN with rs.bytes = NULL → 0).
 	const q = `
 		WITH total AS (
-		    SELECT COALESCE(SUM(storage_used), 0)::BIGINT AS bytes
-		    FROM   repositories
+		    SELECT COALESCE(SUM(image_size_bytes), 0)::BIGINT AS bytes
+		    FROM   manifests
 		    WHERE  tenant_id = $1
+		),
+		repo_sizes AS (
+		    SELECT repo_id, SUM(image_size_bytes)::BIGINT AS bytes
+		    FROM   manifests
+		    WHERE  tenant_id = $1
+		    GROUP  BY repo_id
 		)
 		SELECT r.id::text,
 		       o.name                                                                AS org,
 		       r.name                                                                AS name,
-		       r.storage_used,
+		       COALESCE(rs.bytes, 0)::BIGINT                                         AS storage_used,
 		       CASE WHEN total.bytes = 0 THEN 0.0
-		            ELSE 100.0 * (r.storage_used::DOUBLE PRECISION / total.bytes::DOUBLE PRECISION)
+		            ELSE 100.0 * (COALESCE(rs.bytes, 0)::DOUBLE PRECISION / total.bytes::DOUBLE PRECISION)
 		       END                                                                   AS percent_of_tenant,
 		       total.bytes                                                           AS tenant_total
 		FROM   repositories r
 		JOIN   organizations o ON o.id = r.org_id
+		LEFT   JOIN repo_sizes rs ON rs.repo_id = r.id
 		CROSS  JOIN total
 		WHERE  r.tenant_id = $1
-		ORDER  BY r.storage_used DESC, r.name ASC
+		ORDER  BY COALESCE(rs.bytes, 0) DESC, r.name ASC
 		LIMIT  50`
 
 	rows, err := r.reader().Query(ctx, q, tenantID)
@@ -822,7 +856,9 @@ func (r *Repository) GetTenantStorageBreakdown(ctx context.Context, tenantID str
 	// captured. Re-query the total in that edge case. Cheap: one COALESCE
 	// SELECT against an indexed tenant_id.
 	if len(resp.Repositories) == 0 {
-		const zeroQuery = `SELECT COALESCE(SUM(storage_used), 0)::BIGINT FROM repositories WHERE tenant_id = $1`
+		// S-MAINT-1 B3: same source switch as the main query — manifests, not the
+		// stale storage_used column.
+		const zeroQuery = `SELECT COALESCE(SUM(image_size_bytes), 0)::BIGINT FROM manifests WHERE tenant_id = $1`
 		if err := r.reader().QueryRow(ctx, zeroQuery, tenantID).Scan(&resp.TenantStorageUsedBytes); err != nil {
 			return nil, fmt.Errorf("storage breakdown total: %w", err)
 		}
@@ -843,13 +879,13 @@ func (r *Repository) GetTenantUsage(ctx context.Context, tenantID string) (*meta
 	// created tenants that haven't been registered in the metadata DB yet.
 	// COALESCE returns 0 in the absence of repository rows too. SUM/COUNT
 	// against an empty filter yield NULL by default, so wrap both.
+	// S-MAINT-1 B3: used_bytes sums manifests directly. repo_count still
+	// comes from `repositories` (one row per repo regardless of manifests).
 	const q = `
 		WITH usage AS (
 		    SELECT
-		        COALESCE(SUM(storage_used), 0)::BIGINT  AS used_bytes,
-		        COUNT(*)::BIGINT                        AS repo_count
-		    FROM repositories
-		    WHERE tenant_id = $1
+		        (SELECT COALESCE(SUM(image_size_bytes), 0)::BIGINT FROM manifests WHERE tenant_id = $1) AS used_bytes,
+		        (SELECT COUNT(*)::BIGINT FROM repositories WHERE tenant_id = $1)                        AS repo_count
 		),
 		orgs AS (
 		    SELECT COUNT(*)::BIGINT AS org_count
@@ -1166,8 +1202,7 @@ func (r *Repository) GetScanSBOM(ctx context.Context, tenantID, manifestDigest s
 	return &SBOMResult{Format: *format, SBOMJSON: sbom}, nil
 }
 
-// GetTenantVulnerabilityCount aggregates CRITICAL and HIGH vulnerability counts
-// across all completed scan_results for a tenant. The total is the sum of both.
+// CountRepositories returns the number of repositories owned by a tenant.
 func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (int64, error) {
 	const q = `SELECT COUNT(*) FROM repositories WHERE tenant_id = $1`
 	var n int64
@@ -1298,19 +1333,36 @@ func (r *Repository) GetSecurityOverview(ctx context.Context, tenantID string) (
 	return &ov, nil
 }
 
+// GetTenantVulnerabilityCount aggregates severity counts across a tenant's
+// scanned manifests, deduplicated to the most recent complete scan per
+// (repo_id, manifest_digest).
+//
+// S-MAINT-1 B1 fix: the prior implementation summed across all completed
+// scan_results rows, so re-scanning the same manifest doubled (and tripled,
+// quadrupled, …) the dashboard severity totals. The dedup pattern is the
+// same one [[GetTenantSeverityBreakdown]] and [[GetSecurityOverview]] already
+// use — kept consistent so a future column addition can't desync one of the
+// three aggregators.
+//
+// Returns (total, critical, high, medium, low, negligible) where total is the
+// sum of the five severity buckets.
 func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error) {
 	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		)
 		SELECT
 		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
 		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
 		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
 		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
 		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
-		FROM scan_results
-		WHERE tenant_id = $1
-		  AND status    = 'complete'`
+		FROM latest`
 
-	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+	if err = r.reader().QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
 		return 0, 0, 0, 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
 	}
 	return critical + high + medium + low + negligible, critical, high, medium, low, negligible, nil

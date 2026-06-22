@@ -28,6 +28,10 @@ export interface RepositoryStorageEntry {
 
 export interface StorageBreakdownResponse {
   tenant_storage_used_bytes: number;
+  // S-MAINT-1 P1 — tenant-level quota cap. 0 when no quota row yet
+  // (lazy-created on first push). The dashboard card renders "used / total"
+  // when this is set, falling back to "used" alone when it's 0.
+  tenant_storage_quota_bytes?: number;
   repositories: RepositoryStorageEntry[];
 }
 

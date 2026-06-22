@@ -57,4 +57,6 @@ certs/
 # Personal notes / scratchpad — never committed
 understand.md
 
-.claude/
+# Claude Code: keep .claude/agents/*.md tracked (team agent definitions),
+# but ignore the per-machine settings.local.json (Bash allowlist etc.).
+.claude/settings.local.json

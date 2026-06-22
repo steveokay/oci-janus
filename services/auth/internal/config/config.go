@@ -57,6 +57,19 @@ type Config struct {
 	// key paired with SAMLSPCertPath. Permissions should be chmod 600
 	// (CLAUDE.md §7 — Cert key file permissions).
 	SAMLSPKeyPath string `mapstructure:"SAML_SP_KEY_PATH"`
+
+	// FE-API-048 FUT-005 — audit gRPC client.
+	//
+	// AuditGRPCAddr is the host:port of registry-audit's gRPC server. When
+	// empty, the ActivityService is NOT constructed and /api/v1/access/activity
+	// returns 501 NOT_IMPLEMENTED. Required so per-principal activity feeds
+	// resolve in production.
+	//
+	// The connection reuses the gRPC mTLS material in BaseConfig
+	// (MTLS_CA_CERT_PATH / MTLS_CLIENT_CERT_PATH / MTLS_CLIENT_KEY_PATH).
+	// In production all three cert paths must be set; in local dev the
+	// dial falls back to plaintext with a slog.Warn.
+	AuditGRPCAddr string `mapstructure:"AUDIT_GRPC_ADDR"`
 }
 
 // Load binds environment variables into Config and validates required fields.

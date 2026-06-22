@@ -699,12 +699,13 @@ func (h *HTTPHandler) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	resp := make([]apiKeyResponse, len(keys))
 	for i, k := range keys {
 		resp[i] = apiKeyResponse{
-			ID:        k.ID.String(),
-			Name:      k.Name,
-			Prefix:    k.KeyPrefix,
-			Scopes:    k.Scopes,
-			ExpiresAt: k.ExpiresAt,
-			CreatedAt: k.CreatedAt,
+			ID:         k.ID.String(),
+			Name:       k.Name,
+			Prefix:     k.KeyPrefix,
+			Scopes:     k.Scopes,
+			ExpiresAt:  k.ExpiresAt,
+			CreatedAt:  k.CreatedAt,
+			LastUsedAt: k.LastUsedAt,
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -871,6 +872,14 @@ type apiKeyResponse struct {
 	Scopes    []string   `json:"scopes"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
+	// LastUsedAt is populated on list responses (and is nil for keys that
+	// have never been used). On creation responses it is always nil since
+	// the key has not yet been validated against any request. Sprint 11
+	// maint batch 1 (B2): the column has existed in api_keys since
+	// FE-API-048 T6 + is touched by ValidateAPIKey via repository.TouchLastUsed,
+	// but the JSON response was never plumbed through — the frontend
+	// table's "Last used" column always rendered "Never" as a result.
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	// RawKey is only populated on creation; empty on list responses.
 	RawKey string `json:"key,omitempty"`
 }
