@@ -7,6 +7,7 @@ import { useBuilds } from "@/lib/api/builds";
 import { TagHeader } from "@/components/tags/tag-header";
 import { PullCommandCard } from "@/components/repositories/pull-command-card";
 import { ScanPanel } from "@/components/security/scan-panel";
+import { QuarantineBanner } from "@/components/security/quarantine-banner";
 import { BuildTimeline } from "@/components/builds/build-timeline";
 import { DeleteTagDialog } from "@/components/tags/delete-tag-dialog";
 import { LayersPanel } from "@/components/tags/layers-panel";
@@ -114,7 +115,11 @@ function TagDetail(): React.ReactElement {
           <TabsTrigger value="signing">Signing</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="security">
+        <TabsContent value="security" className="space-y-4">
+          {/* FE-API-050 — renders only when the parent manifest is */}
+          {/* quarantined; otherwise this is a no-op. Reads the      */}
+          {/* manifest detail via useManifest (cached by other panels). */}
+          <QuarantineBanner org={org} repo={repo} tag={tag} />
           <ScanPanel
             scan={scan}
             loading={scanLoading}

@@ -1248,6 +1248,15 @@ type ManifestResponse struct {
 	Config    manifestConfig  `json:"config"`
 	Layers    []manifestLayer `json:"layers"`
 	Manifests []manifestEntry `json:"manifests"`
+	// FE-API-050 — quarantine state surfaced so the tag-detail Security
+	// tab can render a "Quarantined" banner with the reason + who
+	// quarantined + when, and the "Lift quarantine" button. All four
+	// fields are omitted on the wire when the manifest is not
+	// quarantined (the common case).
+	Quarantined       bool       `json:"quarantined,omitempty"`
+	QuarantineReason  string     `json:"quarantine_reason,omitempty"`
+	QuarantinedAt     *time.Time `json:"quarantined_at,omitempty"`
+	QuarantinedBy     string     `json:"quarantined_by,omitempty"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
@@ -1344,6 +1353,18 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: m.GetCreatedAt().AsTime(),
 		Layers:    []manifestLayer{},
 		Manifests: []manifestEntry{},
+	}
+	// FE-API-050: surface quarantine fields so the tag-detail Security
+	// tab can render the banner + lift dialog. Only emit when actually
+	// quarantined — omitempty on the wire keeps the common case clean.
+	if m.GetQuarantined() {
+		resp.Quarantined = true
+		resp.QuarantineReason = m.GetQuarantineReason()
+		resp.QuarantinedBy = m.GetQuarantinedBy()
+		if ts := m.GetQuarantinedAt(); ts != nil {
+			t := ts.AsTime()
+			resp.QuarantinedAt = &t
+		}
 	}
 
 	var raw rawManifest

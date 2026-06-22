@@ -8,6 +8,7 @@ import { DeleteRepositoryDialog } from "@/components/repositories/delete-reposit
 import { RepoMembersPanel } from "@/components/repositories/repo-members-panel";
 import { DescriptionCard } from "@/components/repositories/description-card";
 import { RetentionPanel } from "@/components/repositories/retention-panel";
+import { RepoScanPolicySection } from "@/components/repositories/repo-scan-policy-section";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
@@ -75,12 +76,12 @@ function RepositoryDetail(): React.ReactElement {
           <RetentionPanel org={org} repo={repo} />
         </TabsContent>
 
-        <TabsContent value="settings">
-          <EmptyState
-            icon={<Settings className="size-5" />}
-            title="Repository settings arrive in a later sprint"
-            description="Quota override, description editing, and visibility toggle land alongside the per-tenant policy editor."
-          />
+        <TabsContent value="settings" className="space-y-4">
+          {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
+          {/* Other settings (quota override, description edit, etc.) */}
+          {/* land here in future sprints alongside their backend     */}
+          {/* surfaces.                                                */}
+          <RepoScanPolicySection org={org} repo={repo} />
         </TabsContent>
       </Tabs>
 
