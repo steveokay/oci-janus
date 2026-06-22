@@ -378,6 +378,29 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
 
 ---
 
+### Tag immutability — repo flag + per-tag pin (2026-06-23, in progress)
+- **Affects:** `proto/metadata/v1`, `services/metadata`, `services/core`, `services/management`, `frontend`
+- **Status:** Backend DONE ✅ on `feat/tag-immutability`; FE toggle + pin affordance pending on the same branch. Promotion workflow (cross-repo manifest copy) deferred to a follow-up PR per futures.md Tier 1 #2.
+- **Motivation:** Without an immutability flag, an attacker (or a sleepy engineer) can re-push `staging/myapp:1.0` and silently change what every consumer pulls. Image promotion (dev → staging → prod) is also unsafe without it. Customer-blocking gate for production-grade tenants.
+- **Design — two complementary flags:**
+  - `repositories.immutable_tags` — repo-wide "no tag re-pushes" toggle. When `TRUE`, `services/core` rejects any push that would move an existing tag to a new manifest_digest. Recommended posture for production / staging promotion repos.
+  - `tags.immutable` — per-tag pin. Locks a single canonical tag (e.g. `v1.0-release`) without flipping the whole repo. Useful for repos that mix mutable dev tags + a small set of pinned release tags.
+- **What shipped (backend):**
+  - **Migration `00014_tag_immutability.sql`** — adds both columns. Partial `idx_tags_immutable WHERE immutable=TRUE` for cheap "list pinned tags" admin lookups. Both default `FALSE` so the migration is transparent.
+  - **Proto** — `Repository.immutable_tags` (= 11), `Tag.immutable` (= 12). Two new RPCs (`UpdateRepositoryImmutability`, `UpdateTagImmutable`) — separate from `UpdateRepository` / `PutTag` so the audit trail records security-relevant transitions explicitly.
+  - **`services/metadata`** — `repoSelectCols` + `tagSelectCols` carry both flags. `UpdateRepositoryImmutability` / `UpdateTagImmutable` repository methods use the existing CTE-then-join pattern.
+  - **`services/core`** — new `ErrTagImmutable` sentinel + `checkTagImmutable` preflight on `PutManifest`. Idempotent same-digest re-pushes allowed (not a "move"). Per-tag pin takes precedence over the repo-wide flag. Repo flag check is a second RPC only when the same-digest fast path didn't short-circuit, so steady-state cost is zero for unchanged content. Fail-OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. Handler maps `ErrTagImmutable` → HTTP 400 `MANIFEST_INVALID` per OCI Distribution Spec § 4.2.2.
+  - **`services/management` (BFF)** — `RepoResponse` + `updateRepositoryBody` gain `immutable_tags` (the body field is `*bool` so the BFF can tell "not provided" from "explicit false"). `TagResponse` gains `immutable` so the FE can render the pinned-tag pill without a follow-up GET.
+- **Pending on this branch:**
+  - FE toggle on repo Settings tab: "Immutable tags" (with explainer + audit-trail link).
+  - Per-tag "Pin" affordance on the Tags table; a `📌 pinned` pill on the tag row when set.
+  - Pin/unpin BFF routes: `POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin` + `DELETE` the same path.
+- **Follow-ups (separate PRs):**
+  - Promotion workflow — `POST /repositories/{org}/{repo}/promote` that copies a manifest from `dev/myapp:abc` to `staging/myapp:1.0`, records a `tag.promoted` audit event, optionally re-signs the manifest.
+  - Audit events for the new transitions — `tag.pinned`, `tag.unpinned`, `repository.immutability_changed`. Today the events flow through the generic audit consumer; explicit routing keys would let webhook subscribers wire dedicated notifications.
+
+---
+
 ### FE-API-050 — Pull-time manifest quarantine (2026-06-22)
 - **Affects:** `proto/metadata/v1`, `proto/gen/go/metadata/v1`, `services/metadata`, `services/scanner`, `services/core`, `services/management`, `frontend`
 - **Status:** DONE ✅ — block-on-severity now actually blocks pulls.

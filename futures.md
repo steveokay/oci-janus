@@ -127,16 +127,18 @@ quickly in real operator workflows.
   already store the manifest JSON) and surface as a "Provenance" panel
   on the tag detail page: git commit, source URL, build URL, vendor.
 
-### 5. Pull bandwidth quota + per-tag pull stats
-- **Why:** Docker Hub charges by pulls; we only meter storage. Operators
-  want to see "alpine:3.20 was pulled 12k times last week" both for
-  popularity and for spend forecasting.
-- **What:** services/audit already consumes `push.image`; add
-  `pull.image` (currently noted as a known gap in
-  `docs/SCANNER.md` + `status.md`). Aggregate per-tag in a materialised
-  view; expose via the existing analytics endpoints.
+### 5. Pull bandwidth quota + per-tag pull stats — DONE (FE-API-042)
+- **Resolution:** Closed 2026-06-21. `pull.image` event published from
+  services/core on every successful manifest GET; services/audit
+  consumes + writes `audit_events` rows. `GetAnalytics(metric=pulls)`
+  returns real bucket counts (was flat-zero before). Two-track design:
+  full-fidelity audit/analytics + debounced `last_pulled_at` on
+  `manifests` for retention. See status.md FE-API-042 row.
+- **Follow-up still open:** services/proxy doesn't publish `pull.image`
+  yet (only services/core does). Anonymous IPs / public-pull
+  attribution not captured. Both tracked as their own items.
 
-### 6. Service-account API keys
+### 6. Service-account API keys — DONE (FE-API-048)
 - **Why:** Today every API key is tied to a human (issued from their
   `/profile`). When the human leaves, the key still works until
   someone notices. Real CI bots want a workspace-owned identity.
@@ -151,14 +153,15 @@ quickly in real operator workflows.
   capture the next-level machine-identity features; their preview UI
   surfaces are already in place with dummy data.
 
-### 7. API key scopes
-- **Why:** Today an API key inherits the issuing user's full grants.
-  A CI bot that only needs to push to `staging/*` shouldn't be a full
-  account takeover risk.
-- **What:** Per-key scope strings — `pull:org/*`, `push:staging/*`,
-  `admin:org/myteam`. Enforced in services/auth on every
-  ValidateAPIKey call. Same dialog as creation; chips for permission
-  picking.
+### 7. API key scopes — DONE (FE-API-048)
+- **Resolution:** Closed 2026-06-22 with the service-account work.
+  `services/auth` accepts a `scopes []string` on key creation; the
+  scope intersection logic clamps a bot's effective scope to its
+  service account's allowed list at `/auth/token` exchange time. The
+  `/api-keys` create dialog renders permission chips; ValidateAPIKey
+  emits a `pentest.cross_tenant_attempt` audit row when a key tries to
+  use scopes outside its principal's allowance. See status.md
+  FE-API-048 row + docs/EVENTS.md "Service account lifecycle".
 
 ---
 
@@ -311,9 +314,10 @@ Real value, but easy to defer.
   Phase 1 known limitation, documented in `docs/SCANNER.md` §6).
   Produces correct-but-stricter results; a proper overlayfs replay is
   the fix.
-- **`pull.image` event never published** — see Tier 2 #5 above; the
-  analytics endpoint returns flat-zero for `?metric=pulls` until this
-  ships.
+- **`pull.image` event never published** — DONE (FE-API-042, 2026-06-21).
+  services/core now publishes `pull.image` on every successful manifest
+  GET; analytics endpoint returns real numbers. Tier 2 #5 above has
+  the resolution notes.
 - **`signature_header` + `response_body` empty on webhook deliveries** —
   the FE-API-035 schema is in place; the dispatcher needs a migration +
   patch to actually capture them at delivery time. The UI already
