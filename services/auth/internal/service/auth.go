@@ -18,6 +18,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -209,6 +211,21 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 	if revoked {
 		return nil, ErrTokenRevoked
 	}
+
+	// Check principal-level revocation (spec §5.5 / security HIGH H2).
+	// T8's ServiceAccountService.SetDisabled writes "revoke:user:<shadow_user_id>"
+	// with a 25-minute TTL when an SA is disabled. We check the same key here so
+	// any outstanding JWT for the disabled principal is rejected immediately
+	// without waiting for the token's natural expiry.
+	//
+	// Fail-open on Redis error: the DB row (disabled_at) is the authoritative
+	// source for ValidateAPIKey; this check is an optimisation layer for the JWT
+	// path. A Redis hiccup should not cause a login outage — the token will be
+	// rejected at the API-key validation layer anyway for SA principals.
+	if val, err := s.redis.Get(ctx, "revoke:user:"+claims.Subject).Result(); err == nil && val != "" {
+		return nil, status.Error(codes.Unauthenticated, "principal revoked")
+	}
+
 	return &claims, nil
 }
 

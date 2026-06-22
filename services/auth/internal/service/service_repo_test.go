@@ -16,7 +16,10 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -868,14 +871,17 @@ func TestRevokeToken_alreadyExpired_isNoop(t *testing.T) {
 
 // ── ValidateAPIKey T5 / T6 / T7 / T10 ────────────────────────────────────────
 //
-// authFakes bundles the fakes needed by the T5–T10 test suite. It exposes
-// helper methods for seeding SAs, issuing keys with real argon2id hashes, and
-// asserting audit state.
+// authFakes bundles the fakes needed by the T5–T12 test suite. It exposes
+// helper methods for seeding SAs, issuing keys with real argon2id hashes,
+// issuing JWTs, and asserting audit state.
 type authFakes struct {
 	saRepo   *fakeSARepo
 	userRepo *fakeUserRepo
 	keyRepo  *fakeAPIKeyRepo
 	audit    *capturingAuditEmitter
+	// redis is the miniredis-backed *redis.Client from the parent Service so
+	// tests can seed Redis keys (e.g. revoke:user:<id>) directly.
+	redis *redis.Client
 }
 
 // buildAuthFakesService wires all fakes into the service and returns the
@@ -892,7 +898,7 @@ func buildAuthFakesService(svc *Service) *authFakes {
 	svc.serviceAccounts = sr
 	svc.audit = ae
 
-	return &authFakes{saRepo: sr, userRepo: ur, keyRepo: ar, audit: ae}
+	return &authFakes{saRepo: sr, userRepo: ur, keyRepo: ar, audit: ae, redis: svc.redis}
 }
 
 // newAuthService constructs a Service backed by in-memory fakes and miniredis
@@ -1018,6 +1024,33 @@ func (f *authFakes) HasAction(action string) bool {
 	return false
 }
 
+// issueJWT issues a real RS256 JWT for the given username via svc.IssueToken and
+// returns the raw token string plus the parsed claims. The subject of the JWT is
+// a freshly generated UUID (simulating a real user ID) embedded in claims.Subject.
+// This helper is used by T12 tests that need to inject Redis revoke keys and then
+// call ValidateToken to assert rejection.
+func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
+	ctx := context.Background()
+	userID := uuid.New()
+	tenantID := uuid.New()
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil)
+	if err != nil {
+		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
+	}
+	// Parse the signed token to obtain the claims so callers can use
+	// claims.Subject as the key for revoke:user:<sub>.
+	var claims Claims
+	// ParseWithClaims validates the signature against svc.pubKey; we access it
+	// via the same-package field since both this file and auth.go are in package service.
+	tok, err := jwt.ParseWithClaims(token, &claims, func(_ *jwt.Token) (any, error) {
+		return svc.pubKey, nil
+	})
+	if err != nil || !tok.Valid {
+		panic("issueJWT: parse claims failed: " + err.Error())
+	}
+	return token, &claims
+}
+
 // ── T5: cross-tenant guard ────────────────────────────────────────────────────
 
 // TestValidateAPIKey_CrossTenantGuard_T5 verifies that an SA key used with a
@@ -1085,6 +1118,49 @@ func TestValidateAPIKey_LastUsedWritebackFailureIsolated_T7(t *testing.T) {
 	vk, err := svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{KeyID: keyID, RawSecret: secret})
 	require.NoError(t, err, "TouchLastUsed failure must not propagate to the caller")
 	require.Equal(t, "human", vk.PrincipalKind)
+}
+
+// ── T12: ValidateToken revoke:user check ──────────────────────────────────────
+
+// TestValidateToken_RespectsUserRevoke verifies that when the Redis key
+// "revoke:user:<sub>" is set, ValidateToken rejects the token with
+// codes.Unauthenticated. This covers the SA disable flow (spec §5.5): T8's
+// SetDisabled writes the same key; this test asserts that ValidateToken reads it.
+func TestValidateToken_RespectsUserRevoke(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// Issue a real JWT and capture the claims so we know the subject UUID.
+	token, claims := fakes.issueJWT(svc, "alice")
+
+	// Manually set the revoke key — simulates what SetDisabled does when an SA
+	// (or any principal's shadow user) is disabled.
+	require.NoError(t, fakes.redis.Set(ctx, "revoke:user:"+claims.Subject, "1", time.Minute).Err())
+
+	// ValidateToken must now reject the token.
+	_, err := svc.ValidateToken(ctx, token)
+	require.Error(t, err)
+	require.Equal(t, codes.Unauthenticated, status.Code(err),
+		"revoked principal must return codes.Unauthenticated")
+}
+
+// TestValidateToken_NoRevokeKey_Succeeds verifies that absent revoke:user:<sub>
+// does not break the normal validate-token path — the positive case for T12.
+func TestValidateToken_NoRevokeKey_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// Issue a valid JWT; no revoke key is set.
+	token, claims := fakes.issueJWT(svc, "bob")
+
+	// Ensure no stale key exists for this subject.
+	_ = fakes.redis.Del(ctx, "revoke:user:"+claims.Subject)
+
+	// ValidateToken must succeed and return the same subject.
+	got, err := svc.ValidateToken(ctx, token)
+	require.NoError(t, err, "valid token without revoke key must succeed")
+	require.Equal(t, claims.Subject, got.Subject,
+		"returned claims must carry the original subject")
 }
 
 // ── T10: benchmark ────────────────────────────────────────────────────────────
