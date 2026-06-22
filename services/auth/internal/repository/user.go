@@ -117,7 +117,8 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
 		       last_login_at, created_at, updated_at, kind
-		FROM   users
+		FROM   users -- allow-any-kind: username lookup is kind-agnostic; callers on the
+		             -- human login path must use GetHumanByUsername instead (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND username = $2`
 
 	return r.scanOne(ctx, q, tenantID, username)
@@ -261,7 +262,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
 		       last_login_at, created_at, updated_at, kind
-		FROM   users
+		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND kind = 'human'
 		ORDER  BY created_at DESC`
 
@@ -302,7 +303,7 @@ func (r *UserRepository) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
 		       last_login_at, created_at, updated_at, kind
-		FROM   users
+		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2) AND kind = 'human'`
 
 	return r.scanOne(ctx, q, tenantID, email)
@@ -317,7 +318,7 @@ func (r *UserRepository) GetHumanByID(ctx context.Context, id uuid.UUID) (*User,
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
 		       last_login_at, created_at, updated_at, kind
-		FROM   users
+		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  id = $1 AND kind = 'human'`
 
 	return r.scanOne(ctx, q, id)
@@ -346,7 +347,7 @@ func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*Use
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
 		       last_login_at, created_at, updated_at, kind
-		FROM   users
+		FROM   users -- allow-any-kind: intentional — SA management handlers need shadow users
 		WHERE  id = $1`
 
 	return r.scanOne(ctx, q, id)
