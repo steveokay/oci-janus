@@ -39,7 +39,7 @@ type Repository interface {
 	// == nil or empty disables the mode filter. Both preserve the old
 	// behaviour so the existing platform-admin /admin/gc/runs route keeps
 	// working with no caller-side changes.
-	ListRuns(ctx context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*repository.GCRun, string, error)
+	ListRuns(ctx context.Context, limit int, pageToken string, filters repository.ListRunsFilters) ([]*repository.GCRun, string, error)
 	// FE-API-040 — retention executor surface.
 	CreateRetentionRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	GetRunByID(ctx context.Context, runID, tenantID uuid.UUID) (*repository.GCRun, error)
@@ -221,7 +221,35 @@ func (h *GRPCHandler) ListRuns(ctx context.Context, req *gcv1.ListRunsRequest) (
 		}
 		repoID = parsed
 	}
-	rows, next, err := h.repo.ListRuns(ctx, limit, req.GetPageToken(), repoID, req.GetModes())
+
+	// S-MAINT-1 F2 — optional triggered_by substring + date_from / date_to
+	// window. Empty / unparseable date strings map to nil so the SQL
+	// guard skips the predicate. Bad timestamps surface as a 400 so a
+	// fat-fingered client gets a clear error instead of a silent
+	// "nothing matched" empty page.
+	var dateFrom, dateTo *time.Time
+	if s := req.GetDateFrom(); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid date_from (RFC3339 required)")
+		}
+		dateFrom = &t
+	}
+	if s := req.GetDateTo(); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid date_to (RFC3339 required)")
+		}
+		dateTo = &t
+	}
+
+	rows, next, err := h.repo.ListRuns(ctx, limit, req.GetPageToken(), repository.ListRunsFilters{
+		RepoID:      repoID,
+		Modes:       req.GetModes(),
+		TriggeredBy: req.GetTriggeredBy(),
+		DateFrom:    dateFrom,
+		DateTo:      dateTo,
+	})
 	if err != nil {
 		// The repository layer surfaces a wrapped error for malformed
 		// page_token; check the wrapped chain rather than a string

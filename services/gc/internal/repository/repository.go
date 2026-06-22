@@ -196,6 +196,32 @@ func (r *Repository) GetLatest(ctx context.Context) (*GCRun, error) {
 	)
 }
 
+// ListRunsFilters bundles the optional row-level filters ListRuns accepts.
+// Every field is optional — the zero value preserves the pre-S-MAINT-1 F2
+// "no filter" semantics.
+//
+// S-MAINT-1 F2 (2026-06-22) added the bottom three fields (TriggeredBy +
+// DateFrom + DateTo). They share the same call-site as the existing
+// REM-013 fields (RepoID + Modes) but are kept on the same struct so
+// future filter additions don't grow the function signature.
+type ListRunsFilters struct {
+	// RepoID scopes the listing to one repository. uuid.Nil = no filter.
+	RepoID uuid.UUID
+	// Modes restricts to specific gc_run_mode values. Empty = no filter.
+	Modes []string
+	// TriggeredBy is a case-insensitive substring match against
+	// gc_runs.triggered_by. Empty = no filter. Useful to find "what did
+	// this user run" or "everything cron did this week" by typing "cron".
+	TriggeredBy string
+	// DateFrom / DateTo bound the listing to runs whose anchor timestamp
+	// falls in the half-open interval [DateFrom, DateTo). The anchor is
+	// COALESCE(completed_at, started_at, requested_at) so an in-flight
+	// queued run still falls into the right bucket. Either or both may
+	// be nil to leave that side unbounded.
+	DateFrom *time.Time
+	DateTo   *time.Time
+}
+
 // ListRuns returns recent rows ordered by completed_at DESC NULLS LAST
 // then by run_id. Pagination is keyset on the (completed_at, run_id)
 // tuple, encoded as base64url(`completed_at|run_id`) to keep the cursor
@@ -204,13 +230,12 @@ func (r *Repository) GetLatest(ctx context.Context) (*GCRun, error) {
 //
 // Limit is enforced at [1, 200] by the caller.
 //
-// REM-013 gap 2 — optional filters:
-//   - repoID == uuid.Nil → no repo filter (preserves pre-REM-013 behaviour).
-//   - modes == nil or empty → no mode filter.
-// Both filters are positional bind params so the optimiser still uses
-// the existing (completed_at DESC, run_id ASC) index; the IS NULL /
-// cardinality guards collapse to a constant TRUE when no filter is set.
-func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*GCRun, string, error) {
+// All filters in `filters` are optional — the zero value preserves the
+// pre-S-MAINT-1 F2 "no filter" semantics. Filters are positional bind
+// params so the optimiser still uses the existing
+// (completed_at DESC, run_id ASC) index; each guard collapses to a
+// constant TRUE when its field is unset.
+func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string, filters ListRunsFilters) ([]*GCRun, string, error) {
 	var sinceCompleted any
 	var sinceRunID any
 	if pageToken != "" {
@@ -232,13 +257,26 @@ func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string, 
 	// short-circuits the predicate. pgx handles uuid.UUID natively but
 	// the SQL `IS NULL` check needs an actual NULL on the wire.
 	var repoIDArg any
-	if repoID != uuid.Nil {
-		repoIDArg = repoID
+	if filters.RepoID != uuid.Nil {
+		repoIDArg = filters.RepoID
 	}
 	// Always pass an empty slice rather than nil so cardinality($N) is
 	// well-defined; pgx encodes []string as TEXT[].
+	modes := filters.Modes
 	if modes == nil {
 		modes = []string{}
+	}
+
+	// S-MAINT-1 F2 — date_from / date_to bind as nullable timestamps; the
+	// SQL guards skip the predicate when either is NULL. Triggered_by is
+	// passed as plain text; the ILIKE wildcard wraps happen in SQL so an
+	// empty input collapses to the no-op `'' = ''` branch.
+	var dateFromArg, dateToArg any
+	if filters.DateFrom != nil {
+		dateFromArg = *filters.DateFrom
+	}
+	if filters.DateTo != nil {
+		dateToArg = *filters.DateTo
 	}
 
 	// The WHERE clause implements (completed_at, run_id) < (cursor)
@@ -274,9 +312,12 @@ func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string, 
 		    )
 		    AND ($4::UUID IS NULL OR repo_id = $4::UUID)
 		    AND (cardinality($5::TEXT[]) = 0 OR mode::TEXT = ANY($5::TEXT[]))
+		    AND ($6 = '' OR COALESCE(triggered_by, '') ILIKE '%' || $6 || '%')
+		    AND ($7::TIMESTAMPTZ IS NULL OR COALESCE(completed_at, started_at, requested_at) >= $7)
+		    AND ($8::TIMESTAMPTZ IS NULL OR COALESCE(completed_at, started_at, requested_at) <  $8)
 		  ORDER BY completed_at DESC NULLS LAST, run_id ASC
 		  LIMIT $1`,
-		limit, sinceCompleted, sinceRunID, repoIDArg, modes,
+		limit, sinceCompleted, sinceRunID, repoIDArg, modes, filters.TriggeredBy, dateFromArg, dateToArg,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("ListRuns: %w", err)

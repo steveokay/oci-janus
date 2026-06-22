@@ -1,7 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { AxiosError } from "axios";
-import { AlertTriangle, Play, Trash2 } from "lucide-react";
+import { AlertTriangle, Play, Search, Trash2, X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -69,15 +69,34 @@ function statusTone(s: string): React.ComponentProps<typeof Badge>["tone"] {
 
 export function GCCard(): React.ReactElement {
   const status = useGCStatus();
+  // S-MAINT-1 F2: search filters drive useGCRuns directly so a fresh
+  // typed search triggers a re-fetch via the queryKey. Debounce the
+  // text input so each keystroke doesn't fire a request.
+  const [triggeredByInput, setTriggeredByInput] = React.useState("");
+  const [dateFrom, setDateFrom] = React.useState("");
+  const [dateTo, setDateTo] = React.useState("");
+  const triggeredBy = useDebounced(triggeredByInput, 250);
+
   // S-MAINT-1 P3: last 5 runs (was 10). Keeps the table compact while
   // still surfacing enough history for an admin to spot a pattern.
-  const runs = useGCRuns({ limit: 5 });
+  const runs = useGCRuns({
+    limit: 5,
+    triggeredBy: triggeredBy || undefined,
+    // Date inputs emit YYYY-MM-DD; the gc service expects RFC3339. Pad
+    // to start/end of day in UTC so the half-open [from, to) bounds
+    // line up with operator intent ("all runs on 2026-06-22").
+    dateFrom: dateFrom ? `${dateFrom}T00:00:00Z` : undefined,
+    dateTo: dateTo ? `${dateTo}T23:59:59Z` : undefined,
+  });
   const [open, setOpen] = React.useState(false);
 
   const flatRuns = React.useMemo(
     () => runs.data?.pages.flatMap((p) => p.runs) ?? [],
     [runs.data],
   );
+
+  const hasActiveFilter =
+    Boolean(triggeredBy) || Boolean(dateFrom) || Boolean(dateTo);
 
   if (status.isError) {
     // 404 here means the BFF route is disabled (GC_GRPC_ADDR unset). Surface
@@ -212,7 +231,30 @@ export function GCCard(): React.ReactElement {
             Garbage collection: Recent runs
           </CardDescription>
         </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent className="space-y-3 pt-0">
+          {/* S-MAINT-1 F2 — search row. The text input is a substring */}
+          {/* match against gc_runs.triggered_by ("cron" finds every */}
+          {/* scheduled sweep; a user_id prefix finds that admin's */}
+          {/* manual runs). The two date inputs bound the listing to */}
+          {/* the [from, to) interval. All three are debounced together. */}
+          <GCRunsSearchBar
+            triggeredBy={triggeredByInput}
+            onTriggeredByChange={setTriggeredByInput}
+            dateFrom={dateFrom}
+            onDateFromChange={setDateFrom}
+            dateTo={dateTo}
+            onDateToChange={setDateTo}
+            onClear={
+              hasActiveFilter
+                ? () => {
+                    setTriggeredByInput("");
+                    setDateFrom("");
+                    setDateTo("");
+                  }
+                : undefined
+            }
+          />
+
           {runs.isError ? (
             <ErrorState
               title="Couldn't load GC runs"
@@ -228,8 +270,12 @@ export function GCCard(): React.ReactElement {
           ) : flatRuns.length === 0 ? (
             <EmptyState
               icon={<Trash2 className="size-5" />}
-              title="No runs yet"
-              description="The cron sweeps in the background; manual runs queued here will appear in the list."
+              title={hasActiveFilter ? "No runs match the filter" : "No runs yet"}
+              description={
+                hasActiveFilter
+                  ? "Try a wider date range or clear the triggered-by box. Server-side filters are case-insensitive substrings."
+                  : "The cron sweeps in the background; manual runs queued here will appear in the list."
+              }
             />
           ) : (
             <Table>
@@ -499,5 +545,113 @@ function TriggerDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// useDebounced — generic value-debounce hook. Returns a value that lags
+// `value` by `ms` milliseconds. Used by the GC + Retention search
+// inputs so each keystroke doesn't fire a server round-trip.
+//
+// S-MAINT-1 F2 (2026-06-22).
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
+// GCRunsSearchBar — three inputs (text + two date pickers) plus an
+// optional "Clear" button when any filter is active. Compact enough to
+// sit above the Recent runs table without dominating the card; falls
+// back to a single column on narrow viewports.
+//
+// S-MAINT-1 F2 (2026-06-22).
+function GCRunsSearchBar({
+  triggeredBy,
+  onTriggeredByChange,
+  dateFrom,
+  onDateFromChange,
+  dateTo,
+  onDateToChange,
+  onClear,
+}: {
+  triggeredBy: string;
+  onTriggeredByChange: (next: string) => void;
+  dateFrom: string;
+  onDateFromChange: (next: string) => void;
+  dateTo: string;
+  onDateToChange: (next: string) => void;
+  // undefined when no filter is set — hides the "Clear" affordance.
+  onClear?: () => void;
+}): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3 sm:flex-row sm:items-end">
+      <div className="flex-1 space-y-1">
+        <label
+          htmlFor="gc-search-triggered-by"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          Triggered by
+        </label>
+        <div className="relative">
+          <Search
+            className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--color-fg-subtle)]"
+            aria-hidden
+          />
+          <Input
+            id="gc-search-triggered-by"
+            type="text"
+            placeholder="cron, admin user_id…"
+            value={triggeredBy}
+            onChange={(e) => onTriggeredByChange(e.target.value)}
+            autoComplete="off"
+            className="pl-7 font-mono"
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <label
+          htmlFor="gc-search-date-from"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          From
+        </label>
+        <Input
+          id="gc-search-date-from"
+          type="date"
+          value={dateFrom}
+          onChange={(e) => onDateFromChange(e.target.value)}
+          className="font-mono"
+        />
+      </div>
+      <div className="space-y-1">
+        <label
+          htmlFor="gc-search-date-to"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          To
+        </label>
+        <Input
+          id="gc-search-date-to"
+          type="date"
+          value={dateTo}
+          onChange={(e) => onDateToChange(e.target.value)}
+          className="font-mono"
+        />
+      </div>
+      {onClear ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onClear}
+          className="self-end"
+        >
+          <X className="size-3.5" /> Clear
+        </Button>
+      ) : null}
+    </div>
   );
 }

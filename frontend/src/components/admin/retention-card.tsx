@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ShieldCheck, Trash2 } from "lucide-react";
+import { Search, ShieldCheck, Trash2, X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -15,6 +15,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
@@ -50,15 +52,33 @@ const RETENTION_MODES = new Set(["retention", "retention_grace"]);
 const RECENT_LIMIT = 5;
 
 export function RetentionCard(): React.ReactElement {
-  // Fetch a larger page than the GCCard so the filter has more rows to
-  // pick from. Backend caps at 200 — see admin_gc.go.
-  const runs = useGCRuns({ limit: 100 });
+  // S-MAINT-1 F2 — server-side filter on the retention listing. Same
+  // shape as GCCard's; the filter applies to BOTH the counts strip
+  // and the recent-runs table so the operator's mental model stays
+  // unified ("show me retention runs that match THIS").
+  const [triggeredByInput, setTriggeredByInput] = React.useState("");
+  const [dateFrom, setDateFrom] = React.useState("");
+  const [dateTo, setDateTo] = React.useState("");
+  const triggeredBy = useRetentionDebounced(triggeredByInput, 250);
+
+  // Fetch a larger page than the GCCard so the (client-side mode
+  // filter) has more rows to pick from. Backend caps at 200 —
+  // see admin_gc.go.
+  const runs = useGCRuns({
+    limit: 100,
+    triggeredBy: triggeredBy || undefined,
+    dateFrom: dateFrom ? `${dateFrom}T00:00:00Z` : undefined,
+    dateTo: dateTo ? `${dateTo}T23:59:59Z` : undefined,
+  });
 
   // Flatten the infinite-query pages and keep only retention modes.
   const retentionRuns = React.useMemo(() => {
     const flat = runs.data?.pages.flatMap((p) => p.runs) ?? [];
     return flat.filter((r) => RETENTION_MODES.has(r.mode));
   }, [runs.data]);
+
+  const hasActiveFilter =
+    Boolean(triggeredBy) || Boolean(dateFrom) || Boolean(dateTo);
 
   // Bucketed counts. 24h is "last day"; 7d is "last week". Backend rows
   // use `completed_at` (when terminal) and `requested_at` (otherwise);
@@ -110,14 +130,46 @@ export function RetentionCard(): React.ReactElement {
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* S-MAINT-1 F2 — search bar. Same shape as GCCard but lives on */}
+        {/* the retention surface so an operator can filter retention */}
+        {/* sweeps by who triggered them or when. */}
+        <RetentionRunsSearchBar
+          triggeredBy={triggeredByInput}
+          onTriggeredByChange={setTriggeredByInput}
+          dateFrom={dateFrom}
+          onDateFromChange={setDateFrom}
+          dateTo={dateTo}
+          onDateToChange={setDateTo}
+          onClear={
+            hasActiveFilter
+              ? () => {
+                  setTriggeredByInput("");
+                  setDateFrom("");
+                  setDateTo("");
+                }
+              : undefined
+          }
+        />
         <Counts loading={runs.isLoading} count24h={count24h} count7d={count7d} />
         <RecentRuns
           loading={runs.isLoading}
           runs={retentionRuns.slice(0, RECENT_LIMIT)}
+          hasActiveFilter={hasActiveFilter}
         />
       </CardContent>
     </Card>
   );
+}
+
+// useRetentionDebounced — local debouncer for the search bar. Tiny
+// duplicate of GCCard's hook to avoid an artificial shared file.
+function useRetentionDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
 }
 
 // Counts — two stat lines for last 24h / last 7d. Matches the visual
@@ -170,9 +222,14 @@ function Stat({
 function RecentRuns({
   loading,
   runs,
+  // S-MAINT-1 F2 — pass the filter state down so the empty-state copy
+  // can explain "no matches" instead of misleading "no runs yet" when
+  // history actually exists but doesn't match.
+  hasActiveFilter,
 }: {
   loading: boolean;
   runs: GCRun[];
+  hasActiveFilter: boolean;
 }): React.ReactElement {
   if (loading) {
     return (
@@ -186,8 +243,16 @@ function RecentRuns({
     return (
       <EmptyState
         icon={<Trash2 className="size-5" />}
-        title="No retention runs yet"
-        description="Once an operator triggers retention from a repo Retention tab — or the cross-tenant grace ticker fires — the runs land here."
+        title={
+          hasActiveFilter
+            ? "No retention runs match the filter"
+            : "No retention runs yet"
+        }
+        description={
+          hasActiveFilter
+            ? "Try a wider date range or clear the triggered-by box. Server-side filters are case-insensitive substrings."
+            : "Once an operator triggers retention from a repo Retention tab — or the cross-tenant grace ticker fires — the runs land here."
+        }
       />
     );
   }
@@ -271,4 +336,97 @@ function statusTone(s: string): React.ComponentProps<typeof Badge>["tone"] {
     default:
       return "neutral";
   }
+}
+
+// RetentionRunsSearchBar — same shape as GCCard's GCRunsSearchBar.
+// Duplicated rather than imported to keep the two card files
+// independent — the next iteration might let them diverge (e.g.
+// retention adds a "policy_id" filter that GC doesn't need).
+//
+// S-MAINT-1 F2 (2026-06-22).
+function RetentionRunsSearchBar({
+  triggeredBy,
+  onTriggeredByChange,
+  dateFrom,
+  onDateFromChange,
+  dateTo,
+  onDateToChange,
+  onClear,
+}: {
+  triggeredBy: string;
+  onTriggeredByChange: (next: string) => void;
+  dateFrom: string;
+  onDateFromChange: (next: string) => void;
+  dateTo: string;
+  onDateToChange: (next: string) => void;
+  onClear?: () => void;
+}): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3 sm:flex-row sm:items-end">
+      <div className="flex-1 space-y-1">
+        <label
+          htmlFor="retention-search-triggered-by"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          Triggered by
+        </label>
+        <div className="relative">
+          <Search
+            className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--color-fg-subtle)]"
+            aria-hidden
+          />
+          <Input
+            id="retention-search-triggered-by"
+            type="text"
+            placeholder="cron, admin user_id…"
+            value={triggeredBy}
+            onChange={(e) => onTriggeredByChange(e.target.value)}
+            autoComplete="off"
+            className="pl-7 font-mono"
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <label
+          htmlFor="retention-search-date-from"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          From
+        </label>
+        <Input
+          id="retention-search-date-from"
+          type="date"
+          value={dateFrom}
+          onChange={(e) => onDateFromChange(e.target.value)}
+          className="font-mono"
+        />
+      </div>
+      <div className="space-y-1">
+        <label
+          htmlFor="retention-search-date-to"
+          className="block text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]"
+        >
+          To
+        </label>
+        <Input
+          id="retention-search-date-to"
+          type="date"
+          value={dateTo}
+          onChange={(e) => onDateToChange(e.target.value)}
+          className="font-mono"
+        />
+      </div>
+      {onClear ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onClear}
+          className="self-end"
+        >
+          <X className="size-3.5" /> Clear
+        </Button>
+      ) : null}
+    </div>
+  );
 }

@@ -148,6 +148,24 @@ message ListRunsRequest {
   // slice for "all modes".
   string repo_id = 3;
   repeated string modes = 4;
+  // S-MAINT-1 F2 — server-side search across the GC + Retention admin
+  // tiles. All three filters are optional; empty values preserve the
+  // pre-F2 behaviour.
+  //
+  // triggered_by is a case-insensitive substring match against the
+  // gc_runs.triggered_by column (which stores the actor's user_id as
+  // text for cron-triggered runs the column is empty; "cron" matches it
+  // via the explicit COALESCE in the SQL layer). Matches both manual-
+  // run actors and the literal "cron" label.
+  //
+  // date_from / date_to are RFC3339 timestamps that scope the listing
+  // to runs whose anchor timestamp falls inside the half-open interval
+  // [date_from, date_to). The anchor is COALESCE(completed_at,
+  // started_at, requested_at) so an in-flight queued run still falls
+  // into the right bucket. Either or both may be empty.
+  string triggered_by = 5;
+  string date_from    = 6;
+  string date_to      = 7;
 }
 
 message ListRunsResponse {

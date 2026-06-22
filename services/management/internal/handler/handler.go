@@ -280,6 +280,16 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))
 
+	// S-MAINT-1 F1 — bulk scan fan-out at the repo and org levels.
+	// Both routes enumerate the relevant tags and publish a scan.queued
+	// event per tag. Cap is enforced at bulkScanLimit on the handler so
+	// a click can't queue 10k scans by accident; the response carries
+	// {scans_queued, tags_count, capped} so the FE can show partial
+	// progress. Permissions: repo route = writer on repo (same as the
+	// per-tag handler above); org route = admin on org (heavier scope).
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/scan", authMW(http.HandlerFunc(h.handleRepoBulkScan)))
+	mux.Handle("POST /api/v1/orgs/{org}/scan", authMW(http.HandlerFunc(h.handleOrgBulkScan)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only

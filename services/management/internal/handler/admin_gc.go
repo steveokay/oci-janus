@@ -156,9 +156,20 @@ func (h *Handler) handleAdminGCRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// S-MAINT-1 F2 — forward the optional search params straight through.
+	// The gc service handler validates the RFC3339 timestamps and the
+	// substring is treated as plain text (no allowlist gate needed —
+	// it's an ILIKE input, fed as a parameterised bind).
+	triggeredBy := r.URL.Query().Get("triggered_by")
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+
 	resp, err := h.gc.ListRuns(r.Context(), &gcv1.ListRunsRequest{
-		PageSize:  limit,
-		PageToken: pageToken,
+		PageSize:    limit,
+		PageToken:   pageToken,
+		TriggeredBy: triggeredBy,
+		DateFrom:    dateFrom,
+		DateTo:      dateTo,
 	})
 	if err != nil {
 		// The gc service maps a bad page_token to INVALID_ARGUMENT;
