@@ -521,6 +521,20 @@ Tracked per service. `?` = not yet assessed.
 
 ---
 
+### PENTEST-AUTH-001 — Polymorphic api_keys cross-tenant guard (resolved pre-merge)
+Closed by FE-API-048 implementation (commit `da86cdd`). `ValidateAPIKey` for service-account
+keys verifies the request's claimed tenant matches `service_accounts.tenant_id`;
+mismatch returns Unauthenticated + writes a `pentest.cross_tenant_attempt`
+audit row. Test: T5 in spec §8.1.
+
+### PENTEST-AUTH-002 — JWT revocation pattern extended to per-user (resolved pre-merge)
+Closed by FE-API-048 implementation (commit `66aab14`). `ValidateToken` consults
+`revoke:user:<user_id>` Redis key set by `SetDisabled` on a service account.
+Closes the 300s JTI window for the SA disable path. Pattern is documented
+under CLAUDE.md §7 "JWT Validation."
+
+---
+
 ## Recurring Security Tasks
 
 | Task | Frequency | Owner | Last Run |

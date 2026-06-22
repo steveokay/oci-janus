@@ -88,6 +88,10 @@ type HTTPHandler struct {
 	// causes all /api/v1/service-accounts routes to return 501 NOT_IMPLEMENTED.
 	// Set via WithServiceAccountService.
 	saService *service.ServiceAccountService
+	// activityService is the optional ActivityService (FE-API-048, T15). nil
+	// causes GET /api/v1/access/activity to return 501 NOT_IMPLEMENTED.
+	// Set via WithActivityService.
+	activityService *service.ActivityService
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
@@ -136,6 +140,14 @@ func (h *HTTPHandler) WithServiceAccountService(svc *service.ServiceAccountServi
 	return h
 }
 
+// WithActivityService attaches the ActivityService used by the
+// GET /api/v1/access/activity route (FE-API-048, T15). Optional — without it
+// the route returns 501 NOT_IMPLEMENTED. Returns the handler for chaining.
+func (h *HTTPHandler) WithActivityService(svc *service.ActivityService) *HTTPHandler {
+	h.activityService = svc
+	return h
+}
+
 // Register mounts all auth routes onto mux.
 func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// Docker token auth — RFC 7235 flow; Docker clients use GET, some tools use POST.
@@ -160,6 +172,9 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// FE-API-048 — service-account CRUD. Always registered; individual routes
 	// return 501 when saService is nil (WithServiceAccountService not called).
 	h.RegisterServiceAccounts(mux)
+	// FE-API-048 T15 — access activity feed. Always registered; returns 501
+	// when activityService is nil (WithActivityService not called).
+	h.RegisterAccessActivity(mux)
 }
 
 // ── Docker token endpoint ─────────────────────────────────────────────────────

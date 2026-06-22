@@ -146,6 +146,10 @@ quickly in real operator workflows.
   - API keys can be issued against a service account OR a user.
   - Workspace admin UI on `/api-keys` (the new route this commit
     shipped) — list of accounts, issue/revoke keys per account.
+- **Note:** FE-API-048 shipped the core implementation (shadow-user
+  principal pattern + `/api-keys` hub). Items FUT-001..004 below
+  capture the next-level machine-identity features; their preview UI
+  surfaces are already in place with dummy data.
 
 ### 7. API key scopes
 - **Why:** Today an API key inherits the issuing user's full grants.
@@ -155,6 +159,52 @@ quickly in real operator workflows.
   `admin:org/myteam`. Enforced in services/auth on every
   ValidateAPIKey call. Same dialog as creation; chips for permission
   picking.
+
+---
+
+## Tier 2 — Access: machine identity & policy
+
+> All four items below have preview UI surfaces already shipped (FE-API-048 T24+)
+> with dummy data. Backend work is what remains.
+
+### FUT-001: Federated workload identity (OIDC trust) — Sprint 11
+- **Why:** GitHub Actions, GKE Workload Identity, and similar OIDC-capable
+  CI systems can authenticate without a stored secret at all. A trust
+  relationship removes the "rotation reminder" problem entirely.
+- **What:** New `oidc_trust_configs` table on services/auth; admin UI on the
+  `/api-keys` Trust tab (preview surface already shipped). services/auth adds
+  a `POST /auth/token/workload` exchange endpoint: validates the OIDC
+  assertion against the configured JWKS URL + audience, issues a short-lived
+  JWT mapped to a service account.
+
+### FUT-002: Credential helpers (docker login / k8s YAML / terraform / GHA snippets) — Sprint 11
+- **Why:** Operators copy-paste credentials into CI configs and get them wrong.
+  Auto-generated, copy-ready snippets reduce support burden.
+- **What:** `/api-keys` Helpers tab (preview surface already shipped) renders
+  per-format snippets: `docker login` command, Kubernetes imagePullSecret YAML,
+  Terraform `docker_registry_image` block, GitHub Actions step. All snippets
+  reference the workspace's actual registry hostname and the selected service
+  account. No new backend RPCs needed — purely frontend rendering against
+  existing `/api/v1/workspace/me` data.
+
+### FUT-003: Token policies (max-TTL, force-rotation, idle-revoke) — Sprint 12
+- **Why:** Long-lived keys with no rotation policy are the #1 lateral-movement
+  vector after a breach. Operators want guardrails at the workspace level.
+- **What:** New `token_policies` table on services/auth keyed by tenant + scope
+  (service account or all accounts). Fields: `max_ttl_days`, `rotation_interval_days`,
+  `idle_revoke_days`. `/api-keys` Policies tab (preview surface already shipped).
+  Enforcement: key creation rejects TTL beyond `max_ttl_days`; a background job
+  (pattern: `FOR UPDATE SKIP LOCKED`) revokes keys exceeding rotation or idle
+  thresholds and publishes `auth.key_revoked` audit events.
+
+### FUT-004: Access review (quarterly stale-key nudge) — Sprint 12
+- **Why:** Without a periodic review prompt, stale keys accumulate silently.
+  Security auditors expect to see evidence that access is re-certified.
+- **What:** Scheduled job emits `auth.access_review_due` audit events (and
+  webhook deliveries) once per configured interval (default 90 days) listing
+  keys not used in that window. `/api-keys` Review tab (preview surface already
+  shipped) surfaces the list with bulk-revoke action. Platform admin can
+  configure the interval per tenant via a new settings field.
 
 ---
 

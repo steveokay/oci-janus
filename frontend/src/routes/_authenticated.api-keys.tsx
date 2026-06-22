@@ -18,10 +18,6 @@ import { ApiKeysSection } from "@/components/profile/api-keys-section";
 // The header text on this route leans into the workspace-credential
 // framing ("CI / Terraform / scripts"), where /profile leans into
 // personal account. Same component, different surrounding copy.
-//
-// Future scope (tracked in `futures.md`): per-key scopes (pull-only /
-// pull-push / admin), service-account keys owned by a workspace rather
-// than a human, per-key last-used telemetry, IP allowlists.
 export const Route = createFileRoute("/_authenticated/api-keys")({
   component: ApiKeysPage,
 });

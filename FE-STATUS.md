@@ -75,6 +75,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | S11.4 | Retention — org default + storage column | PARTIAL ✅ (this session) | `useOrgRetention` / `useUpdate`/`useDelete` hooks + new `OrgRetentionPanel` (summary + editor + remove-default) on new route `/orgs/$org/settings`; cross-link from inherited per-repo policies. FE-API-039 wired. **Storage breakdown "Retention" column deferred** — blocked by REM-013 gap 3. |
 | S11.5 | Retention — admin tile + notifications + activity | DONE ✅ (this session) | `RetentionCard` below `GCCard` on `/admin/tenants` — 24h/7d counts strip + last-10 retention runs table (mode pill + status + manifests + bytes + triggered-by). `retention.evaluated` / `retention.applied` / `retention.grace_completed` added to BFF + audit allowlists + audit `renderNotification` switch → topbar bell + `/activity` chips. Webhook routing-key chips were already in place from FE-API-041. |
 | S11 | Retention policies | DONE ✅ (this session — slices 1+2+5) / PARTIAL on slice 3+4 (blocked by REM-013) | See per-slice rows above. FE-API-037/038/039/041/043 fully FE-DONE. FE-API-040 FE-PARTIAL — executor trigger live, badges + per-repo run history blocked by REM-013 gap 1+2 (proto extensions, fix sketches logged). |
+| FE-API-048 | Service accounts + activity hub | DONE ✅ | `/api-keys` hub with sub-routes for personal keys, service accounts, activity, plus four preview surfaces (trust/helpers/policies/review) carrying dummy data + a11y-compliant PreviewBanner. |
 
 ---
 
