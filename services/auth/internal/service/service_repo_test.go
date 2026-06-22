@@ -147,7 +147,7 @@ func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error      
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }
-func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {

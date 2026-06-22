@@ -29,7 +29,7 @@ type userRepo interface {
 	GrantRole(ctx context.Context, a repository.RoleAssignment) error
 	RevokeRole(ctx context.Context, assignmentID, tenantID uuid.UUID) error
 	RevokeRoleScoped(ctx context.Context, assignmentID, tenantID uuid.UUID, expectedScopeType, expectedScopeValue string) error
-	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error)
+	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.Member, error)
 	// CountByTenant returns the user count for a tenant (FE-API-028).
 	CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
 	// SSO methods (FE-API-034). GetByEmail is used to match an IdP-asserted

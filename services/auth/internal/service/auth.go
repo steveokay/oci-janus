@@ -469,8 +469,10 @@ func (s *Service) RevokeRoleScoped(ctx context.Context, assignmentID, tenantID u
 	return s.users.RevokeRoleScoped(ctx, assignmentID, tenantID, expectedScopeType, expectedScopeValue)
 }
 
-// ListMembers returns all role assignments within a tenant scope.
-func (s *Service) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.RoleAssignment, error) {
+// ListMembers returns the enriched membership list for the given tenant scope.
+// Each Member carries the principal kind, display name, and — for service-account
+// principals — the service_accounts.id so callers can link back to the SA.
+func (s *Service) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.Member, error) {
 	return s.users.ListMembers(ctx, tenantID, scopeType, scopeValue)
 }
 

@@ -174,7 +174,7 @@ func (f *handlerFakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int
 	return int64(len(f.users)), nil
 }
 
-func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }
 

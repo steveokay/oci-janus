@@ -331,7 +331,14 @@ func (h *GRPCHandler) publishRoleRevoked(ctx context.Context, tenantID, assignme
 	}
 }
 
-// ListMembers returns all role assignments within a tenant scope.
+// ListMembers returns all role assignments within a tenant scope, enriched with
+// the principal kind and display name so the dashboard can render human users
+// and service accounts differently without a second round-trip.
+//
+// The proto RoleAssignment.user_id carries the users.id for all principal kinds
+// (for service accounts this is the shadow_user_id). The proto Id field is left
+// empty because the new Member view omits the assignment primary key; callers
+// that need the assignment id for revocation must use GetUserPermissions.
 func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRequest) (*authv1.ListMembersResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -344,23 +351,25 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 		return nil, status.Error(codes.InvalidArgument, "scope_value must not be empty")
 	}
 
-	assignments, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
+	members, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
 	if err != nil {
 		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
-	members := make([]*authv1.RoleAssignment, len(assignments))
-	for i, a := range assignments {
-		members[i] = &authv1.RoleAssignment{
-			Id:         a.ID.String(),
-			UserId:     a.UserID.String(),
-			Role:       a.RoleName,
-			ScopeType:  a.ScopeType,
-			ScopeValue: a.ScopeValue,
-			GrantedBy:  a.GrantedBy.String(),
+	// Map repository.Member to the proto RoleAssignment. The scope fields are
+	// not stored on Member (they are the same for every row in the result set)
+	// so they are copied from the request.
+	out := make([]*authv1.RoleAssignment, len(members))
+	for i, m := range members {
+		out[i] = &authv1.RoleAssignment{
+			UserId:     m.UserID.String(),
+			Role:       m.Role,
+			ScopeType:  req.GetScopeType(),
+			ScopeValue: req.GetScopeValue(),
+			GrantedBy:  m.GrantedBy.String(),
 		}
 	}
-	return &authv1.ListMembersResponse{Members: members}, nil
+	return &authv1.ListMembersResponse{Members: out}, nil
 }
 
 // CountTenantUsers returns the number of users in the tenant (FE-API-028).

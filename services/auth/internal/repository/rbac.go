@@ -8,6 +8,30 @@ import (
 	"github.com/google/uuid"
 )
 
+// Member is the enriched view of a role assignment returned by ListMembers.
+// It joins the users table for kind and the service_accounts table (via
+// shadow_user_id) so callers can distinguish human users from service accounts
+// and render the correct display name without a second round-trip.
+type Member struct {
+	// UserID is the users.id of the principal holding the role. For service
+	// accounts this is the shadow user id.
+	UserID uuid.UUID
+	// Kind is "human" or "service_account" (from users.kind).
+	Kind string
+	// DisplayName is the human-friendly label for the principal.
+	// For humans: users.display_name if set, else users.username, else users.email.
+	// For service accounts: service_accounts.name.
+	DisplayName string
+	// ServiceAccountID is non-nil only when Kind is "service_account"; it is
+	// the service_accounts.id (not the shadow user id).
+	ServiceAccountID *uuid.UUID
+	// Role is the human-readable role name (e.g. "admin", "writer").
+	Role string
+	// GrantedBy is the user who created this assignment, or the zero UUID when
+	// the assignment was created by the system.
+	GrantedBy uuid.UUID
+}
+
 // RoleAssignment is the database model for a user's role within a tenant scope.
 type RoleAssignment struct {
 	// ID is the primary key of the role_assignments row.
@@ -106,15 +130,31 @@ func (r *UserRepository) RevokeRoleScoped(ctx context.Context, assignmentID, ten
 	return nil
 }
 
-// ListMembers returns all role assignments within a tenant for the given scope.
-// scopeType must be "org" or "repo"; scopeValue is the org name or "org/repo" string.
-func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]RoleAssignment, error) {
+// ListMembers returns the enriched membership list for the given tenant scope.
+// scopeType must be "org" or "repo"; scopeValue is the org name or "org/repo"
+// string. Each Member carries the principal's kind, a display name, and — for
+// service-account principals — the service_accounts.id so callers can link back
+// to the SA without a separate lookup.
+//
+// The query joins users for kind and LEFT JOINs service_accounts on
+// shadow_user_id so the SA name is available in a single round-trip. For human
+// users the COALESCE chain falls back through display_name → username → email
+// to guarantee a non-empty label.
+func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]Member, error) {
 	const q = `
-		SELECT ra.id, ra.tenant_id, ra.user_id, ro.name, ra.scope_type, ra.scope_value,
-		       COALESCE(ra.granted_by, '00000000-0000-0000-0000-000000000000'::uuid), ra.created_at
+		SELECT u.id,
+		       u.kind,
+		       COALESCE(sa.name, u.display_name, u.username, COALESCE(u.email, '')) AS display_name,
+		       sa.id AS sa_id,
+		       ro.name,
+		       COALESCE(ra.granted_by, '00000000-0000-0000-0000-000000000000'::uuid)
 		FROM   role_assignments ra
-		JOIN   roles ro ON ro.id = ra.role_id
-		WHERE  ra.tenant_id = $1 AND ra.scope_type = $2 AND ra.scope_value = $3`
+		JOIN   roles ro               ON ro.id           = ra.role_id
+		JOIN   users u                ON u.id            = ra.user_id
+		LEFT   JOIN service_accounts sa ON sa.shadow_user_id = u.id
+		WHERE  ra.tenant_id  = $1
+		  AND  ra.scope_type  = $2
+		  AND  ra.scope_value = $3`
 
 	rows, err := r.pool.Query(ctx, q, tenantID, scopeType, scopeValue)
 	if err != nil {
@@ -122,16 +162,18 @@ func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, sc
 	}
 	defer rows.Close()
 
-	var out []RoleAssignment
+	var out []Member
 	for rows.Next() {
-		var a RoleAssignment
+		var m Member
+		// sa_id is NULL for human users — scan into a pointer so pgx sets it to nil.
+		var saID *uuid.UUID
 		if err := rows.Scan(
-			&a.ID, &a.TenantID, &a.UserID, &a.RoleName,
-			&a.ScopeType, &a.ScopeValue, &a.GrantedBy, &a.CreatedAt,
+			&m.UserID, &m.Kind, &m.DisplayName, &saID, &m.Role, &m.GrantedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
-		out = append(out, a)
+		m.ServiceAccountID = saID
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }
