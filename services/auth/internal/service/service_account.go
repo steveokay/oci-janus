@@ -17,14 +17,21 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
+	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
+
+// saRawSecretLen is the number of random bytes for SA-owned API key secrets.
+// Matches the human-key rawSecretLen in auth.go (32 bytes → 64-char hex).
+const saRawSecretLen = 32
 
 // revokeKeyTTL is longer than the longest JWT TTL (tokenTTL = 5 min) so that
 // any outstanding JWT for the shadow user is rejected before the revoke key
@@ -394,4 +401,179 @@ func (s *ServiceAccountService) CountKeysAffectedByScopeShrink(
 	}
 
 	return s.sa.CountKeysAffectedByScopeShrink(ctx, saID, proposed)
+}
+
+// IssueKeyResult carries the persisted API key record plus the plaintext secret
+// that is shown to the caller exactly once. The raw secret is not stored; it
+// cannot be recovered after this call.
+type IssueKeyResult struct {
+	Key       *repository.APIKey
+	RawSecret string
+}
+
+// IssueKey creates a new API key owned by the given service account. The caller
+// must supply a set of scopes that is a subset of the SA's AllowedScopes; the
+// method returns ErrScopesNotAllowed when the subset check fails.
+//
+// Ownership is expressed via the polymorphic ServiceAccountID column (not
+// UserID) so ValidateAPIKey can apply the SA's AllowedScopes intersection
+// logic (auth.go § intersectScopes).
+//
+// Audit: emits service_account.key_issued on success. Audit failure is a hard
+// error — the key is NOT rolled back (callers must handle the dual-write risk
+// if audit is unavailable, but in practice the audit emitter should be
+// durable).
+func (s *ServiceAccountService) IssueKey(
+	ctx context.Context,
+	saID uuid.UUID,
+	tenantID uuid.UUID,
+	name string,
+	scopes []string,
+	actor uuid.UUID,
+) (*IssueKeyResult, error) {
+	// 1. Load SA and assert tenant ownership to prevent cross-tenant key issuance.
+	sa, err := s.sa.Get(ctx, saID)
+	if err != nil {
+		return nil, err
+	}
+	if sa.TenantID != tenantID {
+		return nil, repository.ErrNotFound
+	}
+
+	// 2. Validate that requested scopes are a subset of the SA's AllowedScopes.
+	//    Build a set for O(1) lookup.
+	allowed := make(map[string]struct{}, len(sa.AllowedScopes))
+	for _, s := range sa.AllowedScopes {
+		allowed[s] = struct{}{}
+	}
+	for _, sc := range scopes {
+		if _, ok := allowed[sc]; !ok {
+			return nil, &ErrScopeNotAllowed{Scope: sc}
+		}
+	}
+
+	// 3. Generate a cryptographically secure random secret.
+	raw := make([]byte, saRawSecretLen)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, err
+	}
+	rawSecret := hex.EncodeToString(raw) // 64-char lowercase hex
+
+	// 4. Hash the secret with argon2id before persisting. The raw secret is
+	//    never stored.
+	hash, err := argon2pkg.Hash(rawSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Persist the key.
+	if scopes == nil {
+		scopes = []string{}
+	}
+	key, err := s.keys.Create(ctx, repository.CreateAPIKeyRequest{
+		TenantID:         tenantID,
+		ServiceAccountID: &saID,
+		Name:             name,
+		KeyHash:          hash,
+		KeyPrefix:        rawSecret[:12], // first 12 chars for display
+		Scopes:           scopes,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 6. Emit audit event. Hard error — the audit trail must be complete.
+	if err := s.audit.Emit(ctx, AuditEvent{
+		Action:   "service_account.key_issued",
+		ActorID:  actor.String(),
+		Resource: saID.String(),
+		Fields: map[string]any{
+			"service_account_id": saID.String(),
+			"key_id":             key.ID.String(),
+			"key_name":           name,
+			"scopes":             scopes,
+		},
+	}); err != nil {
+		slog.ErrorContext(ctx, "service_account: audit emit failed on key_issued",
+			"sa_id", saID,
+			"key_id", key.ID,
+			"err", err,
+		)
+		return nil, err
+	}
+
+	return &IssueKeyResult{Key: key, RawSecret: rawSecret}, nil
+}
+
+// ListKeys returns all active API keys owned by the given service account.
+// Tenant isolation is enforced by first loading the SA and confirming its
+// tenant before querying keys.
+func (s *ServiceAccountService) ListKeys(
+	ctx context.Context,
+	saID uuid.UUID,
+	tenantID uuid.UUID,
+) ([]*repository.APIKey, error) {
+	// Confirm the SA belongs to the caller's tenant before listing keys.
+	// Returning ErrNotFound instead of ErrForbidden so callers cannot probe
+	// cross-tenant existence via the key-list path.
+	sa, err := s.sa.Get(ctx, saID)
+	if err != nil {
+		return nil, err
+	}
+	if sa.TenantID != tenantID {
+		return nil, repository.ErrNotFound
+	}
+
+	return s.keys.ListByServiceAccount(ctx, saID)
+}
+
+// RevokeKey deletes the API key identified by keyID from the service account
+// identified by saID. Tenant isolation is enforced via the SA tenant check;
+// the polymorphic DeleteByServiceAccount repository method ensures only keys
+// whose service_account_id matches saID are deleted (no cross-SA revocation).
+//
+// Audit: emits service_account.key_revoked on success. Audit failure is a
+// hard error.
+func (s *ServiceAccountService) RevokeKey(
+	ctx context.Context,
+	keyID uuid.UUID,
+	saID uuid.UUID,
+	tenantID uuid.UUID,
+	actor uuid.UUID,
+) error {
+	// Confirm SA exists and belongs to the caller's tenant.
+	sa, err := s.sa.Get(ctx, saID)
+	if err != nil {
+		return err
+	}
+	if sa.TenantID != tenantID {
+		return repository.ErrNotFound
+	}
+
+	// Delete the key using the service-account ownership column so a human
+	// key with the same UUID cannot be accidentally revoked.
+	if err := s.keys.DeleteByServiceAccount(ctx, keyID, saID); err != nil {
+		return err
+	}
+
+	// Emit audit event.
+	return s.audit.Emit(ctx, AuditEvent{
+		Action:   "service_account.key_revoked",
+		ActorID:  actor.String(),
+		Resource: saID.String(),
+		Fields: map[string]any{
+			"service_account_id": saID.String(),
+			"key_id":             keyID.String(),
+		},
+	})
+}
+
+// ErrScopeNotAllowed is returned by IssueKey when the requested scopes
+// include a value that is absent from the SA's AllowedScopes.
+type ErrScopeNotAllowed struct {
+	Scope string
+}
+
+func (e *ErrScopeNotAllowed) Error() string {
+	return "scope not allowed for this service account: " + e.Scope
 }

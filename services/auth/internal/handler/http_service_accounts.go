@@ -504,24 +504,282 @@ func (h *HTTPHandler) deleteServiceAccount(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── T14 stubs ─────────────────────────────────────────────────────────────────
-// These routes are registered now so the URL space is reserved. T14 fills in
-// the bodies. All return 501 NOT_IMPLEMENTED.
+// ── POST /api/v1/service-accounts/{id}/scopes/preflight ──────────────────────
 
-func (h *HTTPHandler) saPreflightScopes(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "scope preflight not yet implemented")
+// saPreflightScopesBody is the request body for the scope-shrink preflight endpoint.
+type saPreflightScopesBody struct {
+	// AllowedScopes is the proposed new set of allowed scopes. The handler
+	// delegates to CountKeysAffectedByScopeShrink to determine how many active
+	// keys will lose at least one scope if the change is applied.
+	AllowedScopes []string `json:"allowed_scopes"`
 }
 
-func (h *HTTPHandler) saListKeys(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "key listing not yet implemented")
+// saPreflightScopes handles POST /api/v1/service-accounts/{id}/scopes/preflight.
+//
+// Response: {"affected_keys": N} where N is the number of active keys that
+// carry at least one scope absent from the proposed AllowedScopes. Callers
+// display N to operators before narrowing the SA's scope allowlist so the
+// impact of the change is visible before committing.
+func (h *HTTPHandler) saPreflightScopes(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSAService(w) {
+		return
+	}
+	_, tenantID, err := h.requireSAAdmin(w, r)
+	if err != nil {
+		return
+	}
+
+	saID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid service account id")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256 KiB
+	var body saPreflightScopesBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid request body")
+		return
+	}
+
+	// Validate the proposed scopes before running the count query.
+	if err := validateScopes(body.AllowedScopes); err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
+		return
+	}
+
+	count, err := h.saService.CountKeysAffectedByScopeShrink(r.Context(), saID, tenantID, body.AllowedScopes)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "sa handler: CountKeysAffectedByScopeShrink failed",
+			"sa_id", saID,
+			"tenant_id", tenantID,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"affected_keys": count,
+	})
 }
 
-func (h *HTTPHandler) saIssueKey(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "key issuance not yet implemented")
+// ── GET /api/v1/service-accounts/{id}/api-keys ───────────────────────────────
+
+// saKeyResponse is the JSON shape for a single SA-owned API key in list and
+// issue responses. RawKey is only populated on creation (shown once).
+type saKeyResponse struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Prefix    string     `json:"prefix"`
+	Scopes    []string   `json:"scopes"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	// RawKey is the plaintext secret returned exactly once at key-creation
+	// time. It is absent on list responses (omitempty).
+	RawKey string `json:"key,omitempty"`
 }
 
-func (h *HTTPHandler) saRevokeKey(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "key revocation not yet implemented")
+// saListKeys handles GET /api/v1/service-accounts/{id}/api-keys.
+// Returns all active keys owned by the SA in the caller's tenant.
+func (h *HTTPHandler) saListKeys(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSAService(w) {
+		return
+	}
+	_, tenantID, err := h.requireSAAdmin(w, r)
+	if err != nil {
+		return
+	}
+
+	saID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid service account id")
+		return
+	}
+
+	keys, err := h.saService.ListKeys(r.Context(), saID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "sa handler: ListKeys failed",
+			"sa_id", saID,
+			"tenant_id", tenantID,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	resp := make([]saKeyResponse, len(keys))
+	for i, k := range keys {
+		resp[i] = saKeyResponse{
+			ID:        k.ID.String(),
+			Name:      k.Name,
+			Prefix:    k.KeyPrefix,
+			Scopes:    k.Scopes,
+			ExpiresAt: k.ExpiresAt,
+			CreatedAt: k.CreatedAt,
+		}
+		// Ensure Scopes is never serialised as JSON null.
+		if resp[i].Scopes == nil {
+			resp[i].Scopes = []string{}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"api_keys": resp,
+	})
+}
+
+// ── POST /api/v1/service-accounts/{id}/api-keys ──────────────────────────────
+
+// issueKeyBody is the request body for POST /api/v1/service-accounts/{id}/api-keys.
+type issueKeyBody struct {
+	// Name is required; must be unique within the SA (partial unique index on
+	// (service_account_id, name) in the api_keys table).
+	Name   string   `json:"name"`
+	// Scopes must be a non-empty subset of the SA's AllowedScopes. The handler
+	// enforces the subset constraint before calling the service layer.
+	Scopes []string `json:"scopes"`
+}
+
+// saIssueKey handles POST /api/v1/service-accounts/{id}/api-keys.
+//
+// Creates a new API key owned by the SA. The requested scopes must be a subset
+// of the SA's AllowedScopes; otherwise 400 Bad Request is returned with a clear
+// message naming the disallowed scope. The raw key is returned in the "key" field
+// and shown exactly once.
+func (h *HTTPHandler) saIssueKey(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSAService(w) {
+		return
+	}
+	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	if err != nil {
+		return
+	}
+
+	saID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid service account id")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<18) // 256 KiB
+	var body issueKeyBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid request body")
+		return
+	}
+
+	// Validate name.
+	if body.Name == "" {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "name is required")
+		return
+	}
+	if len(body.Name) > saMaxNameLen {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "name exceeds maximum length of 64 characters")
+		return
+	}
+
+	// Validate scope format before calling the service layer.
+	if err := validateScopes(body.Scopes); err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
+		return
+	}
+
+	result, err := h.saService.IssueKey(r.Context(), saID, tenantID, body.Name, body.Scopes, callerID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
+			return
+		}
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			writeError(w, http.StatusConflict, "CONFLICT", "a key with that name already exists for this service account")
+			return
+		}
+		// Check for scope-not-allowed error — return 400 with the denied scope name
+		// so callers can display a precise message without parsing internal strings.
+		var scopeErr *service.ErrScopeNotAllowed
+		if errors.As(err, &scopeErr) {
+			writeError(w, http.StatusBadRequest, "SCOPE_NOT_ALLOWED",
+				"scope not allowed for this service account: "+scopeErr.Scope)
+			return
+		}
+		slog.ErrorContext(r.Context(), "sa handler: IssueKey failed",
+			"sa_id", saID,
+			"tenant_id", tenantID,
+			"name", body.Name,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	k := result.Key
+	scopes := k.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	writeJSON(w, http.StatusCreated, saKeyResponse{
+		ID:        k.ID.String(),
+		Name:      k.Name,
+		Prefix:    k.KeyPrefix,
+		Scopes:    scopes,
+		ExpiresAt: k.ExpiresAt,
+		CreatedAt: k.CreatedAt,
+		// RawKey is the plaintext secret — shown once, never recoverable.
+		RawKey: result.RawSecret,
+	})
+}
+
+// ── DELETE /api/v1/service-accounts/{id}/api-keys/{keyID} ────────────────────
+
+// saRevokeKey handles DELETE /api/v1/service-accounts/{id}/api-keys/{keyID}.
+// Returns 204 No Content on success. Returns 404 when either the SA or the
+// key is not found (so callers cannot probe SA existence via key IDs).
+func (h *HTTPHandler) saRevokeKey(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSAService(w) {
+		return
+	}
+	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	if err != nil {
+		return
+	}
+
+	saID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid service account id")
+		return
+	}
+
+	keyID, err := uuid.Parse(r.PathValue("keyID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid key id")
+		return
+	}
+
+	if err := h.saService.RevokeKey(r.Context(), keyID, saID, tenantID, callerID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOTFOUND", "service account or key not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "sa handler: RevokeKey failed",
+			"sa_id", saID,
+			"key_id", keyID,
+			"tenant_id", tenantID,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── validation helpers ────────────────────────────────────────────────────────
