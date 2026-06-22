@@ -34,6 +34,11 @@ import { cn } from "@/lib/utils";
 interface TagsPanelProps {
   org: string;
   repo: string;
+  // F4 follow-up — initial chip selection lifted from the route's
+  // ?type= search param so /helm → repo detail starts on the Helm chip
+  // and /repositories → repo detail starts on Images. Undefined means
+  // "no preference, show all".
+  initialFilter?: ArtifactFilter;
 }
 
 // S-MAINT-1 Batch 5 (F4) — discriminator state for the filter chip row.
@@ -63,18 +68,52 @@ const ARTIFACT_FILTERS: ReadonlyArray<{
 // the table. Selection state is local to the panel — switching tabs
 // re-mounts and clears it, which matches the expected "destructive
 // actions don't survive context switches" gesture.
-export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
+export function TagsPanel({
+  org,
+  repo,
+  initialFilter,
+}: TagsPanelProps): React.ReactElement {
   const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useTags(org, repo);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = React.useState(false);
-  // S-MAINT-1 Batch 5 (F4) — filter chip state. Local for now; promoting
-  // to a URL query param is a follow-up so deep-linking to "Helm charts
-  // in this repo" works for shares. Client-side filter is fine because
-  // the BFF caps tags at 100/page server-side, so the visible array is
-  // always small.
-  const [artifactFilter, setArtifactFilter] =
-    React.useState<ArtifactFilter>("all");
+  // S-MAINT-1 Batch 5 (F4) — filter chip state seeded from the route's
+  // ?type= search param when provided. Subsequent changes go through
+  // setArtifactFilter, which also pushes the new value onto the URL via
+  // navigate({ search }) so deep-linking + browser-back work naturally.
+  const [artifactFilter, setArtifactFilter] = React.useState<ArtifactFilter>(
+    initialFilter ?? "all",
+  );
+
+  // syncFilter wraps setArtifactFilter so the URL stays authoritative —
+  // a chip click updates both the in-memory state AND the address bar.
+  // We use TanStack Router's replace=true so a chain of chip clicks
+  // doesn't pollute browser history with one entry per toggle. The
+  // empty-string sentinel (legacy / unknown manifests) is intentionally
+  // left out of the URL — it's only reachable via in-memory state today
+  // and the route's validateSearch doesn't accept it.
+  const syncFilter = React.useCallback(
+    (next: ArtifactFilter) => {
+      setArtifactFilter(next);
+      const isUrlValue =
+        next === "all" ||
+        next === "image" ||
+        next === "helm" ||
+        next === "signature" ||
+        next === "sbom" ||
+        next === "other";
+      if (!isUrlValue) {
+        return; // unknown-legacy filter — keep in-memory only
+      }
+      void navigate({
+        to: "/repositories/$org/$repo",
+        params: { org, repo },
+        search: next === "all" ? {} : { type: next },
+        replace: true,
+      });
+    },
+    [navigate, org, repo],
+  );
 
   const allTags = React.useMemo(() => data ?? [], [data]);
   // Apply the artifact-type chip before exposing the array to the rest
@@ -151,7 +190,7 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
       {filterChipsVisible ? (
         <ArtifactTypeFilterChips
           value={artifactFilter}
-          onChange={setArtifactFilter}
+          onChange={syncFilter}
           tags={allTags}
         />
       ) : null}

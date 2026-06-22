@@ -121,7 +121,11 @@ function RepositoriesPage(): React.ReactElement {
         />
       ) : (
         <>
-          <RepositoriesTable repositories={filtered} loading={isLoading} />
+          <RepositoriesTable
+            repositories={filtered}
+            loading={isLoading}
+            linkArtifactType="image"
+          />
           {hasNextPage ? (
             <div className="flex justify-center pt-2">
               <Button

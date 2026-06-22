@@ -198,7 +198,11 @@ function HelmChartsPage(): React.ReactElement {
         </div>
       ) : (
         <>
-          <RepositoriesTable repositories={filtered} loading={isLoading} />
+          <RepositoriesTable
+            repositories={filtered}
+            loading={isLoading}
+            linkArtifactType="helm"
+          />
           {hasNextPage ? (
             <div className="flex justify-center pt-2">
               <Button
