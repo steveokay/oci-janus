@@ -16,12 +16,21 @@ service MetadataService {
   rpc DeleteRepository(DeleteRepositoryRequest) returns (google.protobuf.Empty);
   rpc UpdateRepositoryQuota(UpdateRepositoryQuotaRequest) returns (Repository);
   rpc UpdateRepository(UpdateRepositoryRequest) returns (Repository);
+  // Tag immutability (futures.md Tier 1 #2) — flips the repo-wide
+  // `immutable_tags` flag. Separate RPC from UpdateRepository so the
+  // audit trail records the security-relevant change explicitly
+  // (description edits stay on the existing path).
+  rpc UpdateRepositoryImmutability(UpdateRepositoryImmutabilityRequest) returns (Repository);
 
   // Tags
   rpc PutTag(PutTagRequest) returns (Tag);
   rpc GetTag(GetTagRequest) returns (Tag);
   rpc ListTags(ListTagsRequest) returns (stream Tag);
   rpc DeleteTag(DeleteTagRequest) returns (google.protobuf.Empty);
+  // Tag immutability pin (futures.md Tier 1 #2) — flips the per-tag
+  // `immutable` flag. Returns the updated Tag so the caller (FE,
+  // promotion workflow) can confirm without a follow-up GetTag.
+  rpc UpdateTagImmutable(UpdateTagImmutableRequest) returns (Tag);
 
   // Manifests
   rpc PutManifest(PutManifestRequest) returns (Manifest);
@@ -236,6 +245,12 @@ message Repository {
   string org           = 9;
   // Operator-supplied markdown description / README for the repository.
   string description   = 10;
+  // Tag immutability (futures.md Tier 1 #2). When true, services/core
+  // rejects any PutManifest that would move an existing tag to a new
+  // manifest_digest. A new tag (not yet existing) still creates fine —
+  // immutability gates re-writes, not initial pushes. Defaults to false
+  // so the flag is invisible to operators who never opt in.
+  bool   immutable_tags = 11;
 }
 
 message Tag {
@@ -275,6 +290,12 @@ message Tag {
   // accidentally couple to wire-shape mediaType strings; a new artifact
   // type added by the spec only needs a single mapping change.
   string artifact_type = 11;
+  // Per-tag immutability pin (futures.md Tier 1 #2). When true, this
+  // single tag cannot be moved to a new manifest_digest regardless of
+  // the parent repository's `immutable_tags` setting. Lets an operator
+  // lock down a canonical tag (e.g. "v1.0-release") without flipping
+  // the whole repo's immutability. Default false.
+  bool immutable = 12;
 }
 
 message Manifest {
@@ -373,12 +394,33 @@ message ListRepositoriesRequest {
 }
 message DeleteRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
 message UpdateRepositoryQuotaRequest { string repo_id = 1; string tenant_id = 2; int64 storage_quota = 3; }
+// Tag immutability (futures.md Tier 1 #2). `immutable_tags=true` makes
+// every tag in the repo non-mutable: services/core's PutManifest will
+// reject any push that would move an existing tag's manifest_digest.
+// New-tag creation still works. Toggling back to false is allowed —
+// the audit trail captures the transition so a future investigation
+// can answer "who reopened this repo for re-pushes".
+message UpdateRepositoryImmutabilityRequest {
+  string repo_id        = 1;
+  string tenant_id      = 2;
+  bool   immutable_tags = 3;
+}
 
 // Tag requests
 message PutTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; string manifest_digest = 4; }
 message GetTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; }
 message ListTagsRequest { string repo_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; string last = 5; }
 message DeleteTagRequest { string repo_id = 1; string tenant_id = 2; string name = 3; }
+// Per-tag pin (futures.md Tier 1 #2). Independent of the repo-wide
+// flag — a tag pinned to immutable=true cannot be moved even on a
+// repo with immutable_tags=false. Untoggling back to immutable=false
+// is allowed for explicit operator override.
+message UpdateTagImmutableRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+  string name      = 3;
+  bool   immutable = 4;
+}
 
 // Manifest requests
 message PutManifestRequest { string repo_id = 1; string tenant_id = 2; string digest = 3; string media_type = 4; bytes raw_json = 5; int64 size_bytes = 6; }

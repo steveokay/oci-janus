@@ -33,6 +33,8 @@ type metadataRepo interface {
 	ListRepositories(ctx context.Context, tenantID, orgID, artifactType string) ([]*metadatav1.Repository, error)
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
+	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
+	UpdateTagImmutable(ctx context.Context, tenantID, repoID, name string, immutable bool) (*metadatav1.Tag, error)
 	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
 	// Tags
 	PutTag(ctx context.Context, tenantID, repoID, name, manifestDigest string) (*metadatav1.Tag, error)
@@ -302,10 +304,27 @@ func (h *MetadataHandler) UpdateRepositoryQuota(ctx context.Context, req *metada
 	return repo, mapErr(err)
 }
 
+// UpdateRepositoryImmutability flips the repo-wide tag-immutability flag
+// (futures.md Tier 1 #2). Validation is structural only at this layer —
+// the management BFF gates by repo admin role and emits the audit event
+// before calling here.
+func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req *metadatav1.UpdateRepositoryImmutabilityRequest) (*metadatav1.Repository, error) {
+	repo, err := h.repo.UpdateRepositoryImmutability(ctx, req.GetTenantId(), req.GetRepoId(), req.GetImmutableTags())
+	return repo, mapErr(err)
+}
+
 // ── Tags ─────────────────────────────────────────────────────────────────────
 
 func (h *MetadataHandler) PutTag(ctx context.Context, req *metadatav1.PutTagRequest) (*metadatav1.Tag, error) {
 	tag, err := h.repo.PutTag(ctx, req.TenantId, req.RepoId, req.Name, req.ManifestDigest)
+	return tag, mapErr(err)
+}
+
+// UpdateTagImmutable flips the per-tag pin (futures.md Tier 1 #2).
+// Same tenant_id-in-WHERE posture as UpdateManifestQuarantine — cross-
+// tenant attempts surface as NotFound rather than leaking row existence.
+func (h *MetadataHandler) UpdateTagImmutable(ctx context.Context, req *metadatav1.UpdateTagImmutableRequest) (*metadatav1.Tag, error) {
+	tag, err := h.repo.UpdateTagImmutable(ctx, req.GetTenantId(), req.GetRepoId(), req.GetName(), req.GetImmutable())
 	return tag, mapErr(err)
 }
 

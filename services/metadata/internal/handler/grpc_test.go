@@ -365,6 +365,17 @@ func (f *fakeRepo) UpdateRepositoryQuota(_ context.Context, _, _ string, _ int64
 	return f.updateQuotaResult, f.updateQuotaErr
 }
 
+// Tag immutability (futures.md Tier 1 #2) — fakes return the stored
+// result without recording the input. Tests that need to assert input
+// shape extend these with their own capture fields.
+func (f *fakeRepo) UpdateRepositoryImmutability(_ context.Context, _, _ string, _ bool) (*metadatav1.Repository, error) {
+	return f.updateQuotaResult, f.updateQuotaErr
+}
+
+func (f *fakeRepo) UpdateTagImmutable(_ context.Context, _, _, _ string, _ bool) (*metadatav1.Tag, error) {
+	return f.putTagResult, f.putTagErr
+}
+
 func (f *fakeRepo) PutTag(_ context.Context, _, _, _, _ string) (*metadatav1.Tag, error) {
 	return f.putTagResult, f.putTagErr
 }

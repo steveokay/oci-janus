@@ -63,7 +63,8 @@ func (r *Repository) reader() *pgxpool.Pool {
 const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
 	r.storage_quota,
 	COALESCE((SELECT SUM(image_size_bytes) FROM manifests WHERE repo_id = r.id), 0) AS storage_used,
-	r.created_at, o.name, r.description`
+	r.created_at, o.name, r.description,
+	r.immutable_tags`
 
 // CreateRepository inserts a new repository row.
 func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
@@ -77,7 +78,7 @@ func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name
 		WITH inserted AS (
 			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
 		)
 		SELECT ` + repoSelectCols + `
 		FROM inserted r
@@ -111,7 +112,7 @@ func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, des
 			SET    description = $1
 			WHERE  id = $2 AND tenant_id = $3
 			RETURNING id, org_id, tenant_id, name, is_public,
-			          storage_quota, created_at, description
+			          storage_quota, created_at, description, immutable_tags
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
@@ -239,7 +240,8 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 		// repoSelectCols and scanOneRepo.
 		if err := rows.Scan(&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
-			&repo.Description); err != nil {
+			&repo.Description,
+			&repo.ImmutableTags); err != nil {
 			return nil, fmt.Errorf("scan repository: %w", err)
 		}
 		repo.CreatedAt = timestamppb.New(createdAt)
@@ -265,17 +267,70 @@ func (r *Repository) DeleteRepository(ctx context.Context, tenantID, repoID stri
 func (r *Repository) UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error) {
 	// As with CreateRepository, RETURNING can't reach the joined org row;
 	// CTE-then-join to surface the parent org name in a single round trip.
+	// Uses the shared repoSelectCols so a new field added to that constant
+	// flows here automatically (e.g. the immutable_tags column added in
+	// the futures.md Tier 1 #2 work landed without touching this query).
 	const q = `
 		WITH updated AS (
 			UPDATE repositories SET storage_quota = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, storage_used, created_at, description
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
 		)
-		SELECT r.id, r.org_id, r.tenant_id, r.name, r.is_public,
-		       r.storage_quota, r.storage_used, r.created_at, o.name, r.description
-		FROM updated r
-		JOIN organizations o ON o.id = r.org_id`
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
 	return r.scanOneRepo(ctx, q, quota, repoID, tenantID)
+}
+
+// UpdateRepositoryImmutability flips the repo-wide `immutable_tags` flag.
+// Returns the updated Repository so the caller can echo state back
+// without a follow-up GetRepository. Separate RPC from UpdateRepository
+// so the audit trail records the security-relevant change explicitly.
+//
+// Futures.md Tier 1 #2 — Tag immutability + image promotion workflow.
+func (r *Repository) UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error) {
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET immutable_tags = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	return r.scanOneRepo(ctx, q, immutable, repoID, tenantID)
+}
+
+// UpdateTagImmutable flips the per-tag pin. Independent of the repo-wide
+// `immutable_tags` flag — a pinned tag stays locked even when the parent
+// repo is mutable. Returns the updated Tag so the caller can echo state
+// back without a follow-up GetTag.
+//
+// Futures.md Tier 1 #2 — Tag immutability + image promotion workflow.
+func (r *Repository) UpdateTagImmutable(ctx context.Context, tenantID, repoID, name string, immutable bool) (*metadatav1.Tag, error) {
+	// CTE-then-join so the response includes the joined manifests row
+	// fields (size, quarantine state, retention pending stamp) that
+	// scanOneTag expects. RETURNING from the bare UPDATE can't reach
+	// the manifests join.
+	const q = `
+		WITH updated AS (
+			UPDATE tags
+			   SET immutable = $1, updated_at = now()
+			 WHERE repo_id = $2 AND tenant_id = $3 AND name = $4
+		 RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at, immutable
+		)
+		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
+		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
+		       m.retention_pending_delete_at,
+		       COALESCE(m.quarantined, FALSE),
+		       COALESCE(m.config_media_type, ''),
+		       t.immutable
+		FROM   updated t
+		LEFT   JOIN manifests m
+		  ON   m.repo_id   = t.repo_id
+		  AND  m.tenant_id = t.tenant_id
+		  AND  m.digest    = t.manifest_digest`
+	return r.scanOneTag(ctx, q, immutable, repoID, tenantID, name)
 }
 
 func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any) (*metadatav1.Repository, error) {
@@ -285,6 +340,7 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 		&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
 		&repo.Description,
+		&repo.ImmutableTags,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -353,7 +409,8 @@ const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
 	m.retention_pending_delete_at,
 	COALESCE(m.quarantined, FALSE),
-	COALESCE(m.config_media_type, '')`
+	COALESCE(m.config_media_type, ''),
+	t.immutable`
 
 const tagFromJoin = `FROM tags t
 	LEFT JOIN manifests m
@@ -371,13 +428,14 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (repo_id, name) DO UPDATE
 			  SET manifest_digest = EXCLUDED.manifest_digest, updated_at = now()
-			RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
+			RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at, immutable
 		)
 		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
 		       m.retention_pending_delete_at,
 		       COALESCE(m.quarantined, FALSE),
-		       COALESCE(m.config_media_type, '')
+		       COALESCE(m.config_media_type, ''),
+		       t.immutable
 		FROM upserted t
 		LEFT JOIN manifests m
 		  ON  m.repo_id   = t.repo_id
@@ -437,7 +495,8 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		var configMediaType string
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
-			&pendingDeleteAt, &tag.Quarantined, &configMediaType); err != nil {
+			&pendingDeleteAt, &tag.Quarantined, &configMediaType,
+			&tag.Immutable); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tag.UpdatedAt = timestamppb.New(updatedAt)
@@ -475,6 +534,7 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
 		&pendingDeleteAt, &tag.Quarantined, &configMediaType,
+		&tag.Immutable,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
