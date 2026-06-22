@@ -722,7 +722,15 @@ func TestValidateAPIKey_expiredKey_returnsKeyExpired(t *testing.T) {
 	svc, _, ar, cleanup := setupServiceWithRepos(t)
 	defer cleanup()
 
-	// Directly insert an expired key into the fake repo.
+	// Directly insert an expired key into the fake repo. Use a real argon2
+	// hash so the verify step (which now runs BEFORE the expiry check to
+	// close the timing oracle) passes and the test exercises the expiry
+	// branch rather than failing at hash verification.
+	rawSecret := "expired-test-secret"
+	hash, err := argon2pkg.Hash(rawSecret)
+	if err != nil {
+		t.Fatalf("argon2pkg.Hash: %v", err)
+	}
 	past := time.Now().Add(-1 * time.Hour)
 	ownerID := uuid.New()
 	expiredKey := &repository.APIKey{
@@ -730,14 +738,14 @@ func TestValidateAPIKey_expiredKey_returnsKeyExpired(t *testing.T) {
 		TenantID:  uuid.New(),
 		UserID:    &ownerID, // UserID is now *uuid.UUID (FE-API-048 Task 6)
 		Name:      "expired",
-		KeyHash:   "hash",
+		KeyHash:   hash,
 		IsActive:  true,
 		ExpiresAt: &past,
 		CreatedAt: time.Now(),
 	}
 	ar.keys[expiredKey.ID] = expiredKey
 
-	_, err := svc.ValidateAPIKey(context.Background(), ValidateAPIKeyOpts{KeyID: expiredKey.ID, RawSecret: "anything"})
+	_, err = svc.ValidateAPIKey(context.Background(), ValidateAPIKeyOpts{KeyID: expiredKey.ID, RawSecret: rawSecret})
 	if !errors.Is(err, ErrKeyExpired) {
 		t.Errorf("expected ErrKeyExpired, got %v", err)
 	}

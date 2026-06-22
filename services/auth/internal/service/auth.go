@@ -404,20 +404,25 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 		}
 		return nil, err
 	}
+	// Verify the secret FIRST (before expiry / is_active checks) so an attacker
+	// who guesses or knows a key id cannot distinguish "wrong secret" (fast)
+	// from "expired" (also fast) by timing. argon2 is intentionally slow
+	// (~100ms); making every reject path pay that cost neutralises the oracle.
+	// PENTEST-004 applies the same pattern to AuthenticateUser.
+	ok, err := argon2pkg.Verify(opts.RawSecret, key.KeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("verify key: %w", err)
+	}
+	if !ok {
+		return nil, ErrInvalidCredentials
+	}
+
 	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
 		return nil, ErrKeyExpired
 	}
 	if !key.IsActive {
 		// Revoked keys are treated the same as invalid credentials to avoid
 		// distinguishing between "never existed" and "actively revoked".
-		return nil, ErrInvalidCredentials
-	}
-
-	ok, err := argon2pkg.Verify(opts.RawSecret, key.KeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("verify key: %w", err)
-	}
-	if !ok {
 		return nil, ErrInvalidCredentials
 	}
 
