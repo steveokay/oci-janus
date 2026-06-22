@@ -71,7 +71,8 @@ type PrincipalActivity struct {
 	// APIKeyID is the key UUID if the request was authenticated with an API key,
 	// extracted from metadata["api_key_id"].
 	APIKeyID string
-	// Status is the audit outcome ("success" | "failure").
+	// Status is the audit outcome ("success" | "failure"), extracted from
+	// metadata["outcome"].
 	Status string
 }
 
