@@ -288,6 +288,11 @@ services:
       # are visible in container logs but never reach services/audit's
       # audit_events table).
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
+      # FE-API-048 FUT-005 — outbound gRPC to registry-audit for the activity
+      # facade used by GET /api/v1/access/activity. Reuses the same mTLS
+      # material configured above. Optional — without this var the route
+      # returns 501 NOT_IMPLEMENTED and the FE activity tab renders empty.
+      AUDIT_GRPC_ADDR: registry-audit:50051
     volumes:
       - certs_data:/certs:ro
     ports:

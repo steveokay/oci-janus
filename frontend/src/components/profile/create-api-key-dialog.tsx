@@ -27,7 +27,6 @@ const schema = z.object({
       /^[a-zA-Z0-9 _-]+$/,
       "Letters, digits, spaces, hyphens and underscores only.",
     ),
-  description: z.string().max(200).optional(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -40,6 +39,11 @@ interface CreateApiKeyDialogProps {
 // Beacon — CreateApiKeyDialog. Identical flow to the webhook-create dialog:
 // form → server returns plaintext secret → chain into SecretRevealDialog.
 // Reuses the same masked-by-default reveal primitive that ships in Sprint 5.
+//
+// B2 fix (sprint-11 maint batch 1): drop the description input — the
+// services/auth `createAPIKey` handler never stored description; the FE
+// was sending a field the BE silently discarded. The `setSecret(created.key)`
+// rename pairs with the FE type alignment in lib/api/api-keys.ts.
 export function CreateApiKeyDialog({
   open,
   onOpenChange,
@@ -53,7 +57,7 @@ export function CreateApiKeyDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: "", description: "" },
+    defaultValues: { name: "" },
   });
 
   React.useEffect(() => {
@@ -64,10 +68,9 @@ export function CreateApiKeyDialog({
     try {
       const created = await create.mutateAsync({
         name: values.name.trim(),
-        description: values.description?.trim() || undefined,
       });
       onOpenChange(false);
-      setSecret(created.secret);
+      setSecret(created.key);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       toast.error(
@@ -108,15 +111,6 @@ export function CreateApiKeyDialog({
                   {errors.name.message}
                 </p>
               ) : null}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="key-description">Description (optional)</Label>
-              <Input
-                id="key-description"
-                placeholder="GitHub Actions in the platform-services org"
-                {...register("description")}
-              />
             </div>
 
             <DialogFooter>

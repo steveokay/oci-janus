@@ -16,6 +16,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { useRemediations, type Remediation } from "@/lib/api/remediation";
 import { severityTone } from "@/lib/api/security";
+import {
+  PageSizeSelector,
+  usePageSize,
+} from "@/components/ui/page-size-selector";
 import { cn } from "@/lib/utils";
 
 // RemediationTable — FE-API-017.
@@ -27,7 +31,9 @@ import { cn } from "@/lib/utils";
 // Mirrors the visual rhythm of VulnerabilitiesTable so the two tabs in
 // /security read as siblings.
 export function RemediationTable(): React.ReactElement {
-  const q = useRemediations();
+  // S-MAINT-1 P5: persisted page size, "remediation" key.
+  const [pageSize, setPageSize] = usePageSize("remediation");
+  const q = useRemediations({ limit: pageSize });
 
   // Flatten the infinite-query pages into a single list — every row carries
   // a stable composite key so React reconciles cleanly across page loads.
@@ -54,6 +60,9 @@ export function RemediationTable(): React.ReactElement {
         />
       ) : (
         <>
+          <div className="flex justify-end">
+            <PageSizeSelector value={pageSize} onChange={setPageSize} />
+          </div>
           <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
             <Table>
               <TableHeader>

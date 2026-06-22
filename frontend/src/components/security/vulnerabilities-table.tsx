@@ -25,6 +25,10 @@ import {
   useVulnerabilities,
   type Severity,
 } from "@/lib/api/security";
+import {
+  PageSizeSelector,
+  usePageSize,
+} from "@/components/ui/page-size-selector";
 import { formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -39,7 +43,10 @@ import { cn } from "@/lib/utils";
 // "Load more" button only renders when there's a next page.
 export function VulnerabilitiesTable(): React.ReactElement {
   const [severity, setSeverity] = React.useState<Severity | "">("");
-  const q = useVulnerabilities({ severity });
+  // S-MAINT-1 P5: page-size persisted in localStorage keyed by "vulns" so
+  // the operator's choice carries across reloads.
+  const [pageSize, setPageSize] = usePageSize("vulns");
+  const q = useVulnerabilities({ severity, limit: pageSize });
 
   const flat = React.useMemo(
     () => q.data?.pages.flatMap((p) => p.vulnerabilities) ?? [],
@@ -48,7 +55,10 @@ export function VulnerabilitiesTable(): React.ReactElement {
 
   return (
     <div className="space-y-4">
-      <SeverityChips selected={severity} onChange={setSeverity} />
+      <div className="flex items-center justify-between gap-3">
+        <SeverityChips selected={severity} onChange={setSeverity} />
+        <PageSizeSelector value={pageSize} onChange={setPageSize} />
+      </div>
 
       {q.isError ? (
         <ErrorState

@@ -32,6 +32,10 @@ import {
 } from "@/lib/api/notifications";
 import { useAuthStore } from "@/lib/auth/store";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
+import {
+  PageSizeSelector,
+  usePageSize,
+} from "@/components/ui/page-size-selector";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/activity")({
@@ -50,8 +54,10 @@ function ActivityPage(): React.ReactElement {
     new Set(),
   );
   const eventTypes = selected.size > 0 ? Array.from(selected) : undefined;
+  // S-MAINT-1 P5: persisted page size, "notifications" key.
+  const [pageSize, setPageSize] = usePageSize("notifications");
   const { data, isLoading, isError, refetch, isFetching } = useNotifications({
-    limit: 100,
+    limit: pageSize,
     event_types: eventTypes,
   });
   const lastSeenAt = React.useMemo(
@@ -118,15 +124,18 @@ function ActivityPage(): React.ReactElement {
             </button>
           ) : null}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => markAllSeen.mutate()}
-          disabled={markAllSeen.isPending}
-        >
-          <CheckCircle2 className="size-3.5" />
-          Mark all seen
-        </Button>
+        <div className="flex items-center gap-3">
+          <PageSizeSelector value={pageSize} onChange={setPageSize} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => markAllSeen.mutate()}
+            disabled={markAllSeen.isPending}
+          >
+            <CheckCircle2 className="size-3.5" />
+            Mark all seen
+          </Button>
+        </div>
       </div>
 
       {isError ? (

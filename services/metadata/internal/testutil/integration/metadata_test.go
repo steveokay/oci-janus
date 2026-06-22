@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,9 +85,13 @@ func buildTestEnv(t *testing.T) metadatav1.MetadataServiceClient {
 	t.Cleanup(srv.Stop)
 
 	// 6. Dial the in-process server using lis.DialContext as the context dialer.
+	// Wrapped to match grpc.WithContextDialer's `func(ctx, target) (net.Conn, error)`
+	// signature — bufconn's DialContext takes only ctx.
 	conn, err := grpc.NewClient(
 		"passthrough:///bufconn",
-		grpc.WithContextDialer(lis.DialContext),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {

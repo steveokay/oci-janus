@@ -123,23 +123,34 @@ function KeysTable({
             <SkeletonRows />
           ) : (
             keys.map((k) => (
-              <TableRow key={k.key_id}>
+              // B2 fix: services/auth's apiKeyResponse uses `id`, `prefix`, no
+              // `description`; the column shows the prefix (which is what a
+              // human can recognise — first 12 chars of the raw key) rather
+              // than the row's primary-key UUID.
+              <TableRow key={k.id}>
                 <TableCell className="py-3">
                   <div className="text-sm font-medium text-[var(--color-fg)]">
                     {k.name}
                   </div>
-                  {k.description ? (
-                    <div className="mt-0.5 truncate text-xs text-[var(--color-fg-muted)]">
-                      {k.description}
+                  {k.scopes.length > 0 ? (
+                    <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] text-[var(--color-fg-muted)]">
+                      {k.scopes.map((s) => (
+                        <span
+                          key={s}
+                          className="rounded-sm bg-[var(--color-bg-muted)] px-1.5 py-0.5 font-mono"
+                        >
+                          {s}
+                        </span>
+                      ))}
                     </div>
                   ) : null}
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
                     <code className="font-mono text-[11px] text-[var(--color-fg-muted)]">
-                      {k.key_id.slice(0, 8)}…
+                      {k.prefix}…
                     </code>
-                    <CopyButton value={k.key_id} iconOnly />
+                    <CopyButton value={k.prefix} iconOnly />
                   </div>
                 </TableCell>
                 <TableCell>

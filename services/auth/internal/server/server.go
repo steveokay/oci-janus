@@ -18,10 +18,12 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/google/uuid"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
@@ -141,7 +143,31 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	)
 	httpH = httpH.WithServiceAccountService(saSvc)
 
-	// ── 5b. SSO sub-service (FE-API-034) ─────────────────────────────────
+	// ── 5b. Activity service (FE-API-048 FUT-005) ────────────────────────
+	// Dial registry-audit's gRPC server so /api/v1/access/activity can
+	// resolve per-principal feeds. Optional — when AUDIT_GRPC_ADDR is
+	// empty the route returns 501 NOT_IMPLEMENTED and the dashboard
+	// activity tab falls back to the empty-state. Cert paths reuse the
+	// gRPC-server mTLS material (same pattern as services/management).
+	if cfg.AuditGRPCAddr != "" {
+		auditCreds, err := buildClientCreds(cfg, "registry-audit")
+		if err != nil {
+			return fmt.Errorf("build audit gRPC creds: %w", err)
+		}
+		auditConn, err := grpc.NewClient(cfg.AuditGRPCAddr, grpc.WithTransportCredentials(auditCreds))
+		if err != nil {
+			return fmt.Errorf("dial audit gRPC: %w", err)
+		}
+		defer auditConn.Close()
+		auditClient := auditv1.NewAuditServiceClient(auditConn)
+		activitySvc := service.NewActivityService(users, auditClient)
+		httpH = httpH.WithActivityService(activitySvc)
+		slog.Info("activity service wired", "audit_grpc", cfg.AuditGRPCAddr)
+	} else {
+		slog.Warn("AUDIT_GRPC_ADDR not set — /api/v1/access/activity returns 501")
+	}
+
+	// ── 5c. SSO sub-service (FE-API-034) ─────────────────────────────────
 	// SSO is opt-in: without SSO_CREDENTIAL_KEY_HEX the routes are not
 	// registered and the dashboard's SSO buttons keep their "coming soon"
 	// behaviour. With it, the OAuth flow + admin CRUD endpoints come online.
@@ -280,6 +306,30 @@ func runMigrations(cfg *config.Config) error {
 	}
 	slog.Info("database migrations applied")
 	return nil
+}
+
+// buildClientCreds returns mTLS credentials for outbound gRPC dials when all
+// three cert paths are configured, or plaintext insecure credentials
+// otherwise (dev only). config.validate() ensures the plaintext path is
+// rejected in production. The serverName argument is the expected CN /
+// SAN on the remote server's certificate; in production this is checked
+// against the cert's SAN. In dev (insecure mode) it is ignored.
+//
+// FE-API-048 FUT-005: used to dial registry-audit for the activity facade.
+func buildClientCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
+	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+		return insecure.NewCredentials(), nil
+	}
+	tlsCfg, err := mtls.ClientTLSConfig(
+		cfg.MTLSCACertPath,
+		cfg.MTLSCertPath,
+		cfg.MTLSKeyPath,
+		serverName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
 }
 
 // buildGRPCOptions returns the server options list, including mTLS credentials if configured.

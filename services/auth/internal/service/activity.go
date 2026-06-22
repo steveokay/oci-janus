@@ -58,22 +58,27 @@ func NewActivityService(users UserRepoForActivity, audit auditv1.AuditServiceCli
 // PrincipalActivity is one trimmed audit event in the principal's activity
 // feed. Fields that are not directly useful to the frontend (event id, trace
 // id, raw manifest digest) are omitted to keep the response narrow.
+//
+// JSON tags are required because services/auth's HTTP handler json-encodes
+// these directly into the response and the frontend (`lib/api/activity.ts`)
+// reads snake_case keys. Without tags the encoder uses the Go field names
+// and the FE sees PascalCase undefined-everything.
 type PrincipalActivity struct {
 	// At is the wall-clock time the event occurred.
-	At time.Time
+	At time.Time `json:"at"`
 	// Action is the audit action code (e.g. "push.image", "pull.image").
-	Action string
+	Action string `json:"action"`
 	// Repo is extracted from the event metadata["repo"] key when present.
 	// Empty when the event is not repository-scoped.
-	Repo string
+	Repo string `json:"repo"`
 	// SourceIP is the initiating IP address if present in metadata["source_ip"].
-	SourceIP string
+	SourceIP string `json:"source_ip"`
 	// APIKeyID is the key UUID if the request was authenticated with an API key,
 	// extracted from metadata["api_key_id"].
-	APIKeyID string
+	APIKeyID string `json:"api_key_id"`
 	// Status is the audit outcome ("success" | "failure"), extracted from
 	// metadata["outcome"].
-	Status string
+	Status string `json:"status"`
 }
 
 // ListActivityOpts carries the caller-supplied parameters for List.
