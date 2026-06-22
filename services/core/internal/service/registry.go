@@ -472,8 +472,16 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 	// can react to the push. Use the request context so traces are connected and
 	// the publish is cancelled if the broker is unreachable within the deadline.
 	// A failure here must not fail the push — the manifest is already committed.
+	//
+	// 2026-06-22: RepoID was missing from this payload, which silently
+	// broke auto-scan-on-push: the scanner consumed the event, enqueued
+	// the job with an empty repo_id, and metadata's GetManifest rejected
+	// the empty string as not a valid UUID (SQLSTATE 22P02). The actual
+	// error was masked by mapErr's coarse Internal fallback until the
+	// observability fix landed earlier today.
 	payload, _ := json.Marshal(events.PushCompletedPayload{
 		RepositoryName: repoName,
+		RepoID:         repoID,
 		Tag:            reference,
 		ManifestDigest: digest,
 		PushedBy:       pushedBy,
