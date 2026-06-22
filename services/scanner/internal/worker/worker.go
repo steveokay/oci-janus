@@ -667,11 +667,46 @@ func ScanQueuedConsumerConfig() consumer.Config {
 }
 
 // HandleScanQueued is the consumer.Handler for scan.queued events.
-// It parses the ScanQueuedPayload, allocates a scan_id, and enqueues the job.
+// It parses the ScanQueuedPayload, resolves the effective scan policy
+// (same chain HandlePushCompleted uses) so the post-scan violation
+// check + quarantine stamp honour the operator's settings, allocates
+// a scan_id, and enqueues the job.
+//
+// FE-API-050 bugfix: the original implementation skipped the policy
+// resolver, so operator-triggered re-scans NEVER quarantined — only
+// push-driven scans did. Both surfaces now share the same resolution
+// logic + fail-open semantics: a resolver error logs a warning and
+// proceeds with the synthesised default (scan everything, never
+// quarantine) so a DB blip doesn't silently flip enforcement off.
+//
+// Unlike push.completed, scan.queued is operator-triggered (the UI
+// Rescan button), so we always scan even when AutoScanOnPush is
+// false — the operator already overrode the gate by clicking.
 func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 	var payload events.ScanQueuedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal scan.queued payload: %w", err)
+	}
+
+	// Resolve the effective policy so applyQuarantine has the right
+	// threshold + exempt CVEs at scan completion. Failing open here
+	// (resolver returns the synthesised "scan everything, never
+	// quarantine" default on error) is the conservative regression
+	// safety: pre-FE-API-050 behaviour was always-scan + never-block,
+	// and a transient resolver error shouldn't silently flip to a
+	// more aggressive state.
+	resolved := ResolvedScanPolicy{AutoScanOnPush: true}
+	if p.policyResolver != nil {
+		got, err := p.policyResolver(ctx, event.TenantID, payload.RepoID)
+		if err != nil {
+			slog.WarnContext(ctx, "scan policy resolve failed — scanning with default policy",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"err", err,
+			)
+		} else {
+			resolved = got
+		}
 	}
 
 	scanID := uuid.New().String()
@@ -683,6 +718,7 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 		repositoryName: payload.RepositoryName,
 		manifestDigest: payload.ManifestDigest,
 		scanID:         scanID,
+		policy:         resolved,
 	}); err != nil {
 		return fmt.Errorf("enqueue scan job: %w", err)
 	}
@@ -692,6 +728,7 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 		"tenant_id", event.TenantID,
 		"tag", payload.TagName,
 		"manifest_digest", payload.ManifestDigest,
+		"block_on_severity", resolved.BlockOnSeverity,
 	)
 	return nil
 }
