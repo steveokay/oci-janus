@@ -302,7 +302,8 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 		)
 		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
-		       m.retention_pending_delete_at
+		       m.retention_pending_delete_at,
+		       COALESCE(m.quarantined, FALSE)
 		FROM upserted t
 		LEFT JOIN manifests m
 		  ON  m.repo_id   = t.repo_id
