@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"time"
 
@@ -137,6 +138,16 @@ func New(repo *repository.Repository) *MetadataHandler {
 }
 
 // mapErr converts repository sentinel errors to gRPC status errors.
+//
+// Observability note (2026-06-22) — when an error falls through to the
+// Internal fallback we log the underlying error at slog.Error along with
+// the calling handler's function name. Previously every non-sentinel
+// error became "internal error" on the wire with the original lost; an
+// operator debugging a "code=Internal" response had no way to tell
+// whether the cause was a pgx pool blip, a malformed digest, or a
+// constraint violation. We deliberately do NOT log ErrNotFound /
+// ErrAlreadyExists — those are normal control flow (404 / 409) and
+// noisy at WARN/ERROR.
 func mapErr(err error) error {
 	if err == nil {
 		return nil
@@ -147,7 +158,38 @@ func mapErr(err error) error {
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return status.Error(codes.AlreadyExists, "already exists")
 	}
+	// runtime.Caller(1) gives us the file:line + function name of the
+	// handler that invoked mapErr. callerName falls back to "unknown"
+	// when reflection fails so the log entry always has a value.
+	slog.Error("metadata handler returning Internal",
+		"caller", callerName(1),
+		"error", err.Error(),
+	)
 	return errcodes.MapDBError(err, "internal error")
+}
+
+// callerName returns the short function name (without package path) of
+// the caller at the given skip depth. Used by mapErr so the error log
+// names the originating handler without forcing every callsite to pass
+// a method name parameter. Returns "unknown" when runtime reflection
+// fails — defensive, never panics.
+func callerName(skip int) string {
+	pc, _, _, ok := runtime.Caller(skip + 1)
+	if !ok {
+		return "unknown"
+	}
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return "unknown"
+	}
+	full := fn.Name()
+	// Trim the package path so the log line stays compact —
+	// "github.com/steveokay/oci-janus/services/metadata/internal/handler.(*MetadataHandler).GetManifest"
+	// becomes "handler.(*MetadataHandler).GetManifest".
+	if i := strings.LastIndex(full, "/"); i >= 0 {
+		full = full[i+1:]
+	}
+	return full
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────────

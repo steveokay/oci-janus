@@ -88,6 +88,21 @@ func (f *handlerFakeUserRepo) GetByID(_ context.Context, id uuid.UUID) (*reposit
 	return nil, repository.ErrNotFound
 }
 
+func (f *handlerFakeUserRepo) GetHumanByID(ctx context.Context, id uuid.UUID) (*repository.User, error) {
+	u, err := f.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if u.Kind != "" && u.Kind != "human" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
+func (f *handlerFakeUserRepo) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*repository.User, error) {
+	return f.GetByID(ctx, id)
+}
+
 func (f *handlerFakeUserRepo) RecordFailedLogin(_ context.Context, id uuid.UUID) (int, error) {
 	f.failedLogins[id]++
 	return f.failedLogins[id], nil

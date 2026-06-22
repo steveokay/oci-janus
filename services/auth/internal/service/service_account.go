@@ -17,7 +17,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -386,15 +385,4 @@ func (s *ServiceAccountService) CountKeysAffectedByScopeShrink(
 	}
 
 	return s.sa.CountKeysAffectedByScopeShrink(ctx, saID, proposed)
-}
-
-// marshalFields serialises a map[string]any to JSON for audit storage.
-// It returns a compact JSON bytes slice; on error it returns nil (callers
-// must handle nil gracefully).
-func marshalFields(fields map[string]any) []byte {
-	if fields == nil {
-		return nil
-	}
-	b, _ := json.Marshal(fields)
-	return b
 }
