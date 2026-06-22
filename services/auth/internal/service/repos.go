@@ -49,6 +49,11 @@ type apiKeyRepo interface {
 	// ListByServiceAccount returns active keys owned by the given service account.
 	ListByServiceAccount(ctx context.Context, saID uuid.UUID) ([]*repository.APIKey, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
+	// DeleteByServiceAccount revokes an SA-owned API key. Returns ErrNotFound
+	// when no such (id, service_account_id) pair exists. Use Delete for
+	// human-owned keys — the two paths are deliberately separate so the wrong
+	// owner-column cannot authorise a delete.
+	DeleteByServiceAccount(ctx context.Context, id, saID uuid.UUID) error
 	TouchLastUsed(ctx context.Context, id uuid.UUID) error
 }
 

@@ -187,12 +187,16 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Resolve the owner identity for the JWT subject. For human-owned keys,
-		// UserID is non-nil. SA-owned key subject resolution (ServiceAccountID
-		// branching) is implemented in T9. All keys created through this HTTP
-		// endpoint today are human-owned, so UserID is guaranteed non-nil here.
-		if key.UserID != nil {
-			userID = key.UserID.String()
+		// UserID is non-nil. SA-owned key JWT exchange ships in T9
+		// (ServiceAccountService + shadow-user resolution); until then, refuse
+		// explicitly rather than emit an RFC 7519 §4.1.2-invalid JWT with an
+		// empty subject.
+		if key.UserID == nil {
+			writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED",
+				"service-account key token exchange is not yet supported")
+			return
 		}
+		userID = key.UserID.String()
 		userTenantID = key.TenantID.String()
 	} else {
 		user, err := h.svc.AuthenticateUser(r.Context(), tenantID, username, password)

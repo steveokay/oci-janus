@@ -197,13 +197,34 @@ func (r *APIKeyRepository) ListByServiceAccount(ctx context.Context, saID uuid.U
 	return keys, rows.Err()
 }
 
-// Delete soft-deletes the key by setting is_active=false.
-// Only the owning user can delete their own key (enforced via userID check).
+// Delete soft-deletes a human-owned API key by setting is_active=false.
+// SA-owned keys must be removed via DeleteByServiceAccount because the
+// WHERE user_id = $2 predicate never matches NULL in Postgres — using this
+// method for an SA-owned key always returns ErrNotFound even when the key
+// exists. The two paths are deliberately separate so the wrong owner-column
+// cannot authorise a delete.
 func (r *APIKeyRepository) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	const q = `UPDATE api_keys SET is_active = false WHERE id = $1 AND user_id = $2`
 	tag, err := r.pool.Exec(ctx, q, id, userID)
 	if err != nil {
 		return fmt.Errorf("delete api key: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteByServiceAccount soft-deletes an SA-owned API key by setting
+// is_active=false. Returns ErrNotFound when no (id, service_account_id)
+// pair exists. Use Delete (the method above) for human-owned keys — the two
+// paths are deliberately separate so the wrong owner-column cannot authorise
+// a delete.
+func (r *APIKeyRepository) DeleteByServiceAccount(ctx context.Context, id, saID uuid.UUID) error {
+	const q = `UPDATE api_keys SET is_active = false WHERE id = $1 AND service_account_id = $2`
+	tag, err := r.pool.Exec(ctx, q, id, saID)
+	if err != nil {
+		return fmt.Errorf("delete sa api key: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

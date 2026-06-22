@@ -81,16 +81,16 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 	}
 
 	// Resolve the owner identity for the gRPC response. For human-owned keys,
-	// UserID is non-nil. SA-owned key subject resolution (ServiceAccountID
-	// branching) is implemented in T9 — until then, all validated keys are
-	// human-owned so UserID is guaranteed non-nil here.
-	var ownerID string
-	if key.UserID != nil {
-		ownerID = key.UserID.String()
+	// UserID is non-nil. SA-owned key JWT exchange ships in T9
+	// (ServiceAccountService); until then, refuse explicitly rather than return
+	// a ValidateAPIKeyResponse with an empty user_id that downstream services
+	// would treat as unauthenticated noise.
+	if key.UserID == nil {
+		return nil, status.Error(codes.Unimplemented, "service-account key token exchange is not yet supported")
 	}
 	return &authv1.ValidateAPIKeyResponse{
 		Valid:     true,
-		UserId:    ownerID,
+		UserId:    key.UserID.String(),
 		TenantId:  key.TenantID.String(),
 		Access:    scopesToProto(key.Scopes),
 	}, nil

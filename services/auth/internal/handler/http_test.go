@@ -270,6 +270,12 @@ func (f *handlerFakeAPIKeyRepo) Delete(_ context.Context, id, userID uuid.UUID) 
 	return nil
 }
 
+// DeleteByServiceAccount is a no-op stub satisfying the service.APIKeyRepo interface.
+// SA-key deletion test coverage is deferred to T13.
+func (f *handlerFakeAPIKeyRepo) DeleteByServiceAccount(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
 func (f *handlerFakeAPIKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error { return nil }
 
 // ── Test service builder ──────────────────────────────────────────────────────
