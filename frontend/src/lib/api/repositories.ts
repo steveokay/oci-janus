@@ -16,16 +16,30 @@ import type {
 // after any mutation.
 export const repoKeys = {
   all: ["repositories"] as const,
-  list: (visibility: "public" | "private" | "all") =>
-    [...repoKeys.all, "list", visibility] as const,
+  list: (visibility: "public" | "private" | "all", artifactType: RepoArtifactFilter) =>
+    [...repoKeys.all, "list", visibility, artifactType] as const,
   detail: (org: string, repo: string) =>
     [...repoKeys.all, "detail", org, repo] as const,
 };
 
 export type RepoVisibilityFilter = "public" | "private" | "all";
 
+// F4 follow-up — narrow the list to repositories holding at least one
+// manifest of the given artifact_type. "all" disables the filter and
+// returns every repo in the workspace. The values mirror what
+// services/metadata's deriveArtifactType emits (and the BFF allowlist
+// accepts) — `image`, `helm`, `signature`, `sbom`, `other`.
+export type RepoArtifactFilter =
+  | "all"
+  | "image"
+  | "helm"
+  | "signature"
+  | "sbom"
+  | "other";
+
 interface UseRepositoriesParams {
   visibility?: RepoVisibilityFilter;
+  artifactType?: RepoArtifactFilter;
   perPage?: number;
 }
 
@@ -34,16 +48,18 @@ interface UseRepositoriesParams {
 // the response shape doesn't easily collapse to offset paging.
 export function useRepositories({
   visibility = "all",
+  artifactType = "all",
   perPage = 25,
 }: UseRepositoriesParams = {}) {
   return useInfiniteQuery({
-    queryKey: repoKeys.list(visibility),
+    queryKey: repoKeys.list(visibility, artifactType),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const params: Record<string, string> = {
         per_page: String(perPage),
       };
       if (visibility !== "all") params.visibility = visibility;
+      if (artifactType !== "all") params.artifact_type = artifactType;
       if (pageParam) params.page_token = pageParam;
       const { data } = await apiClient.get<RepositoriesListResponse>(
         "/repositories",

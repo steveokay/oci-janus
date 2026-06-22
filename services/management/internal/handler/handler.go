@@ -525,6 +525,23 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 	// Optional filter: "public" | "private" | "" (all).
 	visibility := r.URL.Query().Get("visibility")
 
+	// Optional artifact_type filter (F4 follow-up). Drives the /helm sidebar
+	// entry — passing `?artifact_type=helm` narrows to repositories that
+	// hold at least one Helm chart manifest. /repositories passes "image"
+	// so container repos render alone; "" returns everything.
+	//
+	// Validate against the canonical allowlist so the gRPC layer never
+	// sees an arbitrary string (CLAUDE.md §7 — input validation before
+	// forwarding downstream).
+	artifactType := r.URL.Query().Get("artifact_type")
+	switch artifactType {
+	case "", "image", "helm", "signature", "sbom", "other":
+		// ok
+	default:
+		writeError(w, http.StatusBadRequest, "invalid artifact_type")
+		return
+	}
+
 	// per_page: 1–100, default 25.
 	pageSize := int32(25)
 	if s := r.URL.Query().Get("per_page"); s != "" {
@@ -544,9 +561,10 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 	}
 
 	stream, err := h.meta.ListRepositories(r.Context(), &metadatav1.ListRepositoriesRequest{
-		TenantId:  tenantID,
-		PageToken: pageToken,
-		PageSize:  pageSize,
+		TenantId:     tenantID,
+		PageToken:    pageToken,
+		PageSize:     pageSize,
+		ArtifactType: artifactType,
 	})
 	if err != nil {
 		slog.Error("ListRepositories", "err", err)

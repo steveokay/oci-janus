@@ -155,25 +155,73 @@ func (r *Repository) GetRepositoryByFullName(ctx context.Context, tenantID, full
 	return r.scanOneRepo(ctx, q, tenantID, fullName)
 }
 
-// ListRepositories returns all repositories for the given tenant (+ optional org filter).
-func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error) {
-	var (
-		q    string
-		args []any
-	)
+// ListRepositories returns all repositories for the given tenant (+ optional
+// org filter + optional artifact_type filter).
+//
+// artifactType is a stable discriminator from deriveArtifactType — passing
+// "helm" returns only repositories that hold at least one Helm chart
+// manifest; "image" returns only those with at least one container image;
+// "other" returns those whose manifests don't match any known category.
+// Empty artifactType disables the filter and returns every repository in
+// the tenant.
+//
+// The filter is implemented as an EXISTS subquery against manifests so a
+// repository that holds a mix (e.g. image + chart on the same /v2/...
+// namespace) is correctly returned for any matching filter value rather
+// than being attributed to a single primary category. Repositories with
+// no manifests at all are excluded when artifactType is non-empty.
+func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, artifactType string) ([]*metadatav1.Repository, error) {
+	// Positional-param accounting: tenant_id is always $1. org_id (when
+	// set) is $2. The artifact_type filter's media-type array sits at the
+	// next available slot — $3 with org_id, $2 without. Building the
+	// arg slice + placeholder index together keeps the two in sync.
+	args := []any{tenantID}
+	nextPlaceholder := 2
+	whereOrg := ""
 	if orgID != "" {
-		q = `SELECT ` + repoSelectCols + `
-		     FROM repositories r
-		     JOIN organizations o ON o.id = r.org_id
-		     WHERE r.tenant_id = $1 AND r.org_id = $2 ORDER BY r.name`
-		args = []any{tenantID, orgID}
-	} else {
-		q = `SELECT ` + repoSelectCols + `
-		     FROM repositories r
-		     JOIN organizations o ON o.id = r.org_id
-		     WHERE r.tenant_id = $1 ORDER BY r.name`
-		args = []any{tenantID}
+		args = append(args, orgID)
+		whereOrg = " AND r.org_id = $2"
+		nextPlaceholder = 3
 	}
+
+	filterClause := ""
+	if artifactType != "" {
+		// "other" can't be IN-listed — it's the negation of every known
+		// media type, plus the explicit empty-string row (legacy manifests
+		// pushed before the config_media_type column existed).
+		if artifactType == "other" {
+			args = append(args, allKnownConfigMediaTypes())
+			filterClause = fmt.Sprintf(`
+			   AND EXISTS (
+			       SELECT 1 FROM manifests m
+			       WHERE m.repo_id = r.id
+			         AND m.tenant_id = r.tenant_id
+			         AND (m.config_media_type = ''
+			              OR NOT (m.config_media_type = ANY($%d)))
+			   )`, nextPlaceholder)
+		} else {
+			mediaTypes := configMediaTypesFor(artifactType)
+			if mediaTypes == nil {
+				// Unknown artifact_type — match nothing rather than silently
+				// returning every repository.
+				return nil, nil
+			}
+			args = append(args, mediaTypes)
+			filterClause = fmt.Sprintf(`
+			   AND EXISTS (
+			       SELECT 1 FROM manifests m
+			       WHERE m.repo_id = r.id
+			         AND m.tenant_id = r.tenant_id
+			         AND m.config_media_type = ANY($%d)
+			   )`, nextPlaceholder)
+		}
+	}
+
+	q := `SELECT ` + repoSelectCols + `
+	     FROM repositories r
+	     JOIN organizations o ON o.id = r.org_id
+	     WHERE r.tenant_id = $1` + whereOrg + filterClause + `
+	     ORDER BY r.name`
 
 	rows, err := r.reader().Query(ctx, q, args...)
 	if err != nil {
@@ -556,6 +604,57 @@ func deriveArtifactType(configMediaType string) string {
 	default:
 		return "other"
 	}
+}
+
+// configMediaTypesFor is the reverse of deriveArtifactType — given a
+// stable artifact_type discriminator, return the set of `config.mediaType`
+// strings that belong to that bucket. Used by ListRepositories to filter
+// the repos table to those that hold at least one manifest of the
+// requested kind via a JOIN-EXISTS on the manifests table.
+//
+// The "other" bucket can't be enumerated (it's the deriveArtifactType
+// fall-through) so callers asking for "other" must NOT IN every known
+// media type rather than IN a fixed list. ListRepositories handles that
+// special case inline.
+//
+// Returns nil for unknown artifact_type values so callers can treat them
+// as "no rows match" without surprising NULL semantics.
+func configMediaTypesFor(artifactType string) []string {
+	switch artifactType {
+	case "image":
+		return []string{
+			"application/vnd.docker.container.image.v1+json",
+			"application/vnd.oci.image.config.v1+json",
+		}
+	case "helm":
+		return []string{
+			"application/vnd.cncf.helm.config.v1+json",
+		}
+	case "signature":
+		return []string{
+			"application/vnd.dev.cosign.simplesigning.v1+json",
+			"application/vnd.dsse.envelope.v1+json",
+		}
+	case "sbom":
+		return []string{
+			"application/spdx+json",
+			"application/vnd.cyclonedx+json",
+		}
+	default:
+		return nil
+	}
+}
+
+// allKnownConfigMediaTypes is the union of every value configMediaTypesFor
+// returns — used by the "other" filter path to project everything that
+// ISN'T a known artifact type. Kept derived (not a separate const) so a
+// new entry in configMediaTypesFor automatically updates the negation.
+func allKnownConfigMediaTypes() []string {
+	out := []string{}
+	for _, t := range []string{"image", "helm", "signature", "sbom"} {
+		out = append(out, configMediaTypesFor(t)...)
+	}
+	return out
 }
 
 func parseImageSize(rawJSON []byte) int64 {

@@ -353,7 +353,7 @@ func (f *fakeRepo) GetRepositoryByFullName(_ context.Context, _, _ string) (*met
 	return f.getRepoByFullNameResult, f.getRepoByFullNameErr
 }
 
-func (f *fakeRepo) ListRepositories(_ context.Context, _, _ string) ([]*metadatav1.Repository, error) {
+func (f *fakeRepo) ListRepositories(_ context.Context, _, _, _ string) ([]*metadatav1.Repository, error) {
 	return f.listReposResult, f.listReposErr
 }
 
