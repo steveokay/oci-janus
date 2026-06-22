@@ -116,7 +116,21 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	devTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
 	httpH := handler.NewHTTPHandler(svc, devTenantID)
 
-	// ── 5a. SSO sub-service (FE-API-034) ─────────────────────────────────
+	// ── 5a. Service-account service (FE-API-048 T13) ─────────────────────
+	// Wire ServiceAccountService so /api/v1/service-accounts routes are live.
+	// The audit emitter is a slog-only placeholder for now; durable audit
+	// emission via RabbitMQ is a follow-up (FUT) item. The router accepts
+	// *redis.Client directly — it satisfies the RedisCmdable interface.
+	saSvc := service.NewServiceAccountService(
+		repository.NewServiceAccountRepo(pool),
+		users,
+		apiKeys,
+		slogAuditEmitter{},
+		redisCmdableAdapter{rdb},
+	)
+	httpH = httpH.WithServiceAccountService(saSvc)
+
+	// ── 5b. SSO sub-service (FE-API-034) ─────────────────────────────────
 	// SSO is opt-in: without SSO_CREDENTIAL_KEY_HEX the routes are not
 	// registered and the dashboard's SSO buttons keep their "coming soon"
 	// behaviour. With it, the OAuth flow + admin CRUD endpoints come online.
@@ -307,4 +321,41 @@ func runLoginSessionCleanup(ctx context.Context, sso *service.SSO) {
 			}
 		}
 	}
+}
+
+// slogAuditEmitter logs ServiceAccount lifecycle audit events to slog at INFO
+// level. This is a stand-in for the durable audit emitter (RabbitMQ publish or
+// direct audit-service call) which is a follow-up item. Production audit
+// dashboards will not see SA events until the durable emitter lands, but the
+// lifecycle is correct (the DB row is the authoritative state) and operators
+// get a structured log line per mutation.
+type slogAuditEmitter struct{}
+
+// Emit logs the event and returns nil. Per spec §5.7 "audit failure is a hard
+// error" — but for the slog stand-in we are best-effort: slog never errors, so
+// the call site treats every emit as a success.
+func (slogAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) error {
+	slog.InfoContext(ctx, "audit",
+		"action", ev.Action,
+		"actor_id", ev.ActorID,
+		"resource", ev.Resource,
+		"fields", ev.Fields,
+	)
+	return nil
+}
+
+// redisCmdableAdapter wraps *redis.Client so its Set/Del methods satisfy
+// service.RedisCmdable's structural interface — the interface requires the
+// return type to be exactly interface{Err() error}, but *redis.Client's
+// methods return *redis.StatusCmd / *redis.IntCmd (which themselves implement
+// that interface). Go's interface satisfaction is structural per method
+// signature, so we adapt.
+type redisCmdableAdapter struct{ c *redis.Client }
+
+func (a redisCmdableAdapter) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) interface{ Err() error } {
+	return a.c.Set(ctx, key, value, expiration)
+}
+
+func (a redisCmdableAdapter) Del(ctx context.Context, keys ...string) interface{ Err() error } {
+	return a.c.Del(ctx, keys...)
 }
