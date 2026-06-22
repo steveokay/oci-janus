@@ -11,11 +11,17 @@
 
 ## Integration Tests
 
-- Location: `internal/testutil/integration/`.
+- Location: `internal/testutil/integration/` or alongside the unit tests under `//go:build integration`.
 - Use `testcontainers-go` (helpers in `libs/testutil/containers`).
 - Spin up real PostgreSQL, Redis, RabbitMQ, MinIO per test suite.
 - Integration tests tagged with `//go:build integration` — excluded from default `go test ./...`.
 - Run with `make test-integration`.
+
+### Multi-service testcontainer helpers
+
+`libs/testutil/containers/auth_with_audit.go` (FE-API-048 T18) — `Bundle{AuthPool, AuditPool, AuditConn, Cleanup}` for tests that need both the auth DB and the audit DB at once. The helper boots two Postgres testcontainers and accepts caller-supplied `fs.FS` migration sets via `AuthWithAuditOpts` (so `libs/` does not have to import either service module — the activity facade integration test inlines audit migrations as `fstest.MapFS`).
+
+`services/auth/internal/testutil/sa_fixtures.go` — `NewServiceAccount(t, ctx, saRepo, userRepo, tenant, name, allowedScopes…) → (*ServiceAccount, shadowUserID)` and `NewAPIKeyForSA(t, ctx, keyRepo, sa, name, scopes…) → (keyID, rawSecret)` seed the polymorphic api_keys schema at the repository layer (skipping service-layer audit emission for tests that just need rows in place).
 
 ## OCI Spec Conformance
 
@@ -31,6 +37,7 @@
 - Dependency audit: `govulncheck` in CI for every service workflow.
 - Secret scanning: `gitleaks` workflow on every push and PR.
 - Integration: OWASP ZAP baseline scan against staging environment (weekly).
+- Repo-layer lints: `scripts/lint-user-queries.sh` (FE-API-048 T20, wired into `.github/workflows/ci-auth.yml`) fails the build if a new `FROM users WHERE` query in `services/auth/internal/repository/` doesn't go through a kind-guarded `…Human…` helper or carry an `-- allow-any-kind` annotation. Enforces the spec §4.1 kind guard at the repository layer rather than relying on every caller to remember.
 
 ## Per-service test coverage (as of 2026-06-21)
 

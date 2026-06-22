@@ -8,6 +8,12 @@ The monorepo has a single `.github/workflows/` directory. Jobs are **path-filter
 Per service (triggered by path filter):
 
 1. lint           → golangci-lint (config in .golangci.yml at repo root)
+                  → (services/auth only) scripts/lint-user-queries.sh
+                    enforces the FE-API-048 kind-guard rule: any new
+                    `FROM users WHERE` query in
+                    services/auth/internal/repository/ must use a
+                    `…Human…` helper or carry an `-- allow-any-kind`
+                    annotation. Wired in .github/workflows/ci-auth.yml.
 2. test           → go test -race ./...
 3. security       → govulncheck, gosec, gitleaks
 4. build          → docker build (multi-stage, distroless base)

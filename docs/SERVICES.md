@@ -134,6 +134,42 @@ service AuthService {
 
 Audit routing keys published by the SSO admin handler (not yet typed in `libs/rabbitmq/events`): `auth.provider_created`, `auth.provider_updated`, `auth.provider_deleted`, plus `auth.user_sso_provisioned` from the OAuth/SAML callback path.
 
+**Schema additions for FE-API-048 (service accounts):**
+- `users.kind TEXT NOT NULL DEFAULT 'human' CHECK (kind IN ('human','service_account'))` — every existing row defaulted to `'human'`; rows backing a service account are `'service_account'` and called *shadow users*. All single-row lookups on the human-auth path use the new `…Human…` repository helpers (`GetHumanByEmail`, `GetHumanByID`, `ListHumans`, `CountHumans`) so the kind guard is enforced at the repository layer rather than scattered across handlers. CI lint `scripts/lint-user-queries.sh` fails any new `FROM users WHERE` that doesn't go through a kind-guarded helper or carry an `-- allow-any-kind` annotation.
+- `service_accounts(id PK, tenant_id, shadow_user_id UUID UNIQUE FK users(id) ON DELETE CASCADE, name, description, allowed_scopes TEXT[], created_by FK users(id) ON DELETE SET NULL, created_at, disabled_at)` — UNIQUE `(tenant_id, name)`. `created_by` is `SET NULL` so admins offboarding never blocks; provenance lives in the `service_account.created` audit row (creator_email + creator_display_name snapshotted at creation time).
+- `api_keys` — polymorphic owner. `user_id` is now nullable; `service_account_id UUID FK service_accounts(id) ON DELETE CASCADE` added. CHECK `(user_id IS NULL) <> (service_account_id IS NULL)` enforces exactly-one ownership. Old UNIQUE `(user_id, name)` replaced by two partial unique indexes (`api_keys_user_name_unique WHERE user_id IS NOT NULL` and `api_keys_sa_name_unique WHERE service_account_id IS NOT NULL`) so a human and an SA in the same tenant may each have a key named `ci-prod` without colliding. Down migration carries a `DO $$ RAISE EXCEPTION` guard that refuses rollback when any `service_account_id IS NOT NULL` rows exist (data-loss protection).
+
+**Endpoints added by FE-API-048:**
+```
+GET    /api/v1/service-accounts                                  # list (admin)
+POST   /api/v1/service-accounts                                  # create (admin)
+GET    /api/v1/service-accounts/:id                              # get (admin)
+PATCH  /api/v1/service-accounts/:id                              # update name/desc/allowed_scopes/disabled
+DELETE /api/v1/service-accounts/:id                              # cascade delete
+POST   /api/v1/service-accounts/:id/scopes/preflight             # {affected_keys: N} before scope-shrink save
+GET    /api/v1/service-accounts/:id/api-keys                     # list SA's keys
+POST   /api/v1/service-accounts/:id/api-keys                     # issue (scopes must ⊆ allowed_scopes)
+DELETE /api/v1/service-accounts/:id/api-keys/:keyID              # revoke
+GET    /api/v1/access/activity?principal_user_id=…&limit=…       # principal activity feed (404-not-403 on negative paths)
+```
+`POST /api/v1/apikeys` accepts an optional `service_account_id` field; when set, the call routes to SA-key issuance instead of the human-user path (admin gate + scope-subset enforcement on the SA). `GET /api/v1/users/me` returns a `type: "user"|"service_account"` envelope with nested `service_account: {…}` for SA principals (synthetic email `sa+<uuid>@internal.invalid` is never leaked — the response sets `email: null`).
+
+**Hot-path security changes** (`ValidateAPIKey`, T9):
+- Branches on polymorphic owner.
+- SA branch: load SA → if `disabled_at IS NOT NULL` → `PermissionDenied`. If the request carries an `X-Tenant-ID` that disagrees with `service_accounts.tenant_id` → `Unauthenticated` + emit `pentest.cross_tenant_attempt` audit (security HIGH H1).
+- Effective scopes = `key.scopes ∩ sa.allowed_scopes` (retroactive shrink); empty intersection → `PermissionDenied`.
+- Order-of-checks: lookup → argon2 verify → expiry → is_active → owner branch. Verify runs FIRST so reject paths share the ~100 ms cost; closes the timing oracle that would distinguish "wrong secret" from "expired key" (same class as PENTEST-004 fix on `AuthenticateUser`).
+
+**JWT revocation on SA disable** (security HIGH H2, T12): `ServiceAccountService.SetDisabled(true)` writes `revoke:user:<shadow_user_id>` to Redis with a 25-minute TTL. `ValidateToken` consults this key after the existing JTI check; presence returns `Unauthenticated`. The pattern is documented in CLAUDE.md §7 "JWT Validation."
+
+**Audit vocabulary** — see [`docs/EVENTS.md`](EVENTS.md) for the SA lifecycle action codes.
+
+**Bootstrap wiring:** `httpH.WithServiceAccountService(saSvc)` in `services/auth/internal/server/server.go` constructs the `ServiceAccountService` from the existing repos + a `redisCmdableAdapter` (the structural `RedisCmdable` interface doesn't accept `*redis.Client.Set/Del` directly because their return types are `*redis.StatusCmd`/`*redis.IntCmd` rather than the bare `interface{Err() error}` — the adapter is 6 lines). The `AuditEmitter` parameter is a `slogAuditEmitter` stand-in for now; durable audit emission via RabbitMQ is a follow-up (FUT-007).
+
+**Not yet wired in production:**
+- `ActivityService` (T11) — the audit gRPC client needs an `AUDIT_GRPC_ADDR` env var + mTLS dial. `/api/v1/access/activity` returns informative 501 until then. Tracked as FUT-005.
+- `/users/me` SA-key authentication — the `requireAuth` middleware currently only accepts JWTs. SA principals reach `/users/me` only via JWT exchange through `/auth/token`, which works (the JWT's `sub` is the shadow user id). A CI bot wanting to introspect itself directly via raw API key is not yet supported. Tracked as FUT-006.
+
 **RBAC role model (implemented in `services/auth/migrations/20260614000001_create_rbac.sql`):**
 
 | Role | Actions granted | Scope types |

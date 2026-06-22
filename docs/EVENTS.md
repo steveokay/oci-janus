@@ -141,6 +141,28 @@ type RoleRevokedPayload struct {
 
 ---
 
+### Service account lifecycle (FE-API-048)
+
+Emitted by `services/auth/internal/service/service_account.ServiceAccountService` on every SA mutation. The current implementation uses a `slogAuditEmitter` stand-in (events go to slog INFO), so they are visible in container logs but not yet persisted to `audit_events`. Durable RabbitMQ-based emission is a follow-up (FUT-007); routing keys + payload shapes below are the planned contract.
+
+All payloads carry a common `actor_id` (the human admin who initiated the action) and `resource` (the SA id). The `fields` map carries action-specific extras.
+
+| Action code | Emitted when | Notable fields |
+|---|---|---|
+| `service_account.created`        | `POST /api/v1/service-accounts` succeeds | `service_account_id`, `name`, `description`, `allowed_scopes`, `creator_email`, `creator_display_name` (creator snapshot so attribution survives admin offboarding per spec §4.2) |
+| `service_account.updated`        | `PATCH /api/v1/service-accounts/:id` (name/desc/allowed_scopes) | `changed` (diff map) |
+| `service_account.disabled`       | `PATCH … {disabled: true}` | `reason` (free text, future) |
+| `service_account.enabled`        | `PATCH … {disabled: false}` | — |
+| `service_account.deleted`        | `DELETE /api/v1/service-accounts/:id` | `name` (snapshot — the row is gone after cascade) |
+| `service_account.key_issued`     | `POST /api/v1/service-accounts/:id/api-keys` | `key_id`, `key_prefix` (never the raw secret) |
+| `service_account.key_revoked`    | `DELETE …/api-keys/:keyID`          | `key_id`, `key_prefix` |
+| `service_account.scopes_updated` | PATCH with `set_allowed_scopes`     | `before` / `after` lists |
+| `rbac.role_granted_to_service_account` | A shadow user receives a role grant | Same payload shape as `rbac.role_granted` plus `service_account_id` so admin "list users with role X" surfaces can render SAs distinctly. Distinct routing key so future filters can separate human vs machine grants. |
+
+**Security tripwire:** `ValidateAPIKey` emits `pentest.cross_tenant_attempt` (best-effort, not via the structured payloads above) when an SA-owned key is presented with an `X-Tenant-ID` that disagrees with the SA's owner tenant. Action body carries `service_account_id`, `key_id`, `claimed_tenant`, `actual_tenant`. See spec §5.4 + security finding H1.
+
+---
+
 ### `store.queued`
 
 Published by `registry-proxy` when a background blob-store goroutine fails. The proxy itself consumes this event to retry the store (3 attempts, DLQ after).
