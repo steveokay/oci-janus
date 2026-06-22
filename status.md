@@ -277,6 +277,37 @@
 
 ---
 
+### REM-014 — Multi-scanner support (Grype DONE, Clair deferred)
+- **Affects:** `infra/scanner-plugins/grype-adapter` (new), `services/scanner/Dockerfile`, `services/scanner/scripts/entrypoint.sh`
+- **Status:** Grype adapter DONE ✅ (2026-06-22). Clair v4 integration DEFERRED to a separate sprint — scope below.
+- **Motivation:** REM-011 P2 shipped the adapter registry + live swap infrastructure but only two adapters (dev-stub + trivy-adapter). REM-014 adds a real second scanner so operators have an actual choice in the `/admin/scanner` UI; FE-API-018 + FE-API-049's `scanner_plugin` allowlist already included `grype` so no wire-shape changes were needed.
+- **Grype — what shipped:**
+  - **`infra/scanner-plugins/grype-adapter`** — standalone Go binary (~400 lines, single-file) mirroring `trivy-adapter`'s shape: reads JSON-RPC scan request from stdin, flattens staged layers into a rootfs dir, shells out to `grype dir:<rootfs> -o json --quiet`, translates Grype's `matches[].vulnerability` shape into the platform's flat findings list, writes RPC response to stdout. Same tar-extract + whiteout-skip + tar-path-traversal guard as trivy-adapter — extracted layer handling is the one cross-adapter concern shared cheaply via inline duplication. Severity normalised to uppercase so FE-API-050 `block_on_severity` comparisons stay scanner-agnostic (Trivy emits uppercase already; Grype emits title-case). Dedupe on (CVE, package, version) for parity with the Trivy path so the same finding doesn't surface twice when matched via both package and language ecosystem.
+  - **`services/scanner/Dockerfile`** — new `RUN go build` for the grype-adapter binary, new `FROM anchore/grype:v0.93.0 AS grype` stage that pins the upstream binary (v0.93+ uses DB schema v6; pre-v0.81 versions use schema v5 which Anchore stopped publishing fresh DBs for — Grype's "DB max age 5 days" check rejected those with the misleading "database was built N weeks ago" error during initial integration). Both binaries copied into the final image at `/usr/local/bin/scanner-grype-adapter` + `/usr/local/bin/grype`. Auto-discovery via the existing `/usr/local/bin/scanner-*` glob picks the new adapter up at boot — no scanner code changes.
+  - **`/grype-cache` volume + `GRYPE_DB_CACHE_DIR=/grype-cache`** — matches the `/trivy-cache` pattern. Chowned to `nonroot:nonroot` at build time so the named volume inherits the right ownership on first attach (same fix as the FE-API-019 compliance reports volume).
+  - **`services/scanner/scripts/entrypoint.sh` — Grype DB pre-warm** — runs `grype db update` synchronously at container start so the first scan doesn't pay the ~2 GB download cost. Best-effort — failure logs but doesn't block startup (dev-stub + Trivy paths still work without Grype's DB). Subsequent restarts no-op when the volume already has a fresh DB. **Operator-visible tradeoff:** first cold start of a fresh `/grype-cache` volume now blocks for ~2–3 min while the DB downloads. `SCANNER_SKIP_GRYPE_WARM=1` opts out for CI runs that don't need Grype.
+- **Verified live in compose (2026-06-22):**
+  - Boot log: `plugin checksum verified path=/usr/local/bin/scanner-grype-adapter sha256=cd0a2c3b3fec015c…`
+  - `/admin/scanner` lists 3 adapters: dev-stub, trivy-adapter, grype-adapter (version backfills from first successful scan).
+  - Swap via FE-API-045 atomic pointer: in-flight scans complete on the old adapter, next job picks up Grype. Persisted in `scanner_settings` — operator's choice survives container restart.
+  - End-to-end scan against `dev/alpine:3.19`: enqueue → Grype run → quarantine stamped in **1.8s** with reason `"scan blocked by policy block_on_severity=HIGH: 2 HIGH, 6 MEDIUM, 6 LOW"`. FE-API-050 pull-time 451 + FE banner + Lift dialog all functional against Grype.
+- **Bugs found + fixed during integration:**
+  - **Grype version pin** — initially used v0.79.6 (Aug 2024, last v5 release). Grype refused to load the v5 DB with "the vulnerability database was built 15 weeks ago (max allowed age is 5 days)" because Anchore stopped publishing fresh v5 DBs in mid-2024. Upgrading to v0.93.0 (schema v6) fixed it. **Lesson worth flagging:** any future scanner pin should verify the upstream is publishing fresh DBs at the schema version the pinned binary speaks.
+  - **First-scan timeout** — without the entrypoint pre-warm, the first Grype scan would trigger a 2.5 GB DB download mid-job, run past the scanner's job timeout, and fail with the misleading "exit status 1, stderr empty" symptom. Pre-warm at container boot keeps every scan deterministically fast.
+
+- **Clair v4 — DEFERRED (scoped for a future sprint, not started in this session):**
+  - **Why deferred:** Clair v4 is structurally different from Trivy + Grype. Both Trivy + Grype consume a pre-flattened rootfs directory (matching the existing adapter contract — the orchestrator stages layers, the adapter just scans them). Clair wants to *pull the image itself* from a registry URL — operates as a multi-service deployment (indexer + matcher + updater + Clair-owned Postgres). Adding Clair means either (a) running ~4 new compose services + giving Clair network access + credentials to pull from `registry-core`, or (b) reworking the adapter contract to be scanner-aware so a "self-pull" path coexists with the "pre-staged layers" path. Neither is small; pushing through "to have Clair too" before validating the multi-adapter UX with Grype would have been false economy.
+  - **Concrete task list when picked up:**
+    - [ ] Add `clair-indexer` + `clair-matcher` + `clair-updater` + `clair-db` Postgres services to `infra/docker-compose/docker-compose.yml`. Behind a `--profile clair` flag so operators opt in (same pattern as the existing `--profile scanner` for the optional scanner service).
+    - [ ] Network policy decision: Clair needs to reach `registry-core` to fetch manifests + layer blobs. Anonymous access? Service-account JWT? Decide before wiring auth.
+    - [ ] **Adapter contract extension** — new optional `registry_url` + `image_ref` fields on the JSON-RPC `ScanRequest` so an adapter that wants to self-pull can ignore the pre-staged layers. The Clair adapter calls `POST /indexer/api/v1/index_report` with a manifest pointing at registry-core, polls for completion, calls `GET /matcher/api/v1/vulnerability_report/<hash>`, translates findings, returns.
+    - [ ] Update `services/management` + `services/scanner` BFF allowlists to include `"clair"` in `allowedScannerPlugins` (currently only `trivy`/`grype`).
+    - [ ] Update frontend `SCANNER_PLUGIN_CHOICES` for the policy editor.
+    - [ ] Integration test: trigger a scan through Clair end-to-end, assert findings land in `scan_results` with the same shape Trivy + Grype produce.
+  - **Estimated effort:** 1–2 days realistic, including the network policy + auth shape decisions. Worth doing when a concrete user (typically enterprise compliance) requires Clair; not blocking the multi-scanner story which now works with Grype.
+
+---
+
 ### FE-API-050 — Pull-time manifest quarantine (2026-06-22)
 - **Affects:** `proto/metadata/v1`, `proto/gen/go/metadata/v1`, `services/metadata`, `services/scanner`, `services/core`, `services/management`, `frontend`
 - **Status:** DONE ✅ — block-on-severity now actually blocks pulls.

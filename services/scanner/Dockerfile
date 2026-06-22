@@ -1,16 +1,17 @@
 # syntax=docker/dockerfile:1.7
 
 # ── Stage 1: Build Go binaries ────────────────────────────────────
-# Builds three artifacts: the scanner server, the healthcheck helper,
-# and the two adapter binaries (dev-stub + trivy-adapter) that satisfy
-# the JSON-RPC plugin contract in services/scanner/internal/plugin.
+# Builds the scanner server, the healthcheck helper, and three adapter
+# binaries (dev-stub + trivy-adapter + grype-adapter) that satisfy the
+# JSON-RPC plugin contract in services/scanner/internal/plugin.
 #
 # Adapters live under infra/scanner-plugins/ and are intentionally NOT
 # part of the go.work workspace — they're standalone single-file
 # programs whose only purpose is bridging the contract to a concrete
-# scanner engine (dev-stub: hardcoded findings for UI testing; trivy:
-# real CVE detection). Keeping them out of the workspace means a
-# breaking change to libs/ never accidentally breaks an adapter build.
+# scanner engine (dev-stub: hardcoded findings for UI testing; trivy +
+# grype: real CVE detection from different upstreams). Keeping them
+# out of the workspace means a breaking change to libs/ never
+# accidentally breaks an adapter build.
 FROM golang:1.25-bookworm AS builder
 
 WORKDIR /build
@@ -33,8 +34,25 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /
 WORKDIR /build/infra/scanner-plugins/trivy-adapter
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/trivy-adapter .
 
+WORKDIR /build/infra/scanner-plugins/grype-adapter
+RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/grype-adapter .
+
 # ── Stage 2: Trivy binary ─────────────────────────────────────────
 FROM aquasec/trivy:0.52.0 AS trivy
+
+# ── Stage 2b: Grype binary ────────────────────────────────────────
+# Anchore publishes grype as a single static binary inside the
+# anchore/grype image. Mirrors the same shape as the Trivy stage —
+# pulling from upstream pins us to a known release without us hosting
+# the binary ourselves.
+#
+# Version pin note: grype < v0.81 uses DB schema v5, which Anchore
+# stopped publishing fresh updates for in mid-2024. The grype binary's
+# own age check (max 5 days old by default) rejects the stale v5 DBs
+# with "the vulnerability database was built N weeks ago". Pinning to
+# v0.93.0 (or any post-v0.81 release) gets schema v6, which is
+# actively maintained upstream.
+FROM anchore/grype:v0.93.0 AS grype
 
 # ── Stage 3: Final image ──────────────────────────────────────────
 # Uses debian-slim instead of distroless: the scanner must exec adapter
@@ -46,12 +64,19 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates coreutils \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy Go server, healthcheck, both adapters, and the Trivy binary.
+# Copy Go server, healthcheck, all three adapters, the Trivy binary,
+# and the Grype binary. The adapter registry auto-discovers via the
+# /usr/local/bin/scanner-* glob at boot, so adding a new adapter only
+# needs (a) the binary baked here and (b) the engine CLI it shells
+# out to.
 COPY --from=builder /bin/healthcheck /healthcheck
 COPY --from=builder /bin/server /server
 COPY --from=builder /bin/dev-stub /usr/local/bin/scanner-dev-stub
 COPY --from=builder /bin/trivy-adapter /usr/local/bin/scanner-trivy-adapter
+COPY --from=builder /bin/grype-adapter /usr/local/bin/scanner-grype-adapter
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+# Grype upstream packages the binary at /grype inside its image.
+COPY --from=grype /grype /usr/local/bin/grype
 
 # Trivy vulnerability DB cache — mount as a volume in production
 # so the DB persists across container restarts and doesn't re-download on every start.
@@ -70,10 +95,15 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 # tmpfs-backed overlay so each pod sees a fresh cache, OR mount the upstream
 # Trivy DB read-only and disable in-place DB updates via TRIVY_NO_PROGRESS +
 # pre-baked cache layers. See infra/runbooks/scanner-cache-hardening.md.
-RUN mkdir -p /trivy-cache /tmp/reports \
+RUN mkdir -p /trivy-cache /grype-cache /tmp/reports \
  && groupadd -g 65532 nonroot \
  && useradd -u 65532 -g nonroot -s /sbin/nologin -M nonroot \
- && chown nonroot:nonroot /trivy-cache /tmp/reports
+ && chown nonroot:nonroot /trivy-cache /grype-cache /tmp/reports
+# /grype-cache holds the Anchore vulnerability DB. Same trust posture
+# as /trivy-cache (PENTEST-019 note above): writable by the scanner
+# process, mitigated by the SHA256 plugin-checksum verification at
+# adapter swap time + the nonroot UID. Operators wanting hard cache
+# integrity should mount this as a tmpfs-backed overlay too.
 # /tmp/reports holds rendered compliance reports (FE-API-019). Both this
 # scanner container (writer) and the registry-management container (reader,
 # via the scanner_reports named volume in infra/docker-compose) share this
@@ -84,6 +114,11 @@ RUN mkdir -p /trivy-cache /tmp/reports \
 # Tracked properly as REM-012 (streaming RPC replacement).
 
 ENV TRIVY_CACHE_DIR=/trivy-cache
+# GRYPE_DB_CACHE_DIR controls where Grype downloads its vuln DB —
+# parallel to TRIVY_CACHE_DIR. Both caches share the same restart-
+# persistence story: mount as a volume in production so the DB
+# doesn't re-download on every pod cycle.
+ENV GRYPE_DB_CACHE_DIR=/grype-cache
 
 # Default to the dev-stub adapter so `docker compose --profile scanner
 # up -d` works with zero operator configuration — useful for local UI
@@ -106,7 +141,7 @@ ENV SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-dev-stub
 COPY services/scanner/scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-VOLUME ["/trivy-cache"]
+VOLUME ["/trivy-cache", "/grype-cache"]
 
 EXPOSE 50051 8080
 
