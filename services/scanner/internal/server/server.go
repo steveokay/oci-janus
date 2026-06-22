@@ -183,31 +183,39 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// adapter discovery list).
 	pool.SetVersionRecorder(adapterReg)
 
-	// FE-API-049: wire the policy resolver so HandlePushCompleted
+	// FE-API-049/050: wire the policy resolver so HandlePushCompleted
 	// consults the per-repo → org → tenant → default inheritance chain
-	// before enqueueing a scan. The closure parses the UUID strings the
-	// push.completed payload carries and delegates to policy.Resolve;
-	// any error (invalid UUID, DB blip) returns autoScanOnPush=true so
-	// we fail OPEN — scan-on-push has always been on by default and
-	// silently turning it off because the resolver can't be reached
-	// would be a regression worse than the bug we're closing.
-	pool.WithPolicyResolver(func(ctx context.Context, tenantIDStr, repoIDStr string) (bool, error) {
+	// before enqueueing a scan AND so the post-scan worker can honour
+	// block_on_severity + exempt_cves when deciding whether to
+	// quarantine. The closure parses the UUID strings the push.completed
+	// payload carries and delegates to policy.Resolve; any error
+	// (invalid UUID, DB blip) returns the "scan everything, quarantine
+	// nothing" default so we fail OPEN — losing a scan is worse than
+	// scanning against a synthesised default, and silently quarantining
+	// against a partial policy view would be worse than not
+	// quarantining at all.
+	pool.WithPolicyResolver(func(ctx context.Context, tenantIDStr, repoIDStr string) (worker.ResolvedScanPolicy, error) {
+		fallback := worker.ResolvedScanPolicy{AutoScanOnPush: true}
 		tenantID, err := uuid.Parse(tenantIDStr)
 		if err != nil {
-			return true, fmt.Errorf("policy resolver: invalid tenant_id: %w", err)
+			return fallback, fmt.Errorf("policy resolver: invalid tenant_id: %w", err)
 		}
 		var repoID uuid.UUID
 		if repoIDStr != "" {
 			repoID, err = uuid.Parse(repoIDStr)
 			if err != nil {
-				return true, fmt.Errorf("policy resolver: invalid repo_id: %w", err)
+				return fallback, fmt.Errorf("policy resolver: invalid repo_id: %w", err)
 			}
 		}
 		res, err := policy.Resolve(ctx, repo, tenantID, repoID, uuid.Nil)
 		if err != nil {
-			return true, fmt.Errorf("policy resolver: %w", err)
+			return fallback, fmt.Errorf("policy resolver: %w", err)
 		}
-		return res.Policy.AutoScanOnPush, nil
+		return worker.ResolvedScanPolicy{
+			AutoScanOnPush:  res.Policy.AutoScanOnPush,
+			BlockOnSeverity: res.Policy.BlockOnSeverity,
+			ExemptCVEs:      res.Policy.ExemptCVEs,
+		}, nil
 	})
 
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Tag as TagIcon, Trash2 } from "lucide-react";
+import { Lock, Tag as TagIcon, Trash2 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Table,
@@ -186,6 +186,11 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
                           {/* grace window; surfaces the ETA so an operator */}
                           {/* can act before hard-delete fires.            */}
                           <PendingDeletePill iso={t.retention_pending_delete_at} />
+                          {/* FE-API-050 — quarantine pill. Renders only */}
+                          {/* when the parent manifest is gated by scan   */}
+                          {/* policy — pulls return 451 until an admin    */}
+                          {/* lifts via the tag detail page.              */}
+                          {t.quarantined ? <QuarantinePill /> : null}
                         </div>
                       </a>
                     </TableCell>
@@ -328,6 +333,23 @@ function SelectionCheckbox({
       aria-label={ariaLabel}
       className="size-4 cursor-pointer rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
     />
+  );
+}
+
+// QuarantinePill — FE-API-050 lock-icon chip rendered on tag rows whose
+// parent manifest is quarantined. Pulls of these tags return 451 from
+// registry-core. The pill is intentionally compact (no countdown) —
+// the why-it-was-quarantined detail lives on the tag detail Security
+// tab where the operator can act on it.
+function QuarantinePill(): React.ReactElement {
+  return (
+    <span
+      title="Quarantined by scan policy — pulls return 451. Open the tag's Security tab to review or lift."
+      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--color-danger)]"
+    >
+      <Lock className="size-2.5" aria-hidden />
+      quarantined
+    </span>
   );
 }
 

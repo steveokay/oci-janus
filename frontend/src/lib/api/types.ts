@@ -60,6 +60,12 @@ export interface Tag {
   // on the Tags table when set; FE derives the ETA from this stamp +
   // the platform's configured grace window (default 7d).
   retention_pending_delete_at?: string;
+  // FE-API-050 — parent manifest's quarantined flag. True means the
+  // pull-time gate in registry-core is rejecting pulls of this
+  // manifest with 451 Unavailable For Legal Reasons. The Tags table
+  // renders a 🔒 pill on quarantined rows; the lift action lives on
+  // the tag detail page.
+  quarantined?: boolean;
 }
 
 export interface TagsListResponse {

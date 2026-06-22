@@ -606,6 +606,24 @@
       ]
     },
     {
+      "name": "Manifest quarantine (FE-API-050)",
+      "description": "Pull-time quarantine — the scanner stamps manifests.quarantined automatically when a scan exceeds the effective block_on_severity policy. Pulls of quarantined manifests return 451 Unavailable For Legal Reasons. This route lets a repo admin/owner dismiss the gate after operator review. There is NO 'set quarantine' route by design — automatic enforcement via scanner + manual lift is the asymmetric API surface.",
+      "item": [
+        {
+          "name": "POST lift manifest quarantine for tag",
+          "description": "Resolves tag→digest server-side then clears manifests.quarantined. Repo admin/owner only. Returns 200 with { manifest_digest, quarantined: false } on success; 403 below admin; 404 when tag or repo not found.",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/quarantine/lift",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "quarantine", "lift"]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "Scan policies — Per-org + Per-repo (FE-API-049)",
       "description": "Org-default + per-repo scan policy CRUD. RBAC: GET routes are reader-grade; PUT/DELETE require org or repo admin/owner. The per-repo GET goes through GetEffectiveScanPolicy so the response always carries an inherited_from label (\"repo\" | \"org\" | \"tenant\" | \"default\").",
       "item": [

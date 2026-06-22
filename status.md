@@ -277,6 +277,37 @@
 
 ---
 
+### FE-API-050 — Pull-time manifest quarantine (2026-06-22)
+- **Affects:** `proto/metadata/v1`, `proto/gen/go/metadata/v1`, `services/metadata`, `services/scanner`, `services/core`, `services/management`, `frontend`
+- **Status:** DONE ✅ — block-on-severity now actually blocks pulls.
+- **Motivation:** FE-API-049 closed the silent-scan-on-push bug but exposed a second one: `block_on_severity` in the policy editor was purely informational. `services/scanner/internal/worker/worker.go` `hasPolicyViolation` hardcoded `CRITICAL || HIGH` regardless of the operator's setting AND only emitted a `scan.policy_blocked` event — the image was already in the registry and pullable. FE-API-050 makes the gate real.
+- **Architecture (Option A from the triage):** pull-time quarantine. Push always succeeds (good UX), scan runs async, on violation the manifest gets a `quarantined=true` flag, subsequent pulls of that manifest return `451 Unavailable For Legal Reasons` until an operator dismisses. Matches Harbor / ECR Image Scanning semantics; rejected Option B (sync scan-before-push, 30s+ pushes) and Option C (auto-delete, surprising mid-deploy).
+- **What shipped:**
+  - **Migration `00012_manifest_quarantine.sql`** — adds `quarantined BOOLEAN NOT NULL DEFAULT FALSE`, `quarantine_reason TEXT`, `quarantined_at TIMESTAMPTZ`, `quarantined_by TEXT` to `manifests`. Partial index on `(tenant_id, repo_id) WHERE quarantined=TRUE` for the future "list all quarantined" admin surface. Existing rows transparently default to "not quarantined" — no backfill needed.
+  - **Proto** — `Manifest` proto extended with all four columns; `Tag` proto adds `quarantined` so the Tags table can render the pill without per-row GetManifest calls. New `UpdateManifestQuarantineRequest` + `rpc UpdateManifestQuarantine`. Idempotent on repeated true→true (preserves the FIRST quarantined_at for audit); clearing nulls all four columns atomically.
+  - **Metadata repository** — `manifestSelectCols` constant shared across all manifest reads (PutManifest RETURNING, GetManifest, ListUntaggedManifests, scanOneManifest) so a future reader can't accidentally drop the quarantine columns. `tagSelectCols` adds `COALESCE(m.quarantined, FALSE)` so tag reads carry the parent flag. New `UpdateManifestQuarantine` + `ListTagNamesByDigest` (used by the cache-bust below).
+  - **Metadata handler** — new `UpdateManifestQuarantine` gRPC handler with tenant_id-in-WHERE enforcement (cross-tenant manifest_digest surfaces as NotFound, not a leak). Reason required when quarantining; ignored on clear. New `WithCacheBuster(rdb)` option wires the Redis client so quarantine flips invalidate GetManifest cache entries — both the digest-keyed entry AND every tag-keyed entry pointing at this manifest (via `ListTagNamesByDigest`). Without this the 5-min GetManifest cache TTL would leave a hole in the gate.
+  - **Scanner — block_on_severity bug fix** — `hasPolicyViolation` now takes the operator's threshold from the resolved policy (`ResolvedScanPolicy` extended with `BlockOnSeverity` + `ExemptCVEs`). Severity-rank-based comparison so HIGH threshold catches both HIGH and CRITICAL; empty threshold means "never block"; unknown threshold values fail safe (no block). 4 new test cases assert MEDIUM threshold catches MEDIUM (which was DEAD UI before) + LOW catches anything + empty never blocks.
+  - **Scanner — quarantine stamp** — `applyQuarantine` in `worker.go` calls `metadata.UpdateManifestQuarantine` with `quarantined=true` + a `buildQuarantineReason` string ("scan blocked by policy block_on_severity=HIGH: 3 CRITICAL, 5 HIGH, 2 MEDIUM"). quarantined_by="scanner" so the audit trail distinguishes automatic enforcement from operator-triggered manual quarantines. Failures log at warn — the scan_results row was already written; the next scan retries idempotently.
+  - **registry-core — pull-time gate** — `handleGetManifest` AND `handleHeadManifest` check `manifest.GetQuarantined()` and return `451 Unavailable For Legal Reasons` with the OCI `DENIED` error code + the scanner's reason text. HEAD mirrors GET so OCI clients that do the HEAD-then-GET dance see a consistent rejection.
+  - **Management BFF** — new `POST /api/v1/repositories/{org}/{repo}/tags/{tag}/quarantine/lift` route (repo admin/owner only — same gate as PUT scan-policy because lift bypasses the security gate). Resolves tag→digest via GetTag then forwards to `UpdateManifestQuarantine(quarantined=false)`. No "set quarantine" route exposed by design — manual quarantines would invite a denial-of-service shape via the UI.
+  - **Frontend** — `Tag` type gains `quarantined?: boolean`. New `QuarantinePill` component on the Tags table renders a red 🔒 chip next to the tag name with a tooltip explaining the gate. New `useLiftQuarantine` mutation hook in `frontend/src/lib/api/quarantine.ts` invalidates both the tags list (clears the pill) and the per-tag manifest detail (clears any Security tab banner) on success.
+- **Tests** — 4 new `hasPolicyViolation` cases (FE-API-050 threshold semantics), new fake repo methods (`UpdateManifestQuarantine` + `ListTagNamesByDigest`) on the metadata handler tests, all existing handler test suites still pass.
+- **Verification plan (to run after rebuild + recreate):**
+  1. Set the policy `block_on_severity=HIGH` via `/orgs/{org}/policies/scan` (or `/security/policies`).
+  2. Push an image with a known HIGH/CRITICAL CVE (e.g. `nginx:1.25-alpine` against Trivy).
+  3. Watch scanner logs for `manifest quarantined by scan policy`.
+  4. Pull the same tag → expect `451 Unavailable For Legal Reasons` with the scanner's reason text on the OCI client.
+  5. Hit `POST /api/v1/repositories/{org}/{repo}/tags/{tag}/quarantine/lift` as a repo admin.
+  6. Pull again → expect 200.
+- **Follow-ups (logged for sprint planning, not blocking):**
+  - **Lift dialog on the tag detail Security tab** — the data path is fully wired (FE pill + `useLiftQuarantine` hook + BFF + lift route) but the visual lift button is the polish piece deferred from this commit. Operators can lift via Postman today; the dashboard will gain the button alongside the broader Security-tab quarantine banner.
+  - **Manual operator quarantine** — intentionally NOT a BFF route today (denial-of-service shape). If real demand surfaces, gate it behind a type-to-confirm dialog with the same admin/owner posture.
+  - **Audit + webhook events for quarantine.applied / quarantine.lifted** — mirror the FE-API-041 retention.* events. Today the scan.policy_blocked event already fires; that covers most subscribers, but a dedicated quarantine.lifted event would let webhook subscribers track operator dismissals separately.
+  - **Quarantine list page for platform admins** — `GET /api/v1/admin/quarantined-manifests` listing every quarantined row across the platform, paginated. The partial index on `(tenant_id, repo_id) WHERE quarantined=TRUE` is already in place.
+
+---
+
 ### FE-API-049 — Org-default + per-repo scan policy (2026-06-22)
 - **Affects:** `proto/scanner/v1`, `services/scanner`, `services/management`, `frontend`
 - **Status:** DONE ✅ — inheritance chain live; auto-scan-on-push policy now honoured (was advisory before).

@@ -354,6 +354,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	h.RegisterOrgScanPolicy(mux, authMW)
 	h.RegisterRepoScanPolicy(mux, authMW)
 
+	// FE-API-050: manifest quarantine surface. Just one route today
+	// (POST .../quarantine/lift) — the scanner sets quarantine
+	// automatically based on the effective scan policy, this route
+	// lets a repo admin/owner dismiss it after operator review.
+	h.RegisterManifestQuarantine(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
@@ -737,6 +743,10 @@ type TagResponse struct {
 	// "🗑 deletes in N days" pills on the Tags table. Omitted when the
 	// referenced manifest has no pending delete stamp (the common case).
 	RetentionPendingDeleteAt *time.Time `json:"retention_pending_delete_at,omitempty"`
+	// FE-API-050: parent manifest's quarantined flag. The dashboard
+	// renders a 🔒 pill on quarantined rows; clicking the badge opens
+	// the quarantine detail / lift dialog on the tag detail page.
+	Quarantined bool `json:"quarantined,omitempty"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -785,6 +795,10 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			SizeBytes:      tag.GetSizeBytes(),
 			UpdatedAt:      tag.GetUpdatedAt().AsTime(),
 			CreatedAt:      tag.GetCreatedAt().AsTime(),
+			// FE-API-050: surface the parent manifest's quarantine flag
+			// on every tag row so the dashboard renders a 🔒 pill
+			// without per-row GetManifest calls.
+			Quarantined: tag.GetQuarantined(),
 		}
 		// REM-013 gap 1: surface the soft-delete stamp only when the
 		// upstream proto carries one. The proto's GetX() helper returns

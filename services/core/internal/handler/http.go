@@ -369,6 +369,22 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
+	// FE-API-050: pull-time quarantine gate. When the scanner (or an
+	// operator) has flagged this manifest, refuse the pull with 451
+	// Unavailable For Legal Reasons. The OCI client sees a clear error
+	// with the scanner's reason text, and the dashboard surfaces a
+	// "Quarantined" banner the operator can dismiss after review.
+	// We use the DENIED OCI error code because OCI v1.1 has no
+	// dedicated quarantine code; the message body carries the why.
+	if manifest.GetQuarantined() {
+		reason := manifest.GetQuarantineReason()
+		if reason == "" {
+			reason = "manifest quarantined by scan policy"
+		}
+		ociError(w, http.StatusUnavailableForLegalReasons, "DENIED", reason)
+		return
+	}
+
 	w.Header().Set("Content-Type", manifest.GetMediaType())
 	w.Header().Set("Docker-Content-Digest", manifest.GetDigest())
 	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(manifest.GetRawJson())), 10))
@@ -426,6 +442,18 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
+		return
+	}
+
+	// FE-API-050: same quarantine gate as handleGetManifest above.
+	// HEAD must mirror GET so OCI clients that do a HEAD-then-GET
+	// dance see a consistent rejection.
+	if manifest.GetQuarantined() {
+		reason := manifest.GetQuarantineReason()
+		if reason == "" {
+			reason = "manifest quarantined by scan policy"
+		}
+		ociError(w, http.StatusUnavailableForLegalReasons, "DENIED", reason)
 		return
 	}
 

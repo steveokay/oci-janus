@@ -27,6 +27,15 @@ service MetadataService {
   rpc PutManifest(PutManifestRequest) returns (Manifest);
   rpc GetManifest(GetManifestRequest) returns (Manifest);
   rpc DeleteManifest(DeleteManifestRequest) returns (google.protobuf.Empty);
+  // FE-API-050 — set / clear quarantine on a manifest. Called by the
+  // scanner after a scan that violates the effective block_on_severity
+  // policy (quarantined=true), and by services/management when an
+  // operator manually quarantines or lifts via the dashboard.
+  // Idempotent: re-applying quarantine=true keeps the existing
+  // quarantined_at + quarantined_by (the FIRST event is the
+  // load-bearing one for audit). quarantined=false clears all four
+  // columns.
+  rpc UpdateManifestQuarantine(UpdateManifestQuarantineRequest) returns (Manifest);
   rpc ListUntaggedManifests(ListUntaggedManifestsRequest) returns (stream Manifest);
 
   // Blobs
@@ -249,6 +258,11 @@ message Tag {
   // null when the referenced manifest has no pending delete stamp (which
   // is the default state).
   google.protobuf.Timestamp retention_pending_delete_at = 9;
+  // FE-API-050 — surfaces the parent manifest's quarantined flag on the
+  // tag row so the Tags table can render a 🔒 pill without a follow-up
+  // GetManifest call per row. False when the manifest is not under a
+  // scan-policy quarantine (the common case).
+  bool quarantined = 10;
 }
 
 message Manifest {
@@ -260,6 +274,20 @@ message Manifest {
   bytes  raw_json    = 6;
   int64  size_bytes  = 7;
   google.protobuf.Timestamp created_at = 8;
+  // FE-API-050 — pull-time quarantine. quarantined=true means a pull
+  // against this manifest must be rejected by registry-core with 451
+  // Unavailable For Legal Reasons. quarantine_reason is operator-
+  // readable text (e.g. "scan blocked by policy: 3 CRITICAL findings");
+  // quarantined_at + quarantined_by track who/when so the audit trail
+  // can show every transition. All four are null when the manifest is
+  // not quarantined.
+  bool   quarantined        = 9;
+  string quarantine_reason  = 10;
+  google.protobuf.Timestamp quarantined_at = 11;
+  // quarantined_by is "scanner" for automatic policy enforcement, or
+  // the user_id UUID when an operator quarantines manually. Empty
+  // when not set.
+  string quarantined_by     = 12;
 }
 
 message BlobRef {
@@ -321,6 +349,22 @@ message DeleteTagRequest { string repo_id = 1; string tenant_id = 2; string name
 message PutManifestRequest { string repo_id = 1; string tenant_id = 2; string digest = 3; string media_type = 4; bytes raw_json = 5; int64 size_bytes = 6; }
 message GetManifestRequest { string repo_id = 1; string tenant_id = 2; string reference = 3; }
 message DeleteManifestRequest { string repo_id = 1; string tenant_id = 2; string digest = 3; }
+
+// FE-API-050 — quarantine state transition. tenant_id is enforced
+// server-side via the WHERE clause; a malformed manifest_id from
+// another tenant can't quarantine a foreign manifest. quarantined=true
+// requires a non-empty reason (server-validated) so the audit trail
+// always carries an explanation; quarantined=false ignores the reason.
+// quarantined_by is "scanner" for automatic policy enforcement, or the
+// caller's user_id UUID for operator-triggered transitions.
+message UpdateManifestQuarantineRequest {
+  string tenant_id        = 1;
+  string repo_id          = 2;
+  string manifest_digest  = 3;
+  bool   quarantined      = 4;
+  string reason           = 5;
+  string quarantined_by   = 6;
+}
 message ListUntaggedManifestsRequest { string repo_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; }
 
 // Blob requests
