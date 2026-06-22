@@ -169,6 +169,24 @@ func (f *fakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, email s
 	return nil, repository.ErrNotFound
 }
 
+// GetHumanByEmail is the kind-guarded variant (FE-API-048, Task 10). It
+// returns ErrNotFound for service-account shadow users (kind='service_account')
+// so synthetic emails (sa+N@internal.invalid) cannot be matched on the SSO
+// login path, mirroring the SQL-layer kind='human' guard in the real repo.
+func (f *fakeUserRepo) GetHumanByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && strings.EqualFold(u.Email, email) {
+			// Refuse shadow users — same behaviour as the real GetHumanByEmail
+			// which filters by kind='human'.
+			if u.Kind == "service_account" {
+				return nil, repository.ErrNotFound
+			}
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (f *fakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
 	for _, u := range f.users {
 		if u.TenantID == req.TenantID && (u.Username == req.Username || (req.Email != "" && strings.EqualFold(u.Email, req.Email))) {

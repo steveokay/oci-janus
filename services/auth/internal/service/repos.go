@@ -37,6 +37,11 @@ type userRepo interface {
 	// auto_provision=true; TouchLastLogin records the SSO login time for
 	// existing users.
 	GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
+	// GetHumanByEmail is the kind-guarded variant of GetByEmail (FE-API-048,
+	// Task 10). It returns ErrNotFound for service-account synthetic emails
+	// (sa+N@internal.invalid) so they cannot match on the SSO login path.
+	// Use this method on all human-authentication paths; GetByEmail is deprecated.
+	GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
 	CreateSSOUser(ctx context.Context, req repository.CreateSSOUserRequest) (*repository.User, error)
 	TouchLastLogin(ctx context.Context, id uuid.UUID) error
 	// Kind-guarded helpers (FE-API-048). GetHumanByID enforces kind='human' so

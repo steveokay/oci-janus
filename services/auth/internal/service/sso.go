@@ -428,6 +428,19 @@ type SSOIdentity struct {
 	Subject       string // IdP-side user id, for logging/audit
 }
 
+// isSyntheticSAEmail returns true for the synthetic email format used to
+// populate the shadow user's email column for service accounts (spec §4.1).
+// These emails are never valid IdP-asserted identities — any IdP returning
+// this format is either misconfigured or adversarial. Rejecting them here,
+// before any DB call, closes the window where a crafted IdP assertion could
+// match a shadow-user row via GetByEmail.
+//
+// Format: "sa+" + UUID + "@internal.invalid" — mirroring the
+// CreateAtomic helper in repository/service_account.go.
+func isSyntheticSAEmail(email string) bool {
+	return strings.HasPrefix(email, "sa+") && strings.HasSuffix(email, "@internal.invalid")
+}
+
 // EnsureSSOUser matches the identity to an existing local user OR provisions
 // a new one. It enforces the verified-email gate, the auto-provision flag,
 // and the default role grant. Returns the (possibly newly created) user and
@@ -447,12 +460,22 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 		return nil, nil, ErrEmailNotVerified
 	}
 
-	user, err := s.auth.users.GetByEmail(ctx, p.TenantID, ident.Email)
+	// Reject synthetic service-account emails before any DB call. An IdP
+	// returning "sa+<uuid>@internal.invalid" is either misconfigured or
+	// adversarial; these emails are machine-internal and must never be used
+	// to authenticate a human SSO session (FE-API-048, Task 10).
+	if isSyntheticSAEmail(ident.Email) {
+		return nil, nil, fmt.Errorf("%w: email domain is reserved for internal service accounts", ErrInvalidProviderConfig)
+	}
+
+	user, err := s.auth.users.GetHumanByEmail(ctx, p.TenantID, ident.Email)
 	switch {
 	case err == nil:
-		// Existing user — accept the SSO login. Note that we do NOT check
-		// whether they originally registered via SSO or password; either path
-		// is a valid way to reach the same account.
+		// Existing human user — accept the SSO login. Note that we do NOT
+		// check whether they originally registered via SSO or password; either
+		// path is a valid way to reach the same account. GetHumanByEmail
+		// already excludes shadow users (kind='service_account'), so we cannot
+		// accidentally bind an SA identity here.
 		if !user.IsActive {
 			return nil, nil, ErrAccountDisabled
 		}
@@ -464,7 +487,7 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 			return nil, nil, ErrAutoProvisionDisabled
 		}
 	default:
-		return nil, nil, fmt.Errorf("lookup sso user: %w", err)
+		return nil, nil, fmt.Errorf("no human user with email %q: %w", ident.Email, err)
 	}
 
 	// Auto-provision path.
@@ -479,12 +502,14 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
 			// Lost a race with a parallel callback — re-query by email and
-			// return that row. The role-grant step below is idempotent (ON
-			// CONFLICT DO NOTHING in repository.GrantRole) so re-running it
-			// is harmless.
-			created, err = s.auth.users.GetByEmail(ctx, p.TenantID, ident.Email)
+			// return that row. GetHumanByEmail is used here intentionally: if
+			// the race created a shadow-user row instead of a human row
+			// (should never happen in normal operation) this call returns
+			// ErrNotFound and we propagate it as an error rather than silently
+			// authenticating as a non-human principal.
+			created, err = s.auth.users.GetHumanByEmail(ctx, p.TenantID, ident.Email)
 			if err != nil {
-				return nil, nil, fmt.Errorf("recover from sso race: %w", err)
+				return nil, nil, fmt.Errorf("no human user with email %q after race: %w", ident.Email, err)
 			}
 		} else {
 			return nil, nil, fmt.Errorf("create sso user: %w", err)
