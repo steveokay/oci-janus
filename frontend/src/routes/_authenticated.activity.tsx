@@ -118,7 +118,14 @@ function ActivityPage(): React.ReactElement {
     }
     return DEFAULT_RANGE;
   })();
-  const since = rangeToSince(range);
+  // Memoise `since` keyed on `range` so the ISO timestamp stays stable
+  // across renders — without this, `Date.now()` ticks forward every render,
+  // producing a fresh ISO string, which propagates into useNotifications'
+  // queryKey. A constantly-changing key means React Query can't return
+  // cached data — only the "all" path (since=undefined) is a stable key,
+  // which is exactly why every other chip rendered empty before this
+  // memo landed.
+  const since = React.useMemo(() => rangeToSince(range), [range]);
 
   const [selected, setSelected] = React.useState<Set<NotificationEventType>>(
     new Set(),
@@ -168,7 +175,14 @@ function ActivityPage(): React.ReactElement {
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
           Audit
         </p>
-        <h1 className="font-display text-3xl font-medium tracking-tight">
+        {/* Icon mirrors the sidebar nav entry so the page identity reads */}
+        {/* the same in the topbar and in the page header (consistent with */}
+        {/* /helm's Ship icon + /security's ShieldCheck icon usage). */}
+        <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
+          <ActivityIcon
+            className="size-7 text-[var(--color-accent)]"
+            aria-hidden
+          />
           Activity
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">
