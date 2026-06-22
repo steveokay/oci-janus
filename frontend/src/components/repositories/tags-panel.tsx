@@ -5,6 +5,7 @@ import {
   FileSignature,
   Lock,
   Package,
+  Pin,
   Play,
   Ship,
   Tag as TagIcon,
@@ -325,6 +326,11 @@ export function TagsPanel({
                           {/* policy — pulls return 451 until an admin    */}
                           {/* lifts via the tag detail page.              */}
                           {t.quarantined ? <QuarantinePill /> : null}
+                          {/* Futures.md Tier 1 #2 — per-tag pin pill.   */}
+                          {/* Renders when `immutable: true` on the row. */}
+                          {/* Independent of the repo-wide immutability  */}
+                          {/* flag (which doesn't surface per-row).      */}
+                          {t.immutable ? <PinnedPill /> : null}
                         </div>
                       </a>
                     </TableCell>
@@ -475,6 +481,22 @@ function SelectionCheckbox({
 // registry-core. The pill is intentionally compact (no countdown) —
 // the why-it-was-quarantined detail lives on the tag detail Security
 // tab where the operator can act on it.
+// PinnedPill — Futures.md Tier 1 #2 per-tag pin chip. Renders when
+// the tag's `immutable` flag is set; signals to the operator that
+// this specific tag is locked against re-pushes even when the parent
+// repository's immutable_tags toggle is off.
+function PinnedPill(): React.ReactElement {
+  return (
+    <span
+      title="Pinned — pushes that would move this tag are rejected. Unpin via the tag detail page."
+      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+    >
+      <Pin className="size-2.5" aria-hidden />
+      pinned
+    </span>
+  );
+}
+
 function QuarantinePill(): React.ReactElement {
   return (
     <span

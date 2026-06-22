@@ -6,12 +6,17 @@ import {
   ShieldCheck,
   Trash2,
   RefreshCw,
+  Pin,
+  PinOff,
 } from "lucide-react";
+import { toast } from "sonner";
+import { AxiosError } from "axios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
 import { formatAbsoluteDate, formatBytes } from "@/lib/format";
+import { usePinTag, useUnpinTag } from "@/lib/api/tags";
 import type { Tag } from "@/lib/api/types";
 
 interface TagHeaderProps {
@@ -39,6 +44,34 @@ export function TagHeader({
   onRescan,
   onDelete,
 }: TagHeaderProps): React.ReactElement {
+  // Futures.md Tier 1 #2 — per-tag pin. The Pin/Unpin button on the
+  // action ribbon flips `tags.immutable`; the BFF gates it on repo
+  // admin role. Failure surfaces via toast — we don't pre-validate
+  // the role on the FE.
+  const pin = usePinTag();
+  const unpin = useUnpinTag();
+  const pinning = pin.isPending || unpin.isPending;
+  const pinned = Boolean(tag?.immutable);
+
+  async function togglePin(): Promise<void> {
+    try {
+      if (pinned) {
+        await unpin.mutateAsync({ org, repo, tag: tagName });
+        toast.success(`Unpinned ${tagName} — re-pushes are allowed again.`);
+      } else {
+        await pin.mutateAsync({ org, repo, tag: tagName });
+        toast.success(`Pinned ${tagName} — pushes that would move it will be rejected.`);
+      }
+    } catch (e) {
+      const code = (e as AxiosError | undefined)?.response?.status;
+      toast.error(
+        code === 403
+          ? "Repository admin role required."
+          : "Couldn't update the pin. Check the BFF logs.",
+      );
+    }
+  }
+
   return (
     <div className="space-y-5">
       {/* Breadcrumb */}
@@ -130,6 +163,29 @@ export function TagHeader({
             )}
             {scanRunning ? "Scan in flight" : "Rescan"}
           </Button>
+          {/* Futures.md Tier 1 #2 — Pin / Unpin. Hidden until the tag */}
+          {/* loads so the button doesn't briefly render in the wrong  */}
+          {/* state on first paint.                                    */}
+          {tag ? (
+            <Button
+              variant="outline"
+              onClick={() => void togglePin()}
+              loading={pinning}
+              disabled={pinning}
+              title={
+                pinned
+                  ? "Remove the per-tag pin. Repo-wide immutability (if set) still applies."
+                  : "Pin this tag — pushes that would move it will be rejected."
+              }
+            >
+              {pinned ? (
+                <PinOff className="size-4" />
+              ) : (
+                <Pin className="size-4" />
+              )}
+              {pinned ? "Unpin tag" : "Pin tag"}
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             onClick={onDelete}

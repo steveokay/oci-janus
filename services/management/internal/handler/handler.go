@@ -290,6 +290,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/scan", authMW(http.HandlerFunc(h.handleRepoBulkScan)))
 	mux.Handle("POST /api/v1/orgs/{org}/scan", authMW(http.HandlerFunc(h.handleOrgBulkScan)))
 
+	// Tag immutability pin (futures.md Tier 1 #2). POST sets immutable=true,
+	// DELETE clears it. Repo admin/owner only — pinning is a security-
+	// relevant action that gates push admission. Same posture as the
+	// retention + scan policy editors.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handlePinTag)))
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handleUnpinTag)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only

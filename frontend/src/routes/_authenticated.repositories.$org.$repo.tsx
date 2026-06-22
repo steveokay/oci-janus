@@ -9,6 +9,7 @@ import { RepoMembersPanel } from "@/components/repositories/repo-members-panel";
 import { DescriptionCard } from "@/components/repositories/description-card";
 import { RetentionPanel } from "@/components/repositories/retention-panel";
 import { RepoScanPolicySection } from "@/components/repositories/repo-scan-policy-section";
+import { RepoImmutabilitySection } from "@/components/repositories/repo-immutability-section";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
@@ -110,6 +111,12 @@ function RepositoryDetail(): React.ReactElement {
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">
+          {/* Futures.md Tier 1 #2 — tag immutability toggle. Lives    */}
+          {/* above the scan-policy section because the security       */}
+          {/* posture (rejecting tag re-pushes) is a foundational       */}
+          {/* repo-shape decision the operator makes before tuning      */}
+          {/* policies.                                                 */}
+          <RepoImmutabilitySection org={org} repo={repo} />
           {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
           {/* Other settings (quota override, description edit, etc.) */}
           {/* land here in future sprints alongside their backend     */}

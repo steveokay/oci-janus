@@ -29,6 +29,12 @@ export interface Repository {
   created_at: string;
   // FE-API-006 — operator-supplied markdown description.
   description: string;
+  // Tag immutability (futures.md Tier 1 #2). When true, services/core
+  // rejects any push that would move an existing tag's digest. Default
+  // false; flipped via the Immutable-tags switch on the repo Settings
+  // tab. Note: per-tag pins (Tag.immutable) work independently of this
+  // flag.
+  immutable_tags?: boolean;
 }
 
 export interface RepositoriesListResponse {
@@ -72,6 +78,12 @@ export interface Tag {
   // when the manifest had no parseable config block (rare, pre-Batch-5
   // legacy row).
   artifact_type?: ArtifactType;
+  // Tag immutability pin (futures.md Tier 1 #2). When true, services/core
+  // rejects any push that would move this tag to a new digest, regardless
+  // of the parent repo's `immutable_tags` flag. The Tags table renders a
+  // 📌 pill on pinned rows; the tag detail page has a Pin/Unpin button
+  // gated on repo admin role.
+  immutable?: boolean;
 }
 
 // S-MAINT-1 Batch 5 — union of stable discriminator values mirroring
