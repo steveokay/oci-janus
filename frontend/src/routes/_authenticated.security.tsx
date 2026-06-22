@@ -63,7 +63,13 @@ function SecurityPage(): React.ReactElement {
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
           Posture
         </p>
-        <h1 className="font-display text-3xl font-medium tracking-tight">
+        {/* Icon mirrors the sidebar nav entry — consistent with the */}
+        {/* /activity (Activity) and /helm (Ship) page headers. */}
+        <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
+          <ShieldCheck
+            className="size-7 text-[var(--color-accent)]"
+            aria-hidden
+          />
           Security
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">

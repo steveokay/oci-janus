@@ -62,7 +62,14 @@ function RepositoriesPage(): React.ReactElement {
           Catalog
         </p>
         <div className="flex items-end justify-between">
-          <h1 className="font-display text-3xl font-medium tracking-tight">
+          {/* Icon matches the sidebar Boxes glyph — consistent with the */}
+          {/* /security (ShieldCheck), /activity (Activity), /helm (Ship) */}
+          {/* page-header pattern. */}
+          <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
+            <Boxes
+              className="size-7 text-[var(--color-accent)]"
+              aria-hidden
+            />
             Repositories
           </h1>
           <p className="text-sm text-[var(--color-fg-muted)]">
