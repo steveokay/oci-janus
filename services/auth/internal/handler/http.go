@@ -84,6 +84,10 @@ type HTTPHandler struct {
 	// samlConfig is the optional SAML SP signing keypair (FE-API-034). nil
 	// disables SAML support — the /auth/saml/... routes return 501.
 	samlConfig *saml.SPConfig
+	// saService is the optional ServiceAccountService (FE-API-048, T13). nil
+	// causes all /api/v1/service-accounts routes to return 501 NOT_IMPLEMENTED.
+	// Set via WithServiceAccountService.
+	saService *service.ServiceAccountService
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
@@ -124,6 +128,14 @@ func (h *HTTPHandler) WithSAMLConfig(cfg *saml.SPConfig) *HTTPHandler {
 	return h
 }
 
+// WithServiceAccountService attaches the ServiceAccountService used by the
+// /api/v1/service-accounts routes (FE-API-048, T13). Optional — without it
+// those routes return 501 NOT_IMPLEMENTED. Returns the handler for chaining.
+func (h *HTTPHandler) WithServiceAccountService(svc *service.ServiceAccountService) *HTTPHandler {
+	h.saService = svc
+	return h
+}
+
 // Register mounts all auth routes onto mux.
 func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// Docker token auth — RFC 7235 flow; Docker clients use GET, some tools use POST.
@@ -145,6 +157,9 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.
 	h.RegisterSSO(mux)
+	// FE-API-048 — service-account CRUD. Always registered; individual routes
+	// return 501 when saService is nil (WithServiceAccountService not called).
+	h.RegisterServiceAccounts(mux)
 }
 
 // ── Docker token endpoint ─────────────────────────────────────────────────────
