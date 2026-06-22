@@ -5,11 +5,14 @@ import {
   FileSignature,
   Lock,
   Package,
+  Play,
   Ship,
   Tag as TagIcon,
   Trash2,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
+import { AxiosError } from "axios";
 import {
   Table,
   TableBody,
@@ -28,6 +31,17 @@ import { BulkDeleteTagsDialog } from "@/components/repositories/bulk-delete-tags
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
 import { BULK_DELETE_MAX } from "@/lib/api/tags";
+import { useBulkScanRepo } from "@/lib/api/scan";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { ArtifactType } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
@@ -187,13 +201,25 @@ export function TagsPanel({
 
   return (
     <div className="space-y-3">
-      {filterChipsVisible ? (
-        <ArtifactTypeFilterChips
-          value={artifactFilter}
-          onChange={syncFilter}
-          tags={allTags}
+      {/* S-MAINT-1 F1 — bulk scan button + the existing chip row sit */}
+      {/* on the same line so they share visual weight. Falls back to */}
+      {/* a stacked layout below sm: width. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {filterChipsVisible ? (
+          <ArtifactTypeFilterChips
+            value={artifactFilter}
+            onChange={syncFilter}
+            tags={allTags}
+          />
+        ) : (
+          <span />
+        )}
+        <BulkScanAllButton
+          org={org}
+          repo={repo}
+          tagCount={allTags.length}
         />
-      ) : null}
+      </div>
 
       <SelectionToolbar
         count={selectionCount}
@@ -696,5 +722,149 @@ function SkeletonRows(): React.ReactElement {
         </TableRow>
       ))}
     </>
+  );
+}
+
+// BulkScanAllButton — S-MAINT-1 F1. One-click "scan every image tag in
+// this repo" with a type-to-confirm dialog so a misclick doesn't queue
+// hundreds of scans. The server caps fan-out at 500 per request; the
+// response carries (queued, total, capped) so the toast can show the
+// real numbers.
+//
+// Hidden when the repo has zero tags — the button would be a no-op.
+function BulkScanAllButton({
+  org,
+  repo,
+  tagCount,
+}: {
+  org: string;
+  repo: string;
+  tagCount: number;
+}): React.ReactElement | null {
+  const [open, setOpen] = React.useState(false);
+  if (tagCount === 0) return null;
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen(true)}
+      >
+        <Play className="size-3.5" /> Scan all tags
+      </Button>
+      <BulkScanConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        org={org}
+        repo={repo}
+        tagCount={tagCount}
+      />
+    </>
+  );
+}
+
+// BulkScanConfirmDialog — type "SCAN" to confirm, then POSTs to
+// /repositories/{org}/{repo}/scan. Toast shows the returned counters
+// so the operator sees exactly what got queued (and whether they
+// need to click again because of the per-request cap).
+function BulkScanConfirmDialog({
+  open,
+  onOpenChange,
+  org,
+  repo,
+  tagCount,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  org: string;
+  repo: string;
+  tagCount: number;
+}): React.ReactElement {
+  const mutation = useBulkScanRepo();
+  const [typed, setTyped] = React.useState("");
+  const EXPECTED = "SCAN";
+  React.useEffect(() => {
+    if (!open) setTyped("");
+  }, [open]);
+
+  async function handleSubmit(): Promise<void> {
+    try {
+      const res = await mutation.mutateAsync({ org, repo });
+      const cappedSuffix = res.capped
+        ? ` · capped at ${res.limit.toLocaleString()} — click again to continue`
+        : "";
+      toast.success(
+        `Queued ${res.scans_queued.toLocaleString()} of ${res.tags_count.toLocaleString()} scans${cappedSuffix}`,
+      );
+      onOpenChange(false);
+    } catch (e) {
+      const code = (e as AxiosError | undefined)?.response?.status;
+      toast.error(
+        code === 403
+          ? "Writer role required on this repository."
+          : code === 404
+            ? "Repository not found."
+            : "Couldn't queue the bulk scan. Check the BFF logs.",
+      );
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Play className="size-4 text-[var(--color-accent)]" />
+            Scan all tags in {org}/{repo}
+          </DialogTitle>
+          <DialogDescription>
+            Queues a vulnerability scan for every image tag in this
+            repository — {tagCount.toLocaleString()} {tagCount === 1 ? "tag" : "tags"} total.
+            Non-image artifacts (Helm charts, signatures, SBOMs) are
+            skipped automatically. Server caps each request at 500;
+            click again if the toast says we hit it.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div>
+          <Label htmlFor="bulk-scan-confirm" className="mb-2 inline-block">
+            Type{" "}
+            <code className="font-mono text-[var(--color-accent)]">
+              {EXPECTED}
+            </code>{" "}
+            to confirm
+          </Label>
+          <Input
+            id="bulk-scan-confirm"
+            autoComplete="off"
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            className="font-mono"
+          />
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={mutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void handleSubmit()}
+            loading={mutation.isPending}
+            disabled={mutation.isPending || typed !== EXPECTED}
+          >
+            <Play className="size-4" />
+            Queue scans
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

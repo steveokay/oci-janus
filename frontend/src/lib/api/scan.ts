@@ -128,6 +128,58 @@ export function useTriggerScan() {
   });
 }
 
+// ── Bulk scan (S-MAINT-1 F1) ──────────────────────────────────────────────
+
+// BulkScanResponse mirrors the BFF's BulkScanResponse JSON shape. The
+// FE renders the four counters in a toast so the operator sees what
+// landed in one breath ("queued 47 of 47" vs "queued 500 of 1,203,
+// capped — re-click to continue").
+export interface BulkScanResponse {
+  scans_queued: number;
+  repositories_count: number;
+  tags_count: number;
+  capped: boolean;
+  limit: number;
+}
+
+interface BulkRepoArgs {
+  org: string;
+  repo: string;
+}
+
+// useBulkScanRepo — POST /repositories/{org}/{repo}/scan. Fans out a
+// scan over every image tag in the repo, up to the BFF's hard cap.
+export function useBulkScanRepo() {
+  return useMutation({
+    mutationFn: async ({ org, repo }: BulkRepoArgs): Promise<BulkScanResponse> => {
+      const { data } = await apiClient.post<BulkScanResponse>(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/scan`,
+        {},
+      );
+      return data;
+    },
+  });
+}
+
+interface BulkOrgArgs {
+  org: string;
+}
+
+// useBulkScanOrg — POST /orgs/{org}/scan. Fans out a scan over every
+// image tag in every repo of the org. Heavier-weight; the BFF gates
+// it on org admin or above.
+export function useBulkScanOrg() {
+  return useMutation({
+    mutationFn: async ({ org }: BulkOrgArgs): Promise<BulkScanResponse> => {
+      const { data } = await apiClient.post<BulkScanResponse>(
+        `/orgs/${encodeURIComponent(org)}/scan`,
+        {},
+      );
+      return data;
+    },
+  });
+}
+
 // ── Severity helpers ────────────────────────────────────────────────────────
 
 export const SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
