@@ -1,9 +1,10 @@
 import * as React from "react";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ServiceAccountsTable } from "@/components/access/ServiceAccountsTable";
 import { CreateServiceAccountDialog } from "@/components/access/CreateServiceAccountDialog";
+import { ServiceAccountDetail } from "@/components/access/ServiceAccountDetail";
 import { authStore } from "@/lib/auth/store";
 import { isPlatformAdmin } from "@/lib/auth/jwt";
 
@@ -34,6 +35,12 @@ export const Route = createFileRoute(
 
 function ServiceAccountsPage(): React.ReactElement {
   const navigate = useNavigate();
+  // Read the ?id search param set by row-click and handleCreated.
+  // TanStack Router returns all current search params via useSearch; we
+  // cast through unknown because the route does not declare a validateSearch
+  // schema (the ?id param is set imperatively via navigate({ search: { id } })).
+  const search = useSearch({ strict: false }) as Record<string, string | undefined>;
+  const selectedID = search.id ?? null;
   const [createOpen, setCreateOpen] = React.useState(false);
 
   // Row click — set ?id=<id> in the URL so T26's drawer can read it.
@@ -87,10 +94,14 @@ function ServiceAccountsPage(): React.ReactElement {
       {/* Table — reads from useServiceAccounts({ includeDisabled: true }). */}
       <ServiceAccountsTable onSelect={handleSelect} onAdd={() => setCreateOpen(true)} />
 
-      {/* TODO (T26): Mount <ServiceAccountDetail /> drawer here.
-          Read ?id from the URL search params and pass it as `selectedId`.
-          The drawer should render as a Sheet overlaid on the right side of
-          the content pane without blocking the table behind it. */}
+      {/* ServiceAccountDetail drawer — mounts when ?id is set in the URL.
+          Closing calls navigate({ search: {} }) to clear the ?id param. */}
+      {selectedID ? (
+        <ServiceAccountDetail
+          saID={selectedID}
+          onClose={() => void navigate({ to: "/api-keys/service-accounts", search: {} })}
+        />
+      ) : null}
 
       {/* Create dialog — mounted at this level so it persists across row
           selections without unmounting between navigations. */}
