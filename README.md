@@ -36,6 +36,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Webhook delivery with retries + HMAC signing | Implemented |
 | Immutable audit log | Implemented (append-only PostgreSQL partition) |
 | Garbage collection worker | Implemented (mark-sweep, dry-run / manifests / blobs / full modes) |
+| Tag immutability — repo-wide flag + per-tag pin | Implemented (rejects re-pushes with `400 MANIFEST_INVALID`) |
 | RBAC at org / repo / tag level | Scaffold |
 
 ### Technology Stack

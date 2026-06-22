@@ -159,7 +159,7 @@ github.com/steveokay/oci-janus/
 |---|---|---|---|---|
 | 1 | `registry-gateway` | TLS termination + host-based tenant resolution + rate limit | — | Traefik v3 |
 | 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks, per-tenant SSO (OAuth + SAML) | Postgres (auth schema — incl. `auth_providers`, `auth_login_sessions`, `users.sso_provider_id`, `service_accounts`) | RS256, 300s TTL, JTI revocation in Redis; PKCE S256 OAuth; SAML SP via `crewjam/saml` |
-| 3 | `registry-core` | OCI Distribution Spec v1.1 — `/v2/` API | — | Streams blobs, checkAccess on every handler |
+| 3 | `registry-core` | OCI Distribution Spec v1.1 — `/v2/` API | — | Streams blobs, checkAccess on every handler; tag immutability preflight on `PutManifest` rejects re-pushes with `400 MANIFEST_INVALID` when `repositories.immutable_tags=true` OR `tags.immutable=true` |
 | 4 | `registry-storage` | Pluggable blob storage abstraction | Object store backend | MinIO/S3/GCS/Azure/filesystem |
 | 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans/SBOMs | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing; per-tag SBOM columns |
 | 6 | `registry-proxy` | Pull-through cache for upstream registries | Postgres (proxy schema) | Upstream creds AES-256-GCM; `store.queued` retry |
@@ -570,6 +570,7 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 20 | Custom-domain primary mutex on `tenant_domains.is_primary` (FE-API-007/027) | Partial unique index `WHERE is_primary`; `MarkDomainVerified` auto-promotes the first verified domain; primary swap is one atomic tx (`SELECT verified → demote-all → promote-target RETURNING`) so no observable state has two primaries | 2026-06-20 |
 | 21 | Generic `GetAnalytics` RPC over `services/audit` with BFF-supplied bucket origin (FE-API-030) | Audit is already the system of record for `push.image` etc.; PG14 `date_bin` aligns buckets across replicas; BFF owns the range→bucket mapping (24h→1h×24, 7d→6h×28, 30d→1d×30) and pre-allocates empty buckets so quiet periods report `count=0` rather than gaps | 2026-06-21 |
 | 22 | Service-account principal pattern: shadow users (FE-API-048) | Each service account auto-provisions a `users.kind='service_account'` row. `ValidateAPIKey`/`ValidateToken` return that id in `user_id`; downstream services treat it as an opaque actor. RBAC/audit/RLS/JWT machinery unchanged. Distinguishing principal kind is a read-path concern (`LEFT JOIN users ON kind`), not a write-path one. | 2026-06-22 |
+| 23 | Two-layer tag immutability — `repositories.immutable_tags` + `tags.immutable` (futures.md Tier 1 #2) | Repo-wide flag is the table-stakes posture; per-tag pin is the lighter alternative for repos that mix mutable dev tags + a small set of pinned releases. `services/core.checkTagImmutable` short-circuits on idempotent same-digest re-pushes (not a "move") and fails OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. Per-tag pin wins precedence — repo flag is the second RPC only when the same-digest fast path didn't fire | 2026-06-23 |
 
 ---
 

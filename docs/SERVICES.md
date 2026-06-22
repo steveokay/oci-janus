@@ -221,6 +221,10 @@ GET  /v2/<name>/referrers/<digest>                  # OCI referrers API (§4.5)
 - Never buffer a full blob in memory. Stream blobs directly to `registry-storage` via gRPC streaming.
 - On successful manifest push: publish `push.completed` event to RabbitMQ (see `docs/EVENTS.md`).
 - Enforce per-tenant storage quota (check before accepting upload, fail fast with 403 if exceeded).
+- **Tag immutability preflight (futures.md Tier 1 #2).** `PutManifest` checks two flags before writing whenever `reference` is a tag (digest pushes skip the check — content-addressable, can't move tags). Rejects with `400 MANIFEST_INVALID` + body `tag is immutable (repo immutable_tags=true or per-tag pin set); push to a new tag or unpin first` when EITHER:
+  - `repositories.immutable_tags = TRUE` (repo-wide flag — flipped via `PATCH /api/v1/repositories/{org}/{repo}` with `{"immutable_tags": true}`); OR
+  - `tags.immutable = TRUE` (per-tag pin — flipped via `POST/DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin`).
+  Idempotent same-digest re-pushes always succeed (not a "move"). Per-tag pin takes precedence over the repo flag; the repo check is the second metadata RPC only when the same-digest fast path didn't fire. Fails OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. New-tag pushes (tag doesn't exist yet) are allowed regardless of either flag.
 - Return `Link` header for paginated tag lists (`?n=` and `?last=` params per spec).
 - `name` in all routes = `<org>/<repo>`. Reject single-component names.
 
@@ -730,15 +734,20 @@ GET  /api/v1/stats                        # Tenant-scoped aggregated stats
 GET  /api/v1/repositories                 # List repositories for tenant
 POST /api/v1/repositories                 # Create repository
 GET  /api/v1/repositories/:org/:repo      # Get single repository
+PATCH /api/v1/repositories/:org/:repo     # Update repository (description + immutable_tags)
 DELETE /api/v1/repositories/:org/:repo    # Delete repository
 
 # Tag management
 GET  /api/v1/repositories/:org/:repo/tags          # List tags
 DELETE /api/v1/repositories/:org/:repo/tags/:tag   # Delete tag
+POST   /api/v1/repositories/:org/:repo/tags/:tag/pin   # Pin tag (futures.md Tier 1 #2; repo admin)
+DELETE /api/v1/repositories/:org/:repo/tags/:tag/pin   # Unpin tag
 
 # Vulnerability scanning
 GET  /api/v1/repositories/:org/:repo/tags/:tag/scan  # Get scan result for a tag
 POST /api/v1/repositories/:org/:repo/tags/:tag/scan  # Trigger a scan
+POST /api/v1/repositories/:org/:repo/scan            # Bulk scan every image tag in repo (S-MAINT-1 F1)
+POST /api/v1/orgs/:org/scan                          # Bulk scan every image tag in every repo of org (org admin; S-MAINT-1 F1)
 
 # Build / audit history
 GET  /api/v1/repositories/:org/:repo/tags/:tag/builds  # List build history
