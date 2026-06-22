@@ -204,6 +204,18 @@ func (f *handlerFakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, 
 	return nil, repository.ErrNotFound
 }
 
+// GetHumanByEmail mirrors the production kind='human' guard (FE-API-048 T10).
+func (f *handlerFakeUserRepo) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	u, err := f.GetByEmail(ctx, tenantID, email)
+	if err != nil {
+		return nil, err
+	}
+	if u.Kind == "service_account" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
 func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
 	u := &repository.User{
 		ID:        uuid.New(),
