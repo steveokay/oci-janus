@@ -277,10 +277,14 @@ func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName st
 // also covers the transient "tag exists, manifest row missing" state
 // during deletes — the coalesce ensures the column scans as false
 // rather than NULL.
+// S-MAINT-1 Batch 5: COALESCE config_media_type to '' so NULL legacy
+// rows scan as empty string (artifact_type is then derived in Go and
+// left empty so the FE renders the "Unknown" pill tone).
 const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
 	m.retention_pending_delete_at,
-	COALESCE(m.quarantined, FALSE)`
+	COALESCE(m.quarantined, FALSE),
+	COALESCE(m.config_media_type, '')`
 
 const tagFromJoin = `FROM tags t
 	LEFT JOIN manifests m
@@ -303,7 +307,8 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
 		       m.retention_pending_delete_at,
-		       COALESCE(m.quarantined, FALSE)
+		       COALESCE(m.quarantined, FALSE),
+		       COALESCE(m.config_media_type, '')
 		FROM upserted t
 		LEFT JOIN manifests m
 		  ON  m.repo_id   = t.repo_id
@@ -357,9 +362,13 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		// NULL (the common case) survives unmodified and we can leave the
 		// proto field unset rather than emitting the Go zero time.
 		var pendingDeleteAt *time.Time
+		// S-MAINT-1 Batch 5: pull config_media_type so artifact_type can
+		// be derived in Go (deriveArtifactType) without leaking the raw
+		// mediaType taxonomy on the wire.
+		var configMediaType string
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
-			&pendingDeleteAt, &tag.Quarantined); err != nil {
+			&pendingDeleteAt, &tag.Quarantined, &configMediaType); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tag.UpdatedAt = timestamppb.New(updatedAt)
@@ -367,6 +376,7 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		if pendingDeleteAt != nil {
 			tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
 		}
+		tag.ArtifactType = deriveArtifactType(configMediaType)
 		tags = append(tags, &tag)
 	}
 	return tags, rows.Err()
@@ -390,10 +400,12 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 	var updatedAt, createdAt time.Time
 	// REM-013 gap 1: see ListTags for the *time.Time scan rationale.
 	var pendingDeleteAt *time.Time
+	// S-MAINT-1 Batch 5: artifact_type derivation mirrors ListTags.
+	var configMediaType string
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
-		&pendingDeleteAt, &tag.Quarantined,
+		&pendingDeleteAt, &tag.Quarantined, &configMediaType,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -401,6 +413,7 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 		}
 		return nil, err
 	}
+	tag.ArtifactType = deriveArtifactType(configMediaType)
 	tag.UpdatedAt = timestamppb.New(updatedAt)
 	tag.CreatedAt = timestamppb.New(createdAt)
 	if pendingDeleteAt != nil {
@@ -416,10 +429,16 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 // migration 00012. Keeping it as a constant means a new reader can't
 // accidentally drop them and lie about the quarantine state by
 // omission.
+// S-MAINT-1 Batch 5: config_media_type joined in via COALESCE so legacy
+// rows that pre-date migration 00013 (or where backfill missed) still
+// scan into an empty string rather than NULL. artifact_type is derived
+// in Go (deriveArtifactType) not in SQL because the mapping is a one-
+// line switch that prefers code-review visibility over hidden SQL CASE.
 const manifestSelectCols = `id, repo_id, tenant_id, digest, media_type, raw_json,
 	size_bytes, created_at,
 	quarantined, COALESCE(quarantine_reason, ''),
-	quarantined_at, COALESCE(quarantined_by, '')`
+	quarantined_at, COALESCE(quarantined_by, ''),
+	COALESCE(config_media_type, '')`
 
 // PutManifest upserts a manifest row.
 //
@@ -429,16 +448,23 @@ const manifestSelectCols = `id, repo_id, tenant_id, digest, media_type, raw_json
 // parseImageSize and stored in `image_size_bytes` so the tag-level size can
 // be returned in O(1) without re-parsing on every read.
 func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, mediaType string, rawJSON []byte, sizeBytes int64) (*metadatav1.Manifest, error) {
+	// S-MAINT-1 Batch 5: parse config.mediaType once at push time so the
+	// indexed column stays in sync with raw_json without a follow-up
+	// scan. On re-push of the same digest the EXCLUDED.config_media_type
+	// path keeps the column accurate even if a manifest's contents are
+	// rewritten (uncommon but legal under OCI).
+	configMediaType := parseConfigMediaType(rawJSON)
 	const q = `
-		INSERT INTO manifests (repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO manifests (repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes, config_media_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''))
 		ON CONFLICT (repo_id, digest) DO UPDATE
 		  SET media_type        = EXCLUDED.media_type,
 		      raw_json          = EXCLUDED.raw_json,
 		      size_bytes        = EXCLUDED.size_bytes,
-		      image_size_bytes  = EXCLUDED.image_size_bytes
+		      image_size_bytes  = EXCLUDED.image_size_bytes,
+		      config_media_type = EXCLUDED.config_media_type
 		RETURNING ` + manifestSelectCols
-	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes, parseImageSize(rawJSON))
+	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes, parseImageSize(rawJSON), configMediaType)
 }
 
 // parseImageSize derives the total image size in bytes from an OCI manifest's
@@ -453,6 +479,63 @@ func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, 
 // is a generous ceiling that prevents a crafted document from consuming CPU in a
 // tight summation loop.
 const maxManifestEntries = 1000
+
+// parseConfigMediaType extracts `config.mediaType` from an OCI manifest
+// document. Used at PutManifest time to populate the indexed
+// `config_media_type` column without re-parsing the manifest on every
+// read. Returns the empty string when the JSON is malformed, has no
+// config block, or the mediaType key is missing — callers store "" and
+// any artifact_type derivation downstream treats that as unknown.
+//
+// S-MAINT-1 Batch 5 (P6 + F4): introduces the discriminator that lets
+// the scanner skip non-image artifacts and the dashboard render the
+// per-tag artifact-type pill.
+func parseConfigMediaType(rawJSON []byte) string {
+	if len(rawJSON) == 0 {
+		return ""
+	}
+	var doc struct {
+		Config *struct {
+			MediaType string `json:"mediaType"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		return ""
+	}
+	if doc.Config == nil {
+		return ""
+	}
+	return doc.Config.MediaType
+}
+
+// deriveArtifactType maps a raw `config.mediaType` string to the
+// stable discriminator used on the wire (proto field `artifact_type`).
+// Keeping this mapping in one place means a new OCI artifact category
+// only needs an entry here — no schema change, no proto change.
+//
+// Returns "" when configMediaType is empty (NULL in DB) so callers can
+// tell "unknown legacy row" apart from "recognised manifest, unknown
+// artifact category" ("other").
+func deriveArtifactType(configMediaType string) string {
+	if configMediaType == "" {
+		return ""
+	}
+	switch configMediaType {
+	case "application/vnd.docker.container.image.v1+json",
+		"application/vnd.oci.image.config.v1+json":
+		return "image"
+	case "application/vnd.cncf.helm.config.v1+json":
+		return "helm"
+	case "application/vnd.dev.cosign.simplesigning.v1+json",
+		"application/vnd.dsse.envelope.v1+json":
+		return "signature"
+	case "application/spdx+json",
+		"application/vnd.cyclonedx+json":
+		return "sbom"
+	default:
+		return "other"
+	}
+}
 
 func parseImageSize(rawJSON []byte) int64 {
 	if len(rawJSON) == 0 {
@@ -620,9 +703,13 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 		var createdAt time.Time
 		var qReason, qBy string
 		var qAt *time.Time
+		// S-MAINT-1 Batch 5: same shape as scanOneManifest — derive
+		// artifact_type from config_media_type in Go after scan.
+		var configMediaType string
 		if err := rows.Scan(&m.ManifestId, &m.RepoId, &m.TenantId, &m.Digest,
 			&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt,
-			&m.Quarantined, &qReason, &qAt, &qBy); err != nil {
+			&m.Quarantined, &qReason, &qAt, &qBy,
+			&configMediaType); err != nil {
 			return nil, fmt.Errorf("scan manifest: %w", err)
 		}
 		m.CreatedAt = timestamppb.New(createdAt)
@@ -631,6 +718,8 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 		if qAt != nil {
 			m.QuarantinedAt = timestamppb.New(*qAt)
 		}
+		m.ConfigMediaType = configMediaType
+		m.ArtifactType = deriveArtifactType(configMediaType)
 		manifests = append(manifests, &m)
 	}
 	return manifests, rows.Err()
@@ -641,10 +730,16 @@ func (r *Repository) scanOneManifest(ctx context.Context, query string, args ...
 	var createdAt time.Time
 	var qReason, qBy string
 	var qAt *time.Time
+	// S-MAINT-1 Batch 5: config_media_type scans into a local string;
+	// artifact_type derived in Go from that mediaType (see
+	// deriveArtifactType). Keeping the derivation outside SQL keeps the
+	// mapping reviewable as plain Go code.
+	var configMediaType string
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&m.ManifestId, &m.RepoId, &m.TenantId, &m.Digest,
 		&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt,
 		&m.Quarantined, &qReason, &qAt, &qBy,
+		&configMediaType,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -658,6 +753,8 @@ func (r *Repository) scanOneManifest(ctx context.Context, query string, args ...
 	if qAt != nil {
 		m.QuarantinedAt = timestamppb.New(*qAt)
 	}
+	m.ConfigMediaType = configMediaType
+	m.ArtifactType = deriveArtifactType(configMediaType)
 	return &m, nil
 }
 

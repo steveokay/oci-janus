@@ -264,6 +264,37 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// FE-API-048 FUT-007: every SA lifecycle mutation lands on this single
+	// routing key — services/auth's rabbitMQAuditEmitter packs the
+	// spec-§5.7 action (e.g. "service_account.disabled") into the payload
+	// rather than fanning out per action. We propagate the payload action
+	// verbatim into audit_events.action so the activity feed (FE-API-048
+	// FUT-005) groups SA events alongside push/pull.
+	//
+	// Per-action context (creator_email, key_id, key_prefix, scope diffs)
+	// is already preserved inside meta's raw envelope under the `raw.fields`
+	// key — no merge needed at this layer; the notifications handler can
+	// surface specific fields when it builds the dashboard rows.
+	case events.RoutingServiceAccountLifecycle:
+		var p events.ServiceAccountLifecyclePayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		actorType := "user"
+		if actor == "" || actor == "system" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     p.Action,
+			Resource:   p.Resource,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil

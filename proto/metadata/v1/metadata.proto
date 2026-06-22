@@ -263,6 +263,18 @@ message Tag {
   // GetManifest call per row. False when the manifest is not under a
   // scan-policy quarantine (the common case).
   bool quarantined = 10;
+  // S-MAINT-1 Batch 5 (P6 + F4) — artifact-type discriminator derived
+  // from the parent manifest's `config.mediaType`. One of:
+  //   "image"     — OCI/Docker container image (common case)
+  //   "helm"      — Helm 3 chart
+  //   "signature" — Cosign signature / referrer
+  //   "sbom"      — SPDX or CycloneDX SBOM attestation
+  //   "other"     — recognised manifest media type, unknown config type
+  //   ""          — config_media_type unknown (legacy row, NULL in DB)
+  // Repository code maps raw mediaType -> discriminator so callers can't
+  // accidentally couple to wire-shape mediaType strings; a new artifact
+  // type added by the spec only needs a single mapping change.
+  string artifact_type = 11;
 }
 
 message Manifest {
@@ -288,6 +300,16 @@ message Manifest {
   // the user_id UUID when an operator quarantines manually. Empty
   // when not set.
   string quarantined_by     = 12;
+  // S-MAINT-1 Batch 5 (P6 + F4) — raw `config.mediaType` extracted
+  // from `raw_json` at push time. Indexed via the partial idx so the
+  // "list this tenant's helm charts" query stays cheap. Empty when
+  // the source manifest had no parseable config block.
+  string config_media_type = 13;
+  // S-MAINT-1 Batch 5 (P6 + F4) — derived discriminator. Same values
+  // as Tag.artifact_type above. Repository code computes it from
+  // config_media_type so wire consumers don't need to know the raw
+  // mediaType taxonomy.
+  string artifact_type = 14;
 }
 
 message BlobRef {

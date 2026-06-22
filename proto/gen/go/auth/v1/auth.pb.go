@@ -74,7 +74,9 @@ type ValidateTokenResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Valid     bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	Valid bool `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	// user_id is the authenticated principal. May be a service-account shadow
+	// user id (kind='service_account'); join users.kind to distinguish.
 	UserId    string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	TenantId  string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Jti       string                 `protobuf:"bytes,4,opt,name=jti,proto3" json:"jti,omitempty"`
@@ -226,7 +228,9 @@ type ValidateAPIKeyResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Valid    bool                `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	Valid bool `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	// user_id is the authenticated principal. May be a service-account shadow
+	// user id (kind='service_account'); join users.kind to distinguish.
 	UserId   string              `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	TenantId string              `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Access   []*RepositoryAccess `protobuf:"bytes,4,rep,name=access,proto3" json:"access,omitempty"`

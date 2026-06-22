@@ -282,6 +282,12 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/auth.crt
       MTLS_KEY_PATH: /certs/auth.key
+      # FE-API-048 FUT-007 — RabbitMQ publisher for SA lifecycle audit
+      # events on routing key service_account.lifecycle. Without this,
+      # ServiceAccountService falls back to slogAuditEmitter (events
+      # are visible in container logs but never reach services/audit's
+      # audit_events table).
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
     volumes:
       - certs_data:/certs:ro
     ports:
@@ -293,6 +299,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - registry

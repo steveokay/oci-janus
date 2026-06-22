@@ -40,12 +40,18 @@ const revokeKeyTTL = 25 * time.Minute
 
 // AuditEvent is a lightweight audit record emitted by ServiceAccountService on
 // every lifecycle mutation. The AuditEmitter interface accepts these; test fakes
-// capture them in a slice for assertion. Production wiring (RabbitMQ or direct
-// audit-service call) is deferred to the handler layer (T13/T14).
+// capture them in a slice for assertion. Production wiring (FE-API-048
+// FUT-007) is a RabbitMQ publisher emitting on
+// events.RoutingServiceAccountLifecycle; dev stacks without a broker
+// fall through to a slog stand-in.
 //
 // Fields maps to the spec §5.7 "notable fields" column — callers populate only
 // the fields relevant to the action.
 type AuditEvent struct {
+	// TenantID is the tenant the mutated SA belongs to. Carried so the
+	// RabbitMQ publisher can populate the events.Event envelope without
+	// reaching back into Fields for a magic-key tenant lookup.
+	TenantID string
 	Action   string
 	ActorID  string
 	Resource string
@@ -179,6 +185,7 @@ func (s *ServiceAccountService) Create(ctx context.Context, in ServiceAccountInp
 	}
 
 	if err := s.audit.Emit(ctx, AuditEvent{
+		TenantID: in.TenantID.String(),
 		Action:   "service_account.created",
 		ActorID:  in.ActorUserID.String(),
 		Resource: sa.ID.String(),
@@ -263,6 +270,7 @@ func (s *ServiceAccountService) Update(ctx context.Context, in UpdateServiceAcco
 	}
 
 	if err := s.audit.Emit(ctx, AuditEvent{
+		TenantID: in.TenantID.String(),
 		Action:   "service_account.updated",
 		ActorID:  in.ActorUserID.String(),
 		Resource: sa.ID.String(),
@@ -329,6 +337,7 @@ func (s *ServiceAccountService) SetDisabled(ctx context.Context, id, tenantID uu
 		action = "service_account.disabled"
 	}
 	return s.audit.Emit(ctx, AuditEvent{
+		TenantID: tenantID.String(),
 		Action:   action,
 		ActorID:  actor.String(),
 		Resource: sa.ID.String(),
@@ -364,13 +373,13 @@ func (s *ServiceAccountService) Delete(ctx context.Context, id uuid.UUID, actor 
 	// Emit audit event with the name snapshot so the audit trail is useful
 	// even after the row has been hard-deleted.
 	return s.audit.Emit(ctx, AuditEvent{
+		TenantID: tenantID.String(),
 		Action:   "service_account.deleted",
 		ActorID:  actor.String(),
 		Resource: id.String(),
 		Fields: map[string]any{
-			"name":             name,
-			"tenant_id":        tenantID.String(),
-			"shadow_user_id":   shadowUserID.String(),
+			"name":           name,
+			"shadow_user_id": shadowUserID.String(),
 		},
 	})
 }
@@ -484,6 +493,7 @@ func (s *ServiceAccountService) IssueKey(
 
 	// 6. Emit audit event. Hard error — the audit trail must be complete.
 	if err := s.audit.Emit(ctx, AuditEvent{
+		TenantID: tenantID.String(),
 		Action:   "service_account.key_issued",
 		ActorID:  actor.String(),
 		Resource: saID.String(),
@@ -558,6 +568,7 @@ func (s *ServiceAccountService) RevokeKey(
 
 	// Emit audit event.
 	return s.audit.Emit(ctx, AuditEvent{
+		TenantID: tenantID.String(),
 		Action:   "service_account.key_revoked",
 		ActorID:  actor.String(),
 		Resource: saID.String(),
