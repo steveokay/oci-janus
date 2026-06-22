@@ -58,12 +58,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("scanner adapter registry: %w", err)
 	}
 
-	// Validate and load the scanner plugin binary (checksum verified here — service
-	// refuses to start if the binary has been tampered with).
-	scannerPlugin, err := internalPlugin.New(cfg.PluginPath, cfg.PluginChecksum)
-	if err != nil {
-		return fmt.Errorf("load scanner plugin: %w", err)
-	}
+	// Boot-time scanner plugin construction is deferred until after
+	// `selectInitialAdapter` resolves the persisted choice in
+	// scanner_settings (REM-011 Phase 2). Otherwise the worker pool would
+	// always boot with cfg.PluginPath (env-var default = dev-stub in
+	// dev), even when the operator had swapped to trivy via the admin
+	// UI — restarting the scanner silently reverted the swap. We still
+	// need this declared up front so the rest of the boot flow can reuse
+	// it; the *ProcessPlugin satisfies the plugin.Scanner contract the
+	// worker.NewPool expects.
+	var scannerPlugin *internalPlugin.ProcessPlugin
 
 	creds, err := clientCreds(cfg)
 	if err != nil {
@@ -110,6 +114,33 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// starts; SetActiveAdapter can bootstrap the selection at runtime.
 	if err := selectInitialAdapter(ctx, adapterReg, repo, cfg.PluginPath); err != nil {
 		slog.WarnContext(ctx, "selecting initial scanner adapter — using none", "err", err)
+	}
+
+	// REM-013 follow-up — boot the worker pool with whatever
+	// `selectInitialAdapter` chose. Without this, the pool was always
+	// constructed from cfg.PluginPath (env-var default = dev-stub),
+	// silently ignoring the operator's persisted swap on every restart.
+	// We re-derive the active adapter's path + checksum from the
+	// registry so the same SHA-256 integrity check that gates the
+	// runtime SetActiveAdapter RPC also gates boot.
+	if active := adapterReg.Active(); active != nil {
+		scannerPlugin, err = internalPlugin.New(active.Path, active.Checksum)
+		if err != nil {
+			return fmt.Errorf("load active scanner plugin %q: %w", active.Path, err)
+		}
+		slog.InfoContext(ctx, "scanner adapter boot selection",
+			"path", active.Path, "checksum", active.Checksum)
+	} else {
+		// selectInitialAdapter logs the no-adapter case at WARN; we still
+		// need a plugin to construct the pool with so fall back to the
+		// env-var path here. The runtime SetActiveAdapter swap can fix
+		// the selection without a restart.
+		scannerPlugin, err = internalPlugin.New(cfg.PluginPath, cfg.PluginChecksum)
+		if err != nil {
+			return fmt.Errorf("load fallback scanner plugin: %w", err)
+		}
+		slog.WarnContext(ctx, "scanner adapter boot selection — no registry entry, using env-var default",
+			"path", cfg.PluginPath)
 	}
 
 	// RabbitMQ publisher for scan.completed / scan.policy_blocked events.

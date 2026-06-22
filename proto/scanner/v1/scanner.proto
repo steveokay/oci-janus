@@ -31,10 +31,32 @@ service ScannerService {
   // observed via GetComplianceReport.
   rpc GenerateComplianceReport(GenerateComplianceReportRequest) returns (GenerateComplianceReportResponse);
   // GetComplianceReport returns one report row by id. The download_*_url
-  // fields are populated only when status == "succeeded".
+  // fields are populated only when status == "succeeded" — they are now
+  // an internal hint (the scanner uses them to resolve the on-disk path
+  // inside its own filesystem) and should NOT be used by remote callers
+  // to fetch bytes; the streaming DownloadComplianceReport RPC below is
+  // the supported path. The fields stay on the wire as a "ready" sentinel
+  // for the dashboard.
   rpc GetComplianceReport(GetComplianceReportRequest) returns (ComplianceReport);
   // ListComplianceReports returns recent reports for a tenant, paginated.
   rpc ListComplianceReports(ListComplianceReportsRequest) returns (ListComplianceReportsResponse);
+  // DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+  // JSON report bytes back to the caller. The scanner reads the file from
+  // its own filesystem and chunks it in ~64KB pieces; the management BFF
+  // proxies the stream into the client HTTP response. This RPC replaces
+  // the v1 shortcut of returning an absolute on-disk path on GetReport
+  // and having callers open the file themselves — that breaks the moment
+  // scanner and management are on different nodes.
+  //
+  // The first ReportChunk carries content_type (e.g. "application/pdf")
+  // so the BFF can set Content-Type on the HTTP response before forwarding
+  // any bytes; subsequent chunks carry data only. NotFound when the
+  // report id does not exist (or belongs to another tenant);
+  // FailedPrecondition when the report is not yet succeeded; Internal
+  // when the on-disk artifact is missing despite the row claiming
+  // success (storage corruption — surfaced distinctly so operators see
+  // "your data is gone" vs "still rendering").
+  rpc DownloadComplianceReport(DownloadComplianceReportRequest) returns (stream ReportChunk);
 
   // --------------------------------------------------------------------------
   // REM-011 Phase 2 — adapter management
@@ -192,6 +214,36 @@ message ListComplianceReportsRequest {
 message ListComplianceReportsResponse {
   repeated ComplianceReport reports = 1;
   string next_page_token = 2;
+}
+
+// DownloadComplianceReportRequest selects which report to stream and
+// which artifact format to return. tenant_id is enforced server-side so
+// a malformed report_id can't surface another tenant's bytes.
+message DownloadComplianceReportRequest {
+  string tenant_id = 1;
+  string report_id = 2;
+  // format is either "pdf" or "sbom". Anything else returns
+  // InvalidArgument so a typo doesn't silently return the wrong file
+  // (the scanner stores both PDF and SPDX JSON for every succeeded
+  // report).
+  string format = 3;
+}
+
+// ReportChunk is one piece of the streamed file body.
+//
+// The FIRST chunk carries `content_type` populated (e.g. "application/pdf"
+// or "application/json") so the proxy can set Content-Type on its HTTP
+// response before any bytes flow. Subsequent chunks leave content_type
+// empty and carry only `data`. The final chunk may be a zero-length
+// `data` — the server closes the stream when the file is fully sent.
+//
+// We use ~64KB chunks (server-side knob) to balance per-message overhead
+// against memory footprint. The BFF can io.Copy from the stream to the
+// HTTP response writer without buffering the full payload — keeps a
+// multi-MB PDF from sitting in management's RAM.
+message ReportChunk {
+  bytes data = 1;
+  string content_type = 2;
 }
 
 // ----------------------------------------------------------------------------

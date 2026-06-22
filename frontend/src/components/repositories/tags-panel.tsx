@@ -177,9 +177,16 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
                         }}
                         className="block px-4 py-3 text-inherit no-underline"
                       >
-                        <Badge tone="accent">
-                          <TagIcon className="size-3" /> {t.name}
-                        </Badge>
+                        <div className="inline-flex items-center gap-1.5">
+                          <Badge tone="accent">
+                            <TagIcon className="size-3" /> {t.name}
+                          </Badge>
+                          {/* REM-013 gap 1 — pending-delete pill. Renders */}
+                          {/* only when the manifest is in the retention   */}
+                          {/* grace window; surfaces the ETA so an operator */}
+                          {/* can act before hard-delete fires.            */}
+                          <PendingDeletePill iso={t.retention_pending_delete_at} />
+                        </div>
                       </a>
                     </TableCell>
                     <TableCell>
@@ -321,6 +328,54 @@ function SelectionCheckbox({
       aria-label={ariaLabel}
       className="size-4 cursor-pointer rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
     />
+  );
+}
+
+// PendingDeletePill — soft-delete countdown surfaced on each tag row when
+// the manifest is inside the retention grace window. Renders nothing for
+// the common path (no stamp on the wire).
+//
+// Grace window is 7 days by default (services/gc RETENTION_GRACE_DAYS). The
+// pill turns danger-toned in the final 24h so an operator scanning the
+// table sees the imminent rows first. The relative date already handles
+// "in 4 days" vs "in 6 hours" so the pill stays compact.
+function PendingDeletePill({
+  iso,
+}: {
+  iso: string | undefined;
+}): React.ReactElement | null {
+  if (!iso) return null;
+  // Stamp + 7d grace window = ETA. We compute client-side because the BFF
+  // doesn't return the platform grace setting; if it ever does the value
+  // should flow in from useWorkspace() instead of being hardcoded.
+  const GRACE_DAYS = 7;
+  const eta = new Date(iso).getTime() + GRACE_DAYS * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const msLeft = eta - now;
+  // Already past grace — should be hard-deleted shortly. Still surface it
+  // distinctly so the operator knows what's going on if the grace ticker
+  // is running late.
+  const overdue = msLeft <= 0;
+  const urgent = !overdue && msLeft <= 24 * 60 * 60 * 1000;
+  return (
+    <span
+      title={
+        overdue
+          ? "Past grace window — will be hard-deleted on the next retention_grace tick."
+          : `Retention will hard-delete this manifest ${formatRelativeDate(new Date(eta).toISOString())}. Marked at ${iso}.`
+      }
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+        overdue
+          ? "border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+          : urgent
+            ? "border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]"
+            : "border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] text-[var(--color-fg-muted)]",
+      )}
+    >
+      <Trash2 className="size-2.5" aria-hidden />
+      {overdue ? "past grace" : `del ${formatRelativeDate(new Date(eta).toISOString())}`}
+    </span>
   );
 }
 

@@ -203,7 +203,14 @@ func (r *Repository) GetLatest(ctx context.Context) (*GCRun, error) {
 // in-flight rows can still page out cleanly.
 //
 // Limit is enforced at [1, 200] by the caller.
-func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string) ([]*GCRun, string, error) {
+//
+// REM-013 gap 2 — optional filters:
+//   - repoID == uuid.Nil → no repo filter (preserves pre-REM-013 behaviour).
+//   - modes == nil or empty → no mode filter.
+// Both filters are positional bind params so the optimiser still uses
+// the existing (completed_at DESC, run_id ASC) index; the IS NULL /
+// cardinality guards collapse to a constant TRUE when no filter is set.
+func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*GCRun, string, error) {
 	var sinceCompleted any
 	var sinceRunID any
 	if pageToken != "" {
@@ -221,6 +228,19 @@ func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string) 
 		sinceRunID = id
 	}
 
+	// REM-013 gap 2 — pass uuid.Nil through as NULL so the IS NULL guard
+	// short-circuits the predicate. pgx handles uuid.UUID natively but
+	// the SQL `IS NULL` check needs an actual NULL on the wire.
+	var repoIDArg any
+	if repoID != uuid.Nil {
+		repoIDArg = repoID
+	}
+	// Always pass an empty slice rather than nil so cardinality($N) is
+	// well-defined; pgx encodes []string as TEXT[].
+	if modes == nil {
+		modes = []string{}
+	}
+
 	// The WHERE clause implements (completed_at, run_id) < (cursor)
 	// against the DESC NULLS LAST ordering. Three branches:
 	//
@@ -235,24 +255,28 @@ func (r *Repository) ListRuns(ctx context.Context, limit int, pageToken string) 
 		`SELECT `+selectColumns+`
 		   FROM gc_runs
 		  WHERE
-		    ($2::TIMESTAMPTZ IS NULL AND $3::UUID IS NULL)
-		    OR (
-		      $2::TIMESTAMPTZ IS NOT NULL
-		      AND (
-		        completed_at IS NULL
-		        OR completed_at < $2
-		        OR (completed_at = $2 AND run_id > $3)
+		    (
+		      ($2::TIMESTAMPTZ IS NULL AND $3::UUID IS NULL)
+		      OR (
+		        $2::TIMESTAMPTZ IS NOT NULL
+		        AND (
+		          completed_at IS NULL
+		          OR completed_at < $2
+		          OR (completed_at = $2 AND run_id > $3)
+		        )
+		      )
+		      OR (
+		        $2::TIMESTAMPTZ IS NULL
+		        AND $3::UUID IS NOT NULL
+		        AND completed_at IS NULL
+		        AND run_id > $3
 		      )
 		    )
-		    OR (
-		      $2::TIMESTAMPTZ IS NULL
-		      AND $3::UUID IS NOT NULL
-		      AND completed_at IS NULL
-		      AND run_id > $3
-		    )
+		    AND ($4::UUID IS NULL OR repo_id = $4::UUID)
+		    AND (cardinality($5::TEXT[]) = 0 OR mode::TEXT = ANY($5::TEXT[]))
 		  ORDER BY completed_at DESC NULLS LAST, run_id ASC
 		  LIMIT $1`,
-		limit, sinceCompleted, sinceRunID,
+		limit, sinceCompleted, sinceRunID, repoIDArg, modes,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("ListRuns: %w", err)

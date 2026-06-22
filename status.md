@@ -235,6 +235,62 @@
 
 ---
 
+### REM-012 — Compliance Report Downloads via Streaming RPC
+- **Affects:** `proto/scanner/v1`, `services/scanner`, `services/management`, `infra/docker-compose`
+- **Status:** DONE ✅ (2026-06-22) — streaming RPC live; shared-volume workaround retired.
+- **Surfaced:** 2026-06-21 while debugging `/security/reports` PDF/SBOM 404s. Logs showed `services/management` failing `os.Open(/tmp/reports/<tenant>/<id>.pdf)` because the file lives on `services/scanner`'s filesystem.
+- **Why the fix mattered:** the proto comment at `proto/scanner/v1/scanner.proto:159-161` already flagged the on-disk-path return as a v1 shortcut. The shared-volume workaround violated Decision Log #11 ("no presigned URLs to clients; all blob traffic proxied for audit + rate limiting") implicitly — there was no audit hop and no rate limit between storage and the BFF.
+- **What shipped (2026-06-22):**
+  - [x] `rpc DownloadComplianceReport(DownloadComplianceReportRequest) returns (stream ReportChunk)` on `proto/scanner/v1/scanner.proto`. Request carries `tenant_id` + `report_id` + `format` ∈ {pdf, sbom}; first `ReportChunk` carries `content_type` only, subsequent chunks carry `data` only (~64 KiB each — tuned via `reportChunkBytes` constant on the scanner handler).
+  - [x] Scanner-side server-streaming handler at `services/scanner/internal/handler/grpc.go` `DownloadComplianceReport`. Resolves the report row via the existing tenant-scoped `repo.GetReport`, validates `format` against an allowlist, applies the same `filepath.Clean` + extension defence-in-depth the v1 BFF used, opens the file scanner-side, sends content_type on the first chunk, then loops with explicit `stream.Context().Err()` checks so a slow client / BFF disconnect stops the file read promptly. Error mapping: NotFound (no row for tenant), FailedPrecondition (status != succeeded), InvalidArgument (bad UUIDs / format / extension mismatch), Internal (missing on-disk artifact despite "succeeded" status).
+  - [x] Management `serveReportFile` rewritten to call the stream + drain it into the `http.ResponseWriter`. Headers (`Content-Type`, `Content-Disposition`) are committed from the first chunk's `content_type` BEFORE any bytes write — important because once `w.Write` is called the headers seal. Mid-stream errors log + close (we can't change the HTTP status code after headers commit); the client sees a truncated body, surfaced honestly. New `mapDownloadErr` helper translates gRPC codes to HTTP codes (404/409/400/500) for setup-time failures.
+  - [x] `download_pdf_url` / `download_sbom_url` on the JSON `GetComplianceReport` response are now an internal hint only; proto comment at `scanner.proto` updated to mark them as such while keeping the fields on the wire for the dashboard's "report ready" sentinel.
+  - [x] `scanner_reports` named-volume mount removed from `registry-management` in `infra/docker-compose/docker-compose.yml`. Scanner still mounts the same volume (it's the writer); reader side no longer needs filesystem access. Live in the running compose stack — `docker inspect` on management confirms only `/certs` mounted, scanner shows `/certs /tmp/reports /trivy-cache`.
+  - [x] 2 new tests on management: `TestReports_DownloadPDF_multiChunkStream` exercises a 3-chunk fanout (verifies headers come from the FIRST chunk + body concatenates correctly); `TestReports_DownloadPDF_streamErrorMidway` verifies headers stay committed at 200 and the body truncates honestly when the scanner errors mid-stream. `downloadComplianceReportOverride` hook on the fake server lets future tests script stream behaviour without spinning up a new fake. All existing report tests still pass.
+- **Test coverage gap (acknowledged, not blocking):** no end-to-end "generate → wait succeeded → download both formats → byte-compare" integration test was added because the existing scanner integration harness doesn't run the report worker in-process. Manual verification in compose is documented; a real integration test belongs in a follow-up that lifts the report worker into testcontainers.
+- **Frontend impact:** none — the `/api/v1/security/reports/{id}/download/{pdf,sbom}` HTTP surface is unchanged. The single visible change is that the dashboard now works in cross-node K8s, which it didn't before.
+
+---
+
+### REM-013 — Retention surface backend gaps surfaced during S11
+- **Affects:** `proto/metadata/v1`, `proto/gc/v1`, `services/metadata`, `services/gc`, `services/management`
+- **Status:** OPEN — frontend slice 3 of S11 (retention UI) shipped only the executor trigger; the other two pieces ("pending-delete badges on Tags tab", "per-repo retention run history panel") are blocked by missing backend surface.
+- **Surfaced:** 2026-06-21 while shipping S11 slice 3.
+- **Gap 1 — `Tag` proto doesn't carry `retention_pending_delete_at`.** The column exists on `manifests` and the FE-API-040 executor stamps it (services/metadata/internal/repository/retention_pending.go:47), but `proto/metadata/v1/metadata.proto:232` `message Tag` doesn't surface the field. The BFF's `handleListTags` (services/management/internal/handler/handler.go:728) copies only `tag_id`, `manifest_digest`, `size_bytes`, `updated_at`, `created_at` into `TagResponse`. Without this the FE can't render the "🗑 deletes in N days" badge on tag rows.
+- **Gap 1 fix sketch:**
+  - [ ] Add `google.protobuf.Timestamp retention_pending_delete_at = 9;` to `message Tag` (omit when null on the wire — the field is already nullable in SQL).
+  - [ ] LEFT JOIN `manifests` on `tags.manifest_id` in `services/metadata/internal/repository/tags.go` `ListTags` SQL to pull the column.
+  - [ ] Extend `TagResponse` in management with `retention_pending_delete_at *time.Time` (omitempty) and the conversion in `handleListTags`.
+  - [ ] Frontend: chip on the tag row with `formatRelativeDate(now + grace - elapsed)` once the field shows up on the wire; the existing tags-panel toolbar gets a "Show pending only" toggle for free.
+- **Gap 2 — `gcv1.ListRunsRequest` doesn't accept `repo_id` or `mode` filters.** Per-repo "last 10 retention runs" requires either paging through every GC run client-side (unbounded) or adding filters to the gRPC.
+- **Gap 2 fix sketch:**
+  - [ ] Add `string repo_id = 3; string mode = 4;` to `proto/gc/v1/gc.proto:129 ListRunsRequest` (both optional — empty preserves current behaviour).
+  - [ ] Extend `services/gc/internal/repository.go` `ListRuns` SQL with optional `WHERE repo_id = $X` + `WHERE mode = ANY($Y)` predicates (tenant scoping already in place via the gRPC interceptor).
+  - [ ] Mount a new BFF route `GET /api/v1/repositories/{org}/{repo}/policies/retention/runs` (repo reader gate) that forwards `repo_id + mode IN ("retention","retention_grace")` to the gc service.
+  - [ ] Frontend: the deferred `RetentionRunHistoryPanel` consumes this with infinite-query pagination over `next_page_token`; lands below the existing `RetentionRunCard` on the Retention tab.
+- **Gap 3 — Storage breakdown response doesn't carry per-repo retention summary.** S11 slice 4 wanted to add a "Retention" column to the dashboard storage-breakdown card showing each repo's effective retention rule summary (per-repo override OR inherited org default OR "—"). Today `services/management/internal/handler/stats_storage.go` populates `RepositoryStorageEntry` with `{repo_id, org, name, storage_used_bytes, percent_of_tenant}` only. Fetching per-row would be 50 round-trips on every dashboard load.
+- **Gap 3 fix sketch:**
+  - [ ] Add `retention_summary: string` (e.g. "max 50 manifests · 30d") and `retention_source: "repo"|"org"|"none"` to `RepositoryStorageEntry` in `services/management/internal/handler/stats_storage.go`.
+  - [ ] In the BFF, fan out `GetEffectiveRetentionPolicy` once per repo in the breakdown (cap 50) — or add a `BatchGetEffectiveRetentionPolicies(repo_ids)` RPC to `services/metadata` if profiling shows the fan-out is slow.
+  - [ ] Frontend: render the new column in `frontend/src/components/dashboard/storage-breakdown-card.tsx` with link-back to the repo Retention tab.
+- **Why these were deferred rather than added in-flight during S11:** S11 was scoped as a frontend sprint with all backend deps marked DONE in FE-STATUS.md. These three gaps survived that audit. Adding them needs proto regen + service rebuild (or BFF-only fan-out for gap 3) and is worth a focused PR rather than a slice tail.
+
+---
+
+### S11 frontend — SHIPPED this session (2026-06-21)
+
+> Cross-link: full per-slice detail in `FE-STATUS.md` S11.1..S11.5 rows.
+
+- **Slices 1+2** (FE-API-037 + FE-API-038): per-repo Retention tab on `/repositories/$org/$repo` — read summary + 4-state empty/inherited/override/preview, full editor with rule chips + protected-pattern chips, mandatory dry-run dialog before save, remove-override.
+- **Slice 3** (FE-API-040): "Run now" trigger + 5s status polling on the Retention tab. **PARTIAL** — pending-delete pills on Tags tab + per-repo Run history panel deferred (blocked by REM-013 gaps 1 + 2 above).
+- **Slice 4** (FE-API-039): org-default Retention surface on new `/orgs/$org/settings` route + cross-link from inherited per-repo policies. **PARTIAL** — dashboard storage-breakdown "Retention" column deferred (blocked by REM-013 gap 3).
+- **Slice 5** (FE-API-040 admin tile + FE-API-041 audit/notifications): `RetentionCard` below `GCCard` on `/admin/tenants` with 24h/7d counts + last-10 retention runs table (mode filtered client-side until REM-013 gap 2 lands); notifications allowlist extended on BFF + audit (3 new `retention.*` actions); audit `renderNotification` synthesizer extended; topbar bell + `/activity` filter chips auto-include the new types.
+- **FE-API-043**: `max_idle_days` rule kind surfaces in both the per-repo + per-org editors (chip kind selector).
+
+**Side-fix**: Button `asChild` Slot crash fixed at `frontend/src/components/ui/button.tsx` (Radix Slot ≥1.1 rejects multi-child JSX even when one is null; split the asChild/non-asChild paths). Surfaced via the "Org settings" header link from `/orgs/$org/members`.
+
+---
+
 ## Open Decisions
 
 All decisions resolved. No blockers.

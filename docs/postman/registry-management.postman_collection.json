@@ -504,6 +504,147 @@
           }
         }
       ]
+    },
+    {
+      "name": "Retention — Per-repo (FE-API-037/038/040 + REM-013)",
+      "description": "Per-repository retention policy CRUD, dry-run, preview, executor trigger, and run history. RBAC: GET routes are reader-grade; PUT/DELETE/POST run require repo admin/owner. The run-history listing (REM-013 gap 2) is reader-grade.",
+      "item": [
+        {
+          "name": "GET retention policy (effective — falls back to org default)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
+            }
+          }
+        },
+        {
+          "name": "PUT retention policy (upsert per-repo override)",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 30},\n    {\"kind\": \"max_count\", \"value\": 50}\n  ],\n  \"protected_tag_patterns\": [\"latest\", \"stable\", \"^v?\\\\d+(\\\\.\\\\d+){0,2}$\"]\n}"},
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
+            }
+          }
+        },
+        {
+          "name": "DELETE retention policy (revert to inherited)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
+            }
+          }
+        },
+        {
+          "name": "POST retention dry-run (preview impact without saving)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 30}\n  ],\n  \"protected_tag_patterns\": [\"latest\"]\n}"},
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/dry-run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "dry-run"]
+            }
+          }
+        },
+        {
+          "name": "GET retention preview-window state",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/preview",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "preview"]
+            }
+          }
+        },
+        {
+          "name": "POST retention/run (trigger executor — 202 + run_id)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/run",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "run"]
+            }
+          }
+        },
+        {
+          "name": "GET retention/runs/{run_id} (one run's status)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/runs/{{runId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "runs", "{{runId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET retention/runs (REM-013 gap 2 — per-repo history list)",
+          "description": "Paginated history scoped server-side to this repo + the two retention modes. limit defaults to 20, capped at 100.",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/runs?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "runs"],
+              "query": [{"key": "limit", "value": "20"}]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Retention — Per-org (FE-API-039)",
+      "description": "Org-default retention policy. GET requires org reader; PUT/DELETE require org admin/owner. Inheriting repos that have no per-repo override fall back to the org default — disabled defaults do NOT propagate.",
+      "item": [
+        {
+          "name": "GET org default retention policy",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
+            }
+          }
+        },
+        {
+          "name": "PUT org default retention policy",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 90},\n    {\"kind\": \"dangling_grace_days\", \"value\": 7}\n  ],\n  \"protected_tag_patterns\": [\"latest\", \"stable\", \"^v?\\\\d+(\\\\.\\\\d+){0,2}$\"]\n}"},
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
+            }
+          }
+        },
+        {
+          "name": "DELETE org default retention policy",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
+            }
+          }
+        }
+      ]
     }
   ]
 }

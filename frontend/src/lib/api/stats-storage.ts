@@ -16,6 +16,14 @@ export interface RepositoryStorageEntry {
   name: string;
   storage_used_bytes: number;
   percent_of_tenant: number;
+  // REM-013 gap 3 — effective retention policy summary for this row.
+  // Empty when no policy applies anywhere (per-repo OR org default).
+  retention_summary?: string;
+  // "repo" | "org" | "" — where the policy was sourced from. The
+  // dashboard renders an "(inherited)" subscript when source==="org"
+  // so an operator can tell at a glance whether the row is under an
+  // org-wide default or has its own override.
+  retention_source?: "repo" | "org" | "";
 }
 
 export interface StorageBreakdownResponse {

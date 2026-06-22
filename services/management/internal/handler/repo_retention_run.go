@@ -55,11 +55,120 @@ type retentionRunStatusResponse struct {
 }
 
 // RegisterRepoRetentionRun mounts the FE-API-040 routes.
+//
+// REM-013 gap 2 adds GET .../policies/retention/runs — a paginated list
+// of historical runs scoped to this repository, filtered server-side to
+// the two retention modes. Reader-grade auth (matches the GET-by-id
+// sibling) because the response is read-only.
 func (h *Handler) RegisterRepoRetentionRun(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/policies/retention/run",
 		authMW(http.HandlerFunc(h.handleTriggerRepoRetentionRun)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/policies/retention/runs/{run_id}",
 		authMW(http.HandlerFunc(h.handleGetRepoRetentionRun)))
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/policies/retention/runs",
+		authMW(http.HandlerFunc(h.handleListRepoRetentionRuns)))
+}
+
+// retentionRunsListResponse mirrors gcRunsListResponse for the per-repo
+// scope. Reusing GCRunResponse keeps one wire shape across the admin GC
+// route and the per-repo route so the dashboard can render either with
+// the same component code.
+type retentionRunsListResponse struct {
+	Runs          []GCRunResponse `json:"runs"`
+	NextPageToken string          `json:"next_page_token,omitempty"`
+}
+
+// handleListRepoRetentionRuns returns the paginated retention history for
+// one repository. Server-side scoped to repo_id + the two retention
+// modes — the gc service's REM-013 ListRuns filter ensures we never
+// page through unrelated rows.
+//
+// limit defaults to 20 and clamps to [1, 100] — smaller than the
+// platform-admin /admin/gc/runs cap because the per-repo panel renders
+// a compact table rather than a full admin surface.
+func (h *Handler) handleListRepoRetentionRuns(w http.ResponseWriter, r *http.Request) {
+	if h.gc == nil {
+		writeError(w, http.StatusNotFound, "route disabled")
+		return
+	}
+
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	org, repoName := r.PathValue("org"), r.PathValue("repo")
+
+	if err := validateOrgName(org); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid org name")
+		return
+	}
+	if err := validateRepoName(repoName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repository name")
+		return
+	}
+
+	// Reader on the repo (or parent org) is sufficient — the response is
+	// read-only and doesn't reveal anything beyond what the operator can
+	// see on the existing Retention tab.
+	if !hasScopedRole(h.getUserAssignments(r), "repo", org+"/"+repoName, "reader") {
+		// 404 (not 403) so non-members can't probe repo existence.
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	repo, err := h.findRepo(r, tenantID, org, repoName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	limit := int32(20)
+	if s := r.URL.Query().Get("limit"); s != "" {
+		var n int32
+		_, _ = fmtSscan(s, &n)
+		switch {
+		case n <= 0:
+			limit = 20
+		case n > 100:
+			limit = 100
+		default:
+			limit = n
+		}
+	}
+	pageToken := r.URL.Query().Get("page_token")
+	if pageToken != "" {
+		if err := validatePageToken(pageToken); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid page_token")
+			return
+		}
+	}
+
+	// REM-013 gap 2 — pass repo_id + the retention mode allowlist so the
+	// gc service filters server-side. The mode list is hardcoded here
+	// because the per-repo route is by definition only about retention
+	// rows; opening it up to other modes would surface a leak of cron-
+	// only gc activity through a reader-grade endpoint.
+	resp, err := h.gc.ListRuns(r.Context(), &gcv1.ListRunsRequest{
+		PageSize:  limit,
+		PageToken: pageToken,
+		RepoId:    repo.GetRepoId(),
+		Modes:     []string{"retention", "retention_grace"},
+	})
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
+			writeError(w, http.StatusBadRequest, "invalid page_token")
+			return
+		}
+		slog.Error("retention: GCService.ListRuns (per-repo)", "err", err, "repo_id", repo.GetRepoId())
+		writeError(w, http.StatusInternalServerError, "failed to list retention runs")
+		return
+	}
+
+	out := make([]GCRunResponse, 0, len(resp.GetRuns()))
+	for _, run := range resp.GetRuns() {
+		out = append(out, gcRunToResponse(run))
+	}
+	writeJSON(w, http.StatusOK, retentionRunsListResponse{
+		Runs:          out,
+		NextPageToken: resp.GetNextPageToken(),
+	})
 }
 
 // handleTriggerRepoRetentionRun queues a retention sweep for the addressed

@@ -62,15 +62,24 @@ const notificationsDefaultLimit = 50
 // allowedNotificationEventTypes mirrors the audit service's allowlist so we
 // can reject unknown values at the edge with a clear 400. Keep these two
 // lists in sync — audit will also reject anything not on its list.
+//
+// S11 slice 5 added the three retention.* events; the audit consumer
+// already records them (services/audit/internal/eventconsumer/consumer.go
+// maps the routing keys to the same action strings), and the BFF + audit
+// allowlists are the last hop the dashboard goes through before
+// rendering the topbar bell / /activity feed.
 var allowedNotificationEventTypes = map[string]struct{}{
-	"push.image":              {},
-	"push.failed":             {},
-	"delete.manifest":         {},
-	"delete.tag":              {},
-	"scan.completed":          {},
-	"scan.policy_blocked":     {},
-	"image.signed":            {},
-	"webhook.delivery_failed": {},
+	"push.image":                {},
+	"push.failed":               {},
+	"delete.manifest":           {},
+	"delete.tag":                {},
+	"scan.completed":            {},
+	"scan.policy_blocked":       {},
+	"image.signed":              {},
+	"webhook.delivery_failed":   {},
+	"retention.evaluated":       {},
+	"retention.applied":         {},
+	"retention.grace_completed": {},
 }
 
 // handleListNotifications serves GET /api/v1/notifications.

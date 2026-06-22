@@ -50,6 +50,11 @@ var defaultNotificationEventTypes = []string{
 	"scan.policy_blocked",
 	"image.signed",
 	"webhook.delivery_failed",
+	// S11 slice 5 — retention.* surfaces in the topbar bell + /activity
+	// so operators see policy actions without watching gc_runs by hand.
+	"retention.evaluated",
+	"retention.applied",
+	"retention.grace_completed",
 }
 
 // allowedNotificationEventTypes is the full set of action values the
@@ -57,14 +62,17 @@ var defaultNotificationEventTypes = []string{
 // smuggle an arbitrary string into the parameterised `action = ANY($N)` clause
 // — defence in depth even though the value is bound, not interpolated.
 var allowedNotificationEventTypes = map[string]struct{}{
-	"push.image":              {},
-	"push.failed":             {},
-	"delete.manifest":         {},
-	"delete.tag":              {},
-	"scan.completed":          {},
-	"scan.policy_blocked":     {},
-	"image.signed":            {},
-	"webhook.delivery_failed": {},
+	"push.image":                {},
+	"push.failed":               {},
+	"delete.manifest":           {},
+	"delete.tag":                {},
+	"scan.completed":            {},
+	"scan.policy_blocked":       {},
+	"image.signed":              {},
+	"webhook.delivery_failed":   {},
+	"retention.evaluated":       {},
+	"retention.applied":         {},
+	"retention.grace_completed": {},
 }
 
 // GetNotifications returns operator-facing audit events for the calling
@@ -198,6 +206,19 @@ type rawNotificationPayload struct {
 	// Scan finding counts — used to enrich scan.completed summaries.
 	FindingsTotal    int `json:"findings_total"`
 	FindingsCritical int `json:"findings_critical"`
+	// S11 slice 5 — retention.* payload fields. Subset of
+	// libs/rabbitmq/events/events.go's RetentionEvaluatedPayload /
+	// RetentionAppliedPayload / RetentionGraceCompletedPayload. We
+	// take the union so a single struct serves the three switch cases
+	// in renderNotification.
+	RepositoryID        string `json:"repository_id"`
+	Mode                string `json:"mode"` // "retention" | "retention_grace"
+	WouldDeleteCount    int64  `json:"would_delete_count"`
+	WouldDeleteBytes    int64  `json:"would_delete_bytes"`
+	ManifestsMarked     int64  `json:"manifests_marked"`
+	ManifestsConsidered int64  `json:"manifests_considered"`
+	ManifestsDeleted    int64  `json:"manifests_deleted"`
+	BytesFreed          int64  `json:"bytes_freed"`
 }
 
 // notificationFromRow converts an audit row into a wire-shaped notification
@@ -375,6 +396,52 @@ func renderNotification(action, outcome string, p *rawNotificationPayload, org, 
 		if p.WebhookID != "" {
 			link = "/webhooks/" + p.WebhookID
 		}
+		return
+
+	// S11 slice 5 — retention lifecycle. The repository_id from the
+	// payload is a UUID; we don't have repo path resolution here so the
+	// link points to the workspace-level /activity page which already
+	// filters by event_type. Once FE-API-039+ surfaces repo_id → org/repo
+	// resolution at the audit tier we can deep-link to the repo's
+	// Retention tab directly.
+	case "retention.evaluated":
+		title = "Retention evaluated"
+		if p.Mode == "retention_grace" {
+			title = "Retention grace evaluated"
+		}
+		switch {
+		case p.WouldDeleteCount > 0:
+			summary = fmt.Sprintf("Would delete %d manifest(s)", p.WouldDeleteCount)
+		default:
+			summary = "No manifests matched the policy"
+		}
+		link = "/activity?event_types=retention.evaluated"
+		return
+
+	case "retention.applied":
+		title = "Retention applied"
+		if p.ManifestsMarked > 0 {
+			summary = fmt.Sprintf(
+				"Marked %d of %d evaluated manifest(s) for deletion",
+				p.ManifestsMarked, p.ManifestsConsidered,
+			)
+		} else {
+			summary = "Sweep completed with no manifests marked"
+		}
+		link = "/activity?event_types=retention.applied"
+		return
+
+	case "retention.grace_completed":
+		title = "Retention grace completed"
+		if p.ManifestsDeleted > 0 {
+			summary = fmt.Sprintf(
+				"Hard-deleted %d manifest(s) past grace",
+				p.ManifestsDeleted,
+			)
+		} else {
+			summary = "Grace sweep completed with no deletions"
+		}
+		link = "/activity?event_types=retention.grace_completed"
 		return
 	}
 

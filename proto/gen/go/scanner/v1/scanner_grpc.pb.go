@@ -27,6 +27,7 @@ const (
 	ScannerService_GenerateComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
 	ScannerService_GetComplianceReport_FullMethodName      = "/registry.scanner.v1.ScannerService/GetComplianceReport"
 	ScannerService_ListComplianceReports_FullMethodName    = "/registry.scanner.v1.ScannerService/ListComplianceReports"
+	ScannerService_DownloadComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/DownloadComplianceReport"
 	ScannerService_ListInstalledAdapters_FullMethodName    = "/registry.scanner.v1.ScannerService/ListInstalledAdapters"
 	ScannerService_GetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/GetActiveAdapter"
 	ScannerService_SetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/SetActiveAdapter"
@@ -59,10 +60,32 @@ type ScannerServiceClient interface {
 	// observed via GetComplianceReport.
 	GenerateComplianceReport(ctx context.Context, in *GenerateComplianceReportRequest, opts ...grpc.CallOption) (*GenerateComplianceReportResponse, error)
 	// GetComplianceReport returns one report row by id. The download_*_url
-	// fields are populated only when status == "succeeded".
+	// fields are populated only when status == "succeeded" — they are now
+	// an internal hint (the scanner uses them to resolve the on-disk path
+	// inside its own filesystem) and should NOT be used by remote callers
+	// to fetch bytes; the streaming DownloadComplianceReport RPC below is
+	// the supported path. The fields stay on the wire as a "ready" sentinel
+	// for the dashboard.
 	GetComplianceReport(ctx context.Context, in *GetComplianceReportRequest, opts ...grpc.CallOption) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(ctx context.Context, in *ListComplianceReportsRequest, opts ...grpc.CallOption) (*ListComplianceReportsResponse, error)
+	// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+	// JSON report bytes back to the caller. The scanner reads the file from
+	// its own filesystem and chunks it in ~64KB pieces; the management BFF
+	// proxies the stream into the client HTTP response. This RPC replaces
+	// the v1 shortcut of returning an absolute on-disk path on GetReport
+	// and having callers open the file themselves — that breaks the moment
+	// scanner and management are on different nodes.
+	//
+	// The first ReportChunk carries content_type (e.g. "application/pdf")
+	// so the BFF can set Content-Type on the HTTP response before forwarding
+	// any bytes; subsequent chunks carry data only. NotFound when the
+	// report id does not exist (or belongs to another tenant);
+	// FailedPrecondition when the report is not yet succeeded; Internal
+	// when the on-disk artifact is missing despite the row claiming
+	// success (storage corruption — surfaced distinctly so operators see
+	// "your data is gone" vs "still rendering").
+	DownloadComplianceReport(ctx context.Context, in *DownloadComplianceReportRequest, opts ...grpc.CallOption) (ScannerService_DownloadComplianceReportClient, error)
 	// ListInstalledAdapters enumerates every executable binary the scanner
 	// service discovered at startup under its adapter directory (default
 	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
@@ -167,6 +190,39 @@ func (c *scannerServiceClient) ListComplianceReports(ctx context.Context, in *Li
 	return out, nil
 }
 
+func (c *scannerServiceClient) DownloadComplianceReport(ctx context.Context, in *DownloadComplianceReportRequest, opts ...grpc.CallOption) (ScannerService_DownloadComplianceReportClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ScannerService_ServiceDesc.Streams[0], ScannerService_DownloadComplianceReport_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &scannerServiceDownloadComplianceReportClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type ScannerService_DownloadComplianceReportClient interface {
+	Recv() (*ReportChunk, error)
+	grpc.ClientStream
+}
+
+type scannerServiceDownloadComplianceReportClient struct {
+	grpc.ClientStream
+}
+
+func (x *scannerServiceDownloadComplianceReportClient) Recv() (*ReportChunk, error) {
+	m := new(ReportChunk)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *scannerServiceClient) ListInstalledAdapters(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListInstalledAdaptersResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListInstalledAdaptersResponse)
@@ -242,10 +298,32 @@ type ScannerServiceServer interface {
 	// observed via GetComplianceReport.
 	GenerateComplianceReport(context.Context, *GenerateComplianceReportRequest) (*GenerateComplianceReportResponse, error)
 	// GetComplianceReport returns one report row by id. The download_*_url
-	// fields are populated only when status == "succeeded".
+	// fields are populated only when status == "succeeded" — they are now
+	// an internal hint (the scanner uses them to resolve the on-disk path
+	// inside its own filesystem) and should NOT be used by remote callers
+	// to fetch bytes; the streaming DownloadComplianceReport RPC below is
+	// the supported path. The fields stay on the wire as a "ready" sentinel
+	// for the dashboard.
 	GetComplianceReport(context.Context, *GetComplianceReportRequest) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error)
+	// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+	// JSON report bytes back to the caller. The scanner reads the file from
+	// its own filesystem and chunks it in ~64KB pieces; the management BFF
+	// proxies the stream into the client HTTP response. This RPC replaces
+	// the v1 shortcut of returning an absolute on-disk path on GetReport
+	// and having callers open the file themselves — that breaks the moment
+	// scanner and management are on different nodes.
+	//
+	// The first ReportChunk carries content_type (e.g. "application/pdf")
+	// so the BFF can set Content-Type on the HTTP response before forwarding
+	// any bytes; subsequent chunks carry data only. NotFound when the
+	// report id does not exist (or belongs to another tenant);
+	// FailedPrecondition when the report is not yet succeeded; Internal
+	// when the on-disk artifact is missing despite the row claiming
+	// success (storage corruption — surfaced distinctly so operators see
+	// "your data is gone" vs "still rendering").
+	DownloadComplianceReport(*DownloadComplianceReportRequest, ScannerService_DownloadComplianceReportServer) error
 	// ListInstalledAdapters enumerates every executable binary the scanner
 	// service discovered at startup under its adapter directory (default
 	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
@@ -296,6 +374,9 @@ func (UnimplementedScannerServiceServer) GetComplianceReport(context.Context, *G
 }
 func (UnimplementedScannerServiceServer) ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListComplianceReports not implemented")
+}
+func (UnimplementedScannerServiceServer) DownloadComplianceReport(*DownloadComplianceReportRequest, ScannerService_DownloadComplianceReportServer) error {
+	return status.Errorf(codes.Unimplemented, "method DownloadComplianceReport not implemented")
 }
 func (UnimplementedScannerServiceServer) ListInstalledAdapters(context.Context, *emptypb.Empty) (*ListInstalledAdaptersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListInstalledAdapters not implemented")
@@ -450,6 +531,27 @@ func _ScannerService_ListComplianceReports_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerService_DownloadComplianceReport_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DownloadComplianceReportRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ScannerServiceServer).DownloadComplianceReport(m, &scannerServiceDownloadComplianceReportServer{ServerStream: stream})
+}
+
+type ScannerService_DownloadComplianceReportServer interface {
+	Send(*ReportChunk) error
+	grpc.ServerStream
+}
+
+type scannerServiceDownloadComplianceReportServer struct {
+	grpc.ServerStream
+}
+
+func (x *scannerServiceDownloadComplianceReportServer) Send(m *ReportChunk) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 func _ScannerService_ListInstalledAdapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -596,6 +698,12 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ScannerService_GetScannerHealth_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "DownloadComplianceReport",
+			Handler:       _ScannerService_DownloadComplianceReport_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "scanner/v1/scanner.proto",
 }

@@ -151,6 +151,112 @@ func TestReports_DownloadPDF_malformedID_returns400(t *testing.T) {
 	}
 }
 
+// TestReports_DownloadPDF_multiChunkStream — REM-012 verification that
+// the BFF correctly assembles a multi-chunk stream from the scanner.
+// The default fake puts the whole body in one chunk; this test installs
+// an override that splits the body into three to exercise the recv loop.
+//
+// We assert the response body is the concatenation of the chunks AND
+// Content-Type came from the FIRST chunk (zero-data, content_type only).
+func TestReports_DownloadPDF_multiChunkStream(t *testing.T) {
+	env, fake := newScannerEnv(t)
+
+	const reportID = "44444444-4444-4444-4444-444444444444"
+	const part1, part2, part3 = "%PDF-1.4 ", "chunk-two-here ", "tail"
+
+	// Drive GetComplianceReport so the existing path-resolution layer
+	// has something to chew on; we only override the stream path.
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	if err := os.WriteFile(pdfPath, []byte(part1+part2+part3), 0o644); err != nil {
+		t.Fatalf("write fake pdf: %v", err)
+	}
+	fake.getReportReturn = &scannerv1.ComplianceReport{
+		ReportId:       reportID,
+		TenantId:       testTenantID,
+		Status:         "succeeded",
+		DownloadPdfUrl: pdfPath,
+		RequestedAt:    timestamppb.Now(),
+	}
+
+	// Override DownloadComplianceReport on the fake to emit three chunks
+	// in the documented sequence: content_type first, then bytes.
+	downloadComplianceReportOverride = func(_ *scannerv1.DownloadComplianceReportRequest, stream scannerv1.ScannerService_DownloadComplianceReportServer) error {
+		if err := stream.Send(&scannerv1.ReportChunk{ContentType: "application/pdf"}); err != nil {
+			return err
+		}
+		for _, p := range []string{part1, part2, part3} {
+			if err := stream.Send(&scannerv1.ReportChunk{Data: []byte(p)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { downloadComplianceReportOverride = nil })
+
+	resp := env.get(t, "/api/v1/security/reports/"+reportID+"/download/pdf", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/pdf" {
+		t.Errorf("content-type: got %q, want application/pdf", ct)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	want := part1 + part2 + part3
+	if string(body) != want {
+		t.Errorf("body: got %q, want %q", string(body), want)
+	}
+}
+
+// TestReports_DownloadPDF_streamErrorMidway — when the scanner stream
+// errors AFTER headers have been committed, the BFF should log + close
+// (it can't change the HTTP status code). The client sees a truncated
+// body but no 5xx.
+func TestReports_DownloadPDF_streamErrorMidway(t *testing.T) {
+	env, fake := newScannerEnv(t)
+
+	const reportID = "55555555-5555-5555-5555-555555555555"
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	if err := os.WriteFile(pdfPath, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("write fake pdf: %v", err)
+	}
+	fake.getReportReturn = &scannerv1.ComplianceReport{
+		ReportId:       reportID,
+		TenantId:       testTenantID,
+		Status:         "succeeded",
+		DownloadPdfUrl: pdfPath,
+		RequestedAt:    timestamppb.Now(),
+	}
+
+	downloadComplianceReportOverride = func(_ *scannerv1.DownloadComplianceReportRequest, stream scannerv1.ScannerService_DownloadComplianceReportServer) error {
+		// First chunk: content_type (commits headers on the BFF side).
+		if err := stream.Send(&scannerv1.ReportChunk{ContentType: "application/pdf"}); err != nil {
+			return err
+		}
+		// One legitimate data chunk.
+		if err := stream.Send(&scannerv1.ReportChunk{Data: []byte("partial")}); err != nil {
+			return err
+		}
+		// Then bail mid-stream.
+		return status.Errorf(codes.Internal, "simulated mid-stream failure")
+	}
+	t.Cleanup(func() { downloadComplianceReportOverride = nil })
+
+	resp := env.get(t, "/api/v1/security/reports/"+reportID+"/download/pdf", adminToken)
+	// HTTP status was committed as 200 before the mid-stream error;
+	// the BFF can't go back and rewrite it. The body is truncated.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 (headers already committed), got %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "partial" {
+		t.Errorf("expected truncated body %q, got %q", "partial", string(body))
+	}
+}
+
 // TestReports_List_returnsEmptyJSON verifies the BFF wraps the response in
 // the expected map shape even when there are no rows.
 func TestReports_List_returnsEmptyJSON(t *testing.T) {

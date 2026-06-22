@@ -53,6 +53,13 @@ export interface Tag {
   size_bytes: number;
   updated_at: string;
   created_at: string;
+  // REM-013 gap 1 — RFC3339 timestamp of when the retention executor
+  // soft-deleted this manifest. Absent on the wire (and undefined in
+  // TS) when the manifest is not in the retention grace window — the
+  // common case. The dashboard renders a "🗑 deletes in N days" pill
+  // on the Tags table when set; FE derives the ETA from this stamp +
+  // the platform's configured grace window (default 7d).
+  retention_pending_delete_at?: string;
 }
 
 export interface TagsListResponse {

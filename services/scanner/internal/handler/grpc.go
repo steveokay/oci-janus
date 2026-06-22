@@ -17,6 +17,10 @@ package handler
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -325,6 +329,142 @@ func (h *GRPCHandler) ListComplianceReports(ctx context.Context, req *scannerv1.
 		out.Reports = append(out.Reports, reportToProto(r))
 	}
 	return out, nil
+}
+
+// reportChunkBytes is the streaming chunk size for
+// DownloadComplianceReport. 64 KiB is the sweet spot between gRPC
+// per-message overhead and memory footprint on the management proxy
+// (which io.Copy's straight into the HTTP response without buffering
+// the whole file). Tunable here without touching the proto.
+const reportChunkBytes = 64 * 1024
+
+// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+// JSON for a succeeded report.
+//
+// Auth: the request is forwarded by the management BFF, which has
+// already done JWT + RBAC. We still scope to the supplied tenant_id by
+// looking up the report row via GetReport (tenant-filtered) — a
+// malformed report_id from another tenant 404s instead of leaking a
+// file path.
+//
+// Error mapping:
+//   - InvalidArgument: malformed UUIDs, unknown format, mismatched
+//     extension (defence-in-depth against a corrupt DB row whose
+//     pdf_path actually points at a JSON file or vice versa)
+//   - NotFound: report does not exist for this tenant
+//   - FailedPrecondition: report not yet in succeeded state
+//   - Internal: artifact missing on disk despite "succeeded" status
+//     (storage corruption — distinct from "report not found" so an
+//     operator can tell the difference)
+func (h *GRPCHandler) DownloadComplianceReport(
+	req *scannerv1.DownloadComplianceReportRequest,
+	stream scannerv1.ScannerService_DownloadComplianceReportServer,
+) error {
+	if h.repo == nil {
+		return status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	reportID, err := uuid.Parse(req.GetReportId())
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "report_id must be a UUID")
+	}
+
+	rec, err := h.repo.GetReport(stream.Context(), reportID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return status.Error(codes.NotFound, "report not found")
+		}
+		return status.Errorf(codes.Internal, "get report: %v", err)
+	}
+	if rec.Status != "succeeded" {
+		return status.Errorf(codes.FailedPrecondition,
+			"report not ready (status=%s)", rec.Status)
+	}
+
+	// Pick artifact + content type by format. Keeps the allowlist tight
+	// — anything outside {pdf, sbom} 400s rather than blindly streaming
+	// whatever the row happens to hold.
+	var (
+		artifactPath string
+		contentType  string
+		expectedExt  string
+	)
+	switch strings.ToLower(req.GetFormat()) {
+	case "pdf":
+		artifactPath = rec.PDFPath
+		contentType = "application/pdf"
+		expectedExt = ".pdf"
+	case "sbom":
+		artifactPath = rec.SBOMPath
+		contentType = "application/json"
+		expectedExt = ".json"
+	default:
+		return status.Error(codes.InvalidArgument, "format must be one of pdf|sbom")
+	}
+
+	if artifactPath == "" {
+		// Row says succeeded but never recorded a path — counts as
+		// storage corruption from the operator's POV.
+		return status.Errorf(codes.Internal,
+			"report artifact missing for format %q", req.GetFormat())
+	}
+
+	// filepath.Clean + extension match guard against a corrupt DB row
+	// that swapped pdf_path/sbom_path or escaped its working tree.
+	// These are defence-in-depth — the report worker writes the rows
+	// itself, so this is paranoia for the day someone hand-edits the
+	// table.
+	cleaned := filepath.Clean(artifactPath)
+	if !strings.HasSuffix(strings.ToLower(cleaned), expectedExt) {
+		return status.Errorf(codes.InvalidArgument,
+			"report path %q does not match expected extension %q", cleaned, expectedExt)
+	}
+
+	f, err := os.Open(cleaned)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return status.Error(codes.Internal, "report artifact missing on disk")
+		}
+		return status.Errorf(codes.Internal, "open report artifact: %v", err)
+	}
+	defer f.Close()
+
+	// First chunk: content_type only (zero-byte data). Sending the
+	// content_type up-front lets the proxy commit Content-Type on the
+	// HTTP response BEFORE any bytes flow — once io.Copy starts it's too
+	// late to set headers. The first content chunk lands on the next
+	// Send call.
+	if err := stream.Send(&scannerv1.ReportChunk{ContentType: contentType}); err != nil {
+		return status.Errorf(codes.Internal, "send first chunk: %v", err)
+	}
+
+	buf := make([]byte, reportChunkBytes)
+	for {
+		// Honor cancellation — a slow client or BFF disconnect should
+		// stop the file read promptly rather than tying up the file
+		// descriptor.
+		if err := stream.Context().Err(); err != nil {
+			return err
+		}
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			// Slice to actual bytes read; Send copies the slice into the
+			// outbound proto so reusing the buffer in the next loop is
+			// safe.
+			if err := stream.Send(&scannerv1.ReportChunk{Data: buf[:n]}); err != nil {
+				return status.Errorf(codes.Internal, "send chunk: %v", err)
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return status.Errorf(codes.Internal, "read report artifact: %v", readErr)
+		}
+	}
 }
 
 // reportToProto converts a repository row to its proto form. Download URLs

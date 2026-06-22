@@ -208,7 +208,6 @@ Real value, but easy to defer.
   patch to actually capture them at delivery time. The UI already
   renders a "Not captured · backend follow-up tracked in status.md
   FE-API-035" muted placeholder.
-
 ---
 
 ## How to use this file

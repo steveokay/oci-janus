@@ -18,6 +18,7 @@ import { DeleteTenantDialog } from "@/components/admin/delete-tenant-dialog";
 import { TenantDetailDrawer } from "@/components/admin/tenant-detail-drawer";
 // S9.5 — FE-API-032 replaces the prior ComingSoon panel for GC visibility.
 import { GCCard } from "@/components/admin/gc-card";
+import { RetentionCard } from "@/components/admin/retention-card";
 import {
   useAdminTenants,
   type AdminTenant,
@@ -119,6 +120,11 @@ function AdminTenantsPage(): React.ReactElement {
 
       {/* FE-API-032 — GC status + history + run-now. */}
       <GCCard />
+
+      {/* S11 Slice 5 — Retention runs tile. Uses the same /admin/gc/runs */}
+      {/* endpoint as GCCard, filtered client-side for the two retention   */}
+      {/* modes. Per-mode server filter is tracked as REM-013 gap 2.       */}
+      <RetentionCard />
 
       <CreateTenantDialog
         open={createOpen}

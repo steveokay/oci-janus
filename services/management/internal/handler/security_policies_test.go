@@ -9,11 +9,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -103,6 +106,92 @@ func (s *fakeScannerServer) GetComplianceReport(_ context.Context, req *scannerv
 
 func (s *fakeScannerServer) ListComplianceReports(_ context.Context, _ *scannerv1.ListComplianceReportsRequest) (*scannerv1.ListComplianceReportsResponse, error) {
 	return &scannerv1.ListComplianceReportsResponse{Reports: s.listReports}, nil
+}
+
+// downloadComplianceReportOverride lets a test fully control the stream
+// (multi-chunk fanout, mid-stream errors) without spinning up another
+// fake. When set, it short-circuits the file-read path below.
+var downloadComplianceReportOverride func(*scannerv1.DownloadComplianceReportRequest, scannerv1.ScannerService_DownloadComplianceReportServer) error
+
+// DownloadComplianceReport (REM-012) — streaming fake. Replicates the
+// real scanner's behaviour:
+//   - Resolve the report row the same way GetComplianceReport does so the
+//     existing getReportReturn / getComplianceReportOverride fixtures
+//     drive both surfaces uniformly.
+//   - 404 / 409 / 400 mapping mirrors the production handler.
+//   - On success, read the file at the matching path field and stream it
+//     in two chunks: first chunk carries content_type only (matches the
+//     production "headers BEFORE bytes" contract), second chunk carries
+//     the full body. Multi-chunk fanout isn't needed for the basic
+//     fixtures; tests exercising the chunk loop use the override hook
+//     above.
+func (s *fakeScannerServer) DownloadComplianceReport(
+	req *scannerv1.DownloadComplianceReportRequest,
+	stream scannerv1.ScannerService_DownloadComplianceReportServer,
+) error {
+	if downloadComplianceReportOverride != nil {
+		return downloadComplianceReportOverride(req, stream)
+	}
+	// Resolve report via the same path as GetComplianceReport so tests
+	// installing scannerGetErrorOverride / getReportReturn cover this
+	// surface too. The override returning (nil, err) lets a test force
+	// NotFound; (rec, nil) returns an explicit row.
+	var rec *scannerv1.ComplianceReport
+	if getComplianceReportOverride != nil {
+		r, err := getComplianceReportOverride(&scannerv1.GetComplianceReportRequest{
+			TenantId: req.GetTenantId(),
+			ReportId: req.GetReportId(),
+		})
+		if err != nil {
+			return err
+		}
+		rec = r
+	}
+	if rec == nil && s.getReportReturn != nil {
+		rec = s.getReportReturn
+	}
+	if rec == nil {
+		// Default fake — pending. Production returns FailedPrecondition.
+		return status.Errorf(codes.FailedPrecondition, "report not ready (status=pending)")
+	}
+	if rec.GetStatus() != "succeeded" {
+		return status.Errorf(codes.FailedPrecondition,
+			"report not ready (status=%s)", rec.GetStatus())
+	}
+
+	var path, contentType string
+	switch req.GetFormat() {
+	case "pdf":
+		path = rec.GetDownloadPdfUrl()
+		contentType = "application/pdf"
+	case "sbom":
+		path = rec.GetDownloadSbomUrl()
+		contentType = "application/json"
+	default:
+		return status.Errorf(codes.InvalidArgument, "format must be one of pdf|sbom")
+	}
+	if path == "" {
+		return status.Errorf(codes.Internal, "report artifact missing for format %q", req.GetFormat())
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return status.Errorf(codes.Internal, "open report artifact: %v", err)
+	}
+
+	// First chunk: content_type with empty body — matches the production
+	// "commit headers before bytes" sequence.
+	if err := stream.Send(&scannerv1.ReportChunk{ContentType: contentType}); err != nil {
+		return err
+	}
+	// Second chunk: the body in one shot. Tests don't care about
+	// streaming granularity; the BFF's Recv loop handles either.
+	if len(body) > 0 {
+		if err := stream.Send(&scannerv1.ReportChunk{Data: body}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // newScannerEnv wires the same set of fakes as newTestEnv but additionally

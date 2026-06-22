@@ -70,10 +70,18 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 # tmpfs-backed overlay so each pod sees a fresh cache, OR mount the upstream
 # Trivy DB read-only and disable in-place DB updates via TRIVY_NO_PROGRESS +
 # pre-baked cache layers. See infra/runbooks/scanner-cache-hardening.md.
-RUN mkdir -p /trivy-cache \
+RUN mkdir -p /trivy-cache /tmp/reports \
  && groupadd -g 65532 nonroot \
  && useradd -u 65532 -g nonroot -s /sbin/nologin -M nonroot \
- && chown nonroot:nonroot /trivy-cache
+ && chown nonroot:nonroot /trivy-cache /tmp/reports
+# /tmp/reports holds rendered compliance reports (FE-API-019). Both this
+# scanner container (writer) and the registry-management container (reader,
+# via the scanner_reports named volume in infra/docker-compose) share this
+# path. We chown at image-build time so the named volume picks up the
+# nonroot:nonroot ownership on first attach — Docker copies image content
+# into a fresh volume, which means the volume inherits these permissions
+# rather than the default root:root that Docker creates volumes with.
+# Tracked properly as REM-012 (streaming RPC replacement).
 
 ENV TRIVY_CACHE_DIR=/trivy-cache
 

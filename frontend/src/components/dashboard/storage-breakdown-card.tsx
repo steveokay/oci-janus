@@ -70,6 +70,8 @@ export function StorageBreakdownCard({
                   name={r.name}
                   bytes={r.storage_used_bytes}
                   percent={r.percent_of_tenant}
+                  retentionSummary={r.retention_summary}
+                  retentionSource={r.retention_source}
                 />
               ))}
             </ul>
@@ -91,11 +93,15 @@ function BreakdownRow({
   name,
   bytes,
   percent,
+  retentionSummary,
+  retentionSource,
 }: {
   org: string;
   name: string;
   bytes: number;
   percent: number;
+  retentionSummary?: string;
+  retentionSource?: "repo" | "org" | "";
 }): React.ReactElement {
   // Pin the bar to a 1% minimum so a repo with a real (non-zero) presence
   // doesn't render as an invisible sliver — the tenant_total can dwarf any
@@ -128,6 +134,25 @@ function BreakdownRow({
             style={{ width: `${barWidthPct}%` }}
             aria-hidden
           />
+        </div>
+        {/* REM-013 gap 3 — retention column sits below the storage bar */}
+        {/* so a glance at the row tells the operator both "how much" and */}
+        {/* "what policy". Empty when no policy applies — render "—"     */}
+        {/* rather than dropping the line so the layout doesn't shift.   */}
+        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[var(--color-fg-subtle)]">
+          <span className="uppercase tracking-[0.16em]">Retention</span>
+          {retentionSummary ? (
+            <span className="font-mono text-[11px] text-[var(--color-fg-muted)]">
+              {retentionSummary}
+              {retentionSource === "org" ? (
+                <span className="ml-1 text-[var(--color-fg-subtle)]">
+                  (inherited)
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <span>—</span>
+          )}
         </div>
       </Link>
     </li>

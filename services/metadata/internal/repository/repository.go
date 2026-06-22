@@ -265,8 +265,14 @@ func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName st
 // LEFT JOIN against `manifests` keeps the row when the referenced manifest is
 // missing (transient state during deletes) and returns size_bytes=0 in that
 // case instead of dropping the tag from the result set.
+//
+// REM-013 gap 1: m.retention_pending_delete_at surfaces on the wire so the
+// dashboard can render "🗑 deletes in N days" pills on the Tags table
+// without an extra round-trip. NULL when the manifest isn't in the
+// retention soft-delete window (the common case).
 const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
-	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)`
+	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
+	m.retention_pending_delete_at`
 
 const tagFromJoin = `FROM tags t
 	LEFT JOIN manifests m
@@ -287,7 +293,8 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 			RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
 		)
 		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
-		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)
+		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
+		       m.retention_pending_delete_at
 		FROM upserted t
 		LEFT JOIN manifests m
 		  ON  m.repo_id   = t.repo_id
@@ -337,12 +344,19 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 	for rows.Next() {
 		var tag metadatav1.Tag
 		var updatedAt, createdAt time.Time
+		// REM-013 gap 1: scan retention_pending_delete_at as *time.Time so
+		// NULL (the common case) survives unmodified and we can leave the
+		// proto field unset rather than emitting the Go zero time.
+		var pendingDeleteAt *time.Time
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes); err != nil {
+			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes, &pendingDeleteAt); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tag.UpdatedAt = timestamppb.New(updatedAt)
 		tag.CreatedAt = timestamppb.New(createdAt)
+		if pendingDeleteAt != nil {
+			tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
+		}
 		tags = append(tags, &tag)
 	}
 	return tags, rows.Err()
@@ -364,9 +378,11 @@ func (r *Repository) DeleteTag(ctx context.Context, tenantID, repoID, name strin
 func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) (*metadatav1.Tag, error) {
 	var tag metadatav1.Tag
 	var updatedAt, createdAt time.Time
+	// REM-013 gap 1: see ListTags for the *time.Time scan rationale.
+	var pendingDeleteAt *time.Time
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
+		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes, &pendingDeleteAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -376,6 +392,9 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 	}
 	tag.UpdatedAt = timestamppb.New(updatedAt)
 	tag.CreatedAt = timestamppb.New(createdAt)
+	if pendingDeleteAt != nil {
+		tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
+	}
 	return &tag, nil
 }
 

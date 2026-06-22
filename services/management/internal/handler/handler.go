@@ -723,6 +723,11 @@ type TagResponse struct {
 	SizeBytes int64     `json:"size_bytes"`
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+	// REM-013 gap 1: surfaces manifests.retention_pending_delete_at via
+	// proto Tag.retention_pending_delete_at so the dashboard can render
+	// "🗑 deletes in N days" pills on the Tags table. Omitted when the
+	// referenced manifest has no pending delete stamp (the common case).
+	RetentionPendingDeleteAt *time.Time `json:"retention_pending_delete_at,omitempty"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -765,13 +770,22 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			slog.Error("ListTags stream", "err", recvErr)
 			break
 		}
-		tags = append(tags, TagResponse{
+		out := TagResponse{
 			Name:           tag.GetName(),
 			ManifestDigest: tag.GetManifestDigest(),
 			SizeBytes:      tag.GetSizeBytes(),
 			UpdatedAt:      tag.GetUpdatedAt().AsTime(),
 			CreatedAt:      tag.GetCreatedAt().AsTime(),
-		})
+		}
+		// REM-013 gap 1: surface the soft-delete stamp only when the
+		// upstream proto carries one. The proto's GetX() helper returns
+		// nil for unset Timestamps, so we check explicitly rather than
+		// emitting a zero time on every row.
+		if ts := tag.GetRetentionPendingDeleteAt(); ts != nil {
+			t := ts.AsTime()
+			out.RetentionPendingDeleteAt = &t
+		}
+		tags = append(tags, out)
 	}
 
 	if tags == nil {

@@ -34,6 +34,9 @@ type fakeRepo struct {
 	// captured arguments for assertion.
 	lastListLimit  int
 	lastListToken  string
+	// REM-013 gap 2 — new ListRuns filter params.
+	lastListRepoID uuid.UUID
+	lastListModes  []string
 	lastCreateMode string
 	lastCreateBy   string
 
@@ -79,9 +82,14 @@ func (f *fakeRepo) GetLatest(_ context.Context) (*repository.GCRun, error) {
 	return f.latest, nil
 }
 
-func (f *fakeRepo) ListRuns(_ context.Context, limit int, pageToken string) ([]*repository.GCRun, string, error) {
+func (f *fakeRepo) ListRuns(_ context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*repository.GCRun, string, error) {
+	// REM-013 gap 2 — record the new filter params so per-repo / mode
+	// tests can assert the handler plumbed them through. Existing
+	// callers that don't care still see the same `runs` slice back.
 	f.lastListLimit = limit
 	f.lastListToken = pageToken
+	f.lastListRepoID = repoID
+	f.lastListModes = modes
 	if f.listErr != nil {
 		return nil, "", f.listErr
 	}

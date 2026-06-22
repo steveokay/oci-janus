@@ -54,11 +54,30 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     { className, variant, size, asChild = false, loading, children, ...props },
     ref,
   ) {
-    const Comp = asChild ? Slot : "button";
+    const classes = cn(buttonVariants({ variant, size, className }));
+
+    // asChild path uses Radix Slot to forward props to a single child
+    // (typically a <Link>). Newer Radix versions (>=1.1) reject multi-child
+    // JSX even when one is null, so we render Slot WITHOUT the spinner —
+    // asChild + loading was never meaningful anyway (the slotted child
+    // isn't a real <button>).
+    if (asChild) {
+      return (
+        <Slot
+          ref={ref}
+          className={classes}
+          aria-busy={loading || undefined}
+          {...props}
+        >
+          {children}
+        </Slot>
+      );
+    }
+
     return (
-      <Comp
+      <button
         ref={ref}
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={classes}
         aria-busy={loading || undefined}
         {...props}
       >
@@ -71,7 +90,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           />
         ) : null}
         {children}
-      </Comp>
+      </button>
     );
   },
 );

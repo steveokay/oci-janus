@@ -243,6 +243,12 @@ message Tag {
   // stored in `manifests.image_size_bytes`; 0 when the manifest is missing
   // or its JSON could not be parsed.
   int64 size_bytes       = 8;
+  // REM-013 gap 1: surface the manifest's retention_pending_delete_at on
+  // the tag row so the dashboard can render a "🗑 deletes in N days" pill
+  // on the Tags table without a separate per-tag round-trip. Optional —
+  // null when the referenced manifest has no pending delete stamp (which
+  // is the default state).
+  google.protobuf.Timestamp retention_pending_delete_at = 9;
 }
 
 message Manifest {

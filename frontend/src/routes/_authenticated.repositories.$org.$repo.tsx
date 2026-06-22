@@ -7,6 +7,7 @@ import { TagsPanel } from "@/components/repositories/tags-panel";
 import { DeleteRepositoryDialog } from "@/components/repositories/delete-repository-dialog";
 import { RepoMembersPanel } from "@/components/repositories/repo-members-panel";
 import { DescriptionCard } from "@/components/repositories/description-card";
+import { RetentionPanel } from "@/components/repositories/retention-panel";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
@@ -55,6 +56,10 @@ function RepositoryDetail(): React.ReactElement {
         <TabsList>
           <TabsTrigger value="tags">Tags</TabsTrigger>
           <TabsTrigger value="members">Members</TabsTrigger>
+          {/* S11 Slice 1 — Retention tab sits between Members and Settings */}
+          {/* so the destructive primitives (members, retention, future       */}
+          {/* delete-repo) cluster together in the rightmost positions.      */}
+          <TabsTrigger value="retention">Retention</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -64,6 +69,10 @@ function RepositoryDetail(): React.ReactElement {
 
         <TabsContent value="members">
           <RepoMembersPanel org={org} repo={repo} />
+        </TabsContent>
+
+        <TabsContent value="retention">
+          <RetentionPanel org={org} repo={repo} />
         </TabsContent>
 
         <TabsContent value="settings">

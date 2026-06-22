@@ -35,7 +35,11 @@ import (
 type Repository interface {
 	CreateRun(ctx context.Context, mode string, tenantID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	GetLatest(ctx context.Context) (*repository.GCRun, error)
-	ListRuns(ctx context.Context, limit int, pageToken string) ([]*repository.GCRun, string, error)
+	// REM-013 gap 2 — repoID == uuid.Nil disables the repo filter; modes
+	// == nil or empty disables the mode filter. Both preserve the old
+	// behaviour so the existing platform-admin /admin/gc/runs route keeps
+	// working with no caller-side changes.
+	ListRuns(ctx context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*repository.GCRun, string, error)
 	// FE-API-040 — retention executor surface.
 	CreateRetentionRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	GetRunByID(ctx context.Context, runID, tenantID uuid.UUID) (*repository.GCRun, error)
@@ -206,7 +210,18 @@ func (h *GRPCHandler) ListRuns(ctx context.Context, req *gcv1.ListRunsRequest) (
 		limit = 200
 	}
 
-	rows, next, err := h.repo.ListRuns(ctx, limit, req.GetPageToken())
+	// REM-013 gap 2 — parse the new optional repo_id + modes filters from
+	// the request. Empty repo_id maps to uuid.Nil; cardinality 0 modes
+	// preserves the pre-REM-013 "all modes" semantics.
+	var repoID uuid.UUID
+	if rid := req.GetRepoId(); rid != "" {
+		parsed, err := uuid.Parse(rid)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid repo_id")
+		}
+		repoID = parsed
+	}
+	rows, next, err := h.repo.ListRuns(ctx, limit, req.GetPageToken(), repoID, req.GetModes())
 	if err != nil {
 		// The repository layer surfaces a wrapped error for malformed
 		// page_token; check the wrapped chain rather than a string
