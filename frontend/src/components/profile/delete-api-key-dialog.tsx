@@ -33,7 +33,7 @@ export function DeleteApiKeyDialog({
   async function handleConfirm(): Promise<void> {
     setSubmitting(true);
     try {
-      await del.mutateAsync(apiKey.key_id);
+      await del.mutateAsync(apiKey.id);
       toast.success(`Revoked "${apiKey.name}".`);
       onOpenChange(false);
     } catch (e) {
@@ -72,7 +72,7 @@ export function DeleteApiKeyDialog({
         <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3">
           <div className="text-sm font-medium">{apiKey.name}</div>
           <div className="font-mono text-[10px] text-[var(--color-fg-subtle)]">
-            {apiKey.key_id}
+            {apiKey.prefix}…
           </div>
         </div>
 
