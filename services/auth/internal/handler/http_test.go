@@ -1640,5 +1640,141 @@ func TestRemoteIP_trustedProxy_privateXFF_fallsBackToPeer(t *testing.T) {
 	}
 }
 
+// ── CreateAPIKey with service_account_id (FE-API-048 T17) ────────────────────
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_HappyPath — POST /api/v1/apikeys with
+// service_account_id set by an admin caller returns 201 with the raw key.
+func TestHTTP_CreateAPIKey_ForServiceAccount_HappyPath(t *testing.T) {
+	// Use the SA test environment so saService is wired.
+	env := newSATestEnv(t)
+
+	adminTok, adminID := env.issueAdminToken(t)
+
+	// Seed a service account owned by the caller's tenant with an allowed scope.
+	sa := env.seedSA("ci-bot", adminID)
+	// seedSA uses []string{"read"} as AllowedScopes; our key request uses "read".
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "ci-key",
+		"scopes":             []string{"read"},
+		"service_account_id": sa.ID.String(),
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// The raw key must be present — shown exactly once.
+	if result["key"] == "" || result["key"] == nil {
+		t.Error("expected non-empty raw key in response")
+	}
+	if result["name"] != "ci-key" {
+		t.Errorf("name: got %v, want ci-key", result["name"])
+	}
+	// Verify the audit event was emitted via the SA service.
+	if !env.audit.hasAction("service_account.key_issued") {
+		t.Error("expected service_account.key_issued audit event")
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_RequiresAdmin — a non-admin caller
+// (role "reader") posting service_account_id must receive 403 Forbidden.
+func TestHTTP_CreateAPIKey_ForServiceAccount_RequiresAdmin(t *testing.T) {
+	env := newSATestEnv(t)
+
+	// Seed an SA to provide a valid service_account_id.
+	adminID := uuid.New()
+	sa := env.seedSA("worker-bot", adminID)
+
+	// Issue a reader (non-admin) token.
+	readerTok := env.issueReaderToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "should-fail",
+		"scopes":             []string{"read"},
+		"service_account_id": sa.ID.String(),
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+readerTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d, want %d (non-admin must be denied)", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_InvalidUUID — a malformed
+// service_account_id (not a valid UUID) must return 400 Bad Request.
+func TestHTTP_CreateAPIKey_ForServiceAccount_InvalidUUID(t *testing.T) {
+	env := newSATestEnv(t)
+
+	adminTok, _ := env.issueAdminToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "bad-uuid-key",
+		"scopes":             []string{"read"},
+		"service_account_id": "not-a-valid-uuid",
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d (malformed UUID must be rejected)", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_NotFound — a well-formed UUID that
+// does not match any SA in the tenant must return 404 Not Found.
+func TestHTTP_CreateAPIKey_ForServiceAccount_NotFound(t *testing.T) {
+	env := newSATestEnv(t)
+
+	adminTok, _ := env.issueAdminToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "ghost-key",
+		"scopes":             []string{"read"},
+		"service_account_id": uuid.New().String(), // valid UUID, no such SA
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d (unknown SA UUID must return 404)", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
 // ── Suppress unused import errors ─────────────────────────────────────────────
 var _ = time.Now

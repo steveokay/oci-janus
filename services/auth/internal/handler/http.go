@@ -480,7 +480,24 @@ func (h *HTTPHandler) refreshToken(w http.ResponseWriter, r *http.Request) {
 
 // ── API key management ────────────────────────────────────────────────────────
 
+// createAPIKeyBody is the request body for POST /api/v1/apikeys.
+// ServiceAccountID is optional; when set the request is routed to the
+// SA-key issuance path (admin-gated) instead of the human-user path.
+type createAPIKeyBody struct {
+	Name             string     `json:"name"`
+	Scopes           []string   `json:"scopes"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	// ServiceAccountID, when non-empty, must be a valid UUID. The caller must
+	// hold an admin role in the SA's tenant. The key will be owned by the SA
+	// (ServiceAccountID column set, UserID nil) instead of the calling user.
+	ServiceAccountID *string `json:"service_account_id,omitempty"`
+}
+
 // createAPIKey generates a new API key and returns the raw secret (shown once only).
+//
+// When the request body contains a non-empty service_account_id the call is
+// forwarded to createSAAPIKey which handles admin gating and SA-key issuance.
+// The human-key path is unchanged when service_account_id is absent or empty.
 func (h *HTTPHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	claims, err := h.requireAuth(r)
 	if err != nil {
@@ -488,16 +505,19 @@ func (h *HTTPHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name      string     `json:"name"`
-		Scopes    []string   `json:"scopes"`
-		ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	}
+	var req createAPIKeyBody
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid request body")
 		return
 	}
 
+	// Branch: when service_account_id is supplied, route to SA-key issuance.
+	if req.ServiceAccountID != nil && *req.ServiceAccountID != "" {
+		h.createSAAPIKey(w, r, req, claims)
+		return
+	}
+
+	// Human-user key path (unchanged).
 	tenantID, err := uuid.Parse(claims.TenantID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "invalid tenant in token")
@@ -537,6 +557,122 @@ func (h *HTTPHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: key.ExpiresAt,
 		CreatedAt: key.CreatedAt,
 		RawKey:    rawSecret,
+	})
+}
+
+// createSAAPIKey handles the SA-key issuance branch of POST /api/v1/apikeys.
+//
+// It is called only when the decoded request body contains a non-empty
+// service_account_id. The flow mirrors saIssueKey in http_service_accounts.go
+// but is reached from the /apikeys endpoint rather than the SA-specific URL:
+//
+//  1. Validate service_account_id is a well-formed UUID.
+//  2. Require saService to be configured (501 if not).
+//  3. Load the SA and enforce tenant ownership (404 on mismatch).
+//  4. Require the caller to be a workspace admin (403 if not).
+//  5. Delegate to saService.IssueKey and return 201 with the same
+//     apiKeyResponse shape as the human-key path.
+func (h *HTTPHandler) createSAAPIKey(w http.ResponseWriter, r *http.Request, req createAPIKeyBody, claims *service.Claims) {
+	// saService must be wired; return 501 when it is not.
+	if !h.requireSAService(w) {
+		return
+	}
+
+	// 1. Parse and validate the SA UUID.
+	saID, err := uuid.Parse(*req.ServiceAccountID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid service_account_id")
+		return
+	}
+
+	callerID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "createSAAPIKey: invalid sub in token", "value", claims.Subject)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	callerTenant, err := uuid.Parse(claims.TenantID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "createSAAPIKey: invalid tenant_id in token", "value", claims.TenantID)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// 2. Load the SA; verify it belongs to the caller's tenant. We return 404
+	// rather than 403 on a tenant mismatch so callers cannot probe cross-tenant
+	// SA existence via this endpoint.
+	sa, err := h.saService.Get(r.Context(), saID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "service account not found")
+			return
+		}
+		slog.ErrorContext(r.Context(), "createSAAPIKey: Get failed",
+			"sa_id", saID,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if sa.TenantID != callerTenant {
+		// Surface cross-tenant mismatch as 404 — same pattern as getServiceAccount
+		// and deleteServiceAccount (CLAUDE.md §9: never expose cross-tenant existence).
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "service account not found")
+		return
+	}
+
+	// 3. Require the caller to be a tenant admin (admin or owner role).
+	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, callerTenant) {
+		writeError(w, http.StatusForbidden, "DENIED", "admin role required")
+		return
+	}
+
+	// 4. Issue the key via the service layer; it validates that scopes are a
+	// subset of sa.AllowedScopes and emits the service_account.key_issued audit
+	// event.
+	result, err := h.saService.IssueKey(r.Context(), sa.ID, sa.TenantID, req.Name, req.Scopes, callerID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "service account not found")
+			return
+		}
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			writeError(w, http.StatusConflict, "CONFLICT", "a key with that name already exists for this service account")
+			return
+		}
+		// Check for scope-not-allowed; return 400 with the denied scope name so
+		// callers receive a precise, actionable error message.
+		var scopeErr *service.ErrScopeNotAllowed
+		if errors.As(err, &scopeErr) {
+			writeError(w, http.StatusBadRequest, "SCOPE_NOT_ALLOWED",
+				"scope not allowed for this service account: "+scopeErr.Scope)
+			return
+		}
+		slog.ErrorContext(r.Context(), "createSAAPIKey: IssueKey failed",
+			"sa_id", sa.ID,
+			"tenant_id", sa.TenantID,
+			"name", req.Name,
+			"err", err,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// 5. Return 201 with the same shape as the human-key response (apiKeyResponse).
+	// RawKey is the plaintext secret — shown exactly once, never recoverable.
+	k := result.Key
+	scopes := k.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	writeJSON(w, http.StatusCreated, apiKeyResponse{
+		ID:        k.ID.String(),
+		Name:      k.Name,
+		Prefix:    k.KeyPrefix,
+		Scopes:    scopes,
+		ExpiresAt: k.ExpiresAt,
+		CreatedAt: k.CreatedAt,
+		RawKey:    result.RawSecret,
 	})
 }
 
