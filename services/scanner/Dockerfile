@@ -37,6 +37,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /
 WORKDIR /build/infra/scanner-plugins/grype-adapter
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/grype-adapter .
 
+# REM-014 — Clair adapter. Stdlib-only binary (no Clair Go client dep)
+# that talks to the Clair v4 indexer + matcher over HTTP. The scanner
+# container picks this up via the /usr/local/bin/scanner-* glob, same
+# as the other adapters.
+WORKDIR /build/infra/scanner-plugins/clair-adapter
+RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/clair-adapter .
+
 # ── Stage 2: Trivy binary ─────────────────────────────────────────
 FROM aquasec/trivy:0.52.0 AS trivy
 
@@ -74,6 +81,7 @@ COPY --from=builder /bin/server /server
 COPY --from=builder /bin/dev-stub /usr/local/bin/scanner-dev-stub
 COPY --from=builder /bin/trivy-adapter /usr/local/bin/scanner-trivy-adapter
 COPY --from=builder /bin/grype-adapter /usr/local/bin/scanner-grype-adapter
+COPY --from=builder /bin/clair-adapter /usr/local/bin/scanner-clair-adapter
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 # Grype upstream packages the binary at /grype inside its image.
 COPY --from=grype /grype /usr/local/bin/grype
@@ -144,6 +152,11 @@ RUN chmod +x /entrypoint.sh
 VOLUME ["/trivy-cache", "/grype-cache"]
 
 EXPOSE 50051 8080
+# REM-014 — Clair adapter's embedded HTTP server. Clair fetches staged
+# layer blobs from the scanner container via http://scanner:9099/<digest>
+# on the `registry` Docker network. Not mapped to a host port; only
+# reachable from sibling containers.
+EXPOSE 9099
 
 USER 65532:65532
 

@@ -83,6 +83,13 @@ var allowedBlockSeverities = map[string]struct{}{
 var allowedScannerPlugins = map[string]struct{}{
 	"trivy": {},
 	"grype": {},
+	// REM-014 — Clair v4 adapter. Opt-in via the `--profile clair`
+	// compose flag; the adapter binary ships in the scanner image
+	// regardless so the allowlist value is always selectable from
+	// /admin/scanner. When the operator picks `clair` without bringing
+	// up the Clair services, the next scan surfaces a clear "Clair
+	// service unreachable" error rather than a silent failure.
+	"clair": {},
 }
 
 // requireScanPolicyAdmin gates PUT. Same shape as requireWebhookAdmin —

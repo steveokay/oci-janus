@@ -219,7 +219,12 @@ func pluginEnv() []string {
 		"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
 	}
 	// Prefixes for scanner-specific config that plugins may legitimately need.
-	allowedPrefixes := []string{"TRIVY_", "GRYPE_"}
+	// REM-014: CLAIR_ joins the list — the clair-adapter reads CLAIR_URL +
+	// CLAIR_FETCH_HOST + CLAIR_FETCH_PORT + CLAIR_POLL_INTERVAL +
+	// CLAIR_TIMEOUT. The same allowlist gate the other adapters live
+	// behind — services/scanner can't inadvertently leak DB_DSN / JWT
+	// keys / cloud credentials into a subprocess by adding a prefix.
+	allowedPrefixes := []string{"TRIVY_", "GRYPE_", "CLAIR_"}
 
 	var env []string
 	for _, e := range os.Environ() {

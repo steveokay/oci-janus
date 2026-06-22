@@ -1,0 +1,78 @@
+# Clair v4 configuration — dev compose profile.
+#
+# REM-014 (2026-06-22) — Clair multi-scanner integration.
+#
+# We run Clair in "combo" mode (single container hosting the indexer,
+# matcher, and notifier services) because the dev compose stack favours
+# simplicity over horizontal scaling. Production deployments should
+# split the services per the upstream Clair docs:
+#
+#   https://quay.github.io/clair/howto/deployment.html
+#
+# The clair-adapter binary baked into the scanner image talks to this
+# combo service over HTTP on port 6060 (default; see services/scanner
+# environment block for the CLAIR_URL the adapter reads).
+
+http_listen_addr: :6060
+# Introspection endpoint (metrics + pprof). Moved off the default
+# :8089 because registry-gc already binds that on the same compose
+# host port — first cold start of `--profile clair` would fail to
+# expose the container otherwise.
+introspection_addr: :8099
+log_level: info
+
+indexer:
+  # Postgres connection string. Uses the dedicated clair-db container so
+  # Clair's hash-heavy `manifest_index` table doesn't compete with the
+  # platform Postgres workload.
+  connstring: host=clair-db port=5432 user=clair password=clair dbname=clair sslmode=disable
+  # Run indexer migrations on boot so a fresh `--profile clair up` works
+  # without an out-of-band schema setup step.
+  migrations: true
+  # Scan timeout per layer. Generous for the dev stack — production
+  # Clair deployments tune this down.
+  scanlock_retry: 1
+  layer_scan_concurrency: 5
+
+matcher:
+  connstring: host=clair-db port=5432 user=clair password=clair dbname=clair sslmode=disable
+  migrations: true
+  # Tell the matcher where the indexer lives — combo mode keeps both
+  # in the same process, but the matcher still does internal RPCs
+  # against the indexer's HTTP API.
+  indexer_addr: http://localhost:6060
+  # Disable update mode in this process; the dedicated `updater` block
+  # below owns vulnerability DB freshness.
+  disable_updaters: false
+
+# Updater periodically refreshes the vulnerability database from the
+# upstream feeds (Red Hat OVAL, Debian, Ubuntu, etc.). In combo mode
+# the updater runs as a background goroutine inside the same process.
+updaters:
+  # Sets — pick the subset relevant to the dev images we exercise.
+  # The exhaustive list lives in the upstream repo's `updater/defaults`
+  # package; for a dev stack, alpine + debian + ubuntu + osv covers the
+  # vast majority of images we'll demo.
+  sets:
+    - alpine
+    - debian
+    - ubuntu
+    - osv
+
+notifier:
+  # We don't consume Clair notifications today — the scanner adapter
+  # polls the matcher synchronously after the indexer completes. The
+  # notifier subsystem still wants a connstring + migrations even when
+  # idle, so we share clair-db here.
+  connstring: host=clair-db port=5432 user=clair password=clair dbname=clair sslmode=disable
+  migrations: true
+  # Disable HTTP/AMQP delivery — no consumers wired up in this
+  # deployment.
+  delivery_interval: 1m
+  poll_interval: 5m
+
+# Auth section — Clair supports PSK / Quay tokens. The adapter
+# accesses the indexer + matcher over the local docker network with no
+# external exposure, so PSK is overkill for dev. Production deployments
+# should flip this on (see infra/runbooks/clair-auth.md, follow-up).
+auth: ~

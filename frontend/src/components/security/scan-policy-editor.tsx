@@ -44,7 +44,7 @@ import { cn } from "@/lib/utils";
 const schema = z.object({
   auto_scan_on_push: z.boolean(),
   block_on_severity: z.enum(["", "CRITICAL", "HIGH", "MEDIUM", "LOW"]),
-  scanner_plugin: z.enum(["trivy", "grype"]),
+  scanner_plugin: z.enum(["trivy", "grype", "clair"]),
   scanner_version_pin: z
     .string()
     .max(64, "Keep the version pin under 64 characters.")

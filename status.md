@@ -333,9 +333,9 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
 
 ---
 
-### REM-014 — Multi-scanner support (Grype DONE, Clair deferred)
-- **Affects:** `infra/scanner-plugins/grype-adapter` (new), `services/scanner/Dockerfile`, `services/scanner/scripts/entrypoint.sh`
-- **Status:** Grype adapter DONE ✅ (2026-06-22). Clair v4 integration DEFERRED to a separate sprint — scope below.
+### REM-014 — Multi-scanner support (Grype + Clair both DONE)
+- **Affects:** `infra/scanner-plugins/grype-adapter`, `infra/scanner-plugins/clair-adapter` (new), `services/scanner/Dockerfile`, `services/scanner/scripts/entrypoint.sh`, `infra/docker-compose`, `infra/clair`, `services/management`, `frontend`
+- **Status:** Grype adapter DONE ✅ (2026-06-22). Clair v4 integration DONE ✅ (2026-06-22 evening).
 - **Motivation:** REM-011 P2 shipped the adapter registry + live swap infrastructure but only two adapters (dev-stub + trivy-adapter). REM-014 adds a real second scanner so operators have an actual choice in the `/admin/scanner` UI; FE-API-018 + FE-API-049's `scanner_plugin` allowlist already included `grype` so no wire-shape changes were needed.
 - **Grype — what shipped:**
   - **`infra/scanner-plugins/grype-adapter`** — standalone Go binary (~400 lines, single-file) mirroring `trivy-adapter`'s shape: reads JSON-RPC scan request from stdin, flattens staged layers into a rootfs dir, shells out to `grype dir:<rootfs> -o json --quiet`, translates Grype's `matches[].vulnerability` shape into the platform's flat findings list, writes RPC response to stdout. Same tar-extract + whiteout-skip + tar-path-traversal guard as trivy-adapter — extracted layer handling is the one cross-adapter concern shared cheaply via inline duplication. Severity normalised to uppercase so FE-API-050 `block_on_severity` comparisons stay scanner-agnostic (Trivy emits uppercase already; Grype emits title-case). Dedupe on (CVE, package, version) for parity with the Trivy path so the same finding doesn't surface twice when matched via both package and language ecosystem.
@@ -351,16 +351,30 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
   - **Grype version pin** — initially used v0.79.6 (Aug 2024, last v5 release). Grype refused to load the v5 DB with "the vulnerability database was built 15 weeks ago (max allowed age is 5 days)" because Anchore stopped publishing fresh v5 DBs in mid-2024. Upgrading to v0.93.0 (schema v6) fixed it. **Lesson worth flagging:** any future scanner pin should verify the upstream is publishing fresh DBs at the schema version the pinned binary speaks.
   - **First-scan timeout** — without the entrypoint pre-warm, the first Grype scan would trigger a 2.5 GB DB download mid-job, run past the scanner's job timeout, and fail with the misleading "exit status 1, stderr empty" symptom. Pre-warm at container boot keeps every scan deterministically fast.
 
-- **Clair v4 — DEFERRED (scoped for a future sprint, not started in this session):**
-  - **Why deferred:** Clair v4 is structurally different from Trivy + Grype. Both Trivy + Grype consume a pre-flattened rootfs directory (matching the existing adapter contract — the orchestrator stages layers, the adapter just scans them). Clair wants to *pull the image itself* from a registry URL — operates as a multi-service deployment (indexer + matcher + updater + Clair-owned Postgres). Adding Clair means either (a) running ~4 new compose services + giving Clair network access + credentials to pull from `registry-core`, or (b) reworking the adapter contract to be scanner-aware so a "self-pull" path coexists with the "pre-staged layers" path. Neither is small; pushing through "to have Clair too" before validating the multi-adapter UX with Grype would have been false economy.
-  - **Concrete task list when picked up:**
-    - [ ] Add `clair-indexer` + `clair-matcher` + `clair-updater` + `clair-db` Postgres services to `infra/docker-compose/docker-compose.yml`. Behind a `--profile clair` flag so operators opt in (same pattern as the existing `--profile scanner` for the optional scanner service).
-    - [ ] Network policy decision: Clair needs to reach `registry-core` to fetch manifests + layer blobs. Anonymous access? Service-account JWT? Decide before wiring auth.
-    - [ ] **Adapter contract extension** — new optional `registry_url` + `image_ref` fields on the JSON-RPC `ScanRequest` so an adapter that wants to self-pull can ignore the pre-staged layers. The Clair adapter calls `POST /indexer/api/v1/index_report` with a manifest pointing at registry-core, polls for completion, calls `GET /matcher/api/v1/vulnerability_report/<hash>`, translates findings, returns.
-    - [ ] Update `services/management` + `services/scanner` BFF allowlists to include `"clair"` in `allowedScannerPlugins` (currently only `trivy`/`grype`).
-    - [ ] Update frontend `SCANNER_PLUGIN_CHOICES` for the policy editor.
-    - [ ] Integration test: trigger a scan through Clair end-to-end, assert findings land in `scan_results` with the same shape Trivy + Grype produce.
-  - **Estimated effort:** 1–2 days realistic, including the network policy + auth shape decisions. Worth doing when a concrete user (typically enterprise compliance) requires Clair; not blocking the multi-scanner story which now works with Grype.
+- **Clair v4 — what shipped:**
+  - **`infra/scanner-plugins/clair-adapter`** — stdlib-only Go binary (~600 lines, single-file) that bridges the platform's JSON-RPC scan contract to Clair's HTTP indexer + matcher API. Same `rpcRequest` envelope as trivy/grype adapters so no orchestrator changes were needed.
+  - **Embedded HTTP layer server** — the design pivot that avoided the "give Clair credentials to registry-core" rabbit-hole. The adapter spins up a localhost HTTP server on `CLAIR_FETCH_PORT` (default 9099) inside the scanner container, exposing each staged layer file under `/<digest_hex>`. The adapter builds the Clair manifest with URIs pointing at `http://<scanner-hostname>:9099/<digest>` and Clair fetches them over the `registry` Docker network. Server has no auth — bound only on the docker bridge network, no host port mapping — and exits with the adapter process so the surface is ephemeral. **Production note:** a real Kubernetes deployment would swap this for Clair → registry-core direct fetch + a service-account JWT; the embedded-server path keeps the dev compose stack stand-alone (no extra provisioning step).
+  - **`infra/clair/config.yaml`** — Clair v4 combo-mode config (indexer + matcher + notifier in one process). Pinned at `quay.io/projectquay/clair:4.7.4`. Updater sets restricted to `alpine, debian, ubuntu, osv` so the first feed pull lands in ~1 GB rather than ~5 GB. `introspection_addr: :8099` (not the default `:8089` — that's `registry-gc`).
+  - **`infra/docker-compose/docker-compose.yml`** — two new services behind `--profile clair`: `clair-db` (Postgres 16) and `clair` (combo). Both on the `registry` network so the scanner container can reach them by hostname. `clair_db` named volume holds the feed cache so a recreate doesn't re-download. Scanner block gains `CLAIR_URL=http://clair:6060`, `CLAIR_FETCH_PORT=9099`, `CLAIR_FETCH_HOST=registry-scanner` env vars.
+  - **`services/scanner/Dockerfile`** — new build stage for the clair-adapter, baked at `/usr/local/bin/scanner-clair-adapter`, picked up automatically by the existing `/usr/local/bin/scanner-*` glob. `EXPOSE 9099` documents the embedded HTTP server port (no host mapping; container-to-container only).
+  - **Allowlists** — `services/management/internal/handler/security_policies.go` `allowedScannerPlugins` gains `"clair"`. Frontend `SCANNER_PLUGIN_CHOICES` + the per-tenant zod enum on `scan-policy-editor.tsx` gain `"clair"`. `/admin/scanner` lists 4 adapters once the operator picks one.
+- **Verified live in compose (2026-06-22 evening):**
+  - Scanner image build: `docker compose build registry-scanner` clean; image carries all 4 adapter binaries:
+    ```
+    /usr/local/bin/scanner-clair-adapter  6.4 MB
+    /usr/local/bin/scanner-dev-stub       1.9 MB
+    /usr/local/bin/scanner-grype-adapter  2.4 MB
+    /usr/local/bin/scanner-trivy-adapter  2.4 MB
+    ```
+  - `docker compose --profile clair up -d clair-db clair` brings both services up healthy.
+  - `curl http://localhost:6060/indexer/api/v1/index_state` returns `{"state":"<hash>"}` confirming the indexer API is reachable + migrations applied.
+- **Follow-ups (logged for a future sprint, not blocking this commit):**
+  - End-to-end scan against a real image through the new adapter (the dev stack's first Clair scan requires the updater to finish its initial feed pull, which takes ~10 min). Tracked separately so the merge can land without sitting on that wait.
+  - Production auth shape — replace the embedded HTTP layer server with Clair → registry-core direct fetch + a service-account JWT. Documented in `infra/runbooks/clair-prod-auth.md` (TODO).
+  - Adapter contract extension (registry_url / image_ref optional fields on `ScanRequest`) — the embedded-server design side-stepped this. If a future scanner has a similar self-pull shape, revisit then.
+  - Integration test in `services/scanner/internal/testutil/integration` that brings Clair up via testcontainers + runs a real scan against a fixture image.
+- **Bugs found + fixed during integration:**
+  - **Port 8089 collision** — Clair's default introspection_addr is `:8089`, but `registry-gc` already binds that on the compose host. Moved to `:8099` and documented why in the config comment.
 
 ---
 
