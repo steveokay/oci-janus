@@ -336,9 +336,10 @@ func (h *GRPCHandler) publishRoleRevoked(ctx context.Context, tenantID, assignme
 // and service accounts differently without a second round-trip.
 //
 // The proto RoleAssignment.user_id carries the users.id for all principal kinds
-// (for service accounts this is the shadow_user_id). The proto Id field is left
-// empty because the new Member view omits the assignment primary key; callers
-// that need the assignment id for revocation must use GetUserPermissions.
+// (for service accounts this is the shadow_user_id). The proto Id field is set
+// from Member.AssignmentID (role_assignments.id) so the frontend revoke flow
+// (useRevokeOrgRole / useRevokeRepoRole DELETE /orgs/{org}/members/{assignmentId})
+// has the correct assignment primary key to send.
 func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRequest) (*authv1.ListMembersResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -358,10 +359,13 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 
 	// Map repository.Member to the proto RoleAssignment. The scope fields are
 	// not stored on Member (they are the same for every row in the result set)
-	// so they are copied from the request.
+	// so they are copied from the request. Id is set from AssignmentID
+	// (role_assignments.id) so the frontend revoke flow receives the correct
+	// assignment primary key.
 	out := make([]*authv1.RoleAssignment, len(members))
 	for i, m := range members {
 		out[i] = &authv1.RoleAssignment{
+			Id:         m.AssignmentID.String(),
 			UserId:     m.UserID.String(),
 			Role:       m.Role,
 			ScopeType:  req.GetScopeType(),

@@ -101,6 +101,13 @@ func TestRBAC_ListMembers_ProjectsKind(t *testing.T) {
 	// Validate both members; order is not guaranteed so we switch on Kind.
 	var sawHuman, sawSA bool
 	for _, m := range members {
+		// Every member must carry a non-zero AssignmentID (role_assignments.id).
+		// A zero value means the SELECT ra.id column was dropped from the query,
+		// which breaks the frontend revoke flow (useRevokeOrgRole /
+		// useRevokeRepoRole DELETE /orgs/{org}/members/{assignmentId}).
+		require.NotEqual(t, [16]byte{}, m.AssignmentID,
+			"AssignmentID must be non-zero for Kind=%q", m.Kind)
+
 		switch m.Kind {
 		case "human":
 			// The human member must reference the admin user id and carry no SA id.

@@ -13,6 +13,10 @@ import (
 // shadow_user_id) so callers can distinguish human users from service accounts
 // and render the correct display name without a second round-trip.
 type Member struct {
+	// AssignmentID is the primary key of the role_assignments row. It is the
+	// value callers must supply to RevokeRole / the frontend DELETE flow
+	// (useRevokeOrgRole / useRevokeRepoRole). Must never be zero.
+	AssignmentID uuid.UUID
 	// UserID is the users.id of the principal holding the role. For service
 	// accounts this is the shadow user id.
 	UserID uuid.UUID
@@ -142,7 +146,8 @@ func (r *UserRepository) RevokeRoleScoped(ctx context.Context, assignmentID, ten
 // to guarantee a non-empty label.
 func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]Member, error) {
 	const q = `
-		SELECT u.id,
+		SELECT ra.id AS assignment_id,
+		       u.id,
 		       u.kind,
 		       COALESCE(sa.name, u.display_name, u.username, COALESCE(u.email, '')) AS display_name,
 		       sa.id AS sa_id,
@@ -168,7 +173,7 @@ func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, sc
 		// sa_id is NULL for human users — scan into a pointer so pgx sets it to nil.
 		var saID *uuid.UUID
 		if err := rows.Scan(
-			&m.UserID, &m.Kind, &m.DisplayName, &saID, &m.Role, &m.GrantedBy,
+			&m.AssignmentID, &m.UserID, &m.Kind, &m.DisplayName, &saID, &m.Role, &m.GrantedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
