@@ -159,7 +159,8 @@ func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, sc
 		LEFT   JOIN service_accounts sa ON sa.shadow_user_id = u.id
 		WHERE  ra.tenant_id  = $1
 		  AND  ra.scope_type  = $2
-		  AND  ra.scope_value = $3`
+		  AND  ra.scope_value = $3
+		ORDER BY display_name, ra.id`
 
 	rows, err := r.pool.Query(ctx, q, tenantID, scopeType, scopeValue)
 	if err != nil {
