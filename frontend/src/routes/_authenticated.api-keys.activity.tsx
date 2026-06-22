@@ -6,6 +6,15 @@ import { isPlatformAdmin } from "@/lib/auth/jwt";
 import { useMe } from "@/lib/api/me";
 import { useServiceAccounts } from "@/lib/api/service-accounts";
 import { ActivityTable } from "@/components/access/ActivityTable";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // /api-keys/activity — principal activity feed (FE-API-048 T27).
 //
@@ -164,14 +173,14 @@ interface PrincipalFilterProps {
 }
 
 // PrincipalFilter — for non-admins renders a static label ("Me (you)").
-// For admins renders a native <select> containing "Me (you)" + all active SAs.
+// For admins renders a Beacon-themed Radix Select containing "Me (you)" +
+// all active SAs. The native <select> previously used here leaked the OS
+// theme into the otherwise-Beacon-styled page; the themed primitive in
+// components/ui/select.tsx matches dialogs, tabs and the rest of the
+// design system.
 //
-// We use a plain <select> rather than a Radix Select to avoid adding a
-// missing UI component. The native element respects the OS theme which is
-// acceptable for an admin-only filter control.
-//
-// TODO (FUT-005): replace with a Radix Select or combobox once the workspace
-// ships a `/users` list endpoint so human-user targets can also be listed.
+// Human-user listing remains a future capability once a /users list API
+// ships — for now the only non-self targets are service accounts.
 function PrincipalFilter({
   isAdmin,
   selfLabel,
@@ -179,6 +188,14 @@ function PrincipalFilter({
   value,
   onChange,
 }: PrincipalFilterProps): React.ReactElement {
+  // Resolve the selected entry's display label so the closed-state trigger
+  // shows the SA name (not its shadow UUID) when an SA is selected.
+  const selectedLabel: string =
+    value === "self"
+      ? `${selfLabel} (you)`
+      : (serviceAccounts.find((sa) => sa.shadow_user_id === value)?.name ??
+        `${value.slice(0, 8)}…`);
+
   return (
     <div className="flex items-baseline gap-2">
       <span className="shrink-0 text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
@@ -186,29 +203,33 @@ function PrincipalFilter({
       </span>
 
       {isAdmin ? (
-        /* Admin: native select with self + SAs. Human-user listing is a
-           future capability once a /users list API ships (FUT-005). */
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className={cn(
-            "rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]",
-            "px-2.5 py-1 text-sm text-[var(--color-fg)]",
-            "focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]",
-          )}
-          aria-label="Select principal"
-        >
-          <option value="self">{selfLabel} (you)</option>
-          {serviceAccounts.length > 0 ? (
-            <optgroup label="Service accounts">
-              {serviceAccounts.map((sa) => (
-                <option key={sa.shadow_user_id} value={sa.shadow_user_id}>
-                  {sa.name}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-        </select>
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger
+            aria-label="Select principal"
+            className="min-w-[14rem]"
+          >
+            {/* SelectValue would render the raw option text; we control the
+                label explicitly so the closed-state can show "<name> (you)"
+                for the self entry without forcing that suffix into the
+                option list. */}
+            <SelectValue placeholder="Select principal">
+              {selectedLabel}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="self">{selfLabel} (you)</SelectItem>
+            {serviceAccounts.length > 0 ? (
+              <SelectGroup>
+                <SelectLabel>Service accounts</SelectLabel>
+                {serviceAccounts.map((sa) => (
+                  <SelectItem key={sa.shadow_user_id} value={sa.shadow_user_id}>
+                    {sa.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ) : null}
+          </SelectContent>
+        </Select>
       ) : (
         /* Non-admin: static label — no dropdown, always scoped to self. */
         <span className="text-sm text-[var(--color-fg)]">
