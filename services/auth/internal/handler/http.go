@@ -180,24 +180,21 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 
 	// If username is a valid UUID, treat it as an API key ID.
 	if keyID, parseErr := uuid.Parse(username); parseErr == nil {
-		key, err := h.svc.ValidateAPIKey(r.Context(), keyID, password)
+		vk, err := h.svc.ValidateAPIKey(r.Context(), service.ValidateAPIKeyOpts{
+			KeyID:     keyID,
+			RawSecret: password,
+			// RequestTenantID is intentionally nil here: the Docker /auth/token
+			// endpoint derives the tenant from the Basic Auth tenant header, not
+			// from X-Tenant-ID. The cross-tenant guard via RequestTenantID is
+			// applied only through the gRPC ValidateAPIKey path (T13).
+		})
 		if err != nil {
 			h.svc.RecordAuthFailure(r.Context(), ip)
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 			return
 		}
-		// Resolve the owner identity for the JWT subject. For human-owned keys,
-		// UserID is non-nil. SA-owned key JWT exchange ships in T9
-		// (ServiceAccountService + shadow-user resolution); until then, refuse
-		// explicitly rather than emit an RFC 7519 §4.1.2-invalid JWT with an
-		// empty subject.
-		if key.UserID == nil {
-			writeError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED",
-				"service-account key token exchange is not yet supported")
-			return
-		}
-		userID = key.UserID.String()
-		userTenantID = key.TenantID.String()
+		userID = vk.UserID.String()
+		userTenantID = vk.TenantID.String()
 	} else {
 		user, err := h.svc.AuthenticateUser(r.Context(), tenantID, username, password)
 		if err != nil {

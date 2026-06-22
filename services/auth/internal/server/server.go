@@ -68,7 +68,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// ── 3. Repositories & Service ─────────────────────────────────────────────
 	users := repository.NewUserRepository(pool)
 	apiKeys := repository.NewAPIKeyRepository(pool)
-	svc, err := service.New(users, apiKeys, rdb, cfg.JWTPrivateKeyB64, cfg.JWTPublicKeyB64, cfg.JWTKeyID)
+	sa := repository.NewServiceAccountRepo(pool)
+	// audit is nil for now; the full AuditEmitter wiring (RabbitMQ publish or
+	// direct audit-service call) ships in T13/T14. Cross-tenant attempts are
+	// still rejected — the audit emission is best-effort.
+	svc, err := service.New(users, apiKeys, sa, nil, rdb, cfg.JWTPrivateKeyB64, cfg.JWTPublicKeyB64, cfg.JWTKeyID)
 	if err != nil {
 		return fmt.Errorf("init service: %w", err)
 	}

@@ -338,7 +338,9 @@ func buildTestService(t *testing.T) (*testCtx, func()) {
 	ur := newHandlerFakeUserRepo()
 	ar := newHandlerFakeAPIKeyRepo()
 
-	svc, err := service.NewWithFakes(ur, ar, rdb, privB64, pubB64, "test-kid")
+	// sa and audit are nil for handler tests: the SA branch of ValidateAPIKey is
+	// not exercised by handler-level tests (covered by service-level tests).
+	svc, err := service.NewWithFakes(ur, ar, nil, nil, rdb, privB64, pubB64, "test-kid")
 	if err != nil {
 		mr.Close()
 		t.Fatalf("NewWithFakes: %v", err)

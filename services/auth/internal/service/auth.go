@@ -75,20 +75,54 @@ type JWK struct {
 	E   string `json:"e"`   // base64url-encoded exponent
 }
 
+// ValidatedKey is the enriched result returned by ValidateAPIKey. It provides
+// a unified view of the authenticated principal regardless of whether the key
+// was issued to a human user or a service account.
+//
+// PrincipalKind is always "human" or "service_account". ServiceAccountID is
+// non-nil when PrincipalKind=="service_account". EffectiveScopes is the
+// intersection of the key's stored scopes and the SA's AllowedScopes (for
+// human keys it equals the key's scopes directly, since there is no SA-level
+// allowlist to intersect).
+type ValidatedKey struct {
+	// UserID is the users.id for the authenticated principal. For SA-owned keys
+	// this is the shadow user's ID so downstream JWT issuance treats SA callers
+	// the same way as human callers.
+	UserID uuid.UUID
+	// TenantID is the tenant the key belongs to.
+	TenantID uuid.UUID
+	// Access is the OCI RepositoryAccess list derived from EffectiveScopes.
+	// It is suitable for embedding directly in a JWT `access` claim.
+	Access []RepositoryAccess
+	// PrincipalKind is "human" or "service_account".
+	PrincipalKind string
+	// ServiceAccountID is set when PrincipalKind=="service_account".
+	ServiceAccountID *uuid.UUID
+	// EffectiveScopes is the final scope list after applying the SA allowlist
+	// intersection (for SA keys) or using the key's own scopes (for human keys).
+	EffectiveScopes []string
+}
+
 // Service is the core authentication business logic.
 type Service struct {
-	users   userRepo
-	apiKeys apiKeyRepo
-	redis   *redis.Client
-	privKey *rsa.PrivateKey
-	pubKey  *rsa.PublicKey
-	keyID   string
+	users           userRepo
+	apiKeys         apiKeyRepo
+	serviceAccounts saRepo
+	audit           AuditEmitter
+	redis           *redis.Client
+	privKey         *rsa.PrivateKey
+	pubKey          *rsa.PublicKey
+	keyID           string
 }
 
 // New constructs a Service by parsing the base64-encoded PEM keys from config.
+// sa and audit may be nil; if nil, the service-account branch of ValidateAPIKey
+// returns codes.Unimplemented and cross-tenant audit emission is skipped.
 func New(
 	users *repository.UserRepository,
 	apiKeys *repository.APIKeyRepository,
+	sa *repository.ServiceAccountRepo,
+	audit AuditEmitter,
 	rdb *redis.Client,
 	privKeyB64, pubKeyB64, keyID string,
 ) (*Service, error) {
@@ -100,13 +134,19 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("parse JWT public key: %w", err)
 	}
+	var saR saRepo
+	if sa != nil {
+		saR = sa
+	}
 	return &Service{
-		users:   users,
-		apiKeys: apiKeys,
-		redis:   rdb,
-		privKey: privKey,
-		pubKey:  pubKey,
-		keyID:   keyID,
+		users:           users,
+		apiKeys:         apiKeys,
+		serviceAccounts: saR,
+		audit:           audit,
+		redis:           rdb,
+		privKey:         privKey,
+		pubKey:          pubKey,
+		keyID:           keyID,
 	}, nil
 }
 
@@ -325,9 +365,39 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, 
 	return key, rawSecret, nil
 }
 
-// ValidateAPIKey looks up the key by ID, checks expiry, and verifies the secret hash.
-func (s *Service) ValidateAPIKey(ctx context.Context, keyID uuid.UUID, rawSecret string) (*repository.APIKey, error) {
-	key, err := s.apiKeys.GetByID(ctx, keyID)
+// ValidateAPIKeyOpts carries the arguments for ValidateAPIKey. Using a struct
+// keeps the public API stable when optional fields (such as RequestTenantID) are
+// added without breaking existing call sites.
+type ValidateAPIKeyOpts struct {
+	// KeyID is the api_keys.id UUID.
+	KeyID uuid.UUID
+	// RawSecret is the plaintext secret returned at key-creation time.
+	RawSecret string
+	// RequestTenantID is the tenant inferred from the gateway-injected
+	// X-Tenant-ID header. When non-nil, SA keys are cross-tenant-checked against
+	// the SA's stored TenantID (spec §5.4, security finding H1). For human keys
+	// or when the header is absent, this field is nil.
+	RequestTenantID *uuid.UUID
+}
+
+// ValidateAPIKey looks up the key by ID, checks expiry, verifies the secret
+// hash, and returns a ValidatedKey describing the authenticated principal.
+//
+// For service-account keys it additionally:
+//  - rejects the request when the SA is disabled (spec §5.5);
+//  - enforces a cross-tenant guard: if RequestTenantID is set and does not
+//    match the SA's tenant, it emits a best-effort audit event and returns
+//    codes.Unauthenticated (spec §5.4, security finding H1);
+//  - intersects the key's scopes with the SA's AllowedScopes and rejects the
+//    key when the intersection is empty (spec §5.4).
+//
+// For human keys the behaviour is unchanged from the pre-T9 path.
+//
+// The legacy positional-arg wrapper validateAPIKeyByID is intentionally not
+// exposed; all call sites must use this method.
+func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (*ValidatedKey, error) {
+	// 1. Key lookup and baseline validation (shared between human and SA paths).
+	key, err := s.apiKeys.GetByID(ctx, opts.KeyID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrInvalidCredentials
@@ -337,8 +407,13 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keyID uuid.UUID, rawSecret
 	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
 		return nil, ErrKeyExpired
 	}
+	if !key.IsActive {
+		// Revoked keys are treated the same as invalid credentials to avoid
+		// distinguishing between "never existed" and "actively revoked".
+		return nil, ErrInvalidCredentials
+	}
 
-	ok, err := argon2pkg.Verify(rawSecret, key.KeyHash)
+	ok, err := argon2pkg.Verify(opts.RawSecret, key.KeyHash)
 	if err != nil {
 		return nil, fmt.Errorf("verify key: %w", err)
 	}
@@ -346,16 +421,149 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keyID uuid.UUID, rawSecret
 		return nil, ErrInvalidCredentials
 	}
 
-	// Detach from request context: LastUsed updates are best-effort and must not
-	// block or fail the auth response. A 5-second timeout prevents goroutine leaks
-	// if the database is slow or temporarily unavailable.
+	// 2. Branch on owner type.
+	switch {
+	case key.ServiceAccountID != nil:
+		// SA-owned key: load the SA, apply disable check, cross-tenant guard,
+		// and scope intersection.
+		return s.validateSAKey(ctx, key, opts.RequestTenantID)
+
+	case key.UserID != nil:
+		// Human-owned key: fire-and-forget last_used update, return immediately.
+		s.touchLastUsedAsync(key.ID)
+		return &ValidatedKey{
+			UserID:          *key.UserID,
+			TenantID:        key.TenantID,
+			Access:          mapScopesToAccess(key.Scopes),
+			PrincipalKind:   "human",
+			EffectiveScopes: key.Scopes,
+		}, nil
+
+	default:
+		// Both owner columns are NULL — violates the DB CHECK constraint but
+		// defend at the application layer as well.
+		return nil, fmt.Errorf("api_key %s has null owner on both sides — database constraint violated", key.ID)
+	}
+}
+
+// validateSAKey handles the service-account branch of ValidateAPIKey.
+// It is extracted as a separate method to keep ValidateAPIKey readable.
+func (s *Service) validateSAKey(ctx context.Context, key *repository.APIKey, requestTenantID *uuid.UUID) (*ValidatedKey, error) {
+	// SA repo may be nil if the service was constructed without one (e.g. in
+	// legacy test fixtures). Fail with Unimplemented rather than panic.
+	if s.serviceAccounts == nil {
+		return nil, fmt.Errorf("%w: service-account key support requires a ServiceAccountRepo", ErrInvalidCredentials)
+	}
+
+	sa, err := s.serviceAccounts.Get(ctx, *key.ServiceAccountID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// SA deleted after key was issued — treat as invalid.
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("lookup service account: %w", err)
+	}
+
+	// Spec §5.5: reject calls when the SA is disabled.
+	if sa.DisabledAt != nil {
+		return nil, ErrAccountDisabled
+	}
+
+	// Spec §5.4 / security finding H1: cross-tenant guard.
+	// If the gateway injected a tenant header, verify it matches the SA's own
+	// tenant before proceeding. Emit a best-effort audit event for forensics.
+	if requestTenantID != nil && *requestTenantID != sa.TenantID {
+		s.emitCrossTenantAttempt(ctx, sa, key, requestTenantID)
+		return nil, ErrInvalidCredentials
+	}
+
+	// Scope intersection: the effective scopes are the key's scopes intersected
+	// with the SA's current AllowedScopes. An empty intersection means the SA
+	// admin has removed all of the key's scopes — reject and hint at remediation.
+	eff := intersectScopes(key.Scopes, sa.AllowedScopes)
+	if len(eff) == 0 {
+		return nil, fmt.Errorf("%w: all key scopes removed from SA allowlist; rotate key", ErrInvalidCredentials)
+	}
+
+	// Fire-and-forget last_used writeback (same as human path).
+	s.touchLastUsedAsync(key.ID)
+
+	return &ValidatedKey{
+		UserID:           sa.ShadowUserID,
+		TenantID:         sa.TenantID,
+		Access:           mapScopesToAccess(eff),
+		PrincipalKind:    "service_account",
+		ServiceAccountID: &sa.ID,
+		EffectiveScopes:  eff,
+	}, nil
+}
+
+// emitCrossTenantAttempt records a best-effort audit event for a cross-tenant
+// API key use attempt. Errors are logged and swallowed so the auth response
+// latency is unaffected by a slow or unavailable audit backend.
+func (s *Service) emitCrossTenantAttempt(ctx context.Context, sa *repository.ServiceAccount, key *repository.APIKey, claimedTenant *uuid.UUID) {
+	if s.audit == nil {
+		return
+	}
+	ev := AuditEvent{
+		Action:  "pentest.cross_tenant_attempt",
+		ActorID: sa.ShadowUserID.String(),
+		Fields: map[string]any{
+			"service_account_id": sa.ID.String(),
+			"key_id":             key.ID.String(),
+			"claimed_tenant":     claimedTenant.String(),
+			"actual_tenant":      sa.TenantID.String(),
+		},
+	}
+	if err := s.audit.Emit(ctx, ev); err != nil {
+		slog.WarnContext(ctx, "auth: cross-tenant audit emit failed",
+			"sa_id", sa.ID,
+			"err", err,
+		)
+	}
+}
+
+// touchLastUsedAsync fires a background goroutine to update last_used_at. It
+// uses a detached context with a 5-second timeout so that a slow or unavailable
+// database never delays the auth response. Errors are silently discarded.
+func (s *Service) touchLastUsedAsync(keyID uuid.UUID) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.apiKeys.TouchLastUsed(ctx, key.ID)
+		_ = s.apiKeys.TouchLastUsed(ctx, keyID)
 	}()
+}
 
-	return key, nil
+// intersectScopes returns the elements of a that are also in b. Order is
+// preserved (follows a's order). The result is always a non-nil slice; it may
+// be empty when there is no overlap.
+func intersectScopes(a, b []string) []string {
+	allowed := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		allowed[s] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, s := range a {
+		if _, ok := allowed[s]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// mapScopesToAccess converts a flat scope list to a single wildcard
+// RepositoryAccess entry. This mirrors the scopesToProto helper in the handler
+// layer and is a Sprint 1 simplification; full scope-to-resource mapping ships
+// in a later task.
+func mapScopesToAccess(scopes []string) []RepositoryAccess {
+	if len(scopes) == 0 {
+		return nil
+	}
+	return []RepositoryAccess{{
+		Type:    "repository",
+		Name:    "*",
+		Actions: scopes,
+	}}
 }
 
 // AuthenticateUser validates credentials and returns the authenticated user

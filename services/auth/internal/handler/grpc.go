@@ -66,33 +66,35 @@ func (h *GRPCHandler) ValidateToken(ctx context.Context, req *authv1.ValidateTok
 }
 
 // ValidateAPIKey checks the key hash and returns the associated identity.
+// As of T9, both human-owned and service-account-owned keys are supported.
+// The request_tenant_id for the cross-tenant guard (spec §5.4) is threaded
+// through gRPC metadata by the gateway interceptor (T13); for now the proto
+// field is not yet wired so RequestTenantID is always nil on this path.
 func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAPIKeyRequest) (*authv1.ValidateAPIKeyResponse, error) {
 	keyID, err := uuid.Parse(req.GetKeyId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid key_id")
 	}
 
-	key, err := h.svc.ValidateAPIKey(ctx, keyID, req.GetRawSecret())
+	vk, err := h.svc.ValidateAPIKey(ctx, service.ValidateAPIKeyOpts{
+		KeyID:     keyID,
+		RawSecret: req.GetRawSecret(),
+		// RequestTenantID will be wired from gRPC metadata in T13.
+	})
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrKeyExpired) {
+		if errors.Is(err, service.ErrInvalidCredentials) ||
+			errors.Is(err, service.ErrKeyExpired) ||
+			errors.Is(err, service.ErrAccountDisabled) {
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
 		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
-	// Resolve the owner identity for the gRPC response. For human-owned keys,
-	// UserID is non-nil. SA-owned key JWT exchange ships in T9
-	// (ServiceAccountService); until then, refuse explicitly rather than return
-	// a ValidateAPIKeyResponse with an empty user_id that downstream services
-	// would treat as unauthenticated noise.
-	if key.UserID == nil {
-		return nil, status.Error(codes.Unimplemented, "service-account key token exchange is not yet supported")
-	}
 	return &authv1.ValidateAPIKeyResponse{
 		Valid:     true,
-		UserId:    key.UserID.String(),
-		TenantId:  key.TenantID.String(),
-		Access:    scopesToProto(key.Scopes),
+		UserId:    vk.UserID.String(),
+		TenantId:  vk.TenantID.String(),
+		Access:    scopesToProto(vk.EffectiveScopes),
 	}, nil
 }
 

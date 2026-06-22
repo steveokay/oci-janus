@@ -91,11 +91,16 @@ type APIKeyRepo = apiKeyRepo
 // fully in-memory Service without needing a real PostgreSQL pool.
 // The redis.Client must already be connected (e.g. to miniredis).
 //
+// sa and audit may be nil; if nil, the service-account branch of ValidateAPIKey
+// returns ErrInvalidCredentials and cross-tenant audit emission is skipped.
+//
 // This constructor is exported so handler-package tests can call it; it must
 // not be called in production code.
 func NewWithFakes(
 	users userRepo,
 	apiKeys apiKeyRepo,
+	sa saRepo,
+	audit AuditEmitter,
 	rdb *redis.Client,
 	privKeyB64, pubKeyB64, keyID string,
 ) (*Service, error) {
@@ -108,11 +113,13 @@ func NewWithFakes(
 		return nil, fmt.Errorf("parse JWT public key: %w", err)
 	}
 	return &Service{
-		users:   users,
-		apiKeys: apiKeys,
-		redis:   rdb,
-		privKey: privKey,
-		pubKey:  pubKey,
-		keyID:   keyID,
+		users:           users,
+		apiKeys:         apiKeys,
+		serviceAccounts: sa,
+		audit:           audit,
+		redis:           rdb,
+		privKey:         privKey,
+		pubKey:          pubKey,
+		keyID:           keyID,
 	}, nil
 }

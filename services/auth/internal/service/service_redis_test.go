@@ -57,7 +57,7 @@ func setupService(t *testing.T) (*Service, func()) {
 
 	// Construct the Service. We pass nil repositories because the tests below
 	// only exercise JWT and Redis paths — not DB paths.
-	svc, err := New(nil, nil, rdb, privB64, pubB64, "kid-test")
+	svc, err := New(nil, nil, nil, nil, rdb, privB64, pubB64, "kid-test")
 	if err != nil {
 		mr.Close()
 		t.Fatalf("New service: %v", err)
