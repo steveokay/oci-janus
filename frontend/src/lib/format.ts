@@ -60,3 +60,46 @@ export function pullCommand(
 ): string {
   return `docker pull ${host}/${org}/${repo}:${tag}`;
 }
+
+// F4 follow-up — emit the right CLI for the artifact type a repository
+// holds. `image` → `docker pull host/org/repo:tag` (existing behaviour).
+// `helm` → `helm pull oci://host/org/repo --version <tag>` (charts use
+// the OCI scheme + --version flag; the tag never appears after a colon).
+// Unknown / empty type falls back to docker pull so legacy repos and
+// the no-tags-yet first paint stay sensible.
+//
+// Returned shape carries the label + verb separately so the card can
+// re-headline "Pull this image" → "Pull this chart" without rebuilding
+// the command string elsewhere.
+export interface PullCommandSpec {
+  // The shell command line, including the `helm` or `docker` prefix.
+  cmd: string;
+  // Card heading — what the operator is being shown how to do.
+  heading: string;
+  // Short subject noun ("image" | "chart" | "artifact") for the body
+  // copy if a caller needs to interpolate it.
+  artifact: string;
+}
+
+export function pullCommandFor(
+  artifactType: string | undefined,
+  org: string,
+  repo: string,
+  tag = "latest",
+  host = "registry.localhost",
+): PullCommandSpec {
+  switch (artifactType) {
+    case "helm":
+      return {
+        cmd: `helm pull oci://${host}/${org}/${repo} --version ${tag}`,
+        heading: "Pull this chart",
+        artifact: "chart",
+      };
+    default:
+      return {
+        cmd: `docker pull ${host}/${org}/${repo}:${tag}`,
+        heading: "Pull this image",
+        artifact: "image",
+      };
+  }
+}

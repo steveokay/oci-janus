@@ -76,7 +76,11 @@ function RepositoryDetail(): React.ReactElement {
         onDelete={() => setDeleteOpen(true)}
       />
 
-      <PullCommandCard org={org} repo={repo} />
+      <PullCommandCard
+        org={org}
+        repo={repo}
+        artifactType={initialTypeFilter}
+      />
 
       <DescriptionCard description={data?.description} />
 
