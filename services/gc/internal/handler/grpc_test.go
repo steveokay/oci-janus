@@ -37,6 +37,10 @@ type fakeRepo struct {
 	// REM-013 gap 2 — new ListRuns filter params.
 	lastListRepoID uuid.UUID
 	lastListModes  []string
+	// S-MAINT-1 F2 — search params from the same ListRunsFilters bundle.
+	lastListTriggeredBy string
+	lastListDateFrom    *time.Time
+	lastListDateTo      *time.Time
 	lastCreateMode string
 	lastCreateBy   string
 
@@ -82,14 +86,18 @@ func (f *fakeRepo) GetLatest(_ context.Context) (*repository.GCRun, error) {
 	return f.latest, nil
 }
 
-func (f *fakeRepo) ListRuns(_ context.Context, limit int, pageToken string, repoID uuid.UUID, modes []string) ([]*repository.GCRun, string, error) {
-	// REM-013 gap 2 — record the new filter params so per-repo / mode
-	// tests can assert the handler plumbed them through. Existing
-	// callers that don't care still see the same `runs` slice back.
+func (f *fakeRepo) ListRuns(_ context.Context, limit int, pageToken string, filters repository.ListRunsFilters) ([]*repository.GCRun, string, error) {
+	// REM-013 gap 2 + S-MAINT-1 F2 — record the filter params so per-repo /
+	// mode / search tests can assert the handler plumbed them through.
+	// Existing callers that don't care still see the same `runs` slice
+	// back; the new fields live on the same fakeRepo struct.
 	f.lastListLimit = limit
 	f.lastListToken = pageToken
-	f.lastListRepoID = repoID
-	f.lastListModes = modes
+	f.lastListRepoID = filters.RepoID
+	f.lastListModes = filters.Modes
+	f.lastListTriggeredBy = filters.TriggeredBy
+	f.lastListDateFrom = filters.DateFrom
+	f.lastListDateTo = filters.DateTo
 	if f.listErr != nil {
 		return nil, "", f.listErr
 	}

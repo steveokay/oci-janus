@@ -123,18 +123,43 @@ export function useGCStatus() {
 
 interface RunsArgs {
   limit?: number;
+  // S-MAINT-1 F2 — server-side search filters. Empty/undefined values
+  // produce a query with no filter, preserving the pre-F2 behaviour.
+  // The BFF forwards these straight to gc.ListRunsRequest; validation
+  // (RFC3339 on the timestamps) happens on the gc service side.
+  triggeredBy?: string;
+  dateFrom?: string; // RFC3339 lower bound (inclusive)
+  dateTo?: string; // RFC3339 upper bound (exclusive)
 }
 
 // useGCRuns — paginated history. 10-row default keeps the card readable
-// without a giant table; "Load more" exposes the rest.
-export function useGCRuns({ limit = 10 }: RunsArgs = {}) {
+// without a giant table; "Load more" exposes the rest. The S-MAINT-1 F2
+// filter params widen the query key so a new filter triggers a refetch
+// rather than reusing cached unfiltered rows.
+export function useGCRuns({
+  limit = 10,
+  triggeredBy,
+  dateFrom,
+  dateTo,
+}: RunsArgs = {}) {
   return useInfiniteQuery({
-    queryKey: adminGcKeys.runs(limit),
+    // Filters are part of the key so cache entries don't bleed between
+    // searches. Normalise undefined → "" so the key shape stays stable
+    // across renders when the operator hasn't set a filter yet.
+    queryKey: [
+      ...adminGcKeys.runs(limit),
+      triggeredBy ?? "",
+      dateFrom ?? "",
+      dateTo ?? "",
+    ] as const,
     initialPageParam: "",
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
       if (pageParam) params.set("page_token", String(pageParam));
       params.set("limit", String(limit));
+      if (triggeredBy) params.set("triggered_by", triggeredBy);
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
       const { data } = await apiClient.get<GCRunsListResponse>(
         `/admin/gc/runs?${params.toString()}`,
       );
