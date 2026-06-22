@@ -17,6 +17,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -127,10 +128,18 @@ type ServiceAccountInput struct {
 func (s *ServiceAccountService) Create(ctx context.Context, in ServiceAccountInput) (*repository.ServiceAccount, error) {
 	// Snapshot the creator's identity before the atomic create so we have
 	// something to put in the audit event even if the create fails partway.
-	// If the creator lookup fails (user deleted between auth and here, which
-	// is vanishingly unlikely) we proceed with empty snapshot fields — the
-	// audit event still records the actor_id.
-	creator, _ := s.users.GetHumanByID(ctx, in.ActorUserID)
+	// ErrNotFound is a benign race (user deleted between auth and here) — we
+	// proceed with empty snapshot fields so the audit event still records the
+	// actor_id. Any other error (DB pool exhaustion, ctx cancellation) is
+	// unexpected; log at WARN so operators can investigate without aborting
+	// the create.
+	creator, err := s.users.GetHumanByID(ctx, in.ActorUserID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		slog.WarnContext(ctx, "service_account: creator lookup failed, proceeding with empty snapshot",
+			"actor_id", in.ActorUserID,
+			"err", err,
+		)
+	}
 
 	sa, _, err := s.sa.CreateAtomic(ctx, repository.CreateServiceAccountInput{
 		TenantID:      in.TenantID,

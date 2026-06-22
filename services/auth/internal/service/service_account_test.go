@@ -6,6 +6,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -283,14 +284,6 @@ func (f *saFakes) seedSAKey(sa *repository.ServiceAccount, name string, scopes .
 	return k
 }
 
-// min returns the smaller of a and b.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ── redisAdapter ─────────────────────────────────────────────────────────────
 
 // redisAdapter adapts *redis.Client to the RedisCmdable interface used by
@@ -322,7 +315,7 @@ func TestServiceAccount_Create_EmitsAudit(t *testing.T) {
 	ctx := context.Background()
 	svc, fakes := newSAService(t)
 
-	tenant, admin := fakes.seedHuman("admin@example.com")
+	tenant, admin := fakes.seedHuman("actor@example.com")
 
 	sa, err := svc.Create(ctx, ServiceAccountInput{
 		TenantID:      tenant,
@@ -337,7 +330,7 @@ func TestServiceAccount_Create_EmitsAudit(t *testing.T) {
 	require.Equal(t, "service_account.created", ev.Action)
 	require.Equal(t, admin.String(), ev.ActorID)
 	require.Equal(t, sa.ID.String(), ev.Resource)
-	require.Equal(t, "admin@example.com", ev.Fields["creator_email"],
+	require.Equal(t, "actor@example.com", ev.Fields["creator_email"],
 		"creator_email snapshot must match the seeded user")
 }
 
@@ -552,6 +545,80 @@ func TestServiceAccount_Get_ReturnsNotFound(t *testing.T) {
 
 	_, err := svc.Get(ctx, uuid.New())
 	require.ErrorIs(t, err, repository.ErrNotFound)
+}
+
+// TestServiceAccount_AuditFailureIsHardError verifies that spec §5.7's requirement
+// is enforced: when the audit backend returns an error, Create, Update, SetDisabled,
+// and Delete must all propagate that error to the caller rather than silently
+// swallowing it. Using capturingAuditEmitter.EmitErr to inject the failure keeps
+// the test free of any real infrastructure.
+func TestServiceAccount_AuditFailureIsHardError(t *testing.T) {
+	cases := []struct {
+		name string
+		op   func(t *testing.T, svc *ServiceAccountService, fakes *saFakes) error
+	}{
+		{
+			// Create must return the audit error even though the SA row was
+			// already written — the caller sees a failure and can retry.
+			name: "Create",
+			op: func(t *testing.T, svc *ServiceAccountService, fakes *saFakes) error {
+				t.Helper()
+				tenantID, actorID := fakes.seedHuman("audit-create@example.com")
+				_, err := svc.Create(context.Background(), ServiceAccountInput{
+					TenantID:    tenantID,
+					Name:        "audit-sa",
+					ActorUserID: actorID,
+				})
+				return err
+			},
+		},
+		{
+			// SetDisabled must return the audit error after the DB and Redis
+			// steps have already completed.
+			name: "SetDisabled",
+			op: func(t *testing.T, svc *ServiceAccountService, fakes *saFakes) error {
+				t.Helper()
+				sa := fakes.seedSA("audit-disable-sa")
+				return svc.SetDisabled(context.Background(), sa.ID, sa.TenantID, true, fakes.admin)
+			},
+		},
+		{
+			// Update must return the audit error after the DB row has been
+			// patched.
+			name: "Update",
+			op: func(t *testing.T, svc *ServiceAccountService, fakes *saFakes) error {
+				t.Helper()
+				sa := fakes.seedSA("audit-update-sa")
+				newDesc := "patched description"
+				_, err := svc.Update(context.Background(), UpdateServiceAccountInput{
+					ID:          sa.ID,
+					TenantID:    sa.TenantID,
+					Description: &newDesc,
+					ActorUserID: fakes.admin,
+				})
+				return err
+			},
+		},
+		{
+			// Delete must return the audit error after the row has already
+			// been removed from the repo.
+			name: "Delete",
+			op: func(t *testing.T, svc *ServiceAccountService, fakes *saFakes) error {
+				t.Helper()
+				sa := fakes.seedSA("audit-delete-sa")
+				return svc.Delete(context.Background(), sa.ID, fakes.admin)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, fakes := newSAService(t)
+			// Inject a hard audit backend failure before calling the operation.
+			fakes.audit.EmitErr = errors.New("audit backend down")
+			err := tc.op(t, svc, fakes)
+			require.Error(t, err, "audit failure must propagate as a hard error (spec §5.7)")
+		})
+	}
 }
 
 // TestServiceAccount_List_FiltersByTenant verifies that List only returns SAs
