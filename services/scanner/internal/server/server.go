@@ -19,6 +19,8 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/google/uuid"
+
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -29,6 +31,7 @@ import (
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
 	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
+	"github.com/steveokay/oci-janus/services/scanner/internal/policy"
 	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
 	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
@@ -179,6 +182,33 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// always show "unknown" until a process restart with a different
 	// adapter discovery list).
 	pool.SetVersionRecorder(adapterReg)
+
+	// FE-API-049: wire the policy resolver so HandlePushCompleted
+	// consults the per-repo → org → tenant → default inheritance chain
+	// before enqueueing a scan. The closure parses the UUID strings the
+	// push.completed payload carries and delegates to policy.Resolve;
+	// any error (invalid UUID, DB blip) returns autoScanOnPush=true so
+	// we fail OPEN — scan-on-push has always been on by default and
+	// silently turning it off because the resolver can't be reached
+	// would be a regression worse than the bug we're closing.
+	pool.WithPolicyResolver(func(ctx context.Context, tenantIDStr, repoIDStr string) (bool, error) {
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			return true, fmt.Errorf("policy resolver: invalid tenant_id: %w", err)
+		}
+		var repoID uuid.UUID
+		if repoIDStr != "" {
+			repoID, err = uuid.Parse(repoIDStr)
+			if err != nil {
+				return true, fmt.Errorf("policy resolver: invalid repo_id: %w", err)
+			}
+		}
+		res, err := policy.Resolve(ctx, repo, tenantID, repoID, uuid.Nil)
+		if err != nil {
+			return true, fmt.Errorf("policy resolver: %w", err)
+		}
+		return res.Policy.AutoScanOnPush, nil
+	})
 
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.
 	go pool.Start(ctx, cfg.WorkerCount)

@@ -23,6 +23,58 @@ service ScannerService {
   // RBAC check (admin/owner role) before forwarding.
   rpc UpdateScanPolicy(UpdateScanPolicyRequest) returns (ScanPolicy);
 
+  // FE-API-049 — org-default + per-repo override scan policies.
+  //
+  // Mirrors the FE-API-037/039 retention pattern: per-repo override wins,
+  // org default applies when no per-repo row exists (and only when
+  // enabled=true — a disabled default DOES NOT propagate), tenant policy
+  // is the bottom-of-chain fallback. Auto-scan-on-push at the consumer
+  // resolves the effective policy per push via GetEffectiveScanPolicy
+  // (services/scanner/internal/worker/worker.go HandlePushCompleted).
+  //
+  // RBAC posture at the BFF:
+  //   - GET org default        — org reader+
+  //   - PUT/DELETE org default — org admin/owner only (writer not enough;
+  //                              scan policy gates push admission)
+  //   - GET per-repo override  — repo reader+
+  //   - PUT/DELETE per-repo    — repo admin/owner only
+  // Writer is intentionally NOT enough on the writes — a writer can push
+  // images but should not be able to change the gate they're being
+  // pushed against.
+
+  // GetOrgScanPolicy returns the default scan policy attached to an
+  // organisation. NotFound when no row exists; the BFF surfaces that as
+  // a typed empty state so the dashboard can render "no org default
+  // yet" without a separate code path.
+  rpc GetOrgScanPolicy(GetOrgScanPolicyRequest) returns (ScanPolicy);
+  // UpsertOrgScanPolicy creates or updates the org default. updated_by
+  // sourced from the JWT user_id, never client-supplied.
+  rpc UpsertOrgScanPolicy(UpsertOrgScanPolicyRequest) returns (ScanPolicy);
+  // DeleteOrgScanPolicy removes the org default. Repos that previously
+  // inherited fall back to the tenant policy (or the synthesized default
+  // when no tenant row exists either).
+  rpc DeleteOrgScanPolicy(DeleteOrgScanPolicyRequest) returns (google.protobuf.Empty);
+
+  // GetRepoScanPolicy returns a per-repo override. NotFound when no
+  // override exists (the repo is inheriting from org / tenant).
+  rpc GetRepoScanPolicy(GetRepoScanPolicyRequest) returns (ScanPolicy);
+  // UpsertRepoScanPolicy creates or updates the per-repo override.
+  rpc UpsertRepoScanPolicy(UpsertRepoScanPolicyRequest) returns (ScanPolicy);
+  // DeleteRepoScanPolicy removes the per-repo override; the repo falls
+  // back to the org default (or tenant fallback) on the next push.
+  rpc DeleteRepoScanPolicy(DeleteRepoScanPolicyRequest) returns (google.protobuf.Empty);
+
+  // GetEffectiveScanPolicy resolves what policy actually applies to a
+  // given repository: per-repo override → org default (only when
+  // enabled=true) → tenant policy → synthesized auto_scan_on_push=true
+  // default. Never NotFound — the chain always terminates because the
+  // synthesized default is always available. The inherited_from field
+  // on the response labels the source ("repo" | "org" | "tenant" |
+  // "default") so the dashboard can render the right "(inherited)"
+  // label without a second round-trip. Called by the scanner consumer
+  // on every push.completed event.
+  rpc GetEffectiveScanPolicy(GetEffectiveScanPolicyRequest) returns (EffectiveScanPolicy);
+
   // FE-API-019 — compliance reports.
   //
   // GenerateComplianceReport kicks off an asynchronous report job and
@@ -121,8 +173,21 @@ message GetScanStatusResponse {
 // FE-API-018 — scan policies
 // ----------------------------------------------------------------------------
 
-// ScanPolicy is the per-tenant configuration that drives the scanner's
-// automatic scan-on-push behaviour and severity-based push blocking.
+// ScanPolicy is the configuration that drives the scanner's automatic
+// scan-on-push behaviour and severity-based push blocking. Used at three
+// scopes:
+//
+//   - tenant: the original FE-API-018 row; legacy fallback when no
+//     org/repo policy exists. tenant_id set, org_id + repo_id empty.
+//   - org: FE-API-049 org default. org_id + tenant_id set, repo_id empty.
+//   - repo: FE-API-049 per-repo override. repo_id + tenant_id set, org_id
+//     empty (the BFF resolves repo→org from metadata if it ever needs to
+//     surface the parent).
+//
+// inherited_from labels the source when this message is returned via
+// GetEffectiveScanPolicy: "repo" | "org" | "tenant" | "default" (the
+// synthesized auto_scan_on_push=true fallback). The label is empty when
+// returned via the direct Get*ScanPolicy endpoints.
 message ScanPolicy {
   string tenant_id            = 1;
   // auto_scan_on_push triggers a scan whenever a manifest push completes.
@@ -145,6 +210,16 @@ message ScanPolicy {
   // updated_by is the user_id of the last actor; empty for the default
   // policy returned on a cache miss.
   string updated_by           = 8;
+  // enabled flips the whole policy on/off without losing the rule
+  // configuration. A disabled org default does NOT propagate to inheriting
+  // repos (mirrors FE-API-039 semantics). The per-tenant policy ignores
+  // this field for backward compatibility — set true at boot for new rows.
+  bool   enabled              = 9;
+  // FE-API-049: scope identifiers. Exactly one of org_id / repo_id is set
+  // for non-tenant policies; both empty means this is a tenant-scoped
+  // row (the pre-FE-API-049 shape).
+  string org_id               = 10;
+  string repo_id              = 11;
 }
 
 message GetScanPolicyRequest {
@@ -161,6 +236,86 @@ message UpdateScanPolicyRequest {
   // updated_by is the caller's user_id, threaded through so the audit
   // record on the table reflects who made the change.
   string updated_by           = 7;
+}
+
+// ----------------------------------------------------------------------------
+// FE-API-049 — org / per-repo scan policy messages
+// ----------------------------------------------------------------------------
+
+// Org-default request shape. tenant_id is the platform-level scope;
+// org_id identifies the org within that tenant.
+message GetOrgScanPolicyRequest {
+  string tenant_id = 1;
+  string org_id    = 2;
+}
+
+message UpsertOrgScanPolicyRequest {
+  string tenant_id            = 1;
+  string org_id               = 2;
+  bool   auto_scan_on_push    = 3;
+  string block_on_severity    = 4;
+  repeated string exempt_cves = 5;
+  string scanner_plugin       = 6;
+  string scanner_version_pin  = 7;
+  // enabled flips the policy off without losing config. Disabled org
+  // defaults do not propagate (mirrors FE-API-039 semantics).
+  bool   enabled              = 8;
+  string updated_by           = 9;
+}
+
+message DeleteOrgScanPolicyRequest {
+  string tenant_id = 1;
+  string org_id    = 2;
+}
+
+// Per-repo override request shape. repo_id is sufficient — the metadata
+// table already carries the tenant_id, so the scanner enforces tenant
+// scoping by looking up the repo's tenant on every write.
+message GetRepoScanPolicyRequest {
+  string tenant_id = 1;
+  string repo_id   = 2;
+}
+
+message UpsertRepoScanPolicyRequest {
+  string tenant_id            = 1;
+  string repo_id              = 2;
+  bool   auto_scan_on_push    = 3;
+  string block_on_severity    = 4;
+  repeated string exempt_cves = 5;
+  string scanner_plugin       = 6;
+  string scanner_version_pin  = 7;
+  bool   enabled              = 8;
+  string updated_by           = 9;
+}
+
+message DeleteRepoScanPolicyRequest {
+  string tenant_id = 1;
+  string repo_id   = 2;
+}
+
+// GetEffectiveScanPolicyRequest resolves the inheritance chain for one
+// repository. org_id is optional — when empty the service looks up the
+// repo's org from metadata; supplying it skips that lookup so the
+// scanner consumer (HandlePushCompleted) can avoid an extra round-trip
+// since the push.completed payload already carries enough context.
+message GetEffectiveScanPolicyRequest {
+  string tenant_id = 1;
+  string repo_id   = 2;
+  // org_id is optional. When set, the scanner uses it directly. When
+  // empty, the scanner consults the metadata service to resolve the
+  // repo→org parent. Either way the result is the same.
+  string org_id    = 3;
+}
+
+// EffectiveScanPolicy wraps the resolved policy with the source label so
+// the caller can render "(inherited from …)" without a second call.
+message EffectiveScanPolicy {
+  ScanPolicy policy = 1;
+  // inherited_from is one of: "repo" | "org" | "tenant" | "default".
+  // "default" means no row was found at any scope and the synthesized
+  // auto_scan_on_push=true fallback applies (matches the original
+  // FE-API-018 cache-miss behaviour for the per-tenant path).
+  string inherited_from = 2;
 }
 
 // ----------------------------------------------------------------------------

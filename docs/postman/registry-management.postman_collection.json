@@ -606,6 +606,83 @@
       ]
     },
     {
+      "name": "Scan policies — Per-org + Per-repo (FE-API-049)",
+      "description": "Org-default + per-repo scan policy CRUD. RBAC: GET routes are reader-grade; PUT/DELETE require org or repo admin/owner. The per-repo GET goes through GetEffectiveScanPolicy so the response always carries an inherited_from label (\"repo\" | \"org\" | \"tenant\" | \"default\").",
+      "item": [
+        {
+          "name": "GET org-default scan policy",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
+            }
+          }
+        },
+        {
+          "name": "PUT org-default scan policy",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"auto_scan_on_push\": true,\n  \"block_on_severity\": \"HIGH\",\n  \"exempt_cves\": [],\n  \"scanner_plugin\": \"trivy\",\n  \"scanner_version_pin\": \"\",\n  \"enabled\": true\n}"},
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
+            }
+          }
+        },
+        {
+          "name": "DELETE org-default scan policy",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
+            }
+          }
+        },
+        {
+          "name": "GET effective scan policy for repo (inheritance chain)",
+          "description": "Returns whichever policy actually applies. Look at inherited_from to know the source: \"repo\" (this repo has its own override), \"org\" (inheriting from org default), \"tenant\" (inheriting from tenant policy), \"default\" (no row anywhere — synthesised default).",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
+            }
+          }
+        },
+        {
+          "name": "PUT per-repo scan policy override",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"auto_scan_on_push\": true,\n  \"block_on_severity\": \"CRITICAL\",\n  \"exempt_cves\": [\"CVE-2024-0001\"],\n  \"scanner_plugin\": \"trivy\",\n  \"scanner_version_pin\": \"\",\n  \"enabled\": true\n}"},
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
+            }
+          }
+        },
+        {
+          "name": "DELETE per-repo scan policy override",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "Retention — Per-org (FE-API-039)",
       "description": "Org-default retention policy. GET requires org reader; PUT/DELETE require org admin/owner. Inheriting repos that have no per-repo override fall back to the org default — disabled defaults do NOT propagate.",
       "item": [

@@ -277,6 +277,28 @@
 
 ---
 
+### FE-API-049 — Org-default + per-repo scan policy (2026-06-22)
+- **Affects:** `proto/scanner/v1`, `services/scanner`, `services/management`, `frontend`
+- **Status:** DONE ✅ — inheritance chain live; auto-scan-on-push policy now honoured (was advisory before).
+- **Motivation:** The original FE-API-018 scan policy was tenant-wide AND silently never enforced — `services/scanner/internal/worker/worker.go` `HandlePushCompleted` enqueued every push regardless of `auto_scan_on_push`. Operator wanted org-level defaults + per-repo overrides matching the FE-API-039 retention pattern; fixing the silent-policy bug was a free side-benefit.
+- **What shipped:**
+  - **Proto + migration** — new `org_scan_policies` + `repo_scan_policies` tables (PK on org_id / repo_id, denormalised `tenant_id` + `org_id` for cheap inheritance lookups, `enabled` flag). 7 new RPCs on `scanner.proto`: `Get/Upsert/Delete OrgScanPolicy`, `Get/Upsert/Delete RepoScanPolicy`, and `GetEffectiveScanPolicy` (the inheritance walker). `ScanPolicy` proto extended with `org_id` + `repo_id` + `enabled`; new `EffectiveScanPolicy` envelope carries `inherited_from: "repo"|"org"|"tenant"|"default"`.
+  - **Inheritance helper** — extracted into `services/scanner/internal/policy/policy.go` so the gRPC handler and the worker share one chain implementation. Semantics: per-repo (when enabled) → org default (when enabled) → tenant policy (always-on for backward compat) → synthesised `auto_scan_on_push=true` fallback. Disabled overrides DO NOT propagate (mirrors FE-API-039 retention).
+  - **Scanner consumer** — `worker.Pool` gained an optional `PolicyResolver` callback wired in `server.go` to `policy.Resolve`. `HandlePushCompleted` now calls the resolver and short-circuits when `auto_scan_on_push=false`. Resolver-error path fails OPEN (logs, scans anyway) so a transient DB blip doesn't silently turn off scanning — the prior behaviour is always-scan and we preserve that as the safe default.
+  - **BFF routes** — 6 new HTTP endpoints on `services/management`: `GET/PUT/DELETE /api/v1/orgs/{org}/policies/scan` (org reader / org admin) and `GET/PUT/DELETE /api/v1/repositories/{org}/{repo}/policies/scan` (repo reader / repo admin). Writer intentionally NOT enough on writes — scan policy gates push admission, same posture as FE-API-037 retention. The per-repo GET goes through `GetEffectiveScanPolicy` so the response always carries an `inherited_from` label.
+  - **Frontend** — `useOrgScanPolicy` / `useUpdateOrgScanPolicy` / `useDeleteOrgScanPolicy` + repo equivalents on `frontend/src/lib/api/scan-policy.ts`. New `OrgScanPolicySection` mounted on `/orgs/$org/settings` next to `OrgRetentionPanel`. Editor mirrors the FE-API-018 ScanPolicyEditor (switch + radio + chip CVEs) but adds an `enabled` toggle. Cache-invalidation predicates bust per-repo entries when the org default changes so child surfaces flip without a refresh.
+  - **Migration story** — pre-FE-API-049 tenant `scan_policies` rows stay as the bottom-of-chain fallback. No data migration needed; new column additions on `ScanPolicy` proto are backward-compatible. Per-tenant editor on `/security` still works.
+- **Bugs found + fixed along the way:**
+  - **Silent policy break:** the worker never checked `auto_scan_on_push` before this work. The per-tenant editor was purely advisory; every push triggered a scan. FE-API-049 ships both the inheritance AND the missing check.
+  - **(Earlier this session, separate commit)** `services/core/internal/service/registry.go` was publishing `push.completed` events with an empty `RepoID` (the field was just missing from the payload constructor). Without the scanner's REM-012 observability fix from earlier in the session, this would have stayed hidden — the scanner consumed events, enqueued jobs with empty repo_id, and metadata's `GetManifest` threw `SQLSTATE 22P02` which got masked to `Internal "internal error"` by `mapErr`'s coarse fallback. Both fixes (RepoID populate + mapErr observability) committed before FE-API-049 work started.
+- **Verification (live in compose):** pushed `nginx:1.25-alpine` after FE-API-049 deployment. Scanner logs show `scan job enqueued` → `GetManifest code=OK` → scan_results row written. The `/security/policies` per-tenant editor still works; `/orgs/{org}/settings` shows the new section. Per-repo override surface on the repo Settings tab is the next visible follow-up.
+- **Follow-ups (logged for sprint planning, not blocking):**
+  - Per-repo Settings tab scan policy editor — the repo Settings tab currently shows an EmptyState placeholder; FE-API-049 wired the API client but the panel is deferred since FE-API-037 retention already needs that tab and it deserves a unified layout pass.
+  - Audit the FE-API-018 ScanPolicyEditor's react-hook-form + zod stack vs the lighter OrgScanPolicySection editor — pick one and DRY both surfaces.
+  - PENTEST follow-up: rate-limit the `/policies/scan` PUT routes the same way `/webhooks/{id}/test` should (PENTEST-030 family).
+
+---
+
 ### S11 frontend — SHIPPED this session (2026-06-21)
 
 > Cross-link: full per-slice detail in `FE-STATUS.md` S11.1..S11.5 rows.

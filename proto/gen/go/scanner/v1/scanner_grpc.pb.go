@@ -24,6 +24,13 @@ const (
 	ScannerService_GetScanStatus_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanStatus"
 	ScannerService_GetScanPolicy_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanPolicy"
 	ScannerService_UpdateScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/UpdateScanPolicy"
+	ScannerService_GetOrgScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/GetOrgScanPolicy"
+	ScannerService_UpsertOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/UpsertOrgScanPolicy"
+	ScannerService_DeleteOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/DeleteOrgScanPolicy"
+	ScannerService_GetRepoScanPolicy_FullMethodName        = "/registry.scanner.v1.ScannerService/GetRepoScanPolicy"
+	ScannerService_UpsertRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/UpsertRepoScanPolicy"
+	ScannerService_DeleteRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/DeleteRepoScanPolicy"
+	ScannerService_GetEffectiveScanPolicy_FullMethodName   = "/registry.scanner.v1.ScannerService/GetEffectiveScanPolicy"
 	ScannerService_GenerateComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
 	ScannerService_GetComplianceReport_FullMethodName      = "/registry.scanner.v1.ScannerService/GetComplianceReport"
 	ScannerService_ListComplianceReports_FullMethodName    = "/registry.scanner.v1.ScannerService/ListComplianceReports"
@@ -52,6 +59,36 @@ type ScannerServiceClient interface {
 	// applied by the gRPC layer; the management BFF performs an additional
 	// RBAC check (admin/owner role) before forwarding.
 	UpdateScanPolicy(ctx context.Context, in *UpdateScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// GetOrgScanPolicy returns the default scan policy attached to an
+	// organisation. NotFound when no row exists; the BFF surfaces that as
+	// a typed empty state so the dashboard can render "no org default
+	// yet" without a separate code path.
+	GetOrgScanPolicy(ctx context.Context, in *GetOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// UpsertOrgScanPolicy creates or updates the org default. updated_by
+	// sourced from the JWT user_id, never client-supplied.
+	UpsertOrgScanPolicy(ctx context.Context, in *UpsertOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// DeleteOrgScanPolicy removes the org default. Repos that previously
+	// inherited fall back to the tenant policy (or the synthesized default
+	// when no tenant row exists either).
+	DeleteOrgScanPolicy(ctx context.Context, in *DeleteOrgScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetRepoScanPolicy returns a per-repo override. NotFound when no
+	// override exists (the repo is inheriting from org / tenant).
+	GetRepoScanPolicy(ctx context.Context, in *GetRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// UpsertRepoScanPolicy creates or updates the per-repo override.
+	UpsertRepoScanPolicy(ctx context.Context, in *UpsertRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// DeleteRepoScanPolicy removes the per-repo override; the repo falls
+	// back to the org default (or tenant fallback) on the next push.
+	DeleteRepoScanPolicy(ctx context.Context, in *DeleteRepoScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetEffectiveScanPolicy resolves what policy actually applies to a
+	// given repository: per-repo override → org default (only when
+	// enabled=true) → tenant policy → synthesized auto_scan_on_push=true
+	// default. Never NotFound — the chain always terminates because the
+	// synthesized default is always available. The inherited_from field
+	// on the response labels the source ("repo" | "org" | "tenant" |
+	// "default") so the dashboard can render the right "(inherited)"
+	// label without a second round-trip. Called by the scanner consumer
+	// on every push.completed event.
+	GetEffectiveScanPolicy(ctx context.Context, in *GetEffectiveScanPolicyRequest, opts ...grpc.CallOption) (*EffectiveScanPolicy, error)
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -154,6 +191,76 @@ func (c *scannerServiceClient) UpdateScanPolicy(ctx context.Context, in *UpdateS
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ScanPolicy)
 	err := c.cc.Invoke(ctx, ScannerService_UpdateScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetOrgScanPolicy(ctx context.Context, in *GetOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) UpsertOrgScanPolicy(ctx context.Context, in *UpsertOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_UpsertOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) DeleteOrgScanPolicy(ctx context.Context, in *DeleteOrgScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ScannerService_DeleteOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetRepoScanPolicy(ctx context.Context, in *GetRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) UpsertRepoScanPolicy(ctx context.Context, in *UpsertRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_UpsertRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) DeleteRepoScanPolicy(ctx context.Context, in *DeleteRepoScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ScannerService_DeleteRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetEffectiveScanPolicy(ctx context.Context, in *GetEffectiveScanPolicyRequest, opts ...grpc.CallOption) (*EffectiveScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EffectiveScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetEffectiveScanPolicy_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +397,36 @@ type ScannerServiceServer interface {
 	// applied by the gRPC layer; the management BFF performs an additional
 	// RBAC check (admin/owner role) before forwarding.
 	UpdateScanPolicy(context.Context, *UpdateScanPolicyRequest) (*ScanPolicy, error)
+	// GetOrgScanPolicy returns the default scan policy attached to an
+	// organisation. NotFound when no row exists; the BFF surfaces that as
+	// a typed empty state so the dashboard can render "no org default
+	// yet" without a separate code path.
+	GetOrgScanPolicy(context.Context, *GetOrgScanPolicyRequest) (*ScanPolicy, error)
+	// UpsertOrgScanPolicy creates or updates the org default. updated_by
+	// sourced from the JWT user_id, never client-supplied.
+	UpsertOrgScanPolicy(context.Context, *UpsertOrgScanPolicyRequest) (*ScanPolicy, error)
+	// DeleteOrgScanPolicy removes the org default. Repos that previously
+	// inherited fall back to the tenant policy (or the synthesized default
+	// when no tenant row exists either).
+	DeleteOrgScanPolicy(context.Context, *DeleteOrgScanPolicyRequest) (*emptypb.Empty, error)
+	// GetRepoScanPolicy returns a per-repo override. NotFound when no
+	// override exists (the repo is inheriting from org / tenant).
+	GetRepoScanPolicy(context.Context, *GetRepoScanPolicyRequest) (*ScanPolicy, error)
+	// UpsertRepoScanPolicy creates or updates the per-repo override.
+	UpsertRepoScanPolicy(context.Context, *UpsertRepoScanPolicyRequest) (*ScanPolicy, error)
+	// DeleteRepoScanPolicy removes the per-repo override; the repo falls
+	// back to the org default (or tenant fallback) on the next push.
+	DeleteRepoScanPolicy(context.Context, *DeleteRepoScanPolicyRequest) (*emptypb.Empty, error)
+	// GetEffectiveScanPolicy resolves what policy actually applies to a
+	// given repository: per-repo override → org default (only when
+	// enabled=true) → tenant policy → synthesized auto_scan_on_push=true
+	// default. Never NotFound — the chain always terminates because the
+	// synthesized default is always available. The inherited_from field
+	// on the response labels the source ("repo" | "org" | "tenant" |
+	// "default") so the dashboard can render the right "(inherited)"
+	// label without a second round-trip. Called by the scanner consumer
+	// on every push.completed event.
+	GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error)
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -365,6 +502,27 @@ func (UnimplementedScannerServiceServer) GetScanPolicy(context.Context, *GetScan
 }
 func (UnimplementedScannerServiceServer) UpdateScanPolicy(context.Context, *UpdateScanPolicyRequest) (*ScanPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetOrgScanPolicy(context.Context, *GetOrgScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) UpsertOrgScanPolicy(context.Context, *UpsertOrgScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) DeleteOrgScanPolicy(context.Context, *DeleteOrgScanPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetRepoScanPolicy(context.Context, *GetRepoScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) UpsertRepoScanPolicy(context.Context, *UpsertRepoScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) DeleteRepoScanPolicy(context.Context, *DeleteRepoScanPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEffectiveScanPolicy not implemented")
 }
 func (UnimplementedScannerServiceServer) GenerateComplianceReport(context.Context, *GenerateComplianceReportRequest) (*GenerateComplianceReportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GenerateComplianceReport not implemented")
@@ -473,6 +631,132 @@ func _ScannerService_UpdateScanPolicy_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ScannerServiceServer).UpdateScanPolicy(ctx, req.(*UpdateScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetOrgScanPolicy(ctx, req.(*GetOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_UpsertOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).UpsertOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_UpsertOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).UpsertOrgScanPolicy(ctx, req.(*UpsertOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_DeleteOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).DeleteOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_DeleteOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).DeleteOrgScanPolicy(ctx, req.(*DeleteOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetRepoScanPolicy(ctx, req.(*GetRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_UpsertRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).UpsertRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_UpsertRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).UpsertRepoScanPolicy(ctx, req.(*UpsertRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_DeleteRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).DeleteRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_DeleteRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).DeleteRepoScanPolicy(ctx, req.(*DeleteRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetEffectiveScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEffectiveScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetEffectiveScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetEffectiveScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetEffectiveScanPolicy(ctx, req.(*GetEffectiveScanPolicyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -664,6 +948,34 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateScanPolicy",
 			Handler:    _ScannerService_UpdateScanPolicy_Handler,
+		},
+		{
+			MethodName: "GetOrgScanPolicy",
+			Handler:    _ScannerService_GetOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertOrgScanPolicy",
+			Handler:    _ScannerService_UpsertOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteOrgScanPolicy",
+			Handler:    _ScannerService_DeleteOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "GetRepoScanPolicy",
+			Handler:    _ScannerService_GetRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertRepoScanPolicy",
+			Handler:    _ScannerService_UpsertRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteRepoScanPolicy",
+			Handler:    _ScannerService_DeleteRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "GetEffectiveScanPolicy",
+			Handler:    _ScannerService_GetEffectiveScanPolicy_Handler,
 		},
 		{
 			MethodName: "GenerateComplianceReport",

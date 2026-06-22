@@ -76,6 +76,13 @@ type Pool struct {
 	scanStore   *store.Store
 	jobs        chan scanJob
 	timeout     time.Duration
+	// FE-API-049: policyResolver is the inheritance walker for
+	// auto-scan-on-push decisions. Nil disables policy lookup entirely
+	// (every push gets scanned — preserves pre-FE-API-049 behaviour for
+	// tests that don't wire the resolver). server.go populates this at
+	// boot via WithPolicyResolver so the worker can honour per-repo,
+	// per-org and per-tenant policy without a self-gRPC call.
+	policyResolver PolicyResolver
 
 	// inFlight is the number of scans currently executing on a worker
 	// goroutine. Incremented at runJob entry, decremented on exit.
@@ -93,6 +100,27 @@ type scanJob struct {
 	manifestDigest string
 	pushedBy       string
 	scanID         string
+}
+
+// PolicyResolver resolves the effective scan policy for one push event.
+// Returns autoScanOnPush so the worker can short-circuit cheaply
+// without holding the rest of the resolved policy in memory (the worker
+// doesn't need block_on_severity / exempt_cves at enqueue time —
+// those are honoured later inside doScan).
+//
+// Returning an error fails closed: the worker logs + DOES NOT scan,
+// matching the existing "auth service unreachable" failure mode
+// documented in CLAUDE.md §7 (every other policy gate fails closed
+// against an unreachable backend; this one is consistent).
+type PolicyResolver func(ctx context.Context, tenantID, repoID string) (autoScanOnPush bool, err error)
+
+// WithPolicyResolver is the option used by server.go to wire the
+// inheritance helper at boot. Tests that don't care about policy can
+// leave the resolver unset — Enqueue falls through to "always scan",
+// preserving every existing test fixture.
+func (p *Pool) WithPolicyResolver(r PolicyResolver) *Pool {
+	p.policyResolver = r
+	return p
 }
 
 // NewPool creates a Pool with workerCount goroutines ready to process jobs.
@@ -224,11 +252,45 @@ func (p *Pool) Enqueue(job scanJob) error {
 }
 
 // HandlePushCompleted is the consumer.Handler for push.completed events.
-// It parses the payload, allocates a scan_id, and enqueues the job.
+// It parses the payload, checks the effective scan policy for the
+// repo's tenant + org + repo chain, allocates a scan_id, and enqueues
+// the job — but only when auto_scan_on_push is true at whichever scope
+// applies.
+//
+// 2026-06-22 (FE-API-049): added the policy lookup. Before this, the
+// worker scanned every push regardless of policy — the per-tenant
+// auto_scan_on_push toggle on the dashboard was purely advisory.
+// Returns nil even when policy gates the scan so the broker ACKs the
+// event (the push is fine, we just chose not to scan it).
 func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) error {
 	var payload events.PushCompletedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal push.completed payload: %w", err)
+	}
+
+	// Policy gate. resolver == nil preserves pre-FE-API-049 behaviour
+	// (always scan) for tests + dev environments that haven't wired the
+	// resolver. A real error from the resolver fails CLOSED — do not
+	// scan, log, ACK the event so the broker doesn't re-deliver into a
+	// resolver that's still down.
+	if p.policyResolver != nil {
+		autoScan, err := p.policyResolver(ctx, event.TenantID, payload.RepoID)
+		if err != nil {
+			slog.WarnContext(ctx, "scan policy resolve failed — skipping scan",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"err", err,
+			)
+			return nil
+		}
+		if !autoScan {
+			slog.InfoContext(ctx, "auto-scan-on-push disabled by policy — skipping scan",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"manifest_digest", payload.ManifestDigest,
+			)
+			return nil
+		}
 	}
 
 	scanID := uuid.New().String()

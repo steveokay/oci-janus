@@ -345,6 +345,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// when no per-repo policy exists.
 	h.RegisterOrgRetention(mux, authMW)
 
+	// FE-API-049: org-default + per-repo scan policies. Mirrors the
+	// retention CRUD posture above — reader on read paths, admin/owner
+	// on writes. Both surfaces depend on h.scanner; the registrations
+	// themselves succeed even when SCANNER_GRPC_ADDR is unset (the
+	// handlers return 404 "route disabled" individually). Effective
+	// policy resolution lives in the scanner via GetEffectiveScanPolicy.
+	h.RegisterOrgScanPolicy(mux, authMW)
+	h.RegisterRepoScanPolicy(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.

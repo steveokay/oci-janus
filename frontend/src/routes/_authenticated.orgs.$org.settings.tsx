@@ -2,6 +2,7 @@ import * as React from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronRight, Settings as SettingsIcon } from "lucide-react";
 import { OrgRetentionPanel } from "@/components/orgs/org-retention-panel";
+import { OrgScanPolicySection } from "@/components/orgs/org-scan-policy-section";
 
 // Beacon — Org settings route (S11 Slice 4, FE-API-039).
 //
@@ -69,6 +70,17 @@ function OrgSettings(): React.ReactElement {
           Default retention
         </div>
         <OrgRetentionPanel org={org} />
+      </section>
+
+      {/* FE-API-049 — org-default scan policy. Sits next to retention so */}
+      {/* operators tune the two policy families in one place. Per-repo   */}
+      {/* overrides live on the repo Settings tab once that lands.        */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+          <SettingsIcon className="size-3.5" aria-hidden />
+          Default scan policy
+        </div>
+        <OrgScanPolicySection org={org} />
       </section>
     </div>
   );
