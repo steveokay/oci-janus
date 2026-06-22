@@ -39,6 +39,12 @@ type userRepo interface {
 	GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
 	CreateSSOUser(ctx context.Context, req repository.CreateSSOUserRequest) (*repository.User, error)
 	TouchLastLogin(ctx context.Context, id uuid.UUID) error
+	// Kind-guarded helpers (FE-API-048). GetHumanByID enforces kind='human' so
+	// service-account shadow users cannot be loaded onto a human identity context.
+	// GetUserAnyKind is used by the SA management path where loading shadow users
+	// is intentional (e.g. verifying cascade delete, loading creator snapshots).
+	GetHumanByID(ctx context.Context, id uuid.UUID) (*repository.User, error)
+	GetUserAnyKind(ctx context.Context, id uuid.UUID) (*repository.User, error)
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.
@@ -57,9 +63,21 @@ type apiKeyRepo interface {
 	TouchLastUsed(ctx context.Context, id uuid.UUID) error
 }
 
+// saRepo is the subset of *repository.ServiceAccountRepo methods used by
+// ServiceAccountService. The interface allows test fakes without a real DB.
+type saRepo interface {
+	CreateAtomic(ctx context.Context, in repository.CreateServiceAccountInput) (*repository.ServiceAccount, uuid.UUID, error)
+	Get(ctx context.Context, id uuid.UUID) (*repository.ServiceAccount, error)
+	List(ctx context.Context, tenantID uuid.UUID, includeDisabled bool, pageSize int, pageToken string) ([]repository.ServiceAccountWithStats, string, error)
+	Update(ctx context.Context, in repository.UpdateServiceAccountInput) (*repository.ServiceAccount, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+	CountKeysAffectedByScopeShrink(ctx context.Context, saID uuid.UUID, proposed []string) (int64, error)
+}
+
 // Ensure the concrete repository types satisfy the interfaces at compile time.
 var _ userRepo = (*repository.UserRepository)(nil)
 var _ apiKeyRepo = (*repository.APIKeyRepository)(nil)
+var _ saRepo = (*repository.ServiceAccountRepo)(nil)
 
 // UserRepo is the exported alias of the userRepo interface, so handler-package
 // tests can implement it without importing repository directly.

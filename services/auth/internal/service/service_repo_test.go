@@ -198,6 +198,31 @@ func (f *fakeUserRepo) TouchLastLogin(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// GetHumanByID returns ErrNotFound for service_account kind users, matching the
+// production repository guard (FE-API-048).
+func (f *fakeUserRepo) GetHumanByID(_ context.Context, id uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == id {
+			if u.Kind == "service_account" {
+				return nil, repository.ErrNotFound
+			}
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// GetUserAnyKind returns any user by ID regardless of kind. Used by the SA
+// management path where loading shadow users is intentional.
+func (f *fakeUserRepo) GetUserAnyKind(_ context.Context, id uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
 	keys        map[uuid.UUID]*repository.APIKey
