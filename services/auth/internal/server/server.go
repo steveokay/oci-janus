@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -123,11 +124,21 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// The audit emitter is a slog-only placeholder for now; durable audit
 	// emission via RabbitMQ is a follow-up (FUT) item. The router accepts
 	// *redis.Client directly — it satisfies the RedisCmdable interface.
+	// FE-API-048 FUT-007: when a RabbitMQ publisher is wired, every SA
+	// lifecycle event lands on events.RoutingServiceAccountLifecycle so
+	// registry-audit can persist them as audit_events rows. Without a
+	// broker (dev stacks) the slog stand-in keeps the trail visible in
+	// container logs at INFO level — useful for local debugging but
+	// invisible to the activity feed and audit dashboards.
+	var saAudit service.AuditEmitter = slogAuditEmitter{}
+	if pub != nil {
+		saAudit = rabbitMQAuditEmitter{pub: pub}
+	}
 	saSvc := service.NewServiceAccountService(
 		repository.NewServiceAccountRepo(pool),
 		users,
 		apiKeys,
-		slogAuditEmitter{},
+		saAudit,
 		redisCmdableAdapter{rdb},
 	)
 	httpH = httpH.WithServiceAccountService(saSvc)
@@ -374,11 +385,11 @@ func runLoginSessionCleanup(ctx context.Context, sso *service.SSO) {
 }
 
 // slogAuditEmitter logs ServiceAccount lifecycle audit events to slog at INFO
-// level. This is a stand-in for the durable audit emitter (RabbitMQ publish or
-// direct audit-service call) which is a follow-up item. Production audit
-// dashboards will not see SA events until the durable emitter lands, but the
-// lifecycle is correct (the DB row is the authoritative state) and operators
-// get a structured log line per mutation.
+// level. Used in local-dev stacks that boot without RabbitMQ — operators get
+// a structured log line per mutation but the events don't reach
+// services/audit, so they don't appear in /api/v1/access/activity or the
+// audit dashboards. Production stacks should always have a broker wired so
+// rabbitMQAuditEmitter (below) is used instead.
 type slogAuditEmitter struct{}
 
 // Emit logs the event and returns nil. Per spec §5.7 "audit failure is a hard
@@ -386,11 +397,54 @@ type slogAuditEmitter struct{}
 // the call site treats every emit as a success.
 func (slogAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) error {
 	slog.InfoContext(ctx, "audit",
+		"tenant_id", ev.TenantID,
 		"action", ev.Action,
 		"actor_id", ev.ActorID,
 		"resource", ev.Resource,
 		"fields", ev.Fields,
 	)
+	return nil
+}
+
+// rabbitMQAuditEmitter publishes ServiceAccount lifecycle audit events to
+// the registry.events topic exchange on the
+// events.RoutingServiceAccountLifecycle routing key. registry-audit's
+// eventconsumer translates each message to an audit_events row with
+// action == payload.Action so spec §5.7's lifecycle vocabulary becomes a
+// real, queryable audit trail.
+//
+// Publish errors are returned to the caller (ServiceAccountService treats
+// audit emit failures as hard errors per spec §5.7) — a broker outage will
+// fail the SA mutation rather than silently lose the lifecycle row.
+type rabbitMQAuditEmitter struct {
+	pub *publisher.Publisher
+}
+
+// Emit marshals the AuditEvent into a ServiceAccountLifecyclePayload, wraps
+// it in the standard events.Event envelope, and publishes to the lifecycle
+// routing key. TenantID is carried on the outer envelope so a future
+// per-tenant audit consumer can filter without unmarshalling the payload.
+func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) error {
+	payload, err := json.Marshal(events.ServiceAccountLifecyclePayload{
+		Action:   ev.Action,
+		ActorID:  ev.ActorID,
+		Resource: ev.Resource,
+		Fields:   ev.Fields,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal SA lifecycle payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingServiceAccountLifecycle,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, events.RoutingServiceAccountLifecycle, envelope); err != nil {
+		return fmt.Errorf("publish SA lifecycle: %w", err)
+	}
 	return nil
 }
 

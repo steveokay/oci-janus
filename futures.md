@@ -240,20 +240,32 @@ quickly in real operator workflows.
   unifies the auth model; (b) keeps `/users/me` JWT-only. Pick a path then
   ~1–2h impl plus tests.
 
-### FUT-007: Durable audit emission for SA lifecycle — small follow-up
-- **Why:** FE-API-048 T8 defined `AuditEmitter` and emits structured events
-  on every SA mutation, but the production wiring in
-  `services/auth/internal/server/server.go` uses a `slogAuditEmitter`
-  stand-in — events go to slog INFO level only, no `audit_events` row is
-  persisted. The lifecycle is correct (DB row is the authoritative state)
-  but production audit dashboards don't see SA events yet.
-- **What:** Decide between (a) RabbitMQ publish (matches the existing
-  `rbac.role_granted` pattern — services/auth uses
-  `libs/rabbitmq/publisher`; services/audit consumes), or (b) direct
-  gRPC call to services/audit. (a) is more consistent and survives audit
-  restarts; (b) is synchronous and gives immediate write confirmation.
-  Likely (a). Implement an `AuditEmitter` impl backed by the existing
-  publisher, swap it in for `slogAuditEmitter`. ~1h plus tests.
+### FUT-007: Durable audit emission for SA lifecycle — DONE (sprint-11 maint batch 5)
+- **Resolution:** Closed 2026-06-22 on `feat/sprint-11-maint-batch-5`. Chose
+  option (a) RabbitMQ publish to match the existing `rbac.role_granted`
+  pattern. New `events.RoutingServiceAccountLifecycle` routing key
+  (`service_account.lifecycle`) + `ServiceAccountLifecyclePayload`
+  (`Action`, `ActorID`, `Resource`, `Fields`) — single key carries the
+  full §5.7 vocabulary via the embedded action field rather than fanning
+  out per-event-type. `services/auth/internal/server/server.go` defines a
+  `rabbitMQAuditEmitter` that wraps the existing `pub *publisher.Publisher`
+  (already constructed for RBAC events); when `pub == nil` falls back to
+  `slogAuditEmitter` so dev stacks without a broker stay correct. Every
+  `s.audit.Emit` call site in `service_account.go` got a `TenantID` field
+  populated so the outer `events.Event` envelope can route per-tenant
+  without unmarshalling. `services/audit/internal/eventconsumer/consumer.go`
+  adds the `RoutingServiceAccountLifecycle` case → propagates
+  `payload.Action` verbatim into `audit_events.action` so spec §5.7's
+  vocabulary becomes queryable. The eight SA lifecycle action codes were
+  added to both `defaultNotificationEventTypes` and
+  `allowedNotificationEventTypes` so the activity feed (once FUT-005
+  merges) surfaces them alongside push/pull. `infra/docker-compose/docker-compose.yml`
+  sets `RABBITMQ_URL` on `registry-auth` + `depends_on: rabbitmq healthy`.
+  **Live verification:** SA create → disable → delete produced four
+  rows in `audit_events` (`service_account.created`, `.disabled`,
+  `.updated`, `.deleted`). One nit-cleanup follow-up: the PATCH handler
+  emits both `.updated` and `.disabled` on a `{disabled:true}` body —
+  cosmetic over-emission, can be deduped in a small future PR.
 
 ---
 

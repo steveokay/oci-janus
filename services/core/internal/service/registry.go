@@ -479,6 +479,14 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 	// the empty string as not a valid UUID (SQLSTATE 22P02). The actual
 	// error was masked by mapErr's coarse Internal fallback until the
 	// observability fix landed earlier today.
+	// S-MAINT-1 Batch 5 (P6): derive the artifact-type discriminator from
+	// the manifest's config.mediaType so the scanner can short-circuit
+	// non-image artifacts before enqueueing. Same mapping as
+	// services/metadata/internal/repository.deriveArtifactType — kept in
+	// sync by the constant set on the proto. Empty string when the
+	// manifest had no parseable config block; the consumer treats empty
+	// as "unknown — scan anyway" to stay compatible with older pushes.
+	artifactType := deriveArtifactType(extractConfigMediaType(rawJSON))
 	payload, _ := json.Marshal(events.PushCompletedPayload{
 		RepositoryName: repoName,
 		RepoID:         repoID,
@@ -486,6 +494,7 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 		ManifestDigest: digest,
 		PushedBy:       pushedBy,
 		SizeBytes:      int64(len(rawJSON)),
+		ArtifactType:   artifactType,
 	})
 	evt := events.Event{
 		ID:         uuid.New().String(),
@@ -754,4 +763,59 @@ func isGRPCNotFound(err error) bool {
 		return st.Code() == codes.NotFound
 	}
 	return false
+}
+
+// extractConfigMediaType pulls `config.mediaType` out of an OCI manifest
+// doc. Mirrors `services/metadata/internal/repository.parseConfigMediaType`
+// — duplicated rather than imported because services/core sits above
+// metadata in the dependency graph and we don't want to import a sister
+// service's internal package.
+//
+// Returns "" on parse failure or missing fields; the caller's
+// deriveArtifactType handles empty by emitting "" on the wire (which
+// downstream consumers treat as unknown).
+func extractConfigMediaType(rawJSON []byte) string {
+	if len(rawJSON) == 0 {
+		return ""
+	}
+	var doc struct {
+		Config *struct {
+			MediaType string `json:"mediaType"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		return ""
+	}
+	if doc.Config == nil {
+		return ""
+	}
+	return doc.Config.MediaType
+}
+
+// deriveArtifactType maps a raw `config.mediaType` to the stable
+// discriminator the rest of the platform consumes. Source-of-truth
+// mapping lives in services/metadata — keep these two in lockstep when
+// a new artifact category appears.
+//
+// S-MAINT-1 Batch 5 (P6): emitted on PushCompletedPayload so the scanner
+// can skip Helm / cosign / SBOM artifacts before enqueueing.
+func deriveArtifactType(configMediaType string) string {
+	if configMediaType == "" {
+		return ""
+	}
+	switch configMediaType {
+	case "application/vnd.docker.container.image.v1+json",
+		"application/vnd.oci.image.config.v1+json":
+		return "image"
+	case "application/vnd.cncf.helm.config.v1+json":
+		return "helm"
+	case "application/vnd.dev.cosign.simplesigning.v1+json",
+		"application/vnd.dsse.envelope.v1+json":
+		return "signature"
+	case "application/spdx+json",
+		"application/vnd.cyclonedx+json":
+		return "sbom"
+	default:
+		return "other"
+	}
 }

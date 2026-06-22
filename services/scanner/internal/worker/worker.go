@@ -290,6 +290,27 @@ func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) erro
 		return fmt.Errorf("unmarshal push.completed payload: %w", err)
 	}
 
+	// S-MAINT-1 Batch 5 (P6): skip non-image artifacts. Helm charts,
+	// cosign signatures, SPDX SBOMs etc. don't carry a Linux rootfs and
+	// neither Trivy nor Grype find anything to scan in them — the scan
+	// just wastes a cycle and pollutes scan_results with empty rows.
+	//
+	// Skips only the recognised non-image discriminators ("helm",
+	// "signature", "sbom", "other"). The empty string is intentionally
+	// kept on the scan path: a pre-Batch-5 publisher (or a manifest
+	// whose config block didn't parse) leaves ArtifactType empty, and
+	// the safe default there is to scan. This stays correct when an
+	// older services/core deploys alongside a newer scanner.
+	if payload.ArtifactType != "" && payload.ArtifactType != "image" {
+		slog.InfoContext(ctx, "skipping scan for non-image artifact",
+			"tenant_id", event.TenantID,
+			"repo_id", payload.RepoID,
+			"manifest_digest", payload.ManifestDigest,
+			"artifact_type", payload.ArtifactType,
+		)
+		return nil
+	}
+
 	// Policy gate. resolver == nil preserves pre-FE-API-049 behaviour
 	// (always scan, never quarantine) for tests + dev environments that
 	// haven't wired the resolver. A real error from the resolver fails

@@ -55,6 +55,19 @@ var defaultNotificationEventTypes = []string{
 	"retention.evaluated",
 	"retention.applied",
 	"retention.grace_completed",
+	// FE-API-048 FUT-007 — service-account lifecycle from spec §5.7.
+	// All published on the events.RoutingServiceAccountLifecycle key;
+	// the consumer propagates the embedded Action verbatim into
+	// audit_events.action, so the allowlist below matches exactly what
+	// the rabbitMQAuditEmitter ships.
+	"service_account.created",
+	"service_account.updated",
+	"service_account.disabled",
+	"service_account.enabled",
+	"service_account.deleted",
+	"service_account.key_issued",
+	"service_account.key_revoked",
+	"service_account.scopes_updated",
 }
 
 // allowedNotificationEventTypes is the full set of action values the
@@ -62,17 +75,25 @@ var defaultNotificationEventTypes = []string{
 // smuggle an arbitrary string into the parameterised `action = ANY($N)` clause
 // — defence in depth even though the value is bound, not interpolated.
 var allowedNotificationEventTypes = map[string]struct{}{
-	"push.image":                {},
-	"push.failed":               {},
-	"delete.manifest":           {},
-	"delete.tag":                {},
-	"scan.completed":            {},
-	"scan.policy_blocked":       {},
-	"image.signed":              {},
-	"webhook.delivery_failed":   {},
-	"retention.evaluated":       {},
-	"retention.applied":         {},
-	"retention.grace_completed": {},
+	"push.image":                     {},
+	"push.failed":                    {},
+	"delete.manifest":                {},
+	"delete.tag":                     {},
+	"scan.completed":                 {},
+	"scan.policy_blocked":            {},
+	"image.signed":                   {},
+	"webhook.delivery_failed":        {},
+	"retention.evaluated":            {},
+	"retention.applied":              {},
+	"retention.grace_completed":      {},
+	"service_account.created":        {},
+	"service_account.updated":        {},
+	"service_account.disabled":       {},
+	"service_account.enabled":        {},
+	"service_account.deleted":        {},
+	"service_account.key_issued":     {},
+	"service_account.key_revoked":    {},
+	"service_account.scopes_updated": {},
 }
 
 // GetNotifications returns operator-facing audit events for the calling

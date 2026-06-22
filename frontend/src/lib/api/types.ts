@@ -66,7 +66,25 @@ export interface Tag {
   // renders a 🔒 pill on quarantined rows; the lift action lives on
   // the tag detail page.
   quarantined?: boolean;
+  // S-MAINT-1 Batch 5 (P6 + F4) — derived artifact-type discriminator
+  // ("image" | "helm" | "signature" | "sbom" | "other"). Drives the
+  // per-tag pill + the filter chip row on the repo detail page. Empty
+  // when the manifest had no parseable config block (rare, pre-Batch-5
+  // legacy row).
+  artifact_type?: ArtifactType;
 }
+
+// S-MAINT-1 Batch 5 — union of stable discriminator values mirroring
+// services/metadata/internal/repository.deriveArtifactType. Adding a
+// new category needs an entry here + the matching BFF allowlist +
+// the deriveArtifactType switch on both core + metadata.
+export type ArtifactType =
+  | "image"
+  | "helm"
+  | "signature"
+  | "sbom"
+  | "other"
+  | "";
 
 export interface TagsListResponse {
   tags: Tag[];

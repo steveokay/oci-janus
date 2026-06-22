@@ -13,6 +13,7 @@ import {
   KeyRound,
   Globe,
   ScanLine,
+  Ship,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -34,6 +35,11 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
       { to: "/repositories", label: "Repositories", icon: Boxes },
+      // S-MAINT-1 Batch 5 F4 follow-up — dedicated landing for Helm chart
+      // users (platform engineers running `helm install`). MVP renders
+      // the same repos table as /repositories with chart-focused copy;
+      // a workspace-wide chart browser ships in a follow-up sprint.
+      { to: "/helm", label: "Helm charts", icon: Ship },
       { to: "/security", label: "Security", icon: ShieldCheck },
       { to: "/activity", label: "Activity", icon: Activity },
     ],

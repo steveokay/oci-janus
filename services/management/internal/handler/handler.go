@@ -747,6 +747,13 @@ type TagResponse struct {
 	// renders a 🔒 pill on quarantined rows; clicking the badge opens
 	// the quarantine detail / lift dialog on the tag detail page.
 	Quarantined bool `json:"quarantined,omitempty"`
+	// S-MAINT-1 Batch 5 (P6 + F4): derived artifact-type discriminator
+	// ("image" | "helm" | "signature" | "sbom" | "other"). Drives the
+	// per-tag artifact pill + the filter chip row on the repo detail
+	// page. Empty when the row pre-dates Batch 5 or the manifest had
+	// no parseable config block — FE renders the "Unknown" tone for
+	// the empty case to flag the legacy row visibly.
+	ArtifactType string `json:"artifact_type,omitempty"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -765,6 +772,21 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 	repo, err := h.findRepo(r, tenantID, org, repoName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	// S-MAINT-1 Batch 5 (F4): optional `artifact_type` query param drives
+	// the filter chips on the repo detail page. Allowlist mirrors
+	// deriveArtifactType output values so callers can't smuggle arbitrary
+	// strings into the in-memory comparison below. Empty + "all" both
+	// mean "no filter" (FE uses "all" for the chip state, but accepting
+	// empty too lets the route work with plain curl / Postman).
+	artifactFilter := r.URL.Query().Get("artifact_type")
+	switch artifactFilter {
+	case "", "all", "image", "helm", "signature", "sbom", "other":
+		// allowed
+	default:
+		writeError(w, http.StatusBadRequest, "invalid artifact_type")
 		return
 	}
 
@@ -789,6 +811,17 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			slog.Error("ListTags stream", "err", recvErr)
 			break
 		}
+		// S-MAINT-1 Batch 5 (F4): client-side filter for now — the
+		// per-repo list is page-size capped at 100 server-side, so a
+		// post-fetch filter is cheap and lets us ship the FE without
+		// a proto change. If a single repo grows past one page worth
+		// of tags + becomes filter-heavy we can promote artifact_type
+		// to a ListTagsRequest field in a follow-up.
+		if artifactFilter != "" && artifactFilter != "all" {
+			if tag.GetArtifactType() != artifactFilter {
+				continue
+			}
+		}
 		out := TagResponse{
 			Name:           tag.GetName(),
 			ManifestDigest: tag.GetManifestDigest(),
@@ -799,6 +832,9 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			// on every tag row so the dashboard renders a 🔒 pill
 			// without per-row GetManifest calls.
 			Quarantined: tag.GetQuarantined(),
+			// S-MAINT-1 Batch 5: surface the per-row artifact-type
+			// discriminator for the pill + filter chips.
+			ArtifactType: tag.GetArtifactType(),
 		}
 		// REM-013 gap 1: surface the soft-delete stamp only when the
 		// upstream proto carries one. The proto's GetX() helper returns

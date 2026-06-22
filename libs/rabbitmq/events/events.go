@@ -60,6 +60,17 @@ const (
 	// is < 1.0, but the 24h debounce on metadata keeps last_pulled_at accurate
 	// to within a day regardless of sample rate so long as it is > 0.
 	RoutingPullImage = "pull.image"
+
+	// RoutingServiceAccountLifecycle (FE-API-048 FUT-007) carries every SA
+	// mutation emitted by services/auth's ServiceAccountService — created,
+	// updated, disabled, enabled, deleted, key_issued, key_revoked,
+	// scopes_updated, and the rbac.role_granted_to_service_account variant
+	// described in spec §5.7. Subscribers branch on the embedded Action
+	// field rather than the routing key so we don't have nine fan-out
+	// keys to maintain. registry-audit's eventconsumer translates these
+	// to audit_events rows with action == payload.Action so the activity
+	// feed (FE-API-048 FUT-005) surfaces SA lifecycle alongside push/pull.
+	RoutingServiceAccountLifecycle = "service_account.lifecycle"
 )
 
 // Exchange names
@@ -86,6 +97,14 @@ type PushCompletedPayload struct {
 	ManifestDigest string `json:"manifest_digest"`
 	PushedBy       string `json:"pushed_by"`
 	SizeBytes      int64  `json:"size_bytes"`
+	// S-MAINT-1 Batch 5 (P6): derived artifact-type discriminator
+	// ("image" | "helm" | "signature" | "sbom" | "other"). Lets the
+	// scanner skip non-image artifacts before enqueueing a Trivy/Grype
+	// job that wouldn't find packages in a Helm chart / cosign sig.
+	// Empty when the publisher didn't populate it — older publishers
+	// stay compatible; consumer treats empty as "unknown — scan anyway"
+	// so the scanner stays correct against pre-Batch-5 deployments.
+	ArtifactType string `json:"artifact_type,omitempty"`
 }
 
 // ScanCompletedPayload is the payload for scan.completed events.
@@ -266,4 +285,24 @@ type RetentionGraceCompletedPayload struct {
 	BlobsFreed       int64     `json:"blobs_freed"`
 	BytesFreed       int64     `json:"bytes_freed"`
 	TriggeredBy      string    `json:"triggered_by"`
+}
+
+// ServiceAccountLifecyclePayload is the wire shape of every SA mutation
+// (FE-API-048 FUT-007). All routes through a single routing key
+// (RoutingServiceAccountLifecycle); the embedded Action field identifies
+// the sub-action — e.g. "service_account.created", "service_account.disabled",
+// "service_account.key_issued". Spec §5.7 documents the full vocabulary.
+//
+// ActorID is the human admin who triggered the mutation (string-form UUID).
+// Resource is the SA's id; populated on every action so audit dashboards
+// can group rows per-SA without parsing Fields. Fields carries the
+// action-specific extras (creator snapshot, scope diffs, key prefixes, …).
+//
+// TenantID lives on the outer Event envelope rather than this payload so
+// consumers can route per-tenant without an extra unmarshal step.
+type ServiceAccountLifecyclePayload struct {
+	Action   string         `json:"action"`
+	ActorID  string         `json:"actor_id"`
+	Resource string         `json:"resource"`
+	Fields   map[string]any `json:"fields,omitempty"`
 }

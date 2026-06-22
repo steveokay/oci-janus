@@ -1,5 +1,14 @@
 import * as React from "react";
-import { Lock, Tag as TagIcon, Trash2 } from "lucide-react";
+import {
+  Box,
+  FileCheck2,
+  FileSignature,
+  Lock,
+  Package,
+  Ship,
+  Tag as TagIcon,
+  Trash2,
+} from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Table,
@@ -19,12 +28,34 @@ import { BulkDeleteTagsDialog } from "@/components/repositories/bulk-delete-tags
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
 import { BULK_DELETE_MAX } from "@/lib/api/tags";
+import type { ArtifactType } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 interface TagsPanelProps {
   org: string;
   repo: string;
 }
+
+// S-MAINT-1 Batch 5 (F4) — discriminator state for the filter chip row.
+// "all" is the sentinel "no filter"; other values match Tag.artifact_type
+// emitted by the BFF (deriveArtifactType source-of-truth). The "unknown"
+// row catches legacy manifests whose config_media_type didn't backfill
+// — surfaced as its own chip so an operator can find + repush them.
+type ArtifactFilter = "all" | ArtifactType;
+
+const ARTIFACT_FILTERS: ReadonlyArray<{
+  value: ArtifactFilter;
+  label: string;
+  // null → no leading icon; all other rows surface their type glyph.
+  Icon: React.ComponentType<{ className?: string }> | null;
+}> = [
+  { value: "all", label: "All", Icon: null },
+  { value: "image", label: "Images", Icon: Box },
+  { value: "helm", label: "Helm charts", Icon: Ship },
+  { value: "signature", label: "Signatures", Icon: FileSignature },
+  { value: "sbom", label: "SBOMs", Icon: FileCheck2 },
+  { value: "other", label: "Other", Icon: Package },
+];
 
 // TagsPanel — lives inside the repo-detail tab strip.
 //
@@ -37,8 +68,28 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
   const { data, isLoading, isError, refetch } = useTags(org, repo);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // S-MAINT-1 Batch 5 (F4) — filter chip state. Local for now; promoting
+  // to a URL query param is a follow-up so deep-linking to "Helm charts
+  // in this repo" works for shares. Client-side filter is fine because
+  // the BFF caps tags at 100/page server-side, so the visible array is
+  // always small.
+  const [artifactFilter, setArtifactFilter] =
+    React.useState<ArtifactFilter>("all");
 
-  const tags = React.useMemo(() => data ?? [], [data]);
+  const allTags = React.useMemo(() => data ?? [], [data]);
+  // Apply the artifact-type chip before exposing the array to the rest
+  // of the panel — selection counts, "Select all" toggling, and empty-
+  // state messages all need to see only the visible rows.
+  const tags = React.useMemo(() => {
+    if (artifactFilter === "all") return allTags;
+    if (artifactFilter === "") {
+      // "unknown" path — match rows with empty artifact_type (legacy
+      // / pre-Batch-5). Currently exposed only via deep-link, not the
+      // ARTIFACT_FILTERS chip row.
+      return allTags.filter((t) => !t.artifact_type);
+    }
+    return allTags.filter((t) => t.artifact_type === artifactFilter);
+  }, [allTags, artifactFilter]);
   const visibleTagNames = React.useMemo(() => tags.map((t) => t.name), [tags]);
   // Cap selection at the server's hard limit so the toolbar can show a
   // friendlier "max 100" hint instead of letting the BFF 400 the request.
@@ -74,7 +125,7 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
     );
   }
 
-  if (!isLoading && tags.length === 0) {
+  if (!isLoading && allTags.length === 0) {
     return (
       <EmptyState
         icon={<TagIcon className="size-5" />}
@@ -84,6 +135,11 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
     );
   }
 
+  // Filter chips above the table — only when there's >1 tag, otherwise
+  // the chips just add visual noise. The "no tags match the filter"
+  // empty state below covers the "filtered to zero" case.
+  const filterChipsVisible = allTags.length > 1;
+
   const allVisibleSelected =
     visibleTagNames.length > 0 &&
     visibleTagNames.every((n) => selected.has(n));
@@ -92,6 +148,14 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
 
   return (
     <div className="space-y-3">
+      {filterChipsVisible ? (
+        <ArtifactTypeFilterChips
+          value={artifactFilter}
+          onChange={setArtifactFilter}
+          tags={allTags}
+        />
+      ) : null}
+
       <SelectionToolbar
         count={selectionCount}
         overCap={overCap}
@@ -181,6 +245,11 @@ export function TagsPanel({ org, repo }: TagsPanelProps): React.ReactElement {
                           <Badge tone="accent">
                             <TagIcon className="size-3" /> {t.name}
                           </Badge>
+                          {/* S-MAINT-1 Batch 5 — artifact-type pill. */}
+                          {/* Only renders for non-image artifacts so   */}
+                          {/* the common path stays uncluttered; image  */}
+                          {/* rows stay clean.                          */}
+                          <ArtifactTypePill artifactType={t.artifact_type} />
                           {/* REM-013 gap 1 — pending-delete pill. Renders */}
                           {/* only when the manifest is in the retention   */}
                           {/* grace window; surfaces the ETA so an operator */}
@@ -398,6 +467,170 @@ function PendingDeletePill({
       <Trash2 className="size-2.5" aria-hidden />
       {overdue ? "past grace" : `del ${formatRelativeDate(new Date(eta).toISOString())}`}
     </span>
+  );
+}
+
+// ArtifactTypePill — S-MAINT-1 Batch 5 (F4). Compact icon + label chip
+// next to the tag name when the manifest is anything other than a
+// container image. Image rows skip the pill entirely so the common
+// path stays uncluttered.
+//
+// Empty artifact_type ("" — legacy / pre-Batch-5 manifest) renders a
+// neutral-toned "unknown" chip so operators can spot rows that didn't
+// backfill. They'll repush naturally over time.
+function ArtifactTypePill({
+  artifactType,
+}: {
+  artifactType: ArtifactType | undefined;
+}): React.ReactElement | null {
+  // Image is the default expectation — no pill needed.
+  if (artifactType === "image") return null;
+
+  // No artifact_type on the wire = legacy row pre-Batch-5. Surface as
+  // a quiet neutral chip rather than nothing, so the operator can
+  // tell apart "this is an image" from "we don't know".
+  if (!artifactType) {
+    return (
+      <span
+        title="Manifest pre-dates Batch 5 artifact-type backfill. Will be repaired on next push."
+        className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-fg-subtle)]"
+      >
+        unknown
+      </span>
+    );
+  }
+
+  const config = ARTIFACT_PILL_CONFIG[artifactType];
+  const Icon = config.Icon;
+  return (
+    <span
+      title={config.title}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+        config.classes,
+      )}
+    >
+      <Icon className="size-2.5" aria-hidden />
+      {config.label}
+    </span>
+  );
+}
+
+// Per-type pill styling. Same icon set as the filter chip row above
+// so the visual association is immediate (chip in row matches the chip
+// at the top).
+const ARTIFACT_PILL_CONFIG: Record<
+  Exclude<ArtifactType, "" | "image">,
+  {
+    label: string;
+    title: string;
+    classes: string;
+    Icon: React.ComponentType<{ className?: string }>;
+  }
+> = {
+  helm: {
+    label: "helm",
+    title: "Helm 3 chart — pull with `helm pull oci://...` (not `docker pull`).",
+    classes:
+      "border-[var(--color-accent)]/40 bg-[var(--color-accent-subtle)] text-[var(--color-accent)]",
+    Icon: Ship,
+  },
+  signature: {
+    label: "sig",
+    title: "OCI signature — Cosign or DSSE envelope attached as a referrer to another manifest.",
+    classes:
+      "border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]",
+    Icon: FileSignature,
+  },
+  sbom: {
+    label: "sbom",
+    title: "SBOM attestation — SPDX or CycloneDX bill-of-materials attached as a referrer.",
+    classes:
+      "border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]",
+    Icon: FileCheck2,
+  },
+  other: {
+    label: "artifact",
+    title: "Unrecognised OCI artifact — config.mediaType doesn't match any known category.",
+    classes:
+      "border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] text-[var(--color-fg-muted)]",
+    Icon: Package,
+  },
+};
+
+// ArtifactTypeFilterChips — S-MAINT-1 Batch 5 (F4). Chip row above the
+// tags table letting an operator filter by artifact category. Skips
+// chips whose count would be zero so the row stays compact on simple
+// repos (e.g. an image-only repo doesn't show empty Helm / SBOM chips).
+// The "All" chip is always present so the operator can clear the
+// filter without having to pick another category.
+function ArtifactTypeFilterChips({
+  value,
+  onChange,
+  tags,
+}: {
+  value: ArtifactFilter;
+  onChange: (next: ArtifactFilter) => void;
+  // Used to compute per-chip counts + decide which chips to hide.
+  tags: ReadonlyArray<{ artifact_type?: ArtifactType }>;
+}): React.ReactElement {
+  // Tally artifact types once. The "" entry (legacy / unknown) folds
+  // into the "image" or "other" buckets depending on the operator's
+  // mental model — we count it as its own value so the user can
+  // see "5 unknown" pre-backfill rows. Today the chip row doesn't
+  // surface "unknown" as a chip; it shows up via the per-row pill.
+  const counts = React.useMemo(() => {
+    const acc: Partial<Record<ArtifactType | "all", number>> = {};
+    acc.all = tags.length;
+    for (const t of tags) {
+      const k = t.artifact_type ?? "";
+      acc[k] = (acc[k] ?? 0) + 1;
+    }
+    return acc;
+  }, [tags]);
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      role="group"
+      aria-label="Filter by artifact type"
+    >
+      {ARTIFACT_FILTERS.map((opt) => {
+        const count = counts[opt.value] ?? 0;
+        // Hide chips that would have zero rows — except "All" which is
+        // always shown so the operator can revert from any filter.
+        if (opt.value !== "all" && count === 0) return null;
+        const active = value === opt.value;
+        const Icon = opt.Icon;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+              active
+                ? "border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+                : "border-[var(--color-border-strong)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]",
+            )}
+          >
+            {Icon ? <Icon className="size-3" aria-hidden /> : null}
+            {opt.label}
+            <span
+              className={cn(
+                "tabular-nums text-[10px]",
+                active
+                  ? "text-[var(--color-accent)]/80"
+                  : "text-[var(--color-fg-subtle)]",
+              )}
+            >
+              {count}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
