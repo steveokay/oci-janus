@@ -146,6 +146,10 @@ quickly in real operator workflows.
   - API keys can be issued against a service account OR a user.
   - Workspace admin UI on `/api-keys` (the new route this commit
     shipped) — list of accounts, issue/revoke keys per account.
+- **Note:** FE-API-048 shipped the core implementation (shadow-user
+  principal pattern + `/api-keys` hub). Items FUT-001..004 below
+  capture the next-level machine-identity features; their preview UI
+  surfaces are already in place with dummy data.
 
 ### 7. API key scopes
 - **Why:** Today an API key inherits the issuing user's full grants.
@@ -155,6 +159,98 @@ quickly in real operator workflows.
   `admin:org/myteam`. Enforced in services/auth on every
   ValidateAPIKey call. Same dialog as creation; chips for permission
   picking.
+
+---
+
+## Tier 2 — Access: machine identity & policy
+
+> All four items below have preview UI surfaces already shipped (FE-API-048 T24+)
+> with dummy data. Backend work is what remains.
+
+### FUT-001: Federated workload identity (OIDC trust) — Sprint 11
+- **Why:** GitHub Actions, GKE Workload Identity, and similar OIDC-capable
+  CI systems can authenticate without a stored secret at all. A trust
+  relationship removes the "rotation reminder" problem entirely.
+- **What:** New `oidc_trust_configs` table on services/auth; admin UI on the
+  `/api-keys` Trust tab (preview surface already shipped). services/auth adds
+  a `POST /auth/token/workload` exchange endpoint: validates the OIDC
+  assertion against the configured JWKS URL + audience, issues a short-lived
+  JWT mapped to a service account.
+
+### FUT-002: Credential helpers (docker login / k8s YAML / terraform / GHA snippets) — Sprint 11
+- **Why:** Operators copy-paste credentials into CI configs and get them wrong.
+  Auto-generated, copy-ready snippets reduce support burden.
+- **What:** `/api-keys` Helpers tab (preview surface already shipped) renders
+  per-format snippets: `docker login` command, Kubernetes imagePullSecret YAML,
+  Terraform `docker_registry_image` block, GitHub Actions step. All snippets
+  reference the workspace's actual registry hostname and the selected service
+  account. No new backend RPCs needed — purely frontend rendering against
+  existing `/api/v1/workspace/me` data.
+
+### FUT-003: Token policies (max-TTL, force-rotation, idle-revoke) — Sprint 12
+- **Why:** Long-lived keys with no rotation policy are the #1 lateral-movement
+  vector after a breach. Operators want guardrails at the workspace level.
+- **What:** New `token_policies` table on services/auth keyed by tenant + scope
+  (service account or all accounts). Fields: `max_ttl_days`, `rotation_interval_days`,
+  `idle_revoke_days`. `/api-keys` Policies tab (preview surface already shipped).
+  Enforcement: key creation rejects TTL beyond `max_ttl_days`; a background job
+  (pattern: `FOR UPDATE SKIP LOCKED`) revokes keys exceeding rotation or idle
+  thresholds and publishes `auth.key_revoked` audit events.
+
+### FUT-004: Access review (quarterly stale-key nudge) — Sprint 12
+- **Why:** Without a periodic review prompt, stale keys accumulate silently.
+  Security auditors expect to see evidence that access is re-certified.
+- **What:** Scheduled job emits `auth.access_review_due` audit events (and
+  webhook deliveries) once per configured interval (default 90 days) listing
+  keys not used in that window. `/api-keys` Review tab (preview surface already
+  shipped) surfaces the list with bulk-revoke action. Platform admin can
+  configure the interval per tenant via a new settings field.
+
+### FUT-005: Wire ActivityService audit gRPC client — small follow-up
+- **Why:** FE-API-048 T11 implemented `service.ActivityService` and T15 added
+  the `GET /api/v1/access/activity` route, but the production server bootstrap
+  in `services/auth/internal/server/server.go` doesn't construct the service
+  (it needs an `auditv1.AuditServiceClient` dial that doesn't exist on the
+  auth side today). The route returns informative 501 in production until
+  this is wired. Tests pass because they use an in-process bufconn audit
+  client (`activity_integration_test.go` inlines the audit migrations).
+- **What:** Add `AUDIT_GRPC_ADDR` (and `AUDIT_GRPC_CA_CERT_PATH`/`AUDIT_GRPC_CLIENT_CERT_PATH`/`AUDIT_GRPC_CLIENT_KEY_PATH` matching the mTLS pattern used elsewhere) to `services/auth/internal/config`. Dial it at startup, instantiate
+  `service.NewActivityService(usersRepo, auditClient)`, call
+  `httpH.WithActivityService(activitySvc)`. ~30–60 min. Smoke: admin
+  `GET /api/v1/access/activity?principal_user_id=<self>&limit=5` returns 200
+  with the empty list (no events yet) instead of 501.
+
+### FUT-006: `/users/me` SA-key authentication — design + small impl
+- **Why:** FE-API-048 T16 added the SA principal envelope branch to
+  `GET /api/v1/users/me` (return `type:"service_account"` + nested
+  `service_account: {...}` + `email:null` for SA callers per spec §5.6). But
+  the handler's `requireAuth` middleware currently only accepts JWTs, so a
+  CI bot calling `/users/me` with `Authorization: Bearer key.<id>.<secret>`
+  gets UNAUTHORIZED. The SA branch is reachable today only via the
+  `/auth/token` JWT exchange flow — which works (the JWT's `sub` is the
+  shadow user id). For a CI bot that wants to introspect itself directly
+  via raw API key, this is a gap.
+- **What:** Two viable shapes — (a) teach `requireAuth` to accept API keys
+  in addition to JWTs, mapping them to synthetic claims with `Subject =
+  shadow_user_id` + the SA's intersected scopes; (b) add a parallel
+  `/api/v1/principal/me` route that accepts both. (a) is simpler and
+  unifies the auth model; (b) keeps `/users/me` JWT-only. Pick a path then
+  ~1–2h impl plus tests.
+
+### FUT-007: Durable audit emission for SA lifecycle — small follow-up
+- **Why:** FE-API-048 T8 defined `AuditEmitter` and emits structured events
+  on every SA mutation, but the production wiring in
+  `services/auth/internal/server/server.go` uses a `slogAuditEmitter`
+  stand-in — events go to slog INFO level only, no `audit_events` row is
+  persisted. The lifecycle is correct (DB row is the authoritative state)
+  but production audit dashboards don't see SA events yet.
+- **What:** Decide between (a) RabbitMQ publish (matches the existing
+  `rbac.role_granted` pattern — services/auth uses
+  `libs/rabbitmq/publisher`; services/audit consumes), or (b) direct
+  gRPC call to services/audit. (a) is more consistent and survives audit
+  restarts; (b) is synchronous and gives immediate write confirmation.
+  Likely (a). Implement an `AuditEmitter` impl backed by the existing
+  publisher, swap it in for `slogAuditEmitter`. ~1h plus tests.
 
 ---
 
@@ -208,7 +304,6 @@ Real value, but easy to defer.
   patch to actually capture them at delivery time. The UI already
   renders a "Not captured · backend follow-up tracked in status.md
   FE-API-035" muted placeholder.
-
 ---
 
 ## How to use this file

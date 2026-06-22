@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -41,6 +43,21 @@ type metadataRepo interface {
 	PutManifest(ctx context.Context, tenantID, repoID, digest, mediaType string, rawJSON []byte, sizeBytes int64) (*metadatav1.Manifest, error)
 	GetManifest(ctx context.Context, tenantID, repoID, reference string) (*metadatav1.Manifest, error)
 	DeleteManifest(ctx context.Context, tenantID, repoID, digest string) error
+	// FE-API-050 — quarantine state transition. tenant_id is enforced
+	// in the WHERE clause so cross-tenant misuse surfaces as ErrNotFound
+	// (not a leak). Idempotent on repeated quarantined=true transitions.
+	UpdateManifestQuarantine(
+		ctx context.Context,
+		tenantID, repoID, digest string,
+		quarantined bool,
+		reason, by string,
+	) (*metadatav1.Manifest, error)
+	// FE-API-050: returns the names of tags currently pointing at a
+	// digest. Used by UpdateManifestQuarantine to bust GetManifest
+	// cache entries that were stored under tag-keyed lookups so a
+	// quarantine flip is visible at the pull-time gate immediately
+	// rather than at the next 5-minute TTL boundary.
+	ListTagNamesByDigest(ctx context.Context, tenantID, repoID, digest string) ([]string, error)
 	ListUntaggedManifests(ctx context.Context, tenantID, repoID string) ([]*metadatav1.Manifest, error)
 	// Blobs
 	LinkBlob(ctx context.Context, repoID, digest, storageKey string, sizeBytes int64) error
@@ -129,6 +146,12 @@ type metadataRepo interface {
 type MetadataHandler struct {
 	metadatav1.UnimplementedMetadataServiceServer
 	repo metadataRepo
+	// FE-API-050: optional Redis client used by UpdateManifestQuarantine
+	// to bust the GetManifest cache so quarantine flips take effect
+	// immediately at the pull-time gate. Nil disables the bust (tests
+	// + dev environments without Redis still work — the gate just
+	// lags by the cache TTL).
+	rdb *redis.Client
 }
 
 // New returns a MetadataHandler backed by repo.
@@ -136,7 +159,24 @@ func New(repo *repository.Repository) *MetadataHandler {
 	return &MetadataHandler{repo: repo}
 }
 
+// WithCacheBuster wires the Redis client so quarantine transitions
+// invalidate GetManifest cache entries. Called from server.go at boot.
+func (h *MetadataHandler) WithCacheBuster(rdb *redis.Client) *MetadataHandler {
+	h.rdb = rdb
+	return h
+}
+
 // mapErr converts repository sentinel errors to gRPC status errors.
+//
+// Observability note (2026-06-22) — when an error falls through to the
+// Internal fallback we log the underlying error at slog.Error along with
+// the calling handler's function name. Previously every non-sentinel
+// error became "internal error" on the wire with the original lost; an
+// operator debugging a "code=Internal" response had no way to tell
+// whether the cause was a pgx pool blip, a malformed digest, or a
+// constraint violation. We deliberately do NOT log ErrNotFound /
+// ErrAlreadyExists — those are normal control flow (404 / 409) and
+// noisy at WARN/ERROR.
 func mapErr(err error) error {
 	if err == nil {
 		return nil
@@ -147,7 +187,38 @@ func mapErr(err error) error {
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return status.Error(codes.AlreadyExists, "already exists")
 	}
+	// runtime.Caller(1) gives us the file:line + function name of the
+	// handler that invoked mapErr. callerName falls back to "unknown"
+	// when reflection fails so the log entry always has a value.
+	slog.Error("metadata handler returning Internal",
+		"caller", callerName(1),
+		"error", err.Error(),
+	)
 	return errcodes.MapDBError(err, "internal error")
+}
+
+// callerName returns the short function name (without package path) of
+// the caller at the given skip depth. Used by mapErr so the error log
+// names the originating handler without forcing every callsite to pass
+// a method name parameter. Returns "unknown" when runtime reflection
+// fails — defensive, never panics.
+func callerName(skip int) string {
+	pc, _, _, ok := runtime.Caller(skip + 1)
+	if !ok {
+		return "unknown"
+	}
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return "unknown"
+	}
+	full := fn.Name()
+	// Trim the package path so the log line stays compact —
+	// "github.com/steveokay/oci-janus/services/metadata/internal/handler.(*MetadataHandler).GetManifest"
+	// becomes "handler.(*MetadataHandler).GetManifest".
+	if i := strings.LastIndex(full, "/"); i >= 0 {
+		full = full[i+1:]
+	}
+	return full
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────────
@@ -278,6 +349,98 @@ func (h *MetadataHandler) PutManifest(ctx context.Context, req *metadatav1.PutMa
 func (h *MetadataHandler) GetManifest(ctx context.Context, req *metadatav1.GetManifestRequest) (*metadatav1.Manifest, error) {
 	m, err := h.repo.GetManifest(ctx, req.TenantId, req.RepoId, req.Reference)
 	return m, mapErr(err)
+}
+
+// UpdateManifestQuarantine sets / clears the quarantine flag on a
+// manifest. Reason must be non-empty when quarantining; cleared
+// transitions ignore the reason field.
+//
+// Auth model: the scanner is the primary caller (post-scan policy
+// enforcement) and forwards through mTLS with its service-account cert.
+// services/management's operator-quarantine route gates on repo
+// admin/owner before forwarding here, so we do not re-check at the
+// metadata tier. We DO enforce tenant_id in the SQL WHERE so a
+// malformed manifest_digest from another tenant returns NotFound rather
+// than silently flipping a foreign row.
+func (h *MetadataHandler) UpdateManifestQuarantine(
+	ctx context.Context,
+	req *metadatav1.UpdateManifestQuarantineRequest,
+) (*metadatav1.Manifest, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetRepoId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "repo_id is required")
+	}
+	if req.GetManifestDigest() == "" {
+		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
+	}
+	if req.GetQuarantined() && req.GetReason() == "" {
+		// Refuse silent quarantines — the operator-readable reason is
+		// part of the audit trail + 451 response body. Clearing
+		// (quarantined=false) ignores reason.
+		return nil, status.Error(codes.InvalidArgument, "reason is required when quarantined=true")
+	}
+	m, err := h.repo.UpdateManifestQuarantine(
+		ctx,
+		req.GetTenantId(),
+		req.GetRepoId(),
+		req.GetManifestDigest(),
+		req.GetQuarantined(),
+		req.GetReason(),
+		req.GetQuarantinedBy(),
+	)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	// FE-API-050: bust GetManifest cache entries so the next pull
+	// reflects the new quarantine state immediately. Without this,
+	// quarantined manifests would still be served from cache for up
+	// to the GetManifest TTL (5 min).
+	//
+	// Two key shapes to invalidate, mirroring the KeyFunc on
+	// server.go's CacheInterceptor wiring:
+	//
+	//   grpc:/registry.metadata.v1.MetadataService/GetManifest:<tenant>:<repo>:<digest>
+	//   grpc:/registry.metadata.v1.MetadataService/GetManifest:<tenant>:<repo>:<tag>
+	//
+	// Tag-keyed entries cover the typical OCI pull path
+	// (`docker pull repo:1.0` resolves by tag); the digest-keyed entry
+	// covers `docker pull repo@sha256:…` and the HEAD-then-GET dance.
+	//
+	// rdb=nil disables the bust (tests + dev environments without
+	// Redis still work — the gate just lags by the cache TTL). A bust
+	// failure logs but doesn't fail the RPC; the quarantine row is
+	// already persisted (system of record), and the next TTL boundary
+	// will pick up the truth.
+	h.bustManifestCache(ctx, req.GetTenantId(), req.GetRepoId(), req.GetManifestDigest())
+	return m, nil
+}
+
+// bustManifestCache deletes the Redis cache entries that could be
+// holding a stale quarantine state for this manifest. Best-effort.
+func (h *MetadataHandler) bustManifestCache(ctx context.Context, tenantID, repoID, digest string) {
+	if h.rdb == nil {
+		return
+	}
+	const prefix = "grpc:/registry.metadata.v1.MetadataService/GetManifest:"
+	keys := []string{prefix + tenantID + ":" + repoID + ":" + digest}
+	// Look up tag names for this digest so we can bust tag-keyed
+	// entries too. A failure here is non-fatal — the digest-keyed
+	// bust above still narrows the stale window.
+	tags, err := h.repo.ListTagNamesByDigest(ctx, tenantID, repoID, digest)
+	if err != nil {
+		slog.Warn("cache bust: ListTagNamesByDigest failed",
+			"err", err, "tenant_id", tenantID, "repo_id", repoID, "digest", digest)
+	} else {
+		for _, t := range tags {
+			keys = append(keys, prefix+tenantID+":"+repoID+":"+t)
+		}
+	}
+	if err := h.rdb.Del(ctx, keys...).Err(); err != nil {
+		slog.Warn("cache bust: redis Del failed",
+			"err", err, "keys", keys)
+	}
 }
 
 func (h *MetadataHandler) DeleteManifest(ctx context.Context, req *metadatav1.DeleteManifestRequest) (*emptypb.Empty, error) {

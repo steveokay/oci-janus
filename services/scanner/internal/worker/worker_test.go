@@ -19,7 +19,10 @@ func TestHasPolicyViolation_criticalTriggersBlock(t *testing.T) {
 			"MEDIUM":   3,
 		},
 	}
-	if !hasPolicyViolation(result) {
+	// FE-API-050: explicit "HIGH" threshold mirrors the pre-FE-API-050
+	// hardcoded behaviour these tests originally asserted (CRITICAL +
+	// HIGH both block when blockOn=HIGH).
+	if !hasPolicyViolation(result, "HIGH") {
 		t.Error("expected policy violation for CRITICAL findings")
 	}
 }
@@ -33,7 +36,7 @@ func TestHasPolicyViolation_highTriggersBlock(t *testing.T) {
 			"HIGH":     2,
 		},
 	}
-	if !hasPolicyViolation(result) {
+	if !hasPolicyViolation(result, "HIGH") {
 		t.Error("expected policy violation for HIGH findings")
 	}
 }
@@ -49,8 +52,8 @@ func TestHasPolicyViolation_mediumOnlyNoBlock(t *testing.T) {
 			"LOW":      5,
 		},
 	}
-	if hasPolicyViolation(result) {
-		t.Error("MEDIUM-only findings should not trigger a policy violation")
+	if hasPolicyViolation(result, "HIGH") {
+		t.Error("MEDIUM-only findings should not trigger a policy violation at HIGH threshold")
 	}
 }
 
@@ -60,7 +63,7 @@ func TestHasPolicyViolation_emptyCountsNoBlock(t *testing.T) {
 	result := &plugin.ScanResult{
 		SeverityCounts: map[string]int{},
 	}
-	if hasPolicyViolation(result) {
+	if hasPolicyViolation(result, "HIGH") {
 		t.Error("clean scan result should not trigger a policy violation")
 	}
 }
@@ -68,8 +71,49 @@ func TestHasPolicyViolation_emptyCountsNoBlock(t *testing.T) {
 // TestHasPolicyViolation_nilCounts verifies robustness when SeverityCounts is nil.
 func TestHasPolicyViolation_nilCounts(t *testing.T) {
 	result := &plugin.ScanResult{} // SeverityCounts defaults to nil map
-	if hasPolicyViolation(result) {
+	if hasPolicyViolation(result, "HIGH") {
 		t.Error("nil severity counts should not trigger a policy violation")
+	}
+}
+
+// TestHasPolicyViolation_emptyThresholdNeverBlocks verifies that an empty
+// block_on_severity setting means "never block" — the safe default the
+// scan-policy editor's first radio option emits.
+func TestHasPolicyViolation_emptyThresholdNeverBlocks(t *testing.T) {
+	result := &plugin.ScanResult{
+		SeverityCounts: map[string]int{
+			"CRITICAL": 100,
+			"HIGH":     100,
+		},
+	}
+	if hasPolicyViolation(result, "") {
+		t.Error("empty threshold should never trigger a policy violation, even with CRITICAL findings")
+	}
+}
+
+// TestHasPolicyViolation_mediumThresholdCatchesMedium verifies the
+// FE-API-050 fix: the operator's MEDIUM setting actually catches
+// MEDIUM findings (was hardcoded to CRITICAL||HIGH before the fix).
+func TestHasPolicyViolation_mediumThresholdCatchesMedium(t *testing.T) {
+	result := &plugin.ScanResult{
+		SeverityCounts: map[string]int{
+			"MEDIUM": 1,
+		},
+	}
+	if !hasPolicyViolation(result, "MEDIUM") {
+		t.Error("MEDIUM threshold should catch MEDIUM findings (was hardcoded CRITICAL||HIGH pre-FE-API-050)")
+	}
+}
+
+// TestHasPolicyViolation_lowThresholdBlocksOnAnyFinding verifies that
+// the LOW threshold blocks on anything — operator-facing label is
+// "Anything found" in the editor.
+func TestHasPolicyViolation_lowThresholdBlocksOnAnyFinding(t *testing.T) {
+	result := &plugin.ScanResult{
+		SeverityCounts: map[string]int{"LOW": 1},
+	}
+	if !hasPolicyViolation(result, "LOW") {
+		t.Error("LOW threshold should block on LOW findings")
 	}
 }
 

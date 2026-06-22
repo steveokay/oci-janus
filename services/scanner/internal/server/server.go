@@ -19,6 +19,8 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/google/uuid"
+
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -29,6 +31,7 @@ import (
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
 	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
+	"github.com/steveokay/oci-janus/services/scanner/internal/policy"
 	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
 	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
@@ -58,12 +61,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("scanner adapter registry: %w", err)
 	}
 
-	// Validate and load the scanner plugin binary (checksum verified here — service
-	// refuses to start if the binary has been tampered with).
-	scannerPlugin, err := internalPlugin.New(cfg.PluginPath, cfg.PluginChecksum)
-	if err != nil {
-		return fmt.Errorf("load scanner plugin: %w", err)
-	}
+	// Boot-time scanner plugin construction is deferred until after
+	// `selectInitialAdapter` resolves the persisted choice in
+	// scanner_settings (REM-011 Phase 2). Otherwise the worker pool would
+	// always boot with cfg.PluginPath (env-var default = dev-stub in
+	// dev), even when the operator had swapped to trivy via the admin
+	// UI — restarting the scanner silently reverted the swap. We still
+	// need this declared up front so the rest of the boot flow can reuse
+	// it; the *ProcessPlugin satisfies the plugin.Scanner contract the
+	// worker.NewPool expects.
+	var scannerPlugin *internalPlugin.ProcessPlugin
 
 	creds, err := clientCreds(cfg)
 	if err != nil {
@@ -112,6 +119,33 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.WarnContext(ctx, "selecting initial scanner adapter — using none", "err", err)
 	}
 
+	// REM-013 follow-up — boot the worker pool with whatever
+	// `selectInitialAdapter` chose. Without this, the pool was always
+	// constructed from cfg.PluginPath (env-var default = dev-stub),
+	// silently ignoring the operator's persisted swap on every restart.
+	// We re-derive the active adapter's path + checksum from the
+	// registry so the same SHA-256 integrity check that gates the
+	// runtime SetActiveAdapter RPC also gates boot.
+	if active := adapterReg.Active(); active != nil {
+		scannerPlugin, err = internalPlugin.New(active.Path, active.Checksum)
+		if err != nil {
+			return fmt.Errorf("load active scanner plugin %q: %w", active.Path, err)
+		}
+		slog.InfoContext(ctx, "scanner adapter boot selection",
+			"path", active.Path, "checksum", active.Checksum)
+	} else {
+		// selectInitialAdapter logs the no-adapter case at WARN; we still
+		// need a plugin to construct the pool with so fall back to the
+		// env-var path here. The runtime SetActiveAdapter swap can fix
+		// the selection without a restart.
+		scannerPlugin, err = internalPlugin.New(cfg.PluginPath, cfg.PluginChecksum)
+		if err != nil {
+			return fmt.Errorf("load fallback scanner plugin: %w", err)
+		}
+		slog.WarnContext(ctx, "scanner adapter boot selection — no registry entry, using env-var default",
+			"path", cfg.PluginPath)
+	}
+
 	// RabbitMQ publisher for scan.completed / scan.policy_blocked events.
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
@@ -148,6 +182,41 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// always show "unknown" until a process restart with a different
 	// adapter discovery list).
 	pool.SetVersionRecorder(adapterReg)
+
+	// FE-API-049/050: wire the policy resolver so HandlePushCompleted
+	// consults the per-repo → org → tenant → default inheritance chain
+	// before enqueueing a scan AND so the post-scan worker can honour
+	// block_on_severity + exempt_cves when deciding whether to
+	// quarantine. The closure parses the UUID strings the push.completed
+	// payload carries and delegates to policy.Resolve; any error
+	// (invalid UUID, DB blip) returns the "scan everything, quarantine
+	// nothing" default so we fail OPEN — losing a scan is worse than
+	// scanning against a synthesised default, and silently quarantining
+	// against a partial policy view would be worse than not
+	// quarantining at all.
+	pool.WithPolicyResolver(func(ctx context.Context, tenantIDStr, repoIDStr string) (worker.ResolvedScanPolicy, error) {
+		fallback := worker.ResolvedScanPolicy{AutoScanOnPush: true}
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			return fallback, fmt.Errorf("policy resolver: invalid tenant_id: %w", err)
+		}
+		var repoID uuid.UUID
+		if repoIDStr != "" {
+			repoID, err = uuid.Parse(repoIDStr)
+			if err != nil {
+				return fallback, fmt.Errorf("policy resolver: invalid repo_id: %w", err)
+			}
+		}
+		res, err := policy.Resolve(ctx, repo, tenantID, repoID, uuid.Nil)
+		if err != nil {
+			return fallback, fmt.Errorf("policy resolver: %w", err)
+		}
+		return worker.ResolvedScanPolicy{
+			AutoScanOnPush:  res.Policy.AutoScanOnPush,
+			BlockOnSeverity: res.Policy.BlockOnSeverity,
+			ExemptCVEs:      res.Policy.ExemptCVEs,
+		}, nil
+	})
 
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.
 	go pool.Start(ctx, cfg.WorkerCount)

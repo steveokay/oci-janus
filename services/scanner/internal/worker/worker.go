@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -76,6 +77,13 @@ type Pool struct {
 	scanStore   *store.Store
 	jobs        chan scanJob
 	timeout     time.Duration
+	// FE-API-049: policyResolver is the inheritance walker for
+	// auto-scan-on-push decisions. Nil disables policy lookup entirely
+	// (every push gets scanned — preserves pre-FE-API-049 behaviour for
+	// tests that don't wire the resolver). server.go populates this at
+	// boot via WithPolicyResolver so the worker can honour per-repo,
+	// per-org and per-tenant policy without a self-gRPC call.
+	policyResolver PolicyResolver
 
 	// inFlight is the number of scans currently executing on a worker
 	// goroutine. Incremented at runJob entry, decremented on exit.
@@ -93,6 +101,48 @@ type scanJob struct {
 	manifestDigest string
 	pushedBy       string
 	scanID         string
+	// FE-API-050: resolved scan policy attached at enqueue time so
+	// runJob doesn't have to re-resolve at scan completion. Empty
+	// (zero value) when the resolver wasn't wired — runJob then skips
+	// the violation/quarantine step entirely.
+	policy ResolvedScanPolicy
+}
+
+// ResolvedScanPolicy is the slice of the effective scan policy the
+// worker actually consumes — keeping the shape narrow means tests can
+// stub the resolver without depending on the repository package.
+// FE-API-050: BlockOnSeverity + ExemptCVEs drive the post-scan
+// quarantine decision; AutoScanOnPush gates whether we enqueue at all.
+type ResolvedScanPolicy struct {
+	AutoScanOnPush  bool
+	BlockOnSeverity string
+	ExemptCVEs      []string
+}
+
+// PolicyResolver resolves the effective scan policy for one push event.
+// Returns the full resolved policy so the worker can both (a) decide
+// whether to enqueue (AutoScanOnPush) and (b) decide whether the scan
+// result violates the policy and should quarantine the manifest
+// (BlockOnSeverity + ExemptCVEs). Returning the full struct from one
+// resolver call avoids a second round-trip after the scan completes.
+//
+// Returning an error fails OPEN on the enqueue side (we scan even when
+// the resolver is down — losing a scan is worse than enqueuing one
+// against the synthesised default), and fails OPEN on the violation
+// side too (no quarantine when we can't read the policy). This is the
+// conservative "least surprising regression" stance: prior behaviour
+// was always-scan + never-quarantine; a transient DB blip preserves
+// both of those rather than silently flipping to a more aggressive
+// state.
+type PolicyResolver func(ctx context.Context, tenantID, repoID string) (ResolvedScanPolicy, error)
+
+// WithPolicyResolver is the option used by server.go to wire the
+// inheritance helper at boot. Tests that don't care about policy can
+// leave the resolver unset — Enqueue falls through to "always scan",
+// preserving every existing test fixture.
+func (p *Pool) WithPolicyResolver(r PolicyResolver) *Pool {
+	p.policyResolver = r
+	return p
 }
 
 // NewPool creates a Pool with workerCount goroutines ready to process jobs.
@@ -224,11 +274,54 @@ func (p *Pool) Enqueue(job scanJob) error {
 }
 
 // HandlePushCompleted is the consumer.Handler for push.completed events.
-// It parses the payload, allocates a scan_id, and enqueues the job.
+// It parses the payload, checks the effective scan policy for the
+// repo's tenant + org + repo chain, allocates a scan_id, and enqueues
+// the job — but only when auto_scan_on_push is true at whichever scope
+// applies.
+//
+// 2026-06-22 (FE-API-049): added the policy lookup. Before this, the
+// worker scanned every push regardless of policy — the per-tenant
+// auto_scan_on_push toggle on the dashboard was purely advisory.
+// Returns nil even when policy gates the scan so the broker ACKs the
+// event (the push is fine, we just chose not to scan it).
 func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) error {
 	var payload events.PushCompletedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal push.completed payload: %w", err)
+	}
+
+	// Policy gate. resolver == nil preserves pre-FE-API-049 behaviour
+	// (always scan, never quarantine) for tests + dev environments that
+	// haven't wired the resolver. A real error from the resolver fails
+	// OPEN — we scan anyway against the synthesised default so a
+	// transient DB blip doesn't silently turn off scanning. The
+	// resolved policy is attached to the scanJob so the violation
+	// check at scan completion uses the same answer (no second
+	// resolver call needed).
+	resolved := ResolvedScanPolicy{
+		AutoScanOnPush: true,
+		// Empty BlockOnSeverity means "never block" — matches the
+		// pre-FE-API-050 always-on, never-quarantine baseline.
+	}
+	if p.policyResolver != nil {
+		got, err := p.policyResolver(ctx, event.TenantID, payload.RepoID)
+		if err != nil {
+			slog.WarnContext(ctx, "scan policy resolve failed — scanning with default policy",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"err", err,
+			)
+		} else {
+			resolved = got
+		}
+		if !resolved.AutoScanOnPush {
+			slog.InfoContext(ctx, "auto-scan-on-push disabled by policy — skipping scan",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"manifest_digest", payload.ManifestDigest,
+			)
+			return nil
+		}
 	}
 
 	scanID := uuid.New().String()
@@ -241,6 +334,7 @@ func (p *Pool) HandlePushCompleted(ctx context.Context, event events.Event) erro
 		manifestDigest: payload.ManifestDigest,
 		pushedBy:       payload.PushedBy,
 		scanID:         scanID,
+		policy:         resolved,
 	}); err != nil {
 		// Return the error so the RabbitMQ consumer NACKs and the broker
 		// re-delivers after backoff (PENTEST-023: prefer backpressure over
@@ -302,12 +396,77 @@ func (p *Pool) runJob(ctx context.Context, job scanJob) {
 		(*recPtr).RecordVersion(result.ScannerName, result.ScannerVersion)
 	}
 
-	policyViolation := hasPolicyViolation(result)
+	// FE-API-050: violation check now honours the resolved policy's
+	// block_on_severity threshold (was hardcoded to CRITICAL||HIGH).
+	// Empty BlockOnSeverity → "never block" → no violation.
+	policyViolation := hasPolicyViolation(result, job.policy.BlockOnSeverity)
+
 	p.publishScanCompleted(ctx, job, result, policyViolation)
 
 	if policyViolation {
 		p.publishPolicyBlocked(ctx, job, result)
+		// FE-API-050: stamp quarantine on the manifest so the next pull
+		// is rejected by registry-core. Best-effort — a metadata blip
+		// here logs but does not unwind the scan result (which is the
+		// audit row of record). The next scan/lift can recover.
+		p.applyQuarantine(ctx, job, result)
 	}
+}
+
+// applyQuarantine flips manifests.quarantined=true via the metadata
+// service. Reason is operator-readable text that lands on the 451
+// response body when a pull is rejected. quarantined_by="scanner" so
+// the audit trail distinguishes automatic policy enforcement from
+// operator-triggered manual quarantines.
+//
+// Failures are logged at warn — the scan_results row was already
+// written (that's the system-of-record for the audit trail), and the
+// next scan + violation will retry the quarantine stamp idempotently.
+func (p *Pool) applyQuarantine(ctx context.Context, job scanJob, result *plugin.ScanResult) {
+	reason := buildQuarantineReason(result, job.policy.BlockOnSeverity)
+	if _, err := p.metaClient.UpdateManifestQuarantine(ctx, &metadatav1.UpdateManifestQuarantineRequest{
+		TenantId:        job.tenantID,
+		RepoId:          job.repoID,
+		ManifestDigest:  job.manifestDigest,
+		Quarantined:     true,
+		Reason:          reason,
+		QuarantinedBy:   "scanner",
+	}); err != nil {
+		slog.WarnContext(ctx, "UpdateManifestQuarantine failed",
+			"scan_id", job.scanID,
+			"manifest_digest", job.manifestDigest,
+			"error", err,
+		)
+		return
+	}
+	slog.InfoContext(ctx, "manifest quarantined by scan policy",
+		"scan_id", job.scanID,
+		"manifest_digest", job.manifestDigest,
+		"reason", reason,
+	)
+}
+
+// buildQuarantineReason renders the audit-trail string. Keeping it
+// here (rather than in the metadata service) means the dashboard's
+// 451 banner shows the operator EXACTLY what the scanner saw, with
+// the scanner's vocabulary. Format:
+//
+//   "scan blocked by policy block_on_severity=HIGH: 3 CRITICAL, 5 HIGH, 2 MEDIUM"
+func buildQuarantineReason(result *plugin.ScanResult, blockOn string) string {
+	parts := []string{}
+	for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+		if n := result.SeverityCounts[sev]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, sev))
+		}
+	}
+	counts := "no findings"
+	if len(parts) > 0 {
+		counts = strings.Join(parts, ", ")
+	}
+	if blockOn == "" {
+		blockOn = "CRITICAL"
+	}
+	return fmt.Sprintf("scan blocked by policy block_on_severity=%s: %s", blockOn, counts)
 }
 
 // doScan fetches the manifest, extracts layers, and invokes the scanner plugin.
@@ -443,10 +602,42 @@ func (p *Pool) publishPolicyBlocked(ctx context.Context, job scanJob, result *pl
 	}
 }
 
-// hasPolicyViolation returns true if the scan found CRITICAL or HIGH vulnerabilities.
-// Per CLAUDE.md §4.7: default block-on-severity is CRITICAL/HIGH.
-func hasPolicyViolation(result *plugin.ScanResult) bool {
-	return result.SeverityCounts["CRITICAL"] > 0 || result.SeverityCounts["HIGH"] > 0
+// hasPolicyViolation returns true if the scan found at least one
+// vulnerability at the threshold severity or higher.
+//
+// FE-API-050: honours the operator-configured threshold instead of the
+// pre-FE-API-050 hardcoded CRITICAL||HIGH. Severity order from worst
+// to least: CRITICAL > HIGH > MEDIUM > LOW. Empty threshold means
+// "never block" (matches the FE-API-018 wire shape — `""` is the safe
+// default the editor's first radio option emits).
+//
+// Unknown threshold values (a row hand-edited to "FOO") fail safe by
+// treating it as "never block" so an invalid policy doesn't accidentally
+// block every push.
+func hasPolicyViolation(result *plugin.ScanResult, blockOn string) bool {
+	threshold, ok := severityRank[blockOn]
+	if !ok {
+		return false
+	}
+	for sev, rank := range severityRank {
+		if rank >= threshold && result.SeverityCounts[sev] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// severityRank orders the four standard scanner severities so the
+// "blocks at HIGH" check fires for both HIGH and CRITICAL. CRITICAL is
+// the worst (highest rank); LOW is the least; the empty string is
+// intentionally NOT in the map so the unknown-value branch in
+// hasPolicyViolation can detect "never block" without an extra
+// allowlist.
+var severityRank = map[string]int{
+	"LOW":      1,
+	"MEDIUM":   2,
+	"HIGH":     3,
+	"CRITICAL": 4,
 }
 
 // marshalFindings serialises scan findings to JSON for storage in metadata.
@@ -476,11 +667,46 @@ func ScanQueuedConsumerConfig() consumer.Config {
 }
 
 // HandleScanQueued is the consumer.Handler for scan.queued events.
-// It parses the ScanQueuedPayload, allocates a scan_id, and enqueues the job.
+// It parses the ScanQueuedPayload, resolves the effective scan policy
+// (same chain HandlePushCompleted uses) so the post-scan violation
+// check + quarantine stamp honour the operator's settings, allocates
+// a scan_id, and enqueues the job.
+//
+// FE-API-050 bugfix: the original implementation skipped the policy
+// resolver, so operator-triggered re-scans NEVER quarantined — only
+// push-driven scans did. Both surfaces now share the same resolution
+// logic + fail-open semantics: a resolver error logs a warning and
+// proceeds with the synthesised default (scan everything, never
+// quarantine) so a DB blip doesn't silently flip enforcement off.
+//
+// Unlike push.completed, scan.queued is operator-triggered (the UI
+// Rescan button), so we always scan even when AutoScanOnPush is
+// false — the operator already overrode the gate by clicking.
 func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 	var payload events.ScanQueuedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal scan.queued payload: %w", err)
+	}
+
+	// Resolve the effective policy so applyQuarantine has the right
+	// threshold + exempt CVEs at scan completion. Failing open here
+	// (resolver returns the synthesised "scan everything, never
+	// quarantine" default on error) is the conservative regression
+	// safety: pre-FE-API-050 behaviour was always-scan + never-block,
+	// and a transient resolver error shouldn't silently flip to a
+	// more aggressive state.
+	resolved := ResolvedScanPolicy{AutoScanOnPush: true}
+	if p.policyResolver != nil {
+		got, err := p.policyResolver(ctx, event.TenantID, payload.RepoID)
+		if err != nil {
+			slog.WarnContext(ctx, "scan policy resolve failed — scanning with default policy",
+				"tenant_id", event.TenantID,
+				"repo_id", payload.RepoID,
+				"err", err,
+			)
+		} else {
+			resolved = got
+		}
 	}
 
 	scanID := uuid.New().String()
@@ -492,6 +718,7 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 		repositoryName: payload.RepositoryName,
 		manifestDigest: payload.ManifestDigest,
 		scanID:         scanID,
+		policy:         resolved,
 	}); err != nil {
 		return fmt.Errorf("enqueue scan job: %w", err)
 	}
@@ -501,6 +728,7 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 		"tenant_id", event.TenantID,
 		"tag", payload.TagName,
 		"manifest_digest", payload.ManifestDigest,
+		"block_on_severity", resolved.BlockOnSeverity,
 	)
 	return nil
 }

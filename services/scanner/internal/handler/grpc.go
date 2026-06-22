@@ -17,6 +17,10 @@ package handler
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +33,7 @@ import (
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	"github.com/steveokay/oci-janus/libs/scanner/plugin"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
+	"github.com/steveokay/oci-janus/services/scanner/internal/policy"
 	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
 	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
@@ -222,6 +227,12 @@ func (h *GRPCHandler) UpdateScanPolicy(ctx context.Context, req *scannerv1.Updat
 }
 
 // policyToProto converts a repository row to its proto form.
+//
+// FE-API-049 extension: surfaces OrgID + RepoID + Enabled when set so the
+// shared editor on the dashboard can render the same proto for any of
+// the three scopes (tenant / org / repo). Zero-value UUIDs are omitted —
+// the proto fields stay empty strings, which is the wire-side signal
+// that no scope identifier is set.
 func policyToProto(p *repository.ScanPolicy) *scannerv1.ScanPolicy {
 	out := &scannerv1.ScanPolicy{
 		TenantId:          p.TenantID.String(),
@@ -230,12 +241,262 @@ func policyToProto(p *repository.ScanPolicy) *scannerv1.ScanPolicy {
 		ExemptCves:        p.ExemptCVEs,
 		ScannerPlugin:     p.ScannerPlugin,
 		ScannerVersionPin: p.ScannerVersionPin,
+		Enabled:           p.Enabled,
 		UpdatedAt:         timestamppb.New(p.UpdatedAt),
+	}
+	if p.OrgID != uuid.Nil {
+		out.OrgId = p.OrgID.String()
+	}
+	if p.RepoID != uuid.Nil {
+		out.RepoId = p.RepoID.String()
 	}
 	if p.UpdatedBy != uuid.Nil {
 		out.UpdatedBy = p.UpdatedBy.String()
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// FE-API-049 — org + repo scan policies + inheritance
+// ---------------------------------------------------------------------------
+
+// GetOrgScanPolicy returns the org default. NotFound is propagated to the
+// caller — unlike the per-tenant GetScanPolicy which synthesises a
+// default, the org route lets the BFF render an explicit "no org default
+// yet" empty state so the dashboard can distinguish inherited vs absent.
+func (h *GRPCHandler) GetOrgScanPolicy(ctx context.Context, req *scannerv1.GetOrgScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "org_id must be a UUID")
+	}
+	rec, err := h.repo.GetOrgScanPolicy(ctx, tenantID, orgID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "org scan policy not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get org scan policy: %v", err)
+	}
+	return policyToProto(rec), nil
+}
+
+// UpsertOrgScanPolicy creates or updates the org-default row.
+func (h *GRPCHandler) UpsertOrgScanPolicy(ctx context.Context, req *scannerv1.UpsertOrgScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "org_id must be a UUID")
+	}
+	var updatedBy uuid.UUID
+	if s := req.GetUpdatedBy(); s != "" {
+		updatedBy, err = uuid.Parse(s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "updated_by must be a UUID")
+		}
+	}
+	exempts := req.GetExemptCves()
+	if exempts == nil {
+		exempts = []string{}
+	}
+	out, err := h.repo.UpsertOrgScanPolicy(ctx, &repository.ScanPolicy{
+		TenantID:          tenantID,
+		OrgID:             orgID,
+		AutoScanOnPush:    req.GetAutoScanOnPush(),
+		BlockOnSeverity:   req.GetBlockOnSeverity(),
+		ExemptCVEs:        exempts,
+		ScannerPlugin:     req.GetScannerPlugin(),
+		ScannerVersionPin: req.GetScannerVersionPin(),
+		Enabled:           req.GetEnabled(),
+		UpdatedBy:         updatedBy,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "upsert org scan policy: %v", err)
+	}
+	return policyToProto(out), nil
+}
+
+// DeleteOrgScanPolicy removes the org-default row. NotFound when nothing
+// existed — caller (the BFF) maps that to 404 so the operator gets a
+// clear "nothing to remove" rather than a misleading 200.
+func (h *GRPCHandler) DeleteOrgScanPolicy(ctx context.Context, req *scannerv1.DeleteOrgScanPolicyRequest) (*emptypb.Empty, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "org_id must be a UUID")
+	}
+	if err := h.repo.DeleteOrgScanPolicy(ctx, tenantID, orgID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "org scan policy not found")
+		}
+		return nil, status.Errorf(codes.Internal, "delete org scan policy: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// GetRepoScanPolicy returns a per-repo override row, NotFound when none.
+// Mirrors the org route — explicit absence so the dashboard can render
+// "inheriting from org" vs "no override yet".
+func (h *GRPCHandler) GetRepoScanPolicy(ctx context.Context, req *scannerv1.GetRepoScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	repoID, err := uuid.Parse(req.GetRepoId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "repo_id must be a UUID")
+	}
+	rec, err := h.repo.GetRepoScanPolicy(ctx, tenantID, repoID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "repo scan policy not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get repo scan policy: %v", err)
+	}
+	return policyToProto(rec), nil
+}
+
+// UpsertRepoScanPolicy creates or updates a per-repo override. The BFF
+// resolves repo→org via the metadata service before calling this RPC so
+// the org_id is always non-empty on the wire — the scanner doesn't have
+// a local repo→org table.
+func (h *GRPCHandler) UpsertRepoScanPolicy(ctx context.Context, req *scannerv1.UpsertRepoScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	repoID, err := uuid.Parse(req.GetRepoId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "repo_id must be a UUID")
+	}
+	// org_id is part of the per-repo row so the inheritance helper can
+	// find the parent org cheaply later. The BFF is responsible for
+	// resolving it before calling here.
+	orgID, err := parseOrgIDOptional(req.GetTenantId(), repoID)
+	if err != nil {
+		// parseOrgIDOptional always returns nil currently; reserved for
+		// a future enrichment hook if we move repo→org resolution into
+		// the scanner.
+		return nil, err
+	}
+	var updatedBy uuid.UUID
+	if s := req.GetUpdatedBy(); s != "" {
+		updatedBy, err = uuid.Parse(s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "updated_by must be a UUID")
+		}
+	}
+	exempts := req.GetExemptCves()
+	if exempts == nil {
+		exempts = []string{}
+	}
+	out, err := h.repo.UpsertRepoScanPolicy(ctx, &repository.ScanPolicy{
+		TenantID:          tenantID,
+		RepoID:            repoID,
+		OrgID:             orgID,
+		AutoScanOnPush:    req.GetAutoScanOnPush(),
+		BlockOnSeverity:   req.GetBlockOnSeverity(),
+		ExemptCVEs:        exempts,
+		ScannerPlugin:     req.GetScannerPlugin(),
+		ScannerVersionPin: req.GetScannerVersionPin(),
+		Enabled:           req.GetEnabled(),
+		UpdatedBy:         updatedBy,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "upsert repo scan policy: %v", err)
+	}
+	return policyToProto(out), nil
+}
+
+// parseOrgIDOptional is a placeholder for repo→org lookup if/when the
+// scanner gains its own repo→org index. Today the org_id is supplied by
+// the BFF on every upsert (resolved via metadata.LookupOrgIDByName);
+// this function exists so the handler signature is stable when the
+// dependency direction changes. Returns the zero UUID + nil today; the
+// row's org_id column will be overwritten with the BFF-supplied value.
+func parseOrgIDOptional(_ string, _ uuid.UUID) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+// DeleteRepoScanPolicy removes a per-repo override.
+func (h *GRPCHandler) DeleteRepoScanPolicy(ctx context.Context, req *scannerv1.DeleteRepoScanPolicyRequest) (*emptypb.Empty, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	repoID, err := uuid.Parse(req.GetRepoId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "repo_id must be a UUID")
+	}
+	if err := h.repo.DeleteRepoScanPolicy(ctx, tenantID, repoID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "repo scan policy not found")
+		}
+		return nil, status.Errorf(codes.Internal, "delete repo scan policy: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// GetEffectiveScanPolicy walks the per-repo → org → tenant → default
+// inheritance chain via the shared policy.Resolve helper so the worker
+// (HandlePushCompleted) and the gRPC RPC use one source of truth. Never
+// returns NotFound — the synthesised default tier guarantees a result.
+func (h *GRPCHandler) GetEffectiveScanPolicy(ctx context.Context, req *scannerv1.GetEffectiveScanPolicyRequest) (*scannerv1.EffectiveScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	var repoID uuid.UUID
+	if s := req.GetRepoId(); s != "" {
+		repoID, err = uuid.Parse(s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "repo_id must be a UUID")
+		}
+	}
+	var orgID uuid.UUID
+	if s := req.GetOrgId(); s != "" {
+		orgID, err = uuid.Parse(s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "org_id must be a UUID")
+		}
+	}
+	res, err := policy.Resolve(ctx, h.repo, tenantID, repoID, orgID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve effective scan policy: %v", err)
+	}
+	return &scannerv1.EffectiveScanPolicy{
+		Policy:        policyToProto(res.Policy),
+		InheritedFrom: string(res.Source),
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +586,142 @@ func (h *GRPCHandler) ListComplianceReports(ctx context.Context, req *scannerv1.
 		out.Reports = append(out.Reports, reportToProto(r))
 	}
 	return out, nil
+}
+
+// reportChunkBytes is the streaming chunk size for
+// DownloadComplianceReport. 64 KiB is the sweet spot between gRPC
+// per-message overhead and memory footprint on the management proxy
+// (which io.Copy's straight into the HTTP response without buffering
+// the whole file). Tunable here without touching the proto.
+const reportChunkBytes = 64 * 1024
+
+// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+// JSON for a succeeded report.
+//
+// Auth: the request is forwarded by the management BFF, which has
+// already done JWT + RBAC. We still scope to the supplied tenant_id by
+// looking up the report row via GetReport (tenant-filtered) — a
+// malformed report_id from another tenant 404s instead of leaking a
+// file path.
+//
+// Error mapping:
+//   - InvalidArgument: malformed UUIDs, unknown format, mismatched
+//     extension (defence-in-depth against a corrupt DB row whose
+//     pdf_path actually points at a JSON file or vice versa)
+//   - NotFound: report does not exist for this tenant
+//   - FailedPrecondition: report not yet in succeeded state
+//   - Internal: artifact missing on disk despite "succeeded" status
+//     (storage corruption — distinct from "report not found" so an
+//     operator can tell the difference)
+func (h *GRPCHandler) DownloadComplianceReport(
+	req *scannerv1.DownloadComplianceReportRequest,
+	stream scannerv1.ScannerService_DownloadComplianceReportServer,
+) error {
+	if h.repo == nil {
+		return status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	reportID, err := uuid.Parse(req.GetReportId())
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "report_id must be a UUID")
+	}
+
+	rec, err := h.repo.GetReport(stream.Context(), reportID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return status.Error(codes.NotFound, "report not found")
+		}
+		return status.Errorf(codes.Internal, "get report: %v", err)
+	}
+	if rec.Status != "succeeded" {
+		return status.Errorf(codes.FailedPrecondition,
+			"report not ready (status=%s)", rec.Status)
+	}
+
+	// Pick artifact + content type by format. Keeps the allowlist tight
+	// — anything outside {pdf, sbom} 400s rather than blindly streaming
+	// whatever the row happens to hold.
+	var (
+		artifactPath string
+		contentType  string
+		expectedExt  string
+	)
+	switch strings.ToLower(req.GetFormat()) {
+	case "pdf":
+		artifactPath = rec.PDFPath
+		contentType = "application/pdf"
+		expectedExt = ".pdf"
+	case "sbom":
+		artifactPath = rec.SBOMPath
+		contentType = "application/json"
+		expectedExt = ".json"
+	default:
+		return status.Error(codes.InvalidArgument, "format must be one of pdf|sbom")
+	}
+
+	if artifactPath == "" {
+		// Row says succeeded but never recorded a path — counts as
+		// storage corruption from the operator's POV.
+		return status.Errorf(codes.Internal,
+			"report artifact missing for format %q", req.GetFormat())
+	}
+
+	// filepath.Clean + extension match guard against a corrupt DB row
+	// that swapped pdf_path/sbom_path or escaped its working tree.
+	// These are defence-in-depth — the report worker writes the rows
+	// itself, so this is paranoia for the day someone hand-edits the
+	// table.
+	cleaned := filepath.Clean(artifactPath)
+	if !strings.HasSuffix(strings.ToLower(cleaned), expectedExt) {
+		return status.Errorf(codes.InvalidArgument,
+			"report path %q does not match expected extension %q", cleaned, expectedExt)
+	}
+
+	f, err := os.Open(cleaned)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return status.Error(codes.Internal, "report artifact missing on disk")
+		}
+		return status.Errorf(codes.Internal, "open report artifact: %v", err)
+	}
+	defer f.Close()
+
+	// First chunk: content_type only (zero-byte data). Sending the
+	// content_type up-front lets the proxy commit Content-Type on the
+	// HTTP response BEFORE any bytes flow — once io.Copy starts it's too
+	// late to set headers. The first content chunk lands on the next
+	// Send call.
+	if err := stream.Send(&scannerv1.ReportChunk{ContentType: contentType}); err != nil {
+		return status.Errorf(codes.Internal, "send first chunk: %v", err)
+	}
+
+	buf := make([]byte, reportChunkBytes)
+	for {
+		// Honor cancellation — a slow client or BFF disconnect should
+		// stop the file read promptly rather than tying up the file
+		// descriptor.
+		if err := stream.Context().Err(); err != nil {
+			return err
+		}
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			// Slice to actual bytes read; Send copies the slice into the
+			// outbound proto so reusing the buffer in the next loop is
+			// safe.
+			if err := stream.Send(&scannerv1.ReportChunk{Data: buf[:n]}); err != nil {
+				return status.Errorf(codes.Internal, "send chunk: %v", err)
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return status.Errorf(codes.Internal, "read report artifact: %v", readErr)
+		}
+	}
 }
 
 // reportToProto converts a repository row to its proto form. Download URLs

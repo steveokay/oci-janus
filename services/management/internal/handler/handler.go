@@ -345,6 +345,21 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// when no per-repo policy exists.
 	h.RegisterOrgRetention(mux, authMW)
 
+	// FE-API-049: org-default + per-repo scan policies. Mirrors the
+	// retention CRUD posture above — reader on read paths, admin/owner
+	// on writes. Both surfaces depend on h.scanner; the registrations
+	// themselves succeed even when SCANNER_GRPC_ADDR is unset (the
+	// handlers return 404 "route disabled" individually). Effective
+	// policy resolution lives in the scanner via GetEffectiveScanPolicy.
+	h.RegisterOrgScanPolicy(mux, authMW)
+	h.RegisterRepoScanPolicy(mux, authMW)
+
+	// FE-API-050: manifest quarantine surface. Just one route today
+	// (POST .../quarantine/lift) — the scanner sets quarantine
+	// automatically based on the effective scan policy, this route
+	// lets a repo admin/owner dismiss it after operator review.
+	h.RegisterManifestQuarantine(mux, authMW)
+
 	// Platform-admin: set tenant-level storage quota. Caller must be admin/owner
 	// AND must belong to the configured platform-admin tenant. This route is the
 	// canonical way to bump quotas for large customers.
@@ -723,6 +738,15 @@ type TagResponse struct {
 	SizeBytes int64     `json:"size_bytes"`
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+	// REM-013 gap 1: surfaces manifests.retention_pending_delete_at via
+	// proto Tag.retention_pending_delete_at so the dashboard can render
+	// "🗑 deletes in N days" pills on the Tags table. Omitted when the
+	// referenced manifest has no pending delete stamp (the common case).
+	RetentionPendingDeleteAt *time.Time `json:"retention_pending_delete_at,omitempty"`
+	// FE-API-050: parent manifest's quarantined flag. The dashboard
+	// renders a 🔒 pill on quarantined rows; clicking the badge opens
+	// the quarantine detail / lift dialog on the tag detail page.
+	Quarantined bool `json:"quarantined,omitempty"`
 }
 
 func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
@@ -765,13 +789,26 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			slog.Error("ListTags stream", "err", recvErr)
 			break
 		}
-		tags = append(tags, TagResponse{
+		out := TagResponse{
 			Name:           tag.GetName(),
 			ManifestDigest: tag.GetManifestDigest(),
 			SizeBytes:      tag.GetSizeBytes(),
 			UpdatedAt:      tag.GetUpdatedAt().AsTime(),
 			CreatedAt:      tag.GetCreatedAt().AsTime(),
-		})
+			// FE-API-050: surface the parent manifest's quarantine flag
+			// on every tag row so the dashboard renders a 🔒 pill
+			// without per-row GetManifest calls.
+			Quarantined: tag.GetQuarantined(),
+		}
+		// REM-013 gap 1: surface the soft-delete stamp only when the
+		// upstream proto carries one. The proto's GetX() helper returns
+		// nil for unset Timestamps, so we check explicitly rather than
+		// emitting a zero time on every row.
+		if ts := tag.GetRetentionPendingDeleteAt(); ts != nil {
+			t := ts.AsTime()
+			out.RetentionPendingDeleteAt = &t
+		}
+		tags = append(tags, out)
 	}
 
 	if tags == nil {
@@ -1211,6 +1248,15 @@ type ManifestResponse struct {
 	Config    manifestConfig  `json:"config"`
 	Layers    []manifestLayer `json:"layers"`
 	Manifests []manifestEntry `json:"manifests"`
+	// FE-API-050 — quarantine state surfaced so the tag-detail Security
+	// tab can render a "Quarantined" banner with the reason + who
+	// quarantined + when, and the "Lift quarantine" button. All four
+	// fields are omitted on the wire when the manifest is not
+	// quarantined (the common case).
+	Quarantined       bool       `json:"quarantined,omitempty"`
+	QuarantineReason  string     `json:"quarantine_reason,omitempty"`
+	QuarantinedAt     *time.Time `json:"quarantined_at,omitempty"`
+	QuarantinedBy     string     `json:"quarantined_by,omitempty"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
@@ -1307,6 +1353,18 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: m.GetCreatedAt().AsTime(),
 		Layers:    []manifestLayer{},
 		Manifests: []manifestEntry{},
+	}
+	// FE-API-050: surface quarantine fields so the tag-detail Security
+	// tab can render the banner + lift dialog. Only emit when actually
+	// quarantined — omitempty on the wire keeps the common case clean.
+	if m.GetQuarantined() {
+		resp.Quarantined = true
+		resp.QuarantineReason = m.GetQuarantineReason()
+		resp.QuarantinedBy = m.GetQuarantinedBy()
+		if ts := m.GetQuarantinedAt(); ts != nil {
+			t := ts.AsTime()
+			resp.QuarantinedAt = &t
+		}
 	}
 
 	var raw rawManifest

@@ -20,6 +20,14 @@ export const NOTIFICATION_EVENT_TYPES = [
   "scan.policy_blocked",
   "image.signed",
   "webhook.delivery_failed",
+  // S11 slice 5 — retention.* events are emitted by the gc service
+  // executor (FE-API-041) and routed through audit into the
+  // notifications surface. Keep this list in sync with the BFF and
+  // audit allowlists in services/{management,audit}/internal/handler/
+  // notifications.go — the BFF rejects unknown values with 400.
+  "retention.evaluated",
+  "retention.applied",
+  "retention.grace_completed",
 ] as const;
 
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
@@ -34,6 +42,9 @@ export const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = 
   "scan.policy_blocked": "Scan policy blocked",
   "image.signed": "Image signed",
   "webhook.delivery_failed": "Webhook failed",
+  "retention.evaluated": "Retention evaluated",
+  "retention.applied": "Retention applied",
+  "retention.grace_completed": "Retention grace completed",
 };
 
 export interface Notification {

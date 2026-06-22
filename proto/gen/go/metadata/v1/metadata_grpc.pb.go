@@ -34,6 +34,7 @@ const (
 	MetadataService_PutManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/PutManifest"
 	MetadataService_GetManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetManifest"
 	MetadataService_DeleteManifest_FullMethodName                = "/registry.metadata.v1.MetadataService/DeleteManifest"
+	MetadataService_UpdateManifestQuarantine_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateManifestQuarantine"
 	MetadataService_ListUntaggedManifests_FullMethodName         = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
 	MetadataService_LinkBlob_FullMethodName                      = "/registry.metadata.v1.MetadataService/LinkBlob"
 	MetadataService_UnlinkBlob_FullMethodName                    = "/registry.metadata.v1.MetadataService/UnlinkBlob"
@@ -89,6 +90,15 @@ type MetadataServiceClient interface {
 	PutManifest(ctx context.Context, in *PutManifestRequest, opts ...grpc.CallOption) (*Manifest, error)
 	GetManifest(ctx context.Context, in *GetManifestRequest, opts ...grpc.CallOption) (*Manifest, error)
 	DeleteManifest(ctx context.Context, in *DeleteManifestRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// FE-API-050 — set / clear quarantine on a manifest. Called by the
+	// scanner after a scan that violates the effective block_on_severity
+	// policy (quarantined=true), and by services/management when an
+	// operator manually quarantines or lifts via the dashboard.
+	// Idempotent: re-applying quarantine=true keeps the existing
+	// quarantined_at + quarantined_by (the FIRST event is the
+	// load-bearing one for audit). quarantined=false clears all four
+	// columns.
+	UpdateManifestQuarantine(ctx context.Context, in *UpdateManifestQuarantineRequest, opts ...grpc.CallOption) (*Manifest, error)
 	ListUntaggedManifests(ctx context.Context, in *ListUntaggedManifestsRequest, opts ...grpc.CallOption) (MetadataService_ListUntaggedManifestsClient, error)
 	// Blobs
 	LinkBlob(ctx context.Context, in *LinkBlobRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -424,6 +434,16 @@ func (c *metadataServiceClient) DeleteManifest(ctx context.Context, in *DeleteMa
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, MetadataService_DeleteManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateManifestQuarantine(ctx context.Context, in *UpdateManifestQuarantineRequest, opts ...grpc.CallOption) (*Manifest, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Manifest)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateManifestQuarantine_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -817,6 +837,15 @@ type MetadataServiceServer interface {
 	PutManifest(context.Context, *PutManifestRequest) (*Manifest, error)
 	GetManifest(context.Context, *GetManifestRequest) (*Manifest, error)
 	DeleteManifest(context.Context, *DeleteManifestRequest) (*emptypb.Empty, error)
+	// FE-API-050 — set / clear quarantine on a manifest. Called by the
+	// scanner after a scan that violates the effective block_on_severity
+	// policy (quarantined=true), and by services/management when an
+	// operator manually quarantines or lifts via the dashboard.
+	// Idempotent: re-applying quarantine=true keeps the existing
+	// quarantined_at + quarantined_by (the FIRST event is the
+	// load-bearing one for audit). quarantined=false clears all four
+	// columns.
+	UpdateManifestQuarantine(context.Context, *UpdateManifestQuarantineRequest) (*Manifest, error)
 	ListUntaggedManifests(*ListUntaggedManifestsRequest, MetadataService_ListUntaggedManifestsServer) error
 	// Blobs
 	LinkBlob(context.Context, *LinkBlobRequest) (*emptypb.Empty, error)
@@ -1009,6 +1038,9 @@ func (UnimplementedMetadataServiceServer) GetManifest(context.Context, *GetManif
 }
 func (UnimplementedMetadataServiceServer) DeleteManifest(context.Context, *DeleteManifestRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteManifest not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateManifestQuarantine(context.Context, *UpdateManifestQuarantineRequest) (*Manifest, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateManifestQuarantine not implemented")
 }
 func (UnimplementedMetadataServiceServer) ListUntaggedManifests(*ListUntaggedManifestsRequest, MetadataService_ListUntaggedManifestsServer) error {
 	return status.Errorf(codes.Unimplemented, "method ListUntaggedManifests not implemented")
@@ -1372,6 +1404,24 @@ func _MetadataService_DeleteManifest_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).DeleteManifest(ctx, req.(*DeleteManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateManifestQuarantine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateManifestQuarantineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateManifestQuarantine(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateManifestQuarantine_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateManifestQuarantine(ctx, req.(*UpdateManifestQuarantineRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2012,6 +2062,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteManifest",
 			Handler:    _MetadataService_DeleteManifest_Handler,
+		},
+		{
+			MethodName: "UpdateManifestQuarantine",
+			Handler:    _MetadataService_UpdateManifestQuarantine_Handler,
 		},
 		{
 			MethodName: "LinkBlob",

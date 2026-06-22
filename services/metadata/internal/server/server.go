@@ -83,7 +83,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// ── 4. Handler ────────────────────────────────────────────────────────────
 	repo := repository.NewWithReplica(pool, readPool)
-	h := handler.New(repo)
+	// FE-API-050: wire the Redis client so UpdateManifestQuarantine
+	// can bust GetManifest cache entries — without this the pull-time
+	// quarantine gate lags by up to the cache TTL (5 min) after a
+	// quarantine flip.
+	h := handler.New(repo).WithCacheBuster(rdb)
 
 	// ── 4b. FE-API-042 pull.image consumer ────────────────────────────────────
 	// Drives manifests.last_pulled_at debounce-updates so the FE-API-043

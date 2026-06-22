@@ -11,11 +11,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
@@ -471,6 +474,185 @@ func TestChangePassword_rateLimit_returns429(t *testing.T) {
 	// throttled and the request must come back as 429.
 	if status := doAttempt(oldPassword); status != http.StatusTooManyRequests {
 		t.Errorf("post-budget attempt: got %d, want 429", status)
+	}
+}
+
+// ── FE-API-048 T16: polymorphic principal envelope ────────────────────────────
+
+// TestUsersMe_HumanCallerKeepsExistingShape verifies that a human caller's
+// GET /users/me response retains all existing fields and gains the additive
+// "type":"user" field (FE-API-048 T16). The shape change is backwards-compatible:
+// existing clients that do not read "type" are unaffected.
+func TestUsersMe_HumanCallerKeepsExistingShape(t *testing.T) {
+	srv, tc := newTestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "alice-t16", "Str0ng!Password123")
+
+	req := makeMeRequest(t, srv, tc, http.MethodGet, "/api/v1/users/me", nil, userID, tenantID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /users/me: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	// Decode into a generic map so we can assert both the existing fields and the
+	// new "type" field without coupling to the struct layout.
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Existing fields must still be present (regression guard).
+	if got["user_id"] != userID.String() {
+		t.Errorf("user_id: got %v, want %s", got["user_id"], userID)
+	}
+	if got["username"] != "alice-t16" {
+		t.Errorf("username: got %v, want alice-t16", got["username"])
+	}
+	if got["tenant_id"] != tenantID.String() {
+		t.Errorf("tenant_id: got %v, want %s", got["tenant_id"], tenantID)
+	}
+	// roles must be the empty array, not null — existing contract.
+	if got["roles"] == nil {
+		t.Error("roles: expected empty array, got null")
+	}
+
+	// New T16 field: type must be "user" for human callers.
+	if got["type"] != "user" {
+		t.Errorf("type: got %v, want %q", got["type"], "user")
+	}
+
+	// service_account field must be absent for human callers.
+	if _, present := got["service_account"]; present {
+		t.Error("service_account: field must be absent for human callers")
+	}
+}
+
+// TestUsersMe_SAKeyCallerGetsPrincipalEnvelope verifies that when the JWT
+// belongs to a service-account shadow user (kind="service_account"), GET
+// /users/me returns the sanitised saCallerResponse envelope (FE-API-048 T16
+// spec §5.6):
+//   - "type" == "service_account"
+//   - "email" is null (synthetic email must never be leaked)
+//   - "display_name" equals the SA name
+//   - "service_account" nested object carries id, name, description, allowed_scopes
+func TestUsersMe_SAKeyCallerGetsPrincipalEnvelope(t *testing.T) {
+	// Use the SA-wired test server (has h.saService != nil). newSATestEnv
+	// builds the same httptest.Server shape as newTestServer but also wires
+	// the ServiceAccountService via WithServiceAccountService.
+	env := newSATestEnv(t)
+
+	// Seed an admin user to satisfy the actor requirement for issueAdminToken.
+	adminTok, adminID := env.issueAdminToken(t)
+	_ = adminTok // not used directly for the /users/me call
+
+	// Seed a service account directly into the fake SA repo.
+	sa := &repository.ServiceAccount{
+		ID:            uuid.New(),
+		TenantID:      env.tenantID,
+		ShadowUserID:  uuid.New(), // will be registered as the shadow user below
+		Name:          "ci-prod",
+		Description:   "GitHub Actions deploy bot for myapp",
+		AllowedScopes: []string{"pull", "push"},
+		CreatedBy:     &adminID,
+		CreatedAt:     time.Now(),
+	}
+	env.saRepo.accounts[sa.ID] = sa
+
+	// Register the shadow user in the fake user repo so the JWT lookup succeeds.
+	// The shadow user must have kind="service_account" so getCurrentUser branches
+	// into the SA path.
+	shadowUser := &repository.User{
+		ID:       sa.ShadowUserID,
+		TenantID: env.tenantID,
+		Username: "sa-" + sa.ID.String()[:8],
+		Email:    "sa+" + sa.ID.String() + "@internal.invalid",
+		Kind:     "service_account",
+		IsActive: true,
+	}
+	env.tc.users.users[shadowUser.Username] = shadowUser
+
+	// Issue a JWT as the shadow user (same mechanism as production API-key auth).
+	tok := issueTestToken(t, env.tc.svc, sa.ShadowUserID.String(), env.tenantID.String(), nil)
+
+	req, err := http.NewRequest(http.MethodGet, env.srv.URL+"/api/v1/users/me", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /users/me: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Top-level shape assertions.
+	if got["type"] != "service_account" {
+		t.Errorf("type: got %v, want %q", got["type"], "service_account")
+	}
+	if got["id"] != sa.ShadowUserID.String() {
+		t.Errorf("id: got %v, want %s (shadow user id)", got["id"], sa.ShadowUserID)
+	}
+	if got["tenant_id"] != env.tenantID.String() {
+		t.Errorf("tenant_id: got %v, want %s", got["tenant_id"], env.tenantID)
+	}
+	if got["display_name"] != "ci-prod" {
+		t.Errorf("display_name: got %v, want %q", got["display_name"], "ci-prod")
+	}
+
+	// email must be explicit JSON null — synthetic address must not be leaked.
+	emailVal, emailPresent := got["email"]
+	if !emailPresent {
+		t.Error("email: field must be present (as null), not absent")
+	}
+	if emailVal != nil {
+		t.Errorf("email: got %v, want null (synthetic SA email must not be exposed)", emailVal)
+	}
+
+	// Nested service_account object.
+	saObj, ok := got["service_account"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("service_account: expected object, got %T (%v)", got["service_account"], got["service_account"])
+	}
+	if saObj["id"] != sa.ID.String() {
+		t.Errorf("service_account.id: got %v, want %s", saObj["id"], sa.ID)
+	}
+	if saObj["name"] != "ci-prod" {
+		t.Errorf("service_account.name: got %v, want %q", saObj["name"], "ci-prod")
+	}
+	if saObj["description"] != "GitHub Actions deploy bot for myapp" {
+		t.Errorf("service_account.description: got %v, want %q", saObj["description"], "GitHub Actions deploy bot for myapp")
+	}
+	// allowed_scopes should be ["pull","push"].
+	rawScopes, _ := saObj["allowed_scopes"].([]interface{})
+	if len(rawScopes) != 2 {
+		t.Errorf("service_account.allowed_scopes: got %v, want [pull push]", rawScopes)
+	} else {
+		scopes := []string{rawScopes[0].(string), rawScopes[1].(string)}
+		sort.Strings(scopes)
+		if scopes[0] != "pull" || scopes[1] != "push" {
+			t.Errorf("service_account.allowed_scopes: got %v, want [pull push]", scopes)
+		}
+	}
+
+	// Human-only fields (user_id, username, created_at, memberships) must be absent
+	// so the caller cannot infer shadow-user internal details.
+	for _, f := range []string{"user_id", "username", "created_at", "memberships"} {
+		if _, present := got[f]; present {
+			t.Errorf("field %q must be absent for SA callers, was present", f)
+		}
 	}
 }
 

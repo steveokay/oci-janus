@@ -29,6 +29,8 @@ message ValidateTokenRequest {
 
 message ValidateTokenResponse {
   bool   valid      = 1;
+  // user_id is the authenticated principal. May be a service-account shadow
+  // user id (kind='service_account'); join users.kind to distinguish.
   string user_id    = 2;
   string tenant_id  = 3;
   string jti        = 4;
@@ -46,6 +48,8 @@ message ValidateAPIKeyRequest {
 
 message ValidateAPIKeyResponse {
   bool   valid      = 1;
+  // user_id is the authenticated principal. May be a service-account shadow
+  // user id (kind='service_account'); join users.kind to distinguish.
   string user_id    = 2;
   string tenant_id  = 3;
   repeated RepositoryAccess access = 4;

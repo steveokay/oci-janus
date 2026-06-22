@@ -3,7 +3,7 @@ SERVICES := auth audit core gc gateway metadata proxy scanner signer storage ten
 GO := go
 BUF := buf
 
-.PHONY: all build test lint proto dev-certs clean help \
+.PHONY: all build test lint proto dev-certs seed-dev clean help \
         $(addprefix build-,$(SERVICES)) \
         $(addprefix test-,$(SERVICES)) \
         $(addprefix lint-,$(SERVICES))
@@ -52,6 +52,16 @@ test-integration:
 dev-certs:
 	@mkdir -p certs
 	@./scripts/gen-dev-certs.sh
+
+## seed-dev: Load dev-seed SQL files into the running local postgres container
+## Usage: make seed-dev   (stack must be up: docker compose up -d)
+seed-dev:
+	@echo "==> Loading infra/dev-seed/service_accounts.sql into registry_auth …"
+	@docker exec -i docker-compose-postgres-1 \
+		psql -U registry -d registry_auth \
+		< infra/dev-seed/service_accounts.sql
+	@echo "==> Done. Verify with:"
+	@echo "    docker exec docker-compose-postgres-1 psql -U registry -d registry_auth -c \"SELECT id, name, disabled_at FROM service_accounts WHERE tenant_id = '98dbe36b-ef28-4903-b25c-bff1b2921c9e';\""
 
 ## clean: Remove build artifacts
 clean:

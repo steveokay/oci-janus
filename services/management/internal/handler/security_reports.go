@@ -21,14 +21,10 @@
 package handler
 
 import (
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
@@ -190,8 +186,16 @@ const (
 	kindSBOM
 )
 
-// serveReportFile is the shared body of both download routes — fetch the
-// report row, validate state + path, stream the file.
+// serveReportFile is the shared body of both download routes.
+//
+// REM-012 — the BFF no longer opens the on-disk artifact directly.
+// Instead it calls the scanner's streaming DownloadComplianceReport RPC,
+// which sends the file content_type on the first chunk + the bytes on
+// subsequent chunks. We forward those bytes straight into the HTTP
+// response writer with no buffering of the full payload. This removes
+// the shared-volume dependency between scanner + management and makes
+// cross-node K8s deployments work without surprises (per the proper-fix
+// plan logged on REM-012 in status.md).
 func (h *Handler) serveReportFile(w http.ResponseWriter, r *http.Request, kind reportKind) {
 	if h.scanner == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
@@ -204,70 +208,113 @@ func (h *Handler) serveReportFile(w http.ResponseWriter, r *http.Request, kind r
 	}
 	tenantID := middleware.TenantIDFromContext(r.Context())
 
-	rec, err := h.scanner.GetComplianceReport(r.Context(), &scannerv1.GetComplianceReportRequest{
-		TenantId: tenantID,
-		ReportId: id,
-	})
-	if err != nil {
-		st, _ := status.FromError(err)
-		if st.Code() == codes.NotFound {
-			writeError(w, http.StatusNotFound, "report not found")
-			return
-		}
-		slog.Error("GetComplianceReport for download", "err", err, "report_id", id)
-		writeError(w, http.StatusInternalServerError, "failed to fetch report")
-		return
-	}
-	if rec.GetStatus() != "succeeded" {
-		writeError(w, http.StatusConflict, "report not ready")
-		return
-	}
-
-	var path, contentType, expectedExt string
+	// Pick the format string the scanner RPC accepts + the filename
+	// extension we'll suggest in Content-Disposition. The scanner's
+	// allowlist (pdf|sbom) is mirrored here so a future kind addition
+	// has one obvious place to update.
+	var format, expectedExt string
 	switch kind {
 	case kindPDF:
-		path = rec.GetDownloadPdfUrl()
-		contentType = "application/pdf"
+		format = "pdf"
 		expectedExt = ".pdf"
 	case kindSBOM:
-		path = rec.GetDownloadSbomUrl()
-		contentType = "application/json"
+		format = "sbom"
 		expectedExt = ".json"
 	}
 
-	// Defence-in-depth path validation:
-	//   1. Path must not be empty.
-	//   2. Extension must match — this catches a malformed scanner row
-	//      that points at the wrong file (and stops `?download/pdf` from
-	//      returning a non-PDF if the scanner's pdf_path/sbom_path ever
-	//      swap).
-	//   3. filepath.Clean is applied — any embedded `..` is normalised out
-	//      so a future bug in the scanner can't accidentally serve a path
-	//      outside its working tree.
-	cleaned := filepath.Clean(path)
-	if path == "" || !strings.HasSuffix(strings.ToLower(cleaned), expectedExt) {
-		writeError(w, http.StatusInternalServerError, "report artifact missing")
-		return
-	}
-
-	f, err := os.Open(cleaned)
+	stream, err := h.scanner.DownloadComplianceReport(r.Context(), &scannerv1.DownloadComplianceReportRequest{
+		TenantId: tenantID,
+		ReportId: id,
+		Format:   format,
+	})
 	if err != nil {
-		// Don't leak the on-disk path in the response.
-		if errors.Is(err, os.ErrNotExist) {
-			slog.Error("report file missing", "report_id", id, "path", cleaned)
-			writeError(w, http.StatusNotFound, "report artifact missing")
-			return
-		}
-		slog.Error("open report file", "err", err, "report_id", id)
-		writeError(w, http.StatusInternalServerError, "failed to open report")
+		// Failure during stream setup — the RPC errored before any
+		// chunks arrived. Map gRPC codes to HTTP semantics; everything
+		// unmapped surfaces as 500 with the report_id logged for
+		// triage.
+		mapDownloadErr(w, err, id)
 		return
 	}
-	defer f.Close()
 
+	// First chunk carries content_type so we can commit headers BEFORE
+	// any bytes flow into the response. Once Write is called the
+	// headers are sealed; this ordering matters.
+	first, err := stream.Recv()
+	if err != nil {
+		// Includes io.EOF (server closed without sending anything),
+		// which we treat the same as an unexpected absence of bytes.
+		mapDownloadErr(w, err, id)
+		return
+	}
+	contentType := first.GetContentType()
+	if contentType == "" {
+		// Defence-in-depth — the scanner contract puts content_type on
+		// the first chunk; if a future server breaks the contract we
+		// fall back to a sensible default rather than emitting an empty
+		// Content-Type header.
+		switch kind {
+		case kindPDF:
+			contentType = "application/pdf"
+		case kindSBOM:
+			contentType = "application/json"
+		}
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+id+expectedExt+"\"")
-	if _, err := io.Copy(w, f); err != nil {
-		slog.Warn("stream report", "err", err, "report_id", id)
+
+	// First chunk may also carry data (operator convenience — saves a
+	// round-trip on small reports). Write it before draining the
+	// remainder of the stream.
+	if data := first.GetData(); len(data) > 0 {
+		if _, werr := w.Write(data); werr != nil {
+			// Client likely disconnected; nothing we can recover. Log
+			// and let the defer-less stream cleanup run via context
+			// cancellation on return.
+			slog.Warn("stream report write", "err", werr, "report_id", id)
+			return
+		}
+	}
+
+	// Drain the rest of the stream. We deliberately don't io.Copy from
+	// an adapter — the gRPC streaming Recv loop is the natural shape
+	// here, and stops cleanly on io.EOF.
+	for {
+		chunk, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			return
+		}
+		if recvErr != nil {
+			// Mid-stream error — we've already committed headers, so
+			// we can't change the HTTP status code. Best we can do is
+			// stop writing + log; the client sees a truncated body.
+			slog.Warn("stream report recv", "err", recvErr, "report_id", id)
+			return
+		}
+		if _, werr := w.Write(chunk.GetData()); werr != nil {
+			slog.Warn("stream report write", "err", werr, "report_id", id)
+			return
+		}
+	}
+}
+
+// mapDownloadErr translates a gRPC error from the scanner stream into an
+// HTTP response. Used by serveReportFile during stream setup (before
+// any bytes have been written) so we can still pick a status code.
+func mapDownloadErr(w http.ResponseWriter, err error, reportID string) {
+	st, _ := status.FromError(err)
+	switch st.Code() {
+	case codes.NotFound:
+		writeError(w, http.StatusNotFound, "report not found")
+	case codes.FailedPrecondition:
+		// Report exists but isn't succeeded yet (still pending/running)
+		// — 409 Conflict matches the pre-REM-012 semantics so any
+		// existing frontend handling keeps working.
+		writeError(w, http.StatusConflict, "report not ready")
+	case codes.InvalidArgument:
+		writeError(w, http.StatusBadRequest, st.Message())
+	default:
+		slog.Error("DownloadComplianceReport stream", "err", err, "report_id", reportID)
+		writeError(w, http.StatusInternalServerError, "failed to stream report")
 	}
 }
 

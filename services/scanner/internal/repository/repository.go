@@ -25,13 +25,22 @@ var ErrNotFound = errors.New("not found")
 // ScanPolicy mirrors the scan_policies row. It is also the input shape used
 // by UpsertScanPolicy — fields are validated by the gRPC handler before
 // they reach the repository.
+//
+// FE-API-049 extension: the same struct is reused for the org_scan_policies
+// and repo_scan_policies tables, with OrgID / RepoID populated as
+// appropriate. Tenant-level policies leave both empty. The Enabled field
+// only applies to org/repo rows — the per-tenant table doesn't carry it
+// (treated as always-enabled for backward compatibility).
 type ScanPolicy struct {
 	TenantID          uuid.UUID
+	OrgID             uuid.UUID
+	RepoID            uuid.UUID
 	AutoScanOnPush    bool
 	BlockOnSeverity   string
 	ExemptCVEs        []string
 	ScannerPlugin     string
 	ScannerVersionPin string
+	Enabled           bool
 	UpdatedAt         time.Time
 	// UpdatedBy is the user_id of the last actor. Zero UUID is treated as
 	// "system / default" in callers.
@@ -129,6 +138,183 @@ func (r *Repository) UpsertScanPolicy(ctx context.Context, p *ScanPolicy) (*Scan
 		return nil, fmt.Errorf("UpsertScanPolicy: %w", err)
 	}
 	return &out, nil
+}
+
+// ---------------------------------------------------------------------------
+// FE-API-049 — org + repo scan policies
+//
+// Three new access paths mirroring the per-tenant ones above. Schemas
+// are structurally identical so the column lists could be shared via a
+// constant; we keep them inline to make grep-by-table trivial.
+// ---------------------------------------------------------------------------
+
+// GetOrgScanPolicy returns the org-default row or ErrNotFound. tenantID
+// is required even though org_id is the PK — we use it as a scoping
+// predicate so a malformed org_id from another tenant can't surface
+// another tenant's policy (defence-in-depth alongside the metadata
+// service's tenant-on-org constraint).
+func (r *Repository) GetOrgScanPolicy(ctx context.Context, tenantID, orgID uuid.UUID) (*ScanPolicy, error) {
+	var p ScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`SELECT tenant_id, org_id, auto_scan_on_push, block_on_severity,
+		        exempt_cves, scanner_plugin, scanner_version_pin, enabled,
+		        updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)
+		   FROM org_scan_policies
+		  WHERE org_id = $1 AND tenant_id = $2`,
+		orgID, tenantID,
+	).Scan(&p.TenantID, &p.OrgID, &p.AutoScanOnPush, &p.BlockOnSeverity,
+		&p.ExemptCVEs, &p.ScannerPlugin, &p.ScannerVersionPin, &p.Enabled,
+		&p.UpdatedAt, &p.UpdatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetOrgScanPolicy: %w", err)
+	}
+	return &p, nil
+}
+
+// UpsertOrgScanPolicy creates or replaces the org-default row.
+func (r *Repository) UpsertOrgScanPolicy(ctx context.Context, p *ScanPolicy) (*ScanPolicy, error) {
+	var updatedBy any
+	if p.UpdatedBy != uuid.Nil {
+		updatedBy = p.UpdatedBy
+	}
+	var out ScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO org_scan_policies
+		   (org_id, tenant_id, auto_scan_on_push, block_on_severity, exempt_cves,
+		    scanner_plugin, scanner_version_pin, enabled, updated_at, updated_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
+		 ON CONFLICT (org_id) DO UPDATE SET
+		    auto_scan_on_push   = EXCLUDED.auto_scan_on_push,
+		    block_on_severity   = EXCLUDED.block_on_severity,
+		    exempt_cves         = EXCLUDED.exempt_cves,
+		    scanner_plugin      = EXCLUDED.scanner_plugin,
+		    scanner_version_pin = EXCLUDED.scanner_version_pin,
+		    enabled             = EXCLUDED.enabled,
+		    updated_at          = NOW(),
+		    updated_by          = EXCLUDED.updated_by
+		 RETURNING tenant_id, org_id, auto_scan_on_push, block_on_severity,
+		           exempt_cves, scanner_plugin, scanner_version_pin, enabled,
+		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
+		p.OrgID, p.TenantID, p.AutoScanOnPush, p.BlockOnSeverity, p.ExemptCVEs,
+		p.ScannerPlugin, p.ScannerVersionPin, p.Enabled, updatedBy,
+	).Scan(&out.TenantID, &out.OrgID, &out.AutoScanOnPush, &out.BlockOnSeverity,
+		&out.ExemptCVEs, &out.ScannerPlugin, &out.ScannerVersionPin, &out.Enabled,
+		&out.UpdatedAt, &out.UpdatedBy)
+	if err != nil {
+		return nil, fmt.Errorf("UpsertOrgScanPolicy: %w", err)
+	}
+	return &out, nil
+}
+
+// DeleteOrgScanPolicy removes the row or returns ErrNotFound when there
+// is nothing to delete. Non-idempotent on purpose so callers know
+// whether they actually cleared an override.
+func (r *Repository) DeleteOrgScanPolicy(ctx context.Context, tenantID, orgID uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx,
+		`DELETE FROM org_scan_policies WHERE org_id = $1 AND tenant_id = $2`,
+		orgID, tenantID)
+	if err != nil {
+		return fmt.Errorf("DeleteOrgScanPolicy: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetRepoScanPolicy returns the per-repo override or ErrNotFound.
+func (r *Repository) GetRepoScanPolicy(ctx context.Context, tenantID, repoID uuid.UUID) (*ScanPolicy, error) {
+	var p ScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`SELECT tenant_id, org_id, repo_id, auto_scan_on_push, block_on_severity,
+		        exempt_cves, scanner_plugin, scanner_version_pin, enabled,
+		        updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)
+		   FROM repo_scan_policies
+		  WHERE repo_id = $1 AND tenant_id = $2`,
+		repoID, tenantID,
+	).Scan(&p.TenantID, &p.OrgID, &p.RepoID, &p.AutoScanOnPush, &p.BlockOnSeverity,
+		&p.ExemptCVEs, &p.ScannerPlugin, &p.ScannerVersionPin, &p.Enabled,
+		&p.UpdatedAt, &p.UpdatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetRepoScanPolicy: %w", err)
+	}
+	return &p, nil
+}
+
+// UpsertRepoScanPolicy creates or replaces a per-repo override.
+func (r *Repository) UpsertRepoScanPolicy(ctx context.Context, p *ScanPolicy) (*ScanPolicy, error) {
+	var updatedBy any
+	if p.UpdatedBy != uuid.Nil {
+		updatedBy = p.UpdatedBy
+	}
+	var out ScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO repo_scan_policies
+		   (repo_id, tenant_id, org_id, auto_scan_on_push, block_on_severity, exempt_cves,
+		    scanner_plugin, scanner_version_pin, enabled, updated_at, updated_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
+		 ON CONFLICT (repo_id) DO UPDATE SET
+		    org_id              = EXCLUDED.org_id,
+		    auto_scan_on_push   = EXCLUDED.auto_scan_on_push,
+		    block_on_severity   = EXCLUDED.block_on_severity,
+		    exempt_cves         = EXCLUDED.exempt_cves,
+		    scanner_plugin      = EXCLUDED.scanner_plugin,
+		    scanner_version_pin = EXCLUDED.scanner_version_pin,
+		    enabled             = EXCLUDED.enabled,
+		    updated_at          = NOW(),
+		    updated_by          = EXCLUDED.updated_by
+		 RETURNING tenant_id, org_id, repo_id, auto_scan_on_push, block_on_severity,
+		           exempt_cves, scanner_plugin, scanner_version_pin, enabled,
+		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
+		p.RepoID, p.TenantID, p.OrgID, p.AutoScanOnPush, p.BlockOnSeverity, p.ExemptCVEs,
+		p.ScannerPlugin, p.ScannerVersionPin, p.Enabled, updatedBy,
+	).Scan(&out.TenantID, &out.OrgID, &out.RepoID, &out.AutoScanOnPush, &out.BlockOnSeverity,
+		&out.ExemptCVEs, &out.ScannerPlugin, &out.ScannerVersionPin, &out.Enabled,
+		&out.UpdatedAt, &out.UpdatedBy)
+	if err != nil {
+		return nil, fmt.Errorf("UpsertRepoScanPolicy: %w", err)
+	}
+	return &out, nil
+}
+
+// DeleteRepoScanPolicy removes a per-repo override. ErrNotFound when no
+// row existed so the BFF can render a clean 404.
+func (r *Repository) DeleteRepoScanPolicy(ctx context.Context, tenantID, repoID uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx,
+		`DELETE FROM repo_scan_policies WHERE repo_id = $1 AND tenant_id = $2`,
+		repoID, tenantID)
+	if err != nil {
+		return fmt.Errorf("DeleteRepoScanPolicy: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ResolveRepoOrgID returns the org_id stored on a per-repo override row,
+// or ErrNotFound when no override exists. Used by GetEffectiveScanPolicy
+// when the caller didn't supply org_id and there's no per-repo override
+// (in which case we fall back through to tenant + default).
+func (r *Repository) ResolveRepoOrgID(ctx context.Context, tenantID, repoID uuid.UUID) (uuid.UUID, error) {
+	var orgID uuid.UUID
+	err := r.pool.QueryRow(ctx,
+		`SELECT org_id FROM repo_scan_policies WHERE repo_id = $1 AND tenant_id = $2`,
+		repoID, tenantID,
+	).Scan(&orgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("ResolveRepoOrgID: %w", err)
+	}
+	return orgID, nil
 }
 
 // ---------------------------------------------------------------------------

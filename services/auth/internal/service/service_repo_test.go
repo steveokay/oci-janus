@@ -6,14 +6,22 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
@@ -146,7 +154,7 @@ func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error      
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }
-func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
@@ -158,6 +166,24 @@ func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, err
 func (f *fakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
 	for _, u := range f.users {
 		if u.TenantID == tenantID && strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// GetHumanByEmail is the kind-guarded variant (FE-API-048, Task 10). It
+// returns ErrNotFound for service-account shadow users (kind='service_account')
+// so synthetic emails (sa+N@internal.invalid) cannot be matched on the SSO
+// login path, mirroring the SQL-layer kind='human' guard in the real repo.
+func (f *fakeUserRepo) GetHumanByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && strings.EqualFold(u.Email, email) {
+			// Refuse shadow users — same behaviour as the real GetHumanByEmail
+			// which filters by kind='human'.
+			if u.Kind == "service_account" {
+				return nil, repository.ErrNotFound
+			}
 			return u, nil
 		}
 	}
@@ -197,11 +223,40 @@ func (f *fakeUserRepo) TouchLastLogin(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// GetHumanByID returns ErrNotFound for service_account kind users, matching the
+// production repository guard (FE-API-048).
+func (f *fakeUserRepo) GetHumanByID(_ context.Context, id uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == id {
+			if u.Kind == "service_account" {
+				return nil, repository.ErrNotFound
+			}
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// GetUserAnyKind returns any user by ID regardless of kind. Used by the SA
+// management path where loading shadow users is intentional.
+func (f *fakeUserRepo) GetUserAnyKind(_ context.Context, id uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
-	keys        map[uuid.UUID]*repository.APIKey
-	createErr   error
-	getByIDErr  error // if set, GetByID returns this instead of looking up
+	keys             map[uuid.UUID]*repository.APIKey
+	createErr        error
+	getByIDErr       error // if set, GetByID returns this instead of looking up
+	// poisonTouchLastUsed, when true, makes TouchLastUsed return an error so
+	// T7 (TestValidateAPIKey_LastUsedWritebackFailureIsolated) can assert that
+	// a writeback failure does not propagate to the caller.
+	poisonTouchLastUsed bool
 }
 
 func newFakeAPIKeyRepo() *fakeAPIKeyRepo {
@@ -212,17 +267,24 @@ func (f *fakeAPIKeyRepo) Create(_ context.Context, req repository.CreateAPIKeyRe
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
+	// Mirror the repository defence-in-depth check so fake behaviour matches real.
+	bothNil := req.UserID == nil && req.ServiceAccountID == nil
+	bothSet := req.UserID != nil && req.ServiceAccountID != nil
+	if bothNil || bothSet {
+		return nil, fmt.Errorf("apikey: exactly one of UserID/ServiceAccountID must be set")
+	}
 	k := &repository.APIKey{
-		ID:        uuid.New(),
-		TenantID:  req.TenantID,
-		UserID:    req.UserID,
-		Name:      req.Name,
-		KeyHash:   req.KeyHash,
-		KeyPrefix: req.KeyPrefix,
-		Scopes:    req.Scopes,
-		ExpiresAt: req.ExpiresAt,
-		IsActive:  true,
-		CreatedAt: time.Now(),
+		ID:               uuid.New(),
+		TenantID:         req.TenantID,
+		UserID:           req.UserID,
+		ServiceAccountID: req.ServiceAccountID,
+		Name:             req.Name,
+		KeyHash:          req.KeyHash,
+		KeyPrefix:        req.KeyPrefix,
+		Scopes:           req.Scopes,
+		ExpiresAt:        req.ExpiresAt,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
 	}
 	f.keys[k.ID] = k
 	return k, nil
@@ -242,7 +304,18 @@ func (f *fakeAPIKeyRepo) GetByID(_ context.Context, id uuid.UUID) (*repository.A
 func (f *fakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*repository.APIKey, error) {
 	var result []*repository.APIKey
 	for _, k := range f.keys {
-		if k.UserID == userID && k.IsActive {
+		// UserID is now a pointer; dereference safely before comparing.
+		if k.UserID != nil && *k.UserID == userID && k.IsActive {
+			result = append(result, k)
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeAPIKeyRepo) ListByServiceAccount(_ context.Context, saID uuid.UUID) ([]*repository.APIKey, error) {
+	var result []*repository.APIKey
+	for _, k := range f.keys {
+		if k.ServiceAccountID != nil && *k.ServiceAccountID == saID && k.IsActive {
 			result = append(result, k)
 		}
 	}
@@ -251,27 +324,45 @@ func (f *fakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*rep
 
 func (f *fakeAPIKeyRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	k, ok := f.keys[id]
-	if !ok || k.UserID != userID {
+	// UserID is now a pointer; treat a nil UserID as no match.
+	if !ok || k.UserID == nil || *k.UserID != userID {
 		return repository.ErrNotFound
 	}
 	delete(f.keys, id)
 	return nil
 }
 
-func (f *fakeAPIKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error { return nil }
+// DeleteByServiceAccount is a no-op stub satisfying the apiKeyRepo interface.
+// SA-key deletion test coverage is deferred to T13.
+func (f *fakeAPIKeyRepo) DeleteByServiceAccount(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeAPIKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error {
+	if f.poisonTouchLastUsed {
+		return fmt.Errorf("simulated touch-last-used failure")
+	}
+	return nil
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // setupServiceWithRepos creates a Service backed by fake repos and miniredis.
 // Callers get a fully functional service without any external process.
+// It also wires a fakeSARepo and capturingAuditEmitter so the SA branch of
+// ValidateAPIKey is exercisable from service_repo_test.go.
 func setupServiceWithRepos(t *testing.T) (*Service, *fakeUserRepo, *fakeAPIKeyRepo, func()) {
 	t.Helper()
 	svc, cleanup := setupService(t)
 	ur := newFakeUserRepo()
 	ar := newFakeAPIKeyRepo()
+	sr := newFakeSARepo()
+	ae := &capturingAuditEmitter{}
 	// Swap in fakes after construction (struct fields accessible from same package).
 	svc.users = ur
 	svc.apiKeys = ar
+	svc.serviceAccounts = sr
+	svc.audit = ae
 	return svc, ur, ar, cleanup
 }
 
@@ -602,12 +693,17 @@ func TestValidateAPIKey_validSecret_returnsKey(t *testing.T) {
 		t.Fatalf("CreateAPIKey: %v", err)
 	}
 
-	validated, err := svc.ValidateAPIKey(ctx, key.ID, rawSecret)
+	validated, err := svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{KeyID: key.ID, RawSecret: rawSecret})
 	if err != nil {
 		t.Fatalf("ValidateAPIKey: %v", err)
 	}
-	if validated.ID != key.ID {
-		t.Errorf("ID mismatch: got %v, want %v", validated.ID, key.ID)
+	// ValidatedKey carries UserID (the key owner) rather than the APIKey.ID;
+	// assert that the result is for the correct human user.
+	if validated.UserID != userID {
+		t.Errorf("UserID mismatch: got %v, want %v", validated.UserID, userID)
+	}
+	if validated.PrincipalKind != "human" {
+		t.Errorf("PrincipalKind: got %q, want %q", validated.PrincipalKind, "human")
 	}
 }
 
@@ -622,7 +718,10 @@ func TestValidateAPIKey_wrongSecret_returnsInvalidCreds(t *testing.T) {
 		t.Fatalf("CreateAPIKey: %v", err)
 	}
 
-	_, err = svc.ValidateAPIKey(ctx, key.ID, "0000000000000000000000000000000000000000000000000000000000000000")
+	_, err = svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{
+		KeyID:     key.ID,
+		RawSecret: "0000000000000000000000000000000000000000000000000000000000000000",
+	})
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
@@ -633,7 +732,7 @@ func TestValidateAPIKey_notFound_returnsInvalidCreds(t *testing.T) {
 	svc, _, _, cleanup := setupServiceWithRepos(t)
 	defer cleanup()
 
-	_, err := svc.ValidateAPIKey(context.Background(), uuid.New(), "somerawsecret")
+	_, err := svc.ValidateAPIKey(context.Background(), ValidateAPIKeyOpts{KeyID: uuid.New(), RawSecret: "somerawsecret"})
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
@@ -644,21 +743,30 @@ func TestValidateAPIKey_expiredKey_returnsKeyExpired(t *testing.T) {
 	svc, _, ar, cleanup := setupServiceWithRepos(t)
 	defer cleanup()
 
-	// Directly insert an expired key into the fake repo.
+	// Directly insert an expired key into the fake repo. Use a real argon2
+	// hash so the verify step (which now runs BEFORE the expiry check to
+	// close the timing oracle) passes and the test exercises the expiry
+	// branch rather than failing at hash verification.
+	rawSecret := "expired-test-secret"
+	hash, err := argon2pkg.Hash(rawSecret)
+	if err != nil {
+		t.Fatalf("argon2pkg.Hash: %v", err)
+	}
 	past := time.Now().Add(-1 * time.Hour)
+	ownerID := uuid.New()
 	expiredKey := &repository.APIKey{
 		ID:        uuid.New(),
 		TenantID:  uuid.New(),
-		UserID:    uuid.New(),
+		UserID:    &ownerID, // UserID is now *uuid.UUID (FE-API-048 Task 6)
 		Name:      "expired",
-		KeyHash:   "hash",
+		KeyHash:   hash,
 		IsActive:  true,
 		ExpiresAt: &past,
 		CreatedAt: time.Now(),
 	}
 	ar.keys[expiredKey.ID] = expiredKey
 
-	_, err := svc.ValidateAPIKey(context.Background(), expiredKey.ID, "anything")
+	_, err = svc.ValidateAPIKey(context.Background(), ValidateAPIKeyOpts{KeyID: expiredKey.ID, RawSecret: rawSecret})
 	if !errors.Is(err, ErrKeyExpired) {
 		t.Errorf("expected ErrKeyExpired, got %v", err)
 	}
@@ -758,5 +866,343 @@ func TestRevokeToken_alreadyExpired_isNoop(t *testing.T) {
 	// Should succeed without error even though the token is already expired.
 	if err := svc.RevokeToken(context.Background(), claims); err != nil {
 		t.Errorf("RevokeToken on expired token: unexpected error: %v", err)
+	}
+}
+
+// ── ValidateAPIKey T5 / T6 / T7 / T10 ────────────────────────────────────────
+//
+// authFakes bundles the fakes needed by the T5–T12 test suite. It exposes
+// helper methods for seeding SAs, issuing keys with real argon2id hashes,
+// issuing JWTs, and asserting audit state.
+type authFakes struct {
+	saRepo   *fakeSARepo
+	userRepo *fakeUserRepo
+	keyRepo  *fakeAPIKeyRepo
+	audit    *capturingAuditEmitter
+	// redis is the miniredis-backed *redis.Client from the parent Service so
+	// tests can seed Redis keys (e.g. revoke:user:<id>) directly.
+	redis *redis.Client
+}
+
+// buildAuthFakesService wires all fakes into the service and returns the
+// populated authFakes. Used by both newAuthService (T) and bench variants (B).
+func buildAuthFakesService(svc *Service) *authFakes {
+	ur := newFakeUserRepo()
+	ar := newFakeAPIKeyRepo()
+	sr := newFakeSARepo()
+	ae := &capturingAuditEmitter{}
+
+	// Same-package access: wire fakes directly into the unexported struct fields.
+	svc.users = ur
+	svc.apiKeys = ar
+	svc.serviceAccounts = sr
+	svc.audit = ae
+
+	return &authFakes{saRepo: sr, userRepo: ur, keyRepo: ar, audit: ae, redis: svc.redis}
+}
+
+// newAuthService constructs a Service backed by in-memory fakes and miniredis
+// for the T5–T7 unit tests.
+func newAuthService(t *testing.T, _ context.Context) (*Service, *authFakes) {
+	t.Helper()
+	svc, cleanup := setupService(t)
+	t.Cleanup(cleanup)
+	return svc, buildAuthFakesService(svc)
+}
+
+// newAuthServiceB constructs a Service+fakes for the T10 benchmark.
+// It constructs a real Service using the benchServiceHelper (defined below)
+// to avoid requiring a *testing.T when only a *testing.B is available.
+func newAuthServiceB(b *testing.B) (*Service, *authFakes) {
+	b.Helper()
+	svc, cleanup := newBenchService(b)
+	b.Cleanup(cleanup)
+	return svc, buildAuthFakesService(svc)
+}
+
+// seedSAInTenant creates a service account in the given tenant and returns it.
+func (f *authFakes) seedSAInTenant(tenantID uuid.UUID, name string) *repository.ServiceAccount {
+	saID := uuid.New()
+	shadowID := uuid.New()
+	// Register the shadow user so the user repo is consistent.
+	f.userRepo.users["shadow:"+shadowID.String()] = &repository.User{
+		ID:       shadowID,
+		TenantID: tenantID,
+		Kind:     "service_account",
+	}
+	sa := &repository.ServiceAccount{
+		ID:            saID,
+		TenantID:      tenantID,
+		ShadowUserID:  shadowID,
+		Name:          name,
+		AllowedScopes: []string{"pull", "push"},
+		CreatedAt:     time.Now(),
+	}
+	f.saRepo.accounts[saID] = sa
+	return sa
+}
+
+// seedSA allocates a fresh tenant for the SA and delegates to seedSAInTenant.
+func (f *authFakes) seedSA(name string) *repository.ServiceAccount {
+	return f.seedSAInTenant(uuid.New(), name)
+}
+
+// issueSAKey inserts a real argon2id-hashed API key for the given SA. Returns
+// (keyID, rawSecret) so callers can pass them to ValidateAPIKey.
+func (f *authFakes) issueSAKey(sa *repository.ServiceAccount, scopes ...string) (uuid.UUID, string) {
+	rawBytes := make([]byte, 32)
+	if _, err := rand.Read(rawBytes); err != nil {
+		panic("issueSAKey: rand.Read: " + err.Error())
+	}
+	rawSecret := hex.EncodeToString(rawBytes)
+	hash, err := argon2pkg.Hash(rawSecret)
+	if err != nil {
+		panic("issueSAKey: argon2pkg.Hash: " + err.Error())
+	}
+	k := &repository.APIKey{
+		ID:               uuid.New(),
+		TenantID:         sa.TenantID,
+		ServiceAccountID: &sa.ID,
+		Name:             "test-sa-key",
+		KeyHash:          hash,
+		KeyPrefix:        rawSecret[:12],
+		Scopes:           scopes,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
+	}
+	f.keyRepo.keys[k.ID] = k
+	return k.ID, rawSecret
+}
+
+// issueHumanKey seeds a fresh human user + API key. Returns (keyID, rawSecret).
+func (f *authFakes) issueHumanKey(username string) (uuid.UUID, string) {
+	tenantID := uuid.New()
+	userID := uuid.New()
+	f.userRepo.users[username] = &repository.User{
+		ID:       userID,
+		TenantID: tenantID,
+		Username: username,
+		Email:    username + "@example.com",
+		IsActive: true,
+		Kind:     "human",
+	}
+	rawBytes := make([]byte, 32)
+	if _, err := rand.Read(rawBytes); err != nil {
+		panic("issueHumanKey: rand.Read: " + err.Error())
+	}
+	rawSecret := hex.EncodeToString(rawBytes)
+	hash, err := argon2pkg.Hash(rawSecret)
+	if err != nil {
+		panic("issueHumanKey: argon2pkg.Hash: " + err.Error())
+	}
+	k := &repository.APIKey{
+		ID:       uuid.New(),
+		TenantID: tenantID,
+		UserID:   &userID,
+		Name:     "human-key",
+		KeyHash:  hash,
+		Scopes:   []string{"pull"},
+		IsActive: true,
+		CreatedAt: time.Now(),
+	}
+	f.keyRepo.keys[k.ID] = k
+	return k.ID, rawSecret
+}
+
+// setAllowedScopes replaces the SA's AllowedScopes in the fake repo.
+func (f *authFakes) setAllowedScopes(sa *repository.ServiceAccount, scopes ...string) {
+	sa.AllowedScopes = scopes
+}
+
+// HasAction returns true when at least one captured audit event has the given action.
+func (f *authFakes) HasAction(action string) bool {
+	for _, ev := range f.audit.Events {
+		if ev.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
+// issueJWT issues a real RS256 JWT for the given username via svc.IssueToken and
+// returns the raw token string plus the parsed claims. The subject of the JWT is
+// a freshly generated UUID (simulating a real user ID) embedded in claims.Subject.
+// This helper is used by T12 tests that need to inject Redis revoke keys and then
+// call ValidateToken to assert rejection.
+func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
+	ctx := context.Background()
+	userID := uuid.New()
+	tenantID := uuid.New()
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil)
+	if err != nil {
+		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
+	}
+	// Parse the signed token to obtain the claims so callers can use
+	// claims.Subject as the key for revoke:user:<sub>.
+	var claims Claims
+	// ParseWithClaims validates the signature against svc.pubKey; we access it
+	// via the same-package field since both this file and auth.go are in package service.
+	tok, err := jwt.ParseWithClaims(token, &claims, func(_ *jwt.Token) (any, error) {
+		return svc.pubKey, nil
+	})
+	if err != nil || !tok.Valid {
+		panic("issueJWT: parse claims failed: " + err.Error())
+	}
+	return token, &claims
+}
+
+// ── T5: cross-tenant guard ────────────────────────────────────────────────────
+
+// TestValidateAPIKey_CrossTenantGuard_T5 verifies that an SA key used with a
+// mismatched X-Tenant-ID is rejected with ErrInvalidCredentials and that a
+// pentest.cross_tenant_attempt audit event is emitted (spec §5.4 / H1).
+func TestValidateAPIKey_CrossTenantGuard_T5(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+	tenantA, tenantB := uuid.New(), uuid.New()
+
+	// Seed an SA in tenantB, issue a key.
+	sa := fakes.seedSAInTenant(tenantB, "ci")
+	keyID, rawSecret := fakes.issueSAKey(sa, "pull", "push")
+
+	// Attempt to validate the key while claiming tenantA.
+	_, err := svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{
+		KeyID:           keyID,
+		RawSecret:       rawSecret,
+		RequestTenantID: &tenantA,
+	})
+	require.Error(t, err, "cross-tenant SA key must be rejected")
+	require.ErrorIs(t, err, ErrInvalidCredentials, "must return ErrInvalidCredentials")
+
+	// The attempt must be recorded in the audit log.
+	require.True(t, fakes.HasAction("pentest.cross_tenant_attempt"),
+		"cross-tenant attempt must emit audit event")
+}
+
+// ── T6: scope intersection ────────────────────────────────────────────────────
+
+// TestValidateAPIKey_ScopeIntersection_T6 verifies that the effective scopes
+// returned by ValidateAPIKey are the intersection of the key's scopes and the
+// SA's current AllowedScopes (spec §5.4).
+func TestValidateAPIKey_ScopeIntersection_T6(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// SA initially allows pull+push; key is issued with both.
+	sa := fakes.seedSA("c")
+	keyID, secret := fakes.issueSAKey(sa, "pull", "push")
+
+	// Admin narrows the SA's allowlist to pull-only after key issuance.
+	fakes.setAllowedScopes(sa, "pull")
+
+	vk, err := svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{KeyID: keyID, RawSecret: secret})
+	require.NoError(t, err)
+	require.Equal(t, []string{"pull"}, vk.EffectiveScopes,
+		"effective scopes must be intersected with SA AllowedScopes")
+	require.Equal(t, "service_account", vk.PrincipalKind)
+}
+
+// ── T7: last_used writeback failure isolation ─────────────────────────────────
+
+// TestValidateAPIKey_LastUsedWritebackFailureIsolated_T7 verifies that a
+// failure in the fire-and-forget last_used writeback does not cause
+// ValidateAPIKey to return an error (spec §5.4 — best-effort).
+func TestValidateAPIKey_LastUsedWritebackFailureIsolated_T7(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// Poison TouchLastUsed so the goroutine will error.
+	fakes.keyRepo.poisonTouchLastUsed = true
+	keyID, secret := fakes.issueHumanKey("alice")
+
+	vk, err := svc.ValidateAPIKey(ctx, ValidateAPIKeyOpts{KeyID: keyID, RawSecret: secret})
+	require.NoError(t, err, "TouchLastUsed failure must not propagate to the caller")
+	require.Equal(t, "human", vk.PrincipalKind)
+}
+
+// ── T12: ValidateToken revoke:user check ──────────────────────────────────────
+
+// TestValidateToken_RespectsUserRevoke verifies that when the Redis key
+// "revoke:user:<sub>" is set, ValidateToken rejects the token with
+// codes.Unauthenticated. This covers the SA disable flow (spec §5.5): T8's
+// SetDisabled writes the same key; this test asserts that ValidateToken reads it.
+func TestValidateToken_RespectsUserRevoke(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// Issue a real JWT and capture the claims so we know the subject UUID.
+	token, claims := fakes.issueJWT(svc, "alice")
+
+	// Manually set the revoke key — simulates what SetDisabled does when an SA
+	// (or any principal's shadow user) is disabled.
+	require.NoError(t, fakes.redis.Set(ctx, "revoke:user:"+claims.Subject, "1", time.Minute).Err())
+
+	// ValidateToken must now reject the token.
+	_, err := svc.ValidateToken(ctx, token)
+	require.Error(t, err)
+	require.Equal(t, codes.Unauthenticated, status.Code(err),
+		"revoked principal must return codes.Unauthenticated")
+}
+
+// TestValidateToken_NoRevokeKey_Succeeds verifies that absent revoke:user:<sub>
+// does not break the normal validate-token path — the positive case for T12.
+func TestValidateToken_NoRevokeKey_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newAuthService(t, ctx)
+
+	// Issue a valid JWT; no revoke key is set.
+	token, claims := fakes.issueJWT(svc, "bob")
+
+	// Ensure no stale key exists for this subject.
+	_ = fakes.redis.Del(ctx, "revoke:user:"+claims.Subject)
+
+	// ValidateToken must succeed and return the same subject.
+	got, err := svc.ValidateToken(ctx, token)
+	require.NoError(t, err, "valid token without revoke key must succeed")
+	require.Equal(t, claims.Subject, got.Subject,
+		"returned claims must carry the original subject")
+}
+
+// ── T10: benchmark ────────────────────────────────────────────────────────────
+
+// newBenchService is the *testing.B counterpart of setupService. It shares
+// the same construction logic (miniredis + RSA) but accepts a *testing.B so
+// that Fatalf / Cleanup go to the right destination.
+// It lives in this file so the benchmark below can call it without importing
+// additional packages — miniredis and redis are already imported via
+// service_redis_test.go (same package).
+func newBenchService(b *testing.B) (*Service, func()) {
+	b.Helper()
+
+	// We can call setupService here by passing a fresh *testing.T because
+	// b.Fatalf and t.Fatalf use the same underlying mechanism when the test
+	// binary panics on failure. setupService is in service_redis_test.go and
+	// is visible here since both files are in package service.
+	//
+	// NOTE: using a zero-value *testing.T is intentional and safe here because
+	// setupService only calls t.Fatalf (which panics in tests) and t.Helper
+	// (which is a no-op on a zero value). Any failure in setupService will
+	// surface as a panic that b.Run will attribute to the benchmark.
+	t := &testing.T{}
+	return setupService(t)
+}
+
+// BenchmarkValidateAPIKey_T10 measures the end-to-end cost of ValidateAPIKey
+// for a human-owned key (argon2id verify + in-memory fake lookup).
+// Run with: go test ./internal/service/ -bench BenchmarkValidateAPIKey_T10 -benchmem
+func BenchmarkValidateAPIKey_T10(b *testing.B) {
+	// Use newAuthServiceB for a clean service with all fakes wired.
+	svc, fakes := newAuthServiceB(b)
+	keyID, secret := fakes.issueHumanKey("bench-alice")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := svc.ValidateAPIKey(context.Background(), ValidateAPIKeyOpts{
+			KeyID:     keyID,
+			RawSecret: secret,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }

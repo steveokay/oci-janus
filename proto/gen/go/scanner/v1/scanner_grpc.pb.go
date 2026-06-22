@@ -24,9 +24,17 @@ const (
 	ScannerService_GetScanStatus_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanStatus"
 	ScannerService_GetScanPolicy_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanPolicy"
 	ScannerService_UpdateScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/UpdateScanPolicy"
+	ScannerService_GetOrgScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/GetOrgScanPolicy"
+	ScannerService_UpsertOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/UpsertOrgScanPolicy"
+	ScannerService_DeleteOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/DeleteOrgScanPolicy"
+	ScannerService_GetRepoScanPolicy_FullMethodName        = "/registry.scanner.v1.ScannerService/GetRepoScanPolicy"
+	ScannerService_UpsertRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/UpsertRepoScanPolicy"
+	ScannerService_DeleteRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/DeleteRepoScanPolicy"
+	ScannerService_GetEffectiveScanPolicy_FullMethodName   = "/registry.scanner.v1.ScannerService/GetEffectiveScanPolicy"
 	ScannerService_GenerateComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
 	ScannerService_GetComplianceReport_FullMethodName      = "/registry.scanner.v1.ScannerService/GetComplianceReport"
 	ScannerService_ListComplianceReports_FullMethodName    = "/registry.scanner.v1.ScannerService/ListComplianceReports"
+	ScannerService_DownloadComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/DownloadComplianceReport"
 	ScannerService_ListInstalledAdapters_FullMethodName    = "/registry.scanner.v1.ScannerService/ListInstalledAdapters"
 	ScannerService_GetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/GetActiveAdapter"
 	ScannerService_SetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/SetActiveAdapter"
@@ -51,6 +59,36 @@ type ScannerServiceClient interface {
 	// applied by the gRPC layer; the management BFF performs an additional
 	// RBAC check (admin/owner role) before forwarding.
 	UpdateScanPolicy(ctx context.Context, in *UpdateScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// GetOrgScanPolicy returns the default scan policy attached to an
+	// organisation. NotFound when no row exists; the BFF surfaces that as
+	// a typed empty state so the dashboard can render "no org default
+	// yet" without a separate code path.
+	GetOrgScanPolicy(ctx context.Context, in *GetOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// UpsertOrgScanPolicy creates or updates the org default. updated_by
+	// sourced from the JWT user_id, never client-supplied.
+	UpsertOrgScanPolicy(ctx context.Context, in *UpsertOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// DeleteOrgScanPolicy removes the org default. Repos that previously
+	// inherited fall back to the tenant policy (or the synthesized default
+	// when no tenant row exists either).
+	DeleteOrgScanPolicy(ctx context.Context, in *DeleteOrgScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetRepoScanPolicy returns a per-repo override. NotFound when no
+	// override exists (the repo is inheriting from org / tenant).
+	GetRepoScanPolicy(ctx context.Context, in *GetRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// UpsertRepoScanPolicy creates or updates the per-repo override.
+	UpsertRepoScanPolicy(ctx context.Context, in *UpsertRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error)
+	// DeleteRepoScanPolicy removes the per-repo override; the repo falls
+	// back to the org default (or tenant fallback) on the next push.
+	DeleteRepoScanPolicy(ctx context.Context, in *DeleteRepoScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetEffectiveScanPolicy resolves what policy actually applies to a
+	// given repository: per-repo override → org default (only when
+	// enabled=true) → tenant policy → synthesized auto_scan_on_push=true
+	// default. Never NotFound — the chain always terminates because the
+	// synthesized default is always available. The inherited_from field
+	// on the response labels the source ("repo" | "org" | "tenant" |
+	// "default") so the dashboard can render the right "(inherited)"
+	// label without a second round-trip. Called by the scanner consumer
+	// on every push.completed event.
+	GetEffectiveScanPolicy(ctx context.Context, in *GetEffectiveScanPolicyRequest, opts ...grpc.CallOption) (*EffectiveScanPolicy, error)
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -59,10 +97,32 @@ type ScannerServiceClient interface {
 	// observed via GetComplianceReport.
 	GenerateComplianceReport(ctx context.Context, in *GenerateComplianceReportRequest, opts ...grpc.CallOption) (*GenerateComplianceReportResponse, error)
 	// GetComplianceReport returns one report row by id. The download_*_url
-	// fields are populated only when status == "succeeded".
+	// fields are populated only when status == "succeeded" — they are now
+	// an internal hint (the scanner uses them to resolve the on-disk path
+	// inside its own filesystem) and should NOT be used by remote callers
+	// to fetch bytes; the streaming DownloadComplianceReport RPC below is
+	// the supported path. The fields stay on the wire as a "ready" sentinel
+	// for the dashboard.
 	GetComplianceReport(ctx context.Context, in *GetComplianceReportRequest, opts ...grpc.CallOption) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(ctx context.Context, in *ListComplianceReportsRequest, opts ...grpc.CallOption) (*ListComplianceReportsResponse, error)
+	// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+	// JSON report bytes back to the caller. The scanner reads the file from
+	// its own filesystem and chunks it in ~64KB pieces; the management BFF
+	// proxies the stream into the client HTTP response. This RPC replaces
+	// the v1 shortcut of returning an absolute on-disk path on GetReport
+	// and having callers open the file themselves — that breaks the moment
+	// scanner and management are on different nodes.
+	//
+	// The first ReportChunk carries content_type (e.g. "application/pdf")
+	// so the BFF can set Content-Type on the HTTP response before forwarding
+	// any bytes; subsequent chunks carry data only. NotFound when the
+	// report id does not exist (or belongs to another tenant);
+	// FailedPrecondition when the report is not yet succeeded; Internal
+	// when the on-disk artifact is missing despite the row claiming
+	// success (storage corruption — surfaced distinctly so operators see
+	// "your data is gone" vs "still rendering").
+	DownloadComplianceReport(ctx context.Context, in *DownloadComplianceReportRequest, opts ...grpc.CallOption) (ScannerService_DownloadComplianceReportClient, error)
 	// ListInstalledAdapters enumerates every executable binary the scanner
 	// service discovered at startup under its adapter directory (default
 	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
@@ -137,6 +197,76 @@ func (c *scannerServiceClient) UpdateScanPolicy(ctx context.Context, in *UpdateS
 	return out, nil
 }
 
+func (c *scannerServiceClient) GetOrgScanPolicy(ctx context.Context, in *GetOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) UpsertOrgScanPolicy(ctx context.Context, in *UpsertOrgScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_UpsertOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) DeleteOrgScanPolicy(ctx context.Context, in *DeleteOrgScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ScannerService_DeleteOrgScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetRepoScanPolicy(ctx context.Context, in *GetRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) UpsertRepoScanPolicy(ctx context.Context, in *UpsertRepoScanPolicyRequest, opts ...grpc.CallOption) (*ScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_UpsertRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) DeleteRepoScanPolicy(ctx context.Context, in *DeleteRepoScanPolicyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ScannerService_DeleteRepoScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) GetEffectiveScanPolicy(ctx context.Context, in *GetEffectiveScanPolicyRequest, opts ...grpc.CallOption) (*EffectiveScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EffectiveScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetEffectiveScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *scannerServiceClient) GenerateComplianceReport(ctx context.Context, in *GenerateComplianceReportRequest, opts ...grpc.CallOption) (*GenerateComplianceReportResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GenerateComplianceReportResponse)
@@ -165,6 +295,39 @@ func (c *scannerServiceClient) ListComplianceReports(ctx context.Context, in *Li
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *scannerServiceClient) DownloadComplianceReport(ctx context.Context, in *DownloadComplianceReportRequest, opts ...grpc.CallOption) (ScannerService_DownloadComplianceReportClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ScannerService_ServiceDesc.Streams[0], ScannerService_DownloadComplianceReport_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &scannerServiceDownloadComplianceReportClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type ScannerService_DownloadComplianceReportClient interface {
+	Recv() (*ReportChunk, error)
+	grpc.ClientStream
+}
+
+type scannerServiceDownloadComplianceReportClient struct {
+	grpc.ClientStream
+}
+
+func (x *scannerServiceDownloadComplianceReportClient) Recv() (*ReportChunk, error) {
+	m := new(ReportChunk)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *scannerServiceClient) ListInstalledAdapters(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListInstalledAdaptersResponse, error) {
@@ -234,6 +397,36 @@ type ScannerServiceServer interface {
 	// applied by the gRPC layer; the management BFF performs an additional
 	// RBAC check (admin/owner role) before forwarding.
 	UpdateScanPolicy(context.Context, *UpdateScanPolicyRequest) (*ScanPolicy, error)
+	// GetOrgScanPolicy returns the default scan policy attached to an
+	// organisation. NotFound when no row exists; the BFF surfaces that as
+	// a typed empty state so the dashboard can render "no org default
+	// yet" without a separate code path.
+	GetOrgScanPolicy(context.Context, *GetOrgScanPolicyRequest) (*ScanPolicy, error)
+	// UpsertOrgScanPolicy creates or updates the org default. updated_by
+	// sourced from the JWT user_id, never client-supplied.
+	UpsertOrgScanPolicy(context.Context, *UpsertOrgScanPolicyRequest) (*ScanPolicy, error)
+	// DeleteOrgScanPolicy removes the org default. Repos that previously
+	// inherited fall back to the tenant policy (or the synthesized default
+	// when no tenant row exists either).
+	DeleteOrgScanPolicy(context.Context, *DeleteOrgScanPolicyRequest) (*emptypb.Empty, error)
+	// GetRepoScanPolicy returns a per-repo override. NotFound when no
+	// override exists (the repo is inheriting from org / tenant).
+	GetRepoScanPolicy(context.Context, *GetRepoScanPolicyRequest) (*ScanPolicy, error)
+	// UpsertRepoScanPolicy creates or updates the per-repo override.
+	UpsertRepoScanPolicy(context.Context, *UpsertRepoScanPolicyRequest) (*ScanPolicy, error)
+	// DeleteRepoScanPolicy removes the per-repo override; the repo falls
+	// back to the org default (or tenant fallback) on the next push.
+	DeleteRepoScanPolicy(context.Context, *DeleteRepoScanPolicyRequest) (*emptypb.Empty, error)
+	// GetEffectiveScanPolicy resolves what policy actually applies to a
+	// given repository: per-repo override → org default (only when
+	// enabled=true) → tenant policy → synthesized auto_scan_on_push=true
+	// default. Never NotFound — the chain always terminates because the
+	// synthesized default is always available. The inherited_from field
+	// on the response labels the source ("repo" | "org" | "tenant" |
+	// "default") so the dashboard can render the right "(inherited)"
+	// label without a second round-trip. Called by the scanner consumer
+	// on every push.completed event.
+	GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error)
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -242,10 +435,32 @@ type ScannerServiceServer interface {
 	// observed via GetComplianceReport.
 	GenerateComplianceReport(context.Context, *GenerateComplianceReportRequest) (*GenerateComplianceReportResponse, error)
 	// GetComplianceReport returns one report row by id. The download_*_url
-	// fields are populated only when status == "succeeded".
+	// fields are populated only when status == "succeeded" — they are now
+	// an internal hint (the scanner uses them to resolve the on-disk path
+	// inside its own filesystem) and should NOT be used by remote callers
+	// to fetch bytes; the streaming DownloadComplianceReport RPC below is
+	// the supported path. The fields stay on the wire as a "ready" sentinel
+	// for the dashboard.
 	GetComplianceReport(context.Context, *GetComplianceReportRequest) (*ComplianceReport, error)
 	// ListComplianceReports returns recent reports for a tenant, paginated.
 	ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error)
+	// DownloadComplianceReport (REM-012) streams the rendered PDF or SPDX
+	// JSON report bytes back to the caller. The scanner reads the file from
+	// its own filesystem and chunks it in ~64KB pieces; the management BFF
+	// proxies the stream into the client HTTP response. This RPC replaces
+	// the v1 shortcut of returning an absolute on-disk path on GetReport
+	// and having callers open the file themselves — that breaks the moment
+	// scanner and management are on different nodes.
+	//
+	// The first ReportChunk carries content_type (e.g. "application/pdf")
+	// so the BFF can set Content-Type on the HTTP response before forwarding
+	// any bytes; subsequent chunks carry data only. NotFound when the
+	// report id does not exist (or belongs to another tenant);
+	// FailedPrecondition when the report is not yet succeeded; Internal
+	// when the on-disk artifact is missing despite the row claiming
+	// success (storage corruption — surfaced distinctly so operators see
+	// "your data is gone" vs "still rendering").
+	DownloadComplianceReport(*DownloadComplianceReportRequest, ScannerService_DownloadComplianceReportServer) error
 	// ListInstalledAdapters enumerates every executable binary the scanner
 	// service discovered at startup under its adapter directory (default
 	// /usr/local/bin/scanner-*). Includes the SHA-256 checksum so the
@@ -288,6 +503,27 @@ func (UnimplementedScannerServiceServer) GetScanPolicy(context.Context, *GetScan
 func (UnimplementedScannerServiceServer) UpdateScanPolicy(context.Context, *UpdateScanPolicyRequest) (*ScanPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateScanPolicy not implemented")
 }
+func (UnimplementedScannerServiceServer) GetOrgScanPolicy(context.Context, *GetOrgScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) UpsertOrgScanPolicy(context.Context, *UpsertOrgScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) DeleteOrgScanPolicy(context.Context, *DeleteOrgScanPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteOrgScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetRepoScanPolicy(context.Context, *GetRepoScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) UpsertRepoScanPolicy(context.Context, *UpsertRepoScanPolicyRequest) (*ScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) DeleteRepoScanPolicy(context.Context, *DeleteRepoScanPolicyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteRepoScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEffectiveScanPolicy not implemented")
+}
 func (UnimplementedScannerServiceServer) GenerateComplianceReport(context.Context, *GenerateComplianceReportRequest) (*GenerateComplianceReportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GenerateComplianceReport not implemented")
 }
@@ -296,6 +532,9 @@ func (UnimplementedScannerServiceServer) GetComplianceReport(context.Context, *G
 }
 func (UnimplementedScannerServiceServer) ListComplianceReports(context.Context, *ListComplianceReportsRequest) (*ListComplianceReportsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListComplianceReports not implemented")
+}
+func (UnimplementedScannerServiceServer) DownloadComplianceReport(*DownloadComplianceReportRequest, ScannerService_DownloadComplianceReportServer) error {
+	return status.Errorf(codes.Unimplemented, "method DownloadComplianceReport not implemented")
 }
 func (UnimplementedScannerServiceServer) ListInstalledAdapters(context.Context, *emptypb.Empty) (*ListInstalledAdaptersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListInstalledAdapters not implemented")
@@ -396,6 +635,132 @@ func _ScannerService_UpdateScanPolicy_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerService_GetOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetOrgScanPolicy(ctx, req.(*GetOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_UpsertOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).UpsertOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_UpsertOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).UpsertOrgScanPolicy(ctx, req.(*UpsertOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_DeleteOrgScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOrgScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).DeleteOrgScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_DeleteOrgScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).DeleteOrgScanPolicy(ctx, req.(*DeleteOrgScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetRepoScanPolicy(ctx, req.(*GetRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_UpsertRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).UpsertRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_UpsertRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).UpsertRepoScanPolicy(ctx, req.(*UpsertRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_DeleteRepoScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRepoScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).DeleteRepoScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_DeleteRepoScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).DeleteRepoScanPolicy(ctx, req.(*DeleteRepoScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_GetEffectiveScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEffectiveScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetEffectiveScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetEffectiveScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetEffectiveScanPolicy(ctx, req.(*GetEffectiveScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ScannerService_GenerateComplianceReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateComplianceReportRequest)
 	if err := dec(in); err != nil {
@@ -448,6 +813,27 @@ func _ScannerService_ListComplianceReports_Handler(srv interface{}, ctx context.
 		return srv.(ScannerServiceServer).ListComplianceReports(ctx, req.(*ListComplianceReportsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_DownloadComplianceReport_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DownloadComplianceReportRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ScannerServiceServer).DownloadComplianceReport(m, &scannerServiceDownloadComplianceReportServer{ServerStream: stream})
+}
+
+type ScannerService_DownloadComplianceReportServer interface {
+	Send(*ReportChunk) error
+	grpc.ServerStream
+}
+
+type scannerServiceDownloadComplianceReportServer struct {
+	grpc.ServerStream
+}
+
+func (x *scannerServiceDownloadComplianceReportServer) Send(m *ReportChunk) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _ScannerService_ListInstalledAdapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -564,6 +950,34 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ScannerService_UpdateScanPolicy_Handler,
 		},
 		{
+			MethodName: "GetOrgScanPolicy",
+			Handler:    _ScannerService_GetOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertOrgScanPolicy",
+			Handler:    _ScannerService_UpsertOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteOrgScanPolicy",
+			Handler:    _ScannerService_DeleteOrgScanPolicy_Handler,
+		},
+		{
+			MethodName: "GetRepoScanPolicy",
+			Handler:    _ScannerService_GetRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "UpsertRepoScanPolicy",
+			Handler:    _ScannerService_UpsertRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteRepoScanPolicy",
+			Handler:    _ScannerService_DeleteRepoScanPolicy_Handler,
+		},
+		{
+			MethodName: "GetEffectiveScanPolicy",
+			Handler:    _ScannerService_GetEffectiveScanPolicy_Handler,
+		},
+		{
 			MethodName: "GenerateComplianceReport",
 			Handler:    _ScannerService_GenerateComplianceReport_Handler,
 		},
@@ -596,6 +1010,12 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ScannerService_GetScannerHealth_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "DownloadComplianceReport",
+			Handler:       _ScannerService_DownloadComplianceReport_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "scanner/v1/scanner.proto",
 }

@@ -21,16 +21,42 @@ export interface Membership {
   role: string;
 }
 
+// ServiceAccountFields is the nested object present on saCallerResponse (T16).
+// Only populated when type === "service_account".
+export interface ServiceAccountFields {
+  id: string;
+  name: string;
+  description: string;
+  allowed_scopes: string[];
+}
+
+// MeResponse is the polymorphic shape returned by GET /api/v1/users/me.
+//
+// FE-API-048 T16 made the response polymorphic:
+//   - type === "user"            → human caller; human-only fields present.
+//   - type === "service_account" → SA shadow user; service_account nested object
+//                                  is present; email is always null; user_id /
+//                                  username / created_at / memberships are absent.
+//
+// `type` defaults to "user" defensively when the field is absent (old backends).
 export interface MeResponse {
-  user_id: string;
-  username: string;
+  // type discriminates human vs service-account callers (FE-API-048 T16).
+  // Absent on pre-T16 backends — treat as "user" when undefined.
+  type?: "user" | "service_account";
+  // id is returned only for service_account callers (the shadow user UUID).
+  id?: string;
+  // user_id is returned only for human callers.
+  user_id?: string;
+  username?: string;
   email: string | null;
   display_name: string | null;
-  created_at: string;
-  last_login_at: string | null;
+  created_at?: string;
+  last_login_at?: string | null;
   tenant_id: string;
   roles: string[];
-  memberships: Membership[];
+  memberships?: Membership[];
+  // service_account is present only when type === "service_account".
+  service_account?: ServiceAccountFields;
 }
 
 export const meKeys = {

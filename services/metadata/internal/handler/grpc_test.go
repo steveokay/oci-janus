@@ -89,6 +89,12 @@ type fakeRepo struct {
 	// DeleteManifest
 	deleteManifestErr error
 
+	// FE-API-050 UpdateManifestQuarantine fake error injection.
+	updateQuarantineErr error
+	// FE-API-050 tag names returned by ListTagNamesByDigest. Nil
+	// defaults to "no tags", which is the common test case.
+	tagNamesByDigest []string
+
 	// ListUntaggedManifests
 	listUntaggedResult []*metadatav1.Manifest
 	listUntaggedErr    error
@@ -385,6 +391,35 @@ func (f *fakeRepo) GetManifest(_ context.Context, _, _, _ string) (*metadatav1.M
 
 func (f *fakeRepo) DeleteManifest(_ context.Context, _, _, _ string) error {
 	return f.deleteManifestErr
+}
+
+// FE-API-050 — quarantine fake. Defaults to returning a minimal Manifest
+// with Quarantined set to whatever the caller requested so happy-path
+// tests can assert state without wiring extra fixture data.
+func (f *fakeRepo) UpdateManifestQuarantine(
+	_ context.Context,
+	tenantID, repoID, digest string,
+	quarantined bool,
+	reason, by string,
+) (*metadatav1.Manifest, error) {
+	if f.updateQuarantineErr != nil {
+		return nil, f.updateQuarantineErr
+	}
+	return &metadatav1.Manifest{
+		TenantId:         tenantID,
+		RepoId:           repoID,
+		Digest:           digest,
+		Quarantined:      quarantined,
+		QuarantineReason: reason,
+		QuarantinedBy:    by,
+	}, nil
+}
+
+// ListTagNamesByDigest fake — returns the configured slice, defaulting
+// to nil so existing tests don't need to set anything for the FE-API-050
+// cache-bust path to no-op.
+func (f *fakeRepo) ListTagNamesByDigest(_ context.Context, _, _, _ string) ([]string, error) {
+	return f.tagNamesByDigest, nil
 }
 
 func (f *fakeRepo) ListUntaggedManifests(_ context.Context, _, _ string) ([]*metadatav1.Manifest, error) {

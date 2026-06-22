@@ -2,6 +2,11 @@
 // (FE-API-011, FE-API-012, FE-API-013). They live in the auth service because
 // the same JWT middleware and Service value already used by /login and
 // /apikeys give us the cheapest, mTLS-free path to the user record.
+//
+// FE-API-048 T16 extends GET /users/me with a polymorphic principal envelope:
+// service-account shadow users (kind="service_account") receive a
+// {"type":"service_account","service_account":{…}} shape; human users receive
+// the original shape plus {"type":"user"} (additive, backwards-compatible).
 package handler
 
 import (
@@ -19,10 +24,16 @@ import (
 )
 
 // currentUserResponse is the shape returned by GET /api/v1/users/me and
-// PATCH /api/v1/users/me. Nullable fields use *string / *time.Time so that
-// the JSON encodes as null rather than the zero value, which lets the dashboard
-// distinguish "not set" from "set to empty string".
+// PATCH /api/v1/users/me for human callers. Nullable fields use *string /
+// *time.Time so that the JSON encodes as null rather than the zero value,
+// which lets the dashboard distinguish "not set" from "set to empty string".
+//
+// FE-API-048 T16 adds the Type field ("user" for this struct). The
+// ServiceAccount field is absent so that human responses are not affected.
 type currentUserResponse struct {
+	// Type is always "user" for human-caller responses (FE-API-048 T16).
+	// Additive field — existing clients that do not read it are unaffected.
+	Type        string       `json:"type"`
 	UserID      string       `json:"user_id"`
 	Username    string       `json:"username"`
 	Email       *string      `json:"email"`
@@ -41,9 +52,43 @@ type membership struct {
 	Role       string `json:"role"`
 }
 
+// saCallerResponse is the JSON shape returned by GET /api/v1/users/me when the
+// authenticating credential belongs to a service-account shadow user (FE-API-048
+// T16, spec §5.6). The shape is intentionally different from currentUserResponse:
+//
+//   - "type" is "service_account" so the client can branch without guessing.
+//   - "email" is always null — synthetic SA emails (sa+<id>@internal.invalid) must
+//     never be leaked to callers.
+//   - "service_account" carries the SA metadata the client actually cares about.
+//   - Human-only fields (username, created_at, last_login_at, memberships) are
+//     absent so callers cannot infer internal shadow-user details.
+type saCallerResponse struct {
+	// ID is the shadow user UUID (the JWT sub).
+	ID             string            `json:"id"`
+	Type           string            `json:"type"` // always "service_account"
+	TenantID       string            `json:"tenant_id"`
+	DisplayName    string            `json:"display_name"`    // equals SA.Name
+	Email          *string           `json:"email"`           // always null
+	Roles          []string          `json:"roles,omitempty"` // role assignments for the shadow user
+	ServiceAccount *saCallerSAFields `json:"service_account"`
+}
+
+// saCallerSAFields is the nested service_account object within saCallerResponse.
+type saCallerSAFields struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	AllowedScopes []string `json:"allowed_scopes"`
+}
+
 // getCurrentUser implements FE-API-011 — returns the authenticated user's
 // profile, roles, and memberships in a single response. Reads `sub` from the
 // validated JWT; never trusts a tenant/user ID from the request body.
+//
+// FE-API-048 T16: the response shape is now polymorphic. When the JWT belongs to
+// a service-account shadow user (user.Kind == "service_account") the handler
+// returns a saCallerResponse; for human callers the existing currentUserResponse
+// shape is returned with an added "type":"user" field.
 func (h *HTTPHandler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 	claims, err := h.requireAuth(r)
 	if err != nil {
@@ -59,6 +104,9 @@ func (h *HTTPHandler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load the user row any-kind so we can inspect Kind without filtering it
+	// out. GetUserByID delegates to GetUserAnyKind (which accepts both
+	// kind='human' and kind='service_account') so we see the full row.
 	user, err := h.svc.GetUserByID(r.Context(), userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -73,6 +121,13 @@ func (h *HTTPHandler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Branch on principal kind (FE-API-048 T16).
+	if user.Kind == "service_account" {
+		h.getCurrentUserSA(w, r, user, tenantID)
+		return
+	}
+
+	// Human caller — existing path, now with "type":"user" added.
 	resp, err := h.buildCurrentUserResponse(r, user, tenantID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "users/me: build response failed", "error", err)
@@ -80,6 +135,111 @@ func (h *HTTPHandler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// getCurrentUserSA handles the service-account branch of GET /api/v1/users/me
+// (FE-API-048 T16). It resolves the SA row whose shadow_user_id matches
+// shadowUser.ID and returns the sanitised principal envelope.
+//
+// Resolution strategy: the ServiceAccountService exposes List, which includes
+// ShadowUserID in each row. We scan the first page of active+disabled SAs for
+// the matching shadow user. This is correct for tenants with a small number of
+// SAs (the common case). A dedicated GetByShadowUserID repository method would
+// be more efficient at scale; that is deferred to a follow-up task (TODO T17+).
+//
+// If h.saService is nil (SA feature not wired) or no matching SA is found,
+// we return 500 — the shadow-user JWT should never exist without a backing SA
+// row, so this indicates a data-integrity bug rather than a caller error.
+func (h *HTTPHandler) getCurrentUserSA(w http.ResponseWriter, r *http.Request, shadowUser *repository.User, tenantID uuid.UUID) {
+	// TODO(T17+): replace the List scan with a dedicated GetByShadowUserID
+	// repository method once it is added to saRepo (service_account.go).
+	// The List approach is correct but O(n) in the number of SAs per tenant.
+	if h.saService == nil {
+		slog.ErrorContext(r.Context(), "users/me SA: saService not wired; cannot resolve SA for shadow user",
+			"shadow_user_id", shadowUser.ID,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// Scan up to 1 000 SAs (active + disabled) for the matching shadow user.
+	// In practice a tenant is expected to have tens of SAs, never thousands,
+	// so this is acceptable until a direct lookup is added.
+	const scanLimit = 1000
+	accounts, _, err := h.saService.List(r.Context(), tenantID, true /*includeDisabled*/, scanLimit, "")
+	if err != nil {
+		slog.ErrorContext(r.Context(), "users/me SA: List failed", "error", err,
+			"shadow_user_id", shadowUser.ID,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// Linear scan for the shadow user match.
+	var matchedID *uuid.UUID
+	var matchedName, matchedDescription string
+	var matchedScopes []string
+	for i := range accounts {
+		if accounts[i].ShadowUserID == shadowUser.ID {
+			id := accounts[i].ID
+			matchedID = &id
+			matchedName = accounts[i].Name
+			matchedDescription = accounts[i].Description
+			matchedScopes = accounts[i].AllowedScopes
+			break
+		}
+	}
+	if matchedID == nil {
+		// No SA row found for this shadow user — data integrity issue.
+		slog.ErrorContext(r.Context(), "users/me SA: no service_account row for shadow user",
+			"shadow_user_id", shadowUser.ID,
+			"tenant_id", tenantID,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// Normalise nil slices to empty so JSON encodes as [] not null.
+	if matchedScopes == nil {
+		matchedScopes = []string{}
+	}
+
+	// Fetch role assignments for the shadow user so the response carries any
+	// RBAC grants the SA has been given. Empty is the common case.
+	assignments, err := h.svc.GetUserRoles(r.Context(), shadowUser.ID, tenantID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "users/me SA: GetUserRoles failed", "error", err,
+			"shadow_user_id", shadowUser.ID,
+		)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	seen := make(map[string]struct{}, len(assignments))
+	roles := make([]string, 0, len(assignments))
+	for _, a := range assignments {
+		if _, ok := seen[a.RoleName]; !ok {
+			seen[a.RoleName] = struct{}{}
+			roles = append(roles, a.RoleName)
+		}
+	}
+	sort.Strings(roles)
+
+	// email is always null for SA callers — the synthetic sa+<id>@internal.invalid
+	// address is an implementation detail and must never be leaked to API consumers.
+	writeJSON(w, http.StatusOK, saCallerResponse{
+		ID:          shadowUser.ID.String(),
+		Type:        "service_account",
+		TenantID:    tenantID.String(),
+		DisplayName: matchedName,
+		Email:       nil, // always null; synthetic email must not be exposed
+		Roles:       roles,
+		ServiceAccount: &saCallerSAFields{
+			ID:            matchedID.String(),
+			Name:          matchedName,
+			Description:   matchedDescription,
+			AllowedScopes: matchedScopes,
+		},
+	})
 }
 
 // updateCurrentUser implements FE-API-012 — PATCH /api/v1/users/me.
@@ -264,7 +424,10 @@ func (h *HTTPHandler) buildCurrentUserResponse(r *http.Request, user *repository
 		emailPtr = &v
 	}
 
+	// Type is always "user" for human callers (FE-API-048 T16). Additive field —
+	// existing clients that do not read it continue to work unchanged.
 	return currentUserResponse{
+		Type:        "user",
 		UserID:      user.ID.String(),
 		Username:    user.Username,
 		Email:       emailPtr,

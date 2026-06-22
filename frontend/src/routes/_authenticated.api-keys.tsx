@@ -1,56 +1,33 @@
 import * as React from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ApiKeysSection } from "@/components/profile/api-keys-section";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { AccessHubLayout } from "@/components/access/AccessHubLayout";
 
-// /api-keys — workspace credential surface deep-linked from the sidebar
-// "Access" group. The actual list + create + delete UI is reused from
-// the /profile page (`ApiKeysSection`), so a key issued or revoked here
-// is the same row visible there. They're literally the same data.
+// /api-keys hub — layout shell for the workspace credential surface.
 //
-// Why both surfaces exist:
+// Previously this file was a single-page component rendering `ApiKeysSection`
+// directly. It has been converted to a hub layout (FE-API-048 T24) so that
+// child routes — personal keys (index), service accounts, activity, and
+// future preview surfaces (FUT-001..FUT-004) — each render in the right pane
+// of `AccessHubLayout` while the `AccessSubNav` rail persists across navigations.
 //
-//   - /profile is the place an operator goes for their own account
-//     hygiene (identity, password, MFA when we ship it).
-//   - /api-keys is the place an operator goes when wiring a CI pipeline
-//     or terraform module — deep-linkable, bookmarkable, and the URL
-//     the sidebar's "Access" group has promised since Sprint 0.
+// The existing page content has moved to:
+//   `_authenticated.api-keys.index.tsx`  ← /api-keys (exact match)
 //
-// The header text on this route leans into the workspace-credential
-// framing ("CI / Terraform / scripts"), where /profile leans into
-// personal account. Same component, different surrounding copy.
-//
-// Future scope (tracked in `futures.md`): per-key scopes (pull-only /
-// pull-push / admin), service-account keys owned by a workspace rather
-// than a human, per-key last-used telemetry, IP allowlists.
+// T25-T28 will create:
+//   `_authenticated.api-keys.service-accounts.tsx`  ← /api-keys/service-accounts
+//   `_authenticated.api-keys.activity.tsx`           ← /api-keys/activity
+//   `_authenticated.api-keys.trust.tsx`              ← /api-keys/trust  (FUT-001 preview)
+//   `_authenticated.api-keys.helpers.tsx`            ← /api-keys/helpers (FUT-002 preview)
+//   `_authenticated.api-keys.policies.tsx`           ← /api-keys/policies (FUT-003 preview)
+//   `_authenticated.api-keys.review.tsx`             ← /api-keys/review  (FUT-004 preview)
 export const Route = createFileRoute("/_authenticated/api-keys")({
-  component: ApiKeysPage,
+  component: ApiKeysHub,
 });
 
-function ApiKeysPage(): React.ReactElement {
+function ApiKeysHub(): React.ReactElement {
   return (
-    <div className="space-y-6">
-      <header className="flex flex-col gap-1">
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-          Access
-        </p>
-        <h1 className="font-display text-3xl font-medium tracking-tight">
-          API keys
-        </h1>
-        <p className="text-sm text-[var(--color-fg-muted)]">
-          Long-lived credentials for CI pipelines, Terraform modules, and
-          scripts. Each key is shown in plaintext exactly once at creation
-          and can be revoked from this page or your{" "}
-          <Link
-            to="/profile"
-            className="text-[var(--color-accent)] hover:underline"
-          >
-            profile
-          </Link>
-          .
-        </p>
-      </header>
-
-      <ApiKeysSection />
-    </div>
+    <AccessHubLayout>
+      <Outlet />
+    </AccessHubLayout>
   );
 }

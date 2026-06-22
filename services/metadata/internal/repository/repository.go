@@ -265,8 +265,22 @@ func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName st
 // LEFT JOIN against `manifests` keeps the row when the referenced manifest is
 // missing (transient state during deletes) and returns size_bytes=0 in that
 // case instead of dropping the tag from the result set.
+//
+// REM-013 gap 1: m.retention_pending_delete_at surfaces on the wire so the
+// dashboard can render "🗑 deletes in N days" pills on the Tags table
+// without an extra round-trip. NULL when the manifest isn't in the
+// retention soft-delete window (the common case).
+//
+// FE-API-050: COALESCE(m.quarantined, FALSE) surfaces the parent
+// manifest's quarantine flag on every tag row so the Tags table can
+// render a 🔒 pill without per-row GetManifest calls. The LEFT JOIN
+// also covers the transient "tag exists, manifest row missing" state
+// during deletes — the coalesce ensures the column scans as false
+// rather than NULL.
 const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
-	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)`
+	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
+	m.retention_pending_delete_at,
+	COALESCE(m.quarantined, FALSE)`
 
 const tagFromJoin = `FROM tags t
 	LEFT JOIN manifests m
@@ -287,7 +301,9 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 			RETURNING id, repo_id, tenant_id, name, manifest_digest, updated_at, created_at
 		)
 		SELECT t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
-		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0)
+		       t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
+		       m.retention_pending_delete_at,
+		       COALESCE(m.quarantined, FALSE)
 		FROM upserted t
 		LEFT JOIN manifests m
 		  ON  m.repo_id   = t.repo_id
@@ -337,12 +353,20 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 	for rows.Next() {
 		var tag metadatav1.Tag
 		var updatedAt, createdAt time.Time
+		// REM-013 gap 1: scan retention_pending_delete_at as *time.Time so
+		// NULL (the common case) survives unmodified and we can leave the
+		// proto field unset rather than emitting the Go zero time.
+		var pendingDeleteAt *time.Time
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
-			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes); err != nil {
+			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
+			&pendingDeleteAt, &tag.Quarantined); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tag.UpdatedAt = timestamppb.New(updatedAt)
 		tag.CreatedAt = timestamppb.New(createdAt)
+		if pendingDeleteAt != nil {
+			tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
+		}
 		tags = append(tags, &tag)
 	}
 	return tags, rows.Err()
@@ -364,9 +388,12 @@ func (r *Repository) DeleteTag(ctx context.Context, tenantID, repoID, name strin
 func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) (*metadatav1.Tag, error) {
 	var tag metadatav1.Tag
 	var updatedAt, createdAt time.Time
+	// REM-013 gap 1: see ListTags for the *time.Time scan rationale.
+	var pendingDeleteAt *time.Time
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
+		&pendingDeleteAt, &tag.Quarantined,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -376,10 +403,23 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 	}
 	tag.UpdatedAt = timestamppb.New(updatedAt)
 	tag.CreatedAt = timestamppb.New(createdAt)
+	if pendingDeleteAt != nil {
+		tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
+	}
 	return &tag, nil
 }
 
 // ── Manifests ───────────────────────────────────────────────────────────────
+
+// FE-API-050 — manifestSelectCols is the column list every Manifest
+// read SHARES, including the four quarantine columns introduced in
+// migration 00012. Keeping it as a constant means a new reader can't
+// accidentally drop them and lie about the quarantine state by
+// omission.
+const manifestSelectCols = `id, repo_id, tenant_id, digest, media_type, raw_json,
+	size_bytes, created_at,
+	quarantined, COALESCE(quarantine_reason, ''),
+	quarantined_at, COALESCE(quarantined_by, '')`
 
 // PutManifest upserts a manifest row.
 //
@@ -397,7 +437,7 @@ func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, 
 		      raw_json          = EXCLUDED.raw_json,
 		      size_bytes        = EXCLUDED.size_bytes,
 		      image_size_bytes  = EXCLUDED.image_size_bytes
-		RETURNING id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, created_at`
+		RETURNING ` + manifestSelectCols
 	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes, parseImageSize(rawJSON))
 }
 
@@ -463,10 +503,82 @@ func (r *Repository) GetManifest(ctx context.Context, tenantID, repoID, referenc
 	}
 
 	const q = `
-		SELECT id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, created_at
+		SELECT ` + manifestSelectCols + `
 		FROM   manifests
 		WHERE  repo_id = $1 AND digest = $2 AND tenant_id = $3`
 	return r.scanOneManifest(ctx, q, repoID, digest, tenantID)
+}
+
+// UpdateManifestQuarantine flips the quarantine state on a manifest.
+// Idempotent on repeated true→true transitions — quarantined_at +
+// quarantined_by are preserved on re-application so the audit trail
+// keeps the FIRST event's timestamp. quarantined=false clears all four
+// columns atomically.
+//
+// Returns the updated manifest row so the caller (scanner / management
+// BFF) can echo state back without an extra GetManifest round-trip.
+// ErrNotFound when no row matches (tenant_id is in the WHERE clause,
+// so cross-tenant attempts surface as NotFound without leaking state).
+func (r *Repository) UpdateManifestQuarantine(
+	ctx context.Context,
+	tenantID, repoID, digest string,
+	quarantined bool,
+	reason, by string,
+) (*metadatav1.Manifest, error) {
+	if quarantined {
+		// quarantined_at + quarantined_by are COALESCED so an already-
+		// quarantined manifest keeps its original stamps. The reason
+		// IS updated on re-application so a follow-up scan that finds
+		// more severe findings can refresh the operator-readable
+		// message without losing the original timestamp.
+		const q = `
+			UPDATE manifests
+			   SET quarantined        = TRUE,
+			       quarantine_reason  = $4,
+			       quarantined_at     = COALESCE(quarantined_at, NOW()),
+			       quarantined_by     = COALESCE(quarantined_by, $5)
+			 WHERE repo_id = $1 AND digest = $2 AND tenant_id = $3
+			 RETURNING ` + manifestSelectCols
+		return r.scanOneManifest(ctx, q, repoID, digest, tenantID, reason, by)
+	}
+	// Clear path — null out all four columns in one update.
+	const q = `
+		UPDATE manifests
+		   SET quarantined        = FALSE,
+		       quarantine_reason  = NULL,
+		       quarantined_at     = NULL,
+		       quarantined_by     = NULL
+		 WHERE repo_id = $1 AND digest = $2 AND tenant_id = $3
+		 RETURNING ` + manifestSelectCols
+	return r.scanOneManifest(ctx, q, repoID, digest, tenantID)
+}
+
+// ListTagNamesByDigest returns the names of every tag in a repo that
+// currently points at the given manifest digest. Used by the
+// UpdateManifestQuarantine handler to bust the GetManifest Redis cache
+// entries that resolved by tag — without this, a quarantine flip would
+// take up to the cache TTL (5min) to reflect at the pull-time gate.
+//
+// Cheap query — manifests rarely have more than a handful of tags
+// pointing at them. tenant_id is in the predicate so cross-tenant
+// digest collisions stay isolated.
+func (r *Repository) ListTagNamesByDigest(ctx context.Context, tenantID, repoID, digest string) ([]string, error) {
+	const q = `SELECT name FROM tags
+	           WHERE  repo_id = $1 AND tenant_id = $2 AND manifest_digest = $3`
+	rows, err := r.pool.Query(ctx, q, repoID, tenantID, digest)
+	if err != nil {
+		return nil, fmt.Errorf("ListTagNamesByDigest: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("scan tag name: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
 
 // DeleteManifest removes a manifest row.
@@ -485,7 +597,10 @@ func (r *Repository) DeleteManifest(ctx context.Context, tenantID, repoID, diges
 // ListUntaggedManifests returns manifests in a repo that have no tag pointing to them.
 func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID string) ([]*metadatav1.Manifest, error) {
 	const q = `
-		SELECT m.id, m.repo_id, m.tenant_id, m.digest, m.media_type, m.raw_json, m.size_bytes, m.created_at
+		SELECT m.id, m.repo_id, m.tenant_id, m.digest, m.media_type, m.raw_json,
+		       m.size_bytes, m.created_at,
+		       m.quarantined, COALESCE(m.quarantine_reason, ''),
+		       m.quarantined_at, COALESCE(m.quarantined_by, '')
 		FROM   manifests m
 		WHERE  m.repo_id = $1 AND m.tenant_id = $2
 		  AND  NOT EXISTS (
@@ -503,11 +618,19 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 	for rows.Next() {
 		var m metadatav1.Manifest
 		var createdAt time.Time
+		var qReason, qBy string
+		var qAt *time.Time
 		if err := rows.Scan(&m.ManifestId, &m.RepoId, &m.TenantId, &m.Digest,
-			&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt); err != nil {
+			&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt,
+			&m.Quarantined, &qReason, &qAt, &qBy); err != nil {
 			return nil, fmt.Errorf("scan manifest: %w", err)
 		}
 		m.CreatedAt = timestamppb.New(createdAt)
+		m.QuarantineReason = qReason
+		m.QuarantinedBy = qBy
+		if qAt != nil {
+			m.QuarantinedAt = timestamppb.New(*qAt)
+		}
 		manifests = append(manifests, &m)
 	}
 	return manifests, rows.Err()
@@ -516,9 +639,12 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 func (r *Repository) scanOneManifest(ctx context.Context, query string, args ...any) (*metadatav1.Manifest, error) {
 	var m metadatav1.Manifest
 	var createdAt time.Time
+	var qReason, qBy string
+	var qAt *time.Time
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&m.ManifestId, &m.RepoId, &m.TenantId, &m.Digest,
 		&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt,
+		&m.Quarantined, &qReason, &qAt, &qBy,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -527,6 +653,11 @@ func (r *Repository) scanOneManifest(ctx context.Context, query string, args ...
 		return nil, err
 	}
 	m.CreatedAt = timestamppb.New(createdAt)
+	m.QuarantineReason = qReason
+	m.QuarantinedBy = qBy
+	if qAt != nil {
+		m.QuarantinedAt = timestamppb.New(*qAt)
+	}
 	return &m, nil
 }
 

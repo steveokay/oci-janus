@@ -88,6 +88,21 @@ func (f *handlerFakeUserRepo) GetByID(_ context.Context, id uuid.UUID) (*reposit
 	return nil, repository.ErrNotFound
 }
 
+func (f *handlerFakeUserRepo) GetHumanByID(ctx context.Context, id uuid.UUID) (*repository.User, error) {
+	u, err := f.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if u.Kind != "" && u.Kind != "human" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
+func (f *handlerFakeUserRepo) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*repository.User, error) {
+	return f.GetByID(ctx, id)
+}
+
 func (f *handlerFakeUserRepo) RecordFailedLogin(_ context.Context, id uuid.UUID) (int, error) {
 	f.failedLogins[id]++
 	return f.failedLogins[id], nil
@@ -174,7 +189,7 @@ func (f *handlerFakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int
 	return int64(len(f.users)), nil
 }
 
-func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.RoleAssignment, error) {
+func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }
 
@@ -187,6 +202,18 @@ func (f *handlerFakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, 
 		}
 	}
 	return nil, repository.ErrNotFound
+}
+
+// GetHumanByEmail mirrors the production kind='human' guard (FE-API-048 T10).
+func (f *handlerFakeUserRepo) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {
+	u, err := f.GetByEmail(ctx, tenantID, email)
+	if err != nil {
+		return nil, err
+	}
+	if u.Kind == "service_account" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
 }
 
 func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
@@ -215,16 +242,17 @@ func newHandlerFakeAPIKeyRepo() *handlerFakeAPIKeyRepo {
 
 func (f *handlerFakeAPIKeyRepo) Create(_ context.Context, req repository.CreateAPIKeyRequest) (*repository.APIKey, error) {
 	k := &repository.APIKey{
-		ID:        uuid.New(),
-		TenantID:  req.TenantID,
-		UserID:    req.UserID,
-		Name:      req.Name,
-		KeyHash:   req.KeyHash,
-		KeyPrefix: req.KeyPrefix,
-		Scopes:    req.Scopes,
-		ExpiresAt: req.ExpiresAt,
-		IsActive:  true,
-		CreatedAt: time.Now(),
+		ID:               uuid.New(),
+		TenantID:         req.TenantID,
+		UserID:           req.UserID,
+		ServiceAccountID: req.ServiceAccountID,
+		Name:             req.Name,
+		KeyHash:          req.KeyHash,
+		KeyPrefix:        req.KeyPrefix,
+		Scopes:           req.Scopes,
+		ExpiresAt:        req.ExpiresAt,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
 	}
 	f.keys[k.ID] = k
 	return k, nil
@@ -241,7 +269,18 @@ func (f *handlerFakeAPIKeyRepo) GetByID(_ context.Context, id uuid.UUID) (*repos
 func (f *handlerFakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*repository.APIKey, error) {
 	var result []*repository.APIKey
 	for _, k := range f.keys {
-		if k.UserID == userID && k.IsActive {
+		// UserID is now a pointer; dereference safely before comparing.
+		if k.UserID != nil && *k.UserID == userID && k.IsActive {
+			result = append(result, k)
+		}
+	}
+	return result, nil
+}
+
+func (f *handlerFakeAPIKeyRepo) ListByServiceAccount(_ context.Context, saID uuid.UUID) ([]*repository.APIKey, error) {
+	var result []*repository.APIKey
+	for _, k := range f.keys {
+		if k.ServiceAccountID != nil && *k.ServiceAccountID == saID && k.IsActive {
 			result = append(result, k)
 		}
 	}
@@ -250,10 +289,17 @@ func (f *handlerFakeAPIKeyRepo) ListByUser(_ context.Context, userID uuid.UUID) 
 
 func (f *handlerFakeAPIKeyRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	k, ok := f.keys[id]
-	if !ok || k.UserID != userID {
+	// UserID is now a pointer; treat nil UserID as no match.
+	if !ok || k.UserID == nil || *k.UserID != userID {
 		return repository.ErrNotFound
 	}
 	delete(f.keys, id)
+	return nil
+}
+
+// DeleteByServiceAccount is a no-op stub satisfying the service.APIKeyRepo interface.
+// SA-key deletion test coverage is deferred to T13.
+func (f *handlerFakeAPIKeyRepo) DeleteByServiceAccount(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
 
@@ -304,7 +350,9 @@ func buildTestService(t *testing.T) (*testCtx, func()) {
 	ur := newHandlerFakeUserRepo()
 	ar := newHandlerFakeAPIKeyRepo()
 
-	svc, err := service.NewWithFakes(ur, ar, rdb, privB64, pubB64, "test-kid")
+	// sa and audit are nil for handler tests: the SA branch of ValidateAPIKey is
+	// not exercised by handler-level tests (covered by service-level tests).
+	svc, err := service.NewWithFakes(ur, ar, nil, nil, rdb, privB64, pubB64, "test-kid")
 	if err != nil {
 		mr.Close()
 		t.Fatalf("NewWithFakes: %v", err)
@@ -1589,6 +1637,142 @@ func TestRemoteIP_trustedProxy_privateXFF_fallsBackToPeer(t *testing.T) {
 	ip := remoteIP(r)
 	if ip != "10.0.0.1" {
 		t.Errorf("expected fallback to TCP peer 10.0.0.1, got %q", ip)
+	}
+}
+
+// ── CreateAPIKey with service_account_id (FE-API-048 T17) ────────────────────
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_HappyPath — POST /api/v1/apikeys with
+// service_account_id set by an admin caller returns 201 with the raw key.
+func TestHTTP_CreateAPIKey_ForServiceAccount_HappyPath(t *testing.T) {
+	// Use the SA test environment so saService is wired.
+	env := newSATestEnv(t)
+
+	adminTok, adminID := env.issueAdminToken(t)
+
+	// Seed a service account owned by the caller's tenant with an allowed scope.
+	sa := env.seedSA("ci-bot", adminID)
+	// seedSA uses []string{"read"} as AllowedScopes; our key request uses "read".
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "ci-key",
+		"scopes":             []string{"read"},
+		"service_account_id": sa.ID.String(),
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// The raw key must be present — shown exactly once.
+	if result["key"] == "" || result["key"] == nil {
+		t.Error("expected non-empty raw key in response")
+	}
+	if result["name"] != "ci-key" {
+		t.Errorf("name: got %v, want ci-key", result["name"])
+	}
+	// Verify the audit event was emitted via the SA service.
+	if !env.audit.hasAction("service_account.key_issued") {
+		t.Error("expected service_account.key_issued audit event")
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_RequiresAdmin — a non-admin caller
+// (role "reader") posting service_account_id must receive 403 Forbidden.
+func TestHTTP_CreateAPIKey_ForServiceAccount_RequiresAdmin(t *testing.T) {
+	env := newSATestEnv(t)
+
+	// Seed an SA to provide a valid service_account_id.
+	adminID := uuid.New()
+	sa := env.seedSA("worker-bot", adminID)
+
+	// Issue a reader (non-admin) token.
+	readerTok := env.issueReaderToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "should-fail",
+		"scopes":             []string{"read"},
+		"service_account_id": sa.ID.String(),
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+readerTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d, want %d (non-admin must be denied)", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_InvalidUUID — a malformed
+// service_account_id (not a valid UUID) must return 400 Bad Request.
+func TestHTTP_CreateAPIKey_ForServiceAccount_InvalidUUID(t *testing.T) {
+	env := newSATestEnv(t)
+
+	adminTok, _ := env.issueAdminToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "bad-uuid-key",
+		"scopes":             []string{"read"},
+		"service_account_id": "not-a-valid-uuid",
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d (malformed UUID must be rejected)", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+// TestHTTP_CreateAPIKey_ForServiceAccount_NotFound — a well-formed UUID that
+// does not match any SA in the tenant must return 404 Not Found.
+func TestHTTP_CreateAPIKey_ForServiceAccount_NotFound(t *testing.T) {
+	env := newSATestEnv(t)
+
+	adminTok, _ := env.issueAdminToken(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name":               "ghost-key",
+		"scopes":             []string{"read"},
+		"service_account_id": uuid.New().String(), // valid UUID, no such SA
+	})
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/apikeys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /apikeys: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d (unknown SA UUID must return 404)", resp.StatusCode, http.StatusNotFound)
 	}
 }
 

@@ -69,13 +69,19 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | REM-011 P1 FE | Stuck-scan graceful degradation on tag detail | DONE ✅ (`8debd29`) | `ScanPanel` flips to "Scanner isn't producing results" after 90s of `pending` with no row; surfaces the `docker compose --profile scanner up` command inline. Client-side heuristic only — replaced by FE-API-047 liveness in P2. Backend tracked in `status.md` → REM-011 Phase 1. |
 | REM-011 P2 FE | Platform-admin scanner adapter page | DONE ✅ (this commit) | New `/admin/scanner` route — health card up top (worker pool status, queue depth, in-flight, last-success), adapter grid below with `accentBar="success"` + "Active" badge on the chosen one, "Make active" type-to-confirm dialog on the rest, "Run test scan" button on the active card with inline result panel (SeverityBar + duration + scanner version), sidebar entry gated on platform-admin marker grant. `ScanPanel` upgraded — `InFlightCard` now reads `useScannerHealth({ refetchInterval: 15s })` and flips to "Scanner isn't producing results" immediately on `healthy=false`, falling back to the old 90s heuristic for non-admins / 404 BFFs. |
 | S10 | Documentation surface | NOT STARTED | author `/docs/*` content + Topbar docs link + Footer link points at real docs |
-| S11 | Retention policies | NOT STARTED | per-repo "Retention" tab on repo-detail (FE-API-037 CRUD + FE-API-038 dry-run + FE-API-043 activity rule); per-org "Default retention" section on org page (FE-API-039); "Pending deletion" badges on tag rows; gc admin "Retention" tile (FE-API-040 housekeeping summary). **RBAC**: repo `admin`/`owner` writes per-repo policy; org `admin`/`owner` writes org default; readers see "(inherited from org default)" labelling — never platform-admin tier. |
+| S11.1 | Retention — per-repo tab (read) | DONE ✅ (this session) | `useRepoRetention` + `useRepoRetentionPreview` hooks against `GET .../policies/retention` + `.../preview`; new "Retention" tab between Members and Settings on `/repositories/$org/$repo`; four states (skeleton / error / no-policy empty / loaded); preview-window banner with countdown driven by server `in_preview_window` (clock-skew safe). FE-API-037 + FE-API-038 read-paths. |
+| S11.2 | Retention — rule editor + dry-run + save | DONE ✅ (this session) | `RetentionEditor` (enabled switch + 5-rule chips with kind selector + value input + protected-pattern chip input) → `RetentionDryRunDialog` (totals strip + would-delete table + protected-skipped table + truncation banner) → PUT. Save gated on a successful dry-run. Per-repo override "Remove" button reverts to inherited. FE-API-037 PUT/DELETE + FE-API-038 POST. |
+| S11.3 | Retention — executor trigger + run polling | PARTIAL ✅ (this session) | `RetentionRunCard` below summary — "Run now" POST + 5s status polling (queued/running/completed/failed) + result strip (marked / bytes-grace / completed-at). Hidden on inherited policies. **Pending-delete pills on Tags tab + per-repo Run history panel deferred** — blocked by REM-013 gaps 1 + 2; both have fix sketches in `status.md`. |
+| S11.4 | Retention — org default + storage column | PARTIAL ✅ (this session) | `useOrgRetention` / `useUpdate`/`useDelete` hooks + new `OrgRetentionPanel` (summary + editor + remove-default) on new route `/orgs/$org/settings`; cross-link from inherited per-repo policies. FE-API-039 wired. **Storage breakdown "Retention" column deferred** — blocked by REM-013 gap 3. |
+| S11.5 | Retention — admin tile + notifications + activity | DONE ✅ (this session) | `RetentionCard` below `GCCard` on `/admin/tenants` — 24h/7d counts strip + last-10 retention runs table (mode pill + status + manifests + bytes + triggered-by). `retention.evaluated` / `retention.applied` / `retention.grace_completed` added to BFF + audit allowlists + audit `renderNotification` switch → topbar bell + `/activity` chips. Webhook routing-key chips were already in place from FE-API-041. |
+| S11 | Retention policies | DONE ✅ (this session — slices 1+2+5) / PARTIAL on slice 3+4 (blocked by REM-013) | See per-slice rows above. FE-API-037/038/039/041/043 fully FE-DONE. FE-API-040 FE-PARTIAL — executor trigger live, badges + per-repo run history blocked by REM-013 gap 1+2 (proto extensions, fix sketches logged). |
+| FE-API-048 | Service accounts + activity hub | DONE ✅ | `/api-keys` hub with sub-routes for personal keys, service accounts, activity, plus four preview surfaces (trust/helpers/policies/review) carrying dummy data + a11y-compliant PreviewBanner. |
 
 ---
 
 ## Snapshot (as of 2026-06-21)
 
-> Sprint 9 sub-passes 9.1/9.2/9.3/9.4 all landed — verify-on-demand + sign-from-UI + SBOM download (`8a7271f`), workspace metadata + notifications + custom domains (`52178b1`), workspace-wide vulnerabilities + scan history (`5968bf0`), analytics + storage breakdown + admin tenant drawer + bulk tag delete (`2e983fc`). **REM-011 fully shipped** — Phase 1 (`8debd29`) backend + FE stuck-pending degradation, Phase 2 backend (`bd4ba1d`) adapter registry + live swap + 5 admin RPCs, Phase 2 FE (this commit) `/admin/scanner` route + liveness-driven `ScanPanel` upgrade. Next FE work: S9.5 mop-up (FE-API-017/018/019/020/032/035), S8 polish, or S10 docs.
+> Sprint 9 sub-passes 9.1/9.2/9.3/9.4/9.5 all landed. **REM-011 fully shipped** — Phase 1 + Phase 2 backend + Phase 2 FE `/admin/scanner` route. **S11 retention shipped** this session — slices 1, 2, 5 fully DONE (FE-API-037/038/039/041/043); slices 3 and 4 PARTIAL because three retention surfaces (pending-delete pills on Tags tab, per-repo Run history panel, dashboard storage-breakdown "Retention" column) are blocked by backend gaps tracked as **REM-013** in `status.md` — proto / SQL / BFF extensions sketched there. Next FE work: REM-013 backend follow-up to unblock the three deferred S11 surfaces; **FE-API-004** per-repo activity tab (small, backend-ready); **FE-API-034** SSO admin UI (large); **S8** polish; **S10** docs.
 
 **Routes shipped & wired against real backend (no stubs):**
 
@@ -92,8 +98,10 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | `/orgs/:org/members` | `GET/POST/DELETE /api/v1/orgs/{org}/members` | Add member dialog (UUID input, radio-card role picker), revoke confirmation |
 | `/webhooks` | `GET /api/v1/webhooks` | Table with URL + events chips + Active/Paused pill + relative date |
 | `/webhooks/:id` | full webhook surface | Test dispatch, deliveries timeline, rotate-secret, edit, delete |
-| `/admin/tenants` | `GET/POST/DELETE /api/v1/admin/tenants` + quota | `beforeLoad` gate redirects non-admins; platform-admin banner; plan breakdown tiles; quota in GB/TB |
+| `/admin/tenants` | `GET/POST/DELETE /api/v1/admin/tenants` + quota + `/admin/gc/*` + retention runs filter (client-side) | `beforeLoad` gate redirects non-admins; platform-admin banner; plan breakdown tiles; quota in GB/TB; `GCCard` + `RetentionCard` (S11.5) |
 | `/profile` | `GET/PATCH /api/v1/users/me` + apikeys CRUD + password | Inline-edit identity, live policy checklist, API keys with show-once secret |
+| `/repositories/:org/:repo` (Retention tab) | `GET/PUT/DELETE .../policies/retention` + `/dry-run` + `/preview` + `/run` + `/runs/{id}` | S11.1+S11.2+S11.3 — read summary + editor + dry-run dialog + executor "Run now" button; pending-delete pills on Tags tab and per-repo run history deferred (REM-013) |
+| `/orgs/:org/settings` | `GET/PUT/DELETE /api/v1/orgs/{org}/policies/retention` | S11.4 — org default editor; cross-linked from inherited per-repo policies |
 
 **Cross-cutting primitives** delivered across the sprints:
 
@@ -122,13 +130,25 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | 016 | Severity counts in `/stats` | DONE — dashboard mini bar + `/security` overview |
 | 020 | Tenant security overview snapshot | DONE — handler `security.go` |
 | 021..024 | Webhook CRUD + deliveries + test + rotate | DONE — full Sprint 5 wiring |
+| 037 | Per-repo retention CRUD | DONE — Retention tab summary + editor (S11.1+S11.2) |
+| 038 | Retention dry-run + preview | DONE — mandatory pre-save dialog + 24h preview banner (S11.1+S11.2) |
+| 039 | Per-org default retention | DONE — `/orgs/$org/settings` editor (S11.4) |
+| 040 | Retention executor (gc modes) | PARTIAL — "Run now" + admin tile shipped (S11.3+S11.5); per-tag pending-delete pills + per-repo run history blocked by REM-013 gaps 1+2 |
+| 041 | Retention events (audit + webhook) | DONE — notifications bell + activity chips + webhook routing-key chips (S11.5) |
+| 042 | Pull-activity tracking | DONE — closes FE-API-030 caveat (pulls analytics now live) |
+| 043 | `max_idle_days` retention rule | DONE — rule kind present in both editors (S11.2+S11.4) |
+| 044..047 | Scanner adapter admin | DONE — `/admin/scanner` (REM-011 P2 FE) |
 
-**Still NOT STARTED backend-side (UI surfaces honest stubs):**
+**Still NOT STARTED on the frontend (backends already DONE):**
 
-- FE-API-005 (per-repo members) — DONE per status.md, untested from this UI
-- FE-API-007 / 009 (per-tenant registry hostname / workspace metadata)
-- FE-API-008 (notifications / activity stream)
-- FE-API-014 / 015 / 017 / 018 / 019 (security overview / vuln list / scan history / remediation / policies / reports)
+- **FE-API-004** — per-repo activity tab on `/repositories/$org/$repo`. Backend handler `repo_activity.go` exists; FE never wired (workspace-wide `/activity` covers the bigger surface).
+- **FE-API-034** — per-tenant SSO admin UI (`/workspace/sso`). Backend wraps OAuth PKCE + SAML SP; FE deferred to a focused sprint.
+
+**Blocked on REM-013 backend gaps** (status.md tracks the three gaps with fix sketches):
+
+- Pending-delete pills on Tags tab — needs `retention_pending_delete_at` on `Tag` proto + metadata SQL JOIN + management `TagResponse` surface.
+- Per-repo Run history panel on Retention tab — needs `repo_id` + `mode` filters on `gcv1.ListRunsRequest` + new BFF list route.
+- Dashboard storage-breakdown "Retention" column — needs `retention_summary` + `retention_source` on `RepositoryStorageEntry` + per-row effective-policy fan-out.
 
 ## Sprint 8 — Polish pass (remaining)
 

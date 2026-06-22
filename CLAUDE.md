@@ -158,7 +158,7 @@ github.com/steveokay/oci-janus/
 | # | Service | Purpose | Owns | Notable |
 |---|---|---|---|---|
 | 1 | `registry-gateway` | TLS termination + host-based tenant resolution + rate limit | — | Traefik v3 |
-| 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks, per-tenant SSO (OAuth + SAML) | Postgres (auth schema — incl. `auth_providers`, `auth_login_sessions`, `users.sso_provider_id`) | RS256, 300s TTL, JTI revocation in Redis; PKCE S256 OAuth; SAML SP via `crewjam/saml` |
+| 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks, per-tenant SSO (OAuth + SAML) | Postgres (auth schema — incl. `auth_providers`, `auth_login_sessions`, `users.sso_provider_id`, `service_accounts`) | RS256, 300s TTL, JTI revocation in Redis; PKCE S256 OAuth; SAML SP via `crewjam/saml` |
 | 3 | `registry-core` | OCI Distribution Spec v1.1 — `/v2/` API | — | Streams blobs, checkAccess on every handler |
 | 4 | `registry-storage` | Pluggable blob storage abstraction | Object store backend | MinIO/S3/GCS/Azure/filesystem |
 | 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans/SBOMs | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing; per-tag SBOM columns |
@@ -569,6 +569,7 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 19 | Per-tenant SSO model (FE-API-034) — OAuth (PKCE S256) and SAML 2.0 SP | OAuth and SAML both live on `services/auth` since `auth_providers` + `auth_login_sessions` belong with the user table. Hand-rolled OAuth (no `x/oauth2`) for explicit PKCE control; SAML wraps `crewjam/saml` bare `ServiceProvider` (bypasses `samlsp.Middleware` because JWT issuer covers session). `client_secret` AES-256-GCM-encrypted before persistence | 2026-06-21 |
 | 20 | Custom-domain primary mutex on `tenant_domains.is_primary` (FE-API-007/027) | Partial unique index `WHERE is_primary`; `MarkDomainVerified` auto-promotes the first verified domain; primary swap is one atomic tx (`SELECT verified → demote-all → promote-target RETURNING`) so no observable state has two primaries | 2026-06-20 |
 | 21 | Generic `GetAnalytics` RPC over `services/audit` with BFF-supplied bucket origin (FE-API-030) | Audit is already the system of record for `push.image` etc.; PG14 `date_bin` aligns buckets across replicas; BFF owns the range→bucket mapping (24h→1h×24, 7d→6h×28, 30d→1d×30) and pre-allocates empty buckets so quiet periods report `count=0` rather than gaps | 2026-06-21 |
+| 22 | Service-account principal pattern: shadow users (FE-API-048) | Each service account auto-provisions a `users.kind='service_account'` row. `ValidateAPIKey`/`ValidateToken` return that id in `user_id`; downstream services treat it as an opaque actor. RBAC/audit/RLS/JWT machinery unchanged. Distinguishing principal kind is a read-path concern (`LEFT JOIN users ON kind`), not a write-path one. | 2026-06-22 |
 
 ---
 

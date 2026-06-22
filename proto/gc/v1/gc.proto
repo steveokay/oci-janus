@@ -134,6 +134,20 @@ message ListRunsRequest {
   // `completed_at|run_id` produced by the previous response. Bad
   // tokens map to INVALID_ARGUMENT.
   string page_token = 2;
+  // REM-013 gap 2 — optional filters. Empty values preserve the
+  // pre-REM-013 behaviour (no filter applied) so existing callers keep
+  // working unchanged.
+  //
+  // repo_id scopes the list to one repository. Required for the per-repo
+  // Retention tab's "Run history" panel; ignored on the platform-admin
+  // /admin/gc/runs route.
+  //
+  // modes filters by gc_run_mode. The per-repo route passes
+  // ["retention", "retention_grace"] so the listing only shows retention
+  // executor rows; the existing /admin/gc/runs route passes an empty
+  // slice for "all modes".
+  string repo_id = 3;
+  repeated string modes = 4;
 }
 
 message ListRunsResponse {

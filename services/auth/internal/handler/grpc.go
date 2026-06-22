@@ -66,15 +66,25 @@ func (h *GRPCHandler) ValidateToken(ctx context.Context, req *authv1.ValidateTok
 }
 
 // ValidateAPIKey checks the key hash and returns the associated identity.
+// As of T9, both human-owned and service-account-owned keys are supported.
+// The request_tenant_id for the cross-tenant guard (spec §5.4) is threaded
+// through gRPC metadata by the gateway interceptor (T13); for now the proto
+// field is not yet wired so RequestTenantID is always nil on this path.
 func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAPIKeyRequest) (*authv1.ValidateAPIKeyResponse, error) {
 	keyID, err := uuid.Parse(req.GetKeyId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid key_id")
 	}
 
-	key, err := h.svc.ValidateAPIKey(ctx, keyID, req.GetRawSecret())
+	vk, err := h.svc.ValidateAPIKey(ctx, service.ValidateAPIKeyOpts{
+		KeyID:     keyID,
+		RawSecret: req.GetRawSecret(),
+		// RequestTenantID will be wired from gRPC metadata in T13.
+	})
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrKeyExpired) {
+		if errors.Is(err, service.ErrInvalidCredentials) ||
+			errors.Is(err, service.ErrKeyExpired) ||
+			errors.Is(err, service.ErrAccountDisabled) {
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
 		return nil, errcodes.MapDBError(err, "internal error")
@@ -82,9 +92,9 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 
 	return &authv1.ValidateAPIKeyResponse{
 		Valid:     true,
-		UserId:    key.UserID.String(),
-		TenantId:  key.TenantID.String(),
-		Access:    scopesToProto(key.Scopes),
+		UserId:    vk.UserID.String(),
+		TenantId:  vk.TenantID.String(),
+		Access:    scopesToProto(vk.EffectiveScopes),
 	}, nil
 }
 
@@ -323,7 +333,15 @@ func (h *GRPCHandler) publishRoleRevoked(ctx context.Context, tenantID, assignme
 	}
 }
 
-// ListMembers returns all role assignments within a tenant scope.
+// ListMembers returns all role assignments within a tenant scope, enriched with
+// the principal kind and display name so the dashboard can render human users
+// and service accounts differently without a second round-trip.
+//
+// The proto RoleAssignment.user_id carries the users.id for all principal kinds
+// (for service accounts this is the shadow_user_id). The proto Id field is set
+// from Member.AssignmentID (role_assignments.id) so the frontend revoke flow
+// (useRevokeOrgRole / useRevokeRepoRole DELETE /orgs/{org}/members/{assignmentId})
+// has the correct assignment primary key to send.
 func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRequest) (*authv1.ListMembersResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -336,23 +354,28 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 		return nil, status.Error(codes.InvalidArgument, "scope_value must not be empty")
 	}
 
-	assignments, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
+	members, err := h.svc.ListMembers(ctx, tenantID, req.GetScopeType(), req.GetScopeValue())
 	if err != nil {
 		return nil, errcodes.MapDBError(err, "internal error")
 	}
 
-	members := make([]*authv1.RoleAssignment, len(assignments))
-	for i, a := range assignments {
-		members[i] = &authv1.RoleAssignment{
-			Id:         a.ID.String(),
-			UserId:     a.UserID.String(),
-			Role:       a.RoleName,
-			ScopeType:  a.ScopeType,
-			ScopeValue: a.ScopeValue,
-			GrantedBy:  a.GrantedBy.String(),
+	// Map repository.Member to the proto RoleAssignment. The scope fields are
+	// not stored on Member (they are the same for every row in the result set)
+	// so they are copied from the request. Id is set from AssignmentID
+	// (role_assignments.id) so the frontend revoke flow receives the correct
+	// assignment primary key.
+	out := make([]*authv1.RoleAssignment, len(members))
+	for i, m := range members {
+		out[i] = &authv1.RoleAssignment{
+			Id:         m.AssignmentID.String(),
+			UserId:     m.UserID.String(),
+			Role:       m.Role,
+			ScopeType:  req.GetScopeType(),
+			ScopeValue: req.GetScopeValue(),
+			GrantedBy:  m.GrantedBy.String(),
 		}
 	}
-	return &authv1.ListMembersResponse{Members: members}, nil
+	return &authv1.ListMembersResponse{Members: out}, nil
 }
 
 // CountTenantUsers returns the number of users in the tenant (FE-API-028).

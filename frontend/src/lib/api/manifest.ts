@@ -40,6 +40,13 @@ export interface ManifestDetail {
   config: ManifestConfig;
   layers: ManifestLayer[];
   manifests: ManifestEntry[];
+  // FE-API-050 — quarantine state. Omitted on the wire (and undefined
+  // here) when the manifest is not quarantined (the common case). The
+  // tag-detail Security tab renders a banner + lift dialog when set.
+  quarantined?: boolean;
+  quarantine_reason?: string;
+  quarantined_at?: string;
+  quarantined_by?: string;
 }
 
 export const manifestKeys = {

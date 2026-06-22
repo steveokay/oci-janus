@@ -24,15 +24,30 @@ import (
 )
 
 // ScanPolicyResponse is the JSON wire form of a scan policy.
+//
+// FE-API-049 extension: OrgID + RepoID identify the scope when this
+// response carries an org-default or per-repo override; both empty when
+// returned via the per-tenant GET. Enabled lets the operator suspend a
+// policy without losing config; the per-tenant row defaults to true
+// (the original FE-API-018 schema has no enabled column, so backend
+// emits true unconditionally for tenant-scoped reads).
 type ScanPolicyResponse struct {
 	TenantID          string   `json:"tenant_id"`
+	OrgID             string   `json:"org_id,omitempty"`
+	RepoID            string   `json:"repo_id,omitempty"`
 	AutoScanOnPush    bool     `json:"auto_scan_on_push"`
 	BlockOnSeverity   string   `json:"block_on_severity"`
 	ExemptCVEs        []string `json:"exempt_cves"`
 	ScannerPlugin     string   `json:"scanner_plugin"`
 	ScannerVersionPin string   `json:"scanner_version_pin"`
+	Enabled           bool     `json:"enabled"`
 	UpdatedAt         string   `json:"updated_at,omitempty"`
 	UpdatedBy         string   `json:"updated_by,omitempty"`
+	// InheritedFrom is populated only on GET /repositories/.../policies/scan
+	// when the response represents an inherited policy (set to "org",
+	// "tenant", or "default"). The per-org and per-tenant direct GETs
+	// leave it empty.
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 // updateScanPolicyBody is the JSON body for PUT /api/v1/security/policies.
@@ -193,12 +208,22 @@ func scanPolicyToResponse(p *scannerv1.ScanPolicy) ScanPolicyResponse {
 	}
 	out := ScanPolicyResponse{
 		TenantID:          p.GetTenantId(),
+		OrgID:             p.GetOrgId(),
+		RepoID:            p.GetRepoId(),
 		AutoScanOnPush:    p.GetAutoScanOnPush(),
 		BlockOnSeverity:   p.GetBlockOnSeverity(),
 		ExemptCVEs:        cves,
 		ScannerPlugin:     p.GetScannerPlugin(),
 		ScannerVersionPin: p.GetScannerVersionPin(),
+		Enabled:           p.GetEnabled(),
 		UpdatedBy:         p.GetUpdatedBy(),
+	}
+	// Tenant-scoped reads come back with Enabled=false from the pre-FE-API-049
+	// schema where the column doesn't exist. We surface true for those so
+	// the FE doesn't render every legacy row as "disabled" — the inheritance
+	// helper already treats tenant rows as always-on.
+	if out.OrgID == "" && out.RepoID == "" && !out.Enabled {
+		out.Enabled = true
 	}
 	if t := p.GetUpdatedAt(); t != nil {
 		out.UpdatedAt = t.AsTime().UTC().Format("2006-01-02T15:04:05Z07:00")

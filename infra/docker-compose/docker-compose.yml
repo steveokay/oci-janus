@@ -691,6 +691,12 @@ services:
       LOG_LEVEL: info
     volumes:
       - certs_data:/certs:ro
+      # REM-012 (2026-06-22) — the scanner_reports shared mount that used
+      # to live here is gone. Management now streams compliance reports
+      # via the scanner's DownloadComplianceReport gRPC stream rather
+      # than opening files on a shared volume; the mount stays on
+      # registry-scanner (the writer) but the reader side no longer
+      # needs filesystem access. See status.md → REM-012 for the rationale.
     ports:
       # External 8091 avoids collision with registry-scanner (8085) in the scanner profile.
       - "8091:8085"
@@ -754,6 +760,11 @@ services:
       MTLS_KEY_PATH: /certs/scanner.key
     volumes:
       - certs_data:/certs:ro
+      # FE-API-019 compliance reports — scanner writes rendered PDF +
+      # SPDX JSON artifacts here. REM-012 (2026-06-22) moved the
+      # cross-service handoff to a streaming gRPC RPC, so this is a
+      # scanner-private volume now rather than a shared mount.
+      - scanner_reports:/tmp/reports
     ports:
       - "8085:8080"
       - "50056:50051"
@@ -784,3 +795,8 @@ volumes:
   rabbitmq_data:
   minio_data:
   certs_data:
+  # Scanner-private — REM-012 (2026-06-22) moved cross-service compliance
+  # report transfer to a streaming gRPC RPC; this volume now only lives
+  # on registry-scanner so the report worker has a stable rendering
+  # destination.
+  scanner_reports:

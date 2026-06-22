@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ChevronRight, UserPlus, Users } from "lucide-react";
+import { ChevronRight, Settings, UserPlus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
@@ -55,10 +55,21 @@ function OrgMembers(): React.ReactElement {
               : `${data?.length ?? 0} ${(data?.length ?? 0) === 1 ? "member" : "members"} with role assignments`}
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)}>
-          <UserPlus className="size-4" />
-          Add member
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Cross-link to /orgs/$org/settings — slice 4 lands the */}
+          {/* Default retention surface there. Kept as a separate route */}
+          {/* (not a tab) so each surface is URL-honest.                 */}
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/orgs/$org/settings" params={{ org }}>
+              <Settings className="size-4" />
+              Org settings
+            </Link>
+          </Button>
+          <Button onClick={() => setAddOpen(true)}>
+            <UserPlus className="size-4" />
+            Add member
+          </Button>
+        </div>
       </header>
 
       {isError ? (

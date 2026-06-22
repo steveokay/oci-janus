@@ -93,7 +93,7 @@ function Body({ data, commit }: BodyProps): React.ReactElement {
           aria-hidden
           className="grid size-14 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-subtle)] font-display text-2xl font-semibold text-[var(--color-accent)]"
         >
-          {(data.display_name ?? data.username)[0]?.toUpperCase() ?? "·"}
+          {(data.display_name ?? data.username ?? "")[0]?.toUpperCase() ?? "·"}
         </span>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -157,13 +157,13 @@ function Body({ data, commit }: BodyProps): React.ReactElement {
       <ReadOnlyRow
         label="Memberships"
         value={
-          data.memberships.length === 0 ? (
+          (data.memberships ?? []).length === 0 ? (
             <span className="text-[var(--color-fg-subtle)]">
               No explicit role assignments
             </span>
           ) : (
             <div className="flex flex-wrap gap-1.5">
-              {data.memberships.map((m, i) => (
+              {(data.memberships ?? []).map((m, i) => (
                 <Badge key={i} tone="accent" className="font-mono">
                   {m.role}@{m.scope_type}:{m.scope_value}
                 </Badge>

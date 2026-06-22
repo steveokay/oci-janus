@@ -78,7 +78,10 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	users := repository.NewUserRepository(pool)
 	apiKeys := repository.NewAPIKeyRepository(pool)
-	svc, err := service.New(users, apiKeys, rdb, privB64, pubB64, "test-key-1")
+	sa := repository.NewServiceAccountRepo(pool)
+	// audit is nil in integration tests; cross-tenant audit emission is
+	// a service-layer unit-test concern (TestValidateAPIKey_CrossTenantGuard_T5).
+	svc, err := service.New(users, apiKeys, sa, nil, rdb, privB64, pubB64, "test-key-1")
 	if err != nil {
 		t.Fatalf("init auth service: %v", err)
 	}
