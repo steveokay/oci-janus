@@ -1166,8 +1166,7 @@ func (r *Repository) GetScanSBOM(ctx context.Context, tenantID, manifestDigest s
 	return &SBOMResult{Format: *format, SBOMJSON: sbom}, nil
 }
 
-// GetTenantVulnerabilityCount aggregates CRITICAL and HIGH vulnerability counts
-// across all completed scan_results for a tenant. The total is the sum of both.
+// CountRepositories returns the number of repositories owned by a tenant.
 func (r *Repository) CountRepositories(ctx context.Context, tenantID string) (int64, error) {
 	const q = `SELECT COUNT(*) FROM repositories WHERE tenant_id = $1`
 	var n int64
@@ -1298,19 +1297,36 @@ func (r *Repository) GetSecurityOverview(ctx context.Context, tenantID string) (
 	return &ov, nil
 }
 
+// GetTenantVulnerabilityCount aggregates severity counts across a tenant's
+// scanned manifests, deduplicated to the most recent complete scan per
+// (repo_id, manifest_digest).
+//
+// S-MAINT-1 B1 fix: the prior implementation summed across all completed
+// scan_results rows, so re-scanning the same manifest doubled (and tripled,
+// quadrupled, …) the dashboard severity totals. The dedup pattern is the
+// same one [[GetTenantSeverityBreakdown]] and [[GetSecurityOverview]] already
+// use — kept consistent so a future column addition can't desync one of the
+// three aggregators.
+//
+// Returns (total, critical, high, medium, low, negligible) where total is the
+// sum of the five severity buckets.
 func (r *Repository) GetTenantVulnerabilityCount(ctx context.Context, tenantID string) (total, critical, high, medium, low, negligible int64, err error) {
 	const q = `
+		WITH latest AS (
+			SELECT DISTINCT ON (repo_id, manifest_digest) severity_counts
+			FROM   scan_results
+			WHERE  tenant_id = $1 AND status = 'complete'
+			ORDER  BY repo_id, manifest_digest, completed_at DESC NULLS LAST, created_at DESC
+		)
 		SELECT
 		  COALESCE(SUM((severity_counts->>'CRITICAL')::int),   0),
 		  COALESCE(SUM((severity_counts->>'HIGH')::int),       0),
 		  COALESCE(SUM((severity_counts->>'MEDIUM')::int),     0),
 		  COALESCE(SUM((severity_counts->>'LOW')::int),        0),
 		  COALESCE(SUM((severity_counts->>'NEGLIGIBLE')::int), 0)
-		FROM scan_results
-		WHERE tenant_id = $1
-		  AND status    = 'complete'`
+		FROM latest`
 
-	if err = r.pool.QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
+	if err = r.reader().QueryRow(ctx, q, tenantID).Scan(&critical, &high, &medium, &low, &negligible); err != nil {
 		return 0, 0, 0, 0, 0, 0, fmt.Errorf("GetTenantVulnerabilityCount: %w", err)
 	}
 	return critical + high + medium + low + negligible, critical, high, medium, low, negligible, nil
