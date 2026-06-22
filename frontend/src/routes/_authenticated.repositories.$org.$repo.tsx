@@ -20,12 +20,41 @@ import { ErrorState } from "@/components/ui/error-state";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Settings } from "lucide-react";
 
+// F4 follow-up — accept an optional ?type=<artifact-type> search param so
+// that landing on a repo detail page from /helm pre-applies the Helm chip
+// filter on the Tags panel (and likewise /repositories → image). Deep
+// links survive too: pasting /repositories/org/repo?type=helm into the
+// address bar starts the Tags panel scoped to charts. validateSearch
+// rejects unknown values so the URL can't smuggle arbitrary strings into
+// the chip filter state.
+const ARTIFACT_FILTER_VALUES = [
+  "all",
+  "image",
+  "helm",
+  "signature",
+  "sbom",
+  "other",
+] as const;
+type ArtifactFilterParam = (typeof ARTIFACT_FILTER_VALUES)[number];
+
+interface RepoDetailSearch {
+  type?: ArtifactFilterParam;
+}
+
 export const Route = createFileRoute("/_authenticated/repositories/$org/$repo")({
   component: RepositoryDetail,
+  validateSearch: (raw: Record<string, unknown>): RepoDetailSearch => {
+    const t = raw.type;
+    if (typeof t === "string" && (ARTIFACT_FILTER_VALUES as readonly string[]).includes(t)) {
+      return { type: t as ArtifactFilterParam };
+    }
+    return {};
+  },
 });
 
 function RepositoryDetail(): React.ReactElement {
   const { org, repo } = Route.useParams();
+  const { type: initialTypeFilter } = Route.useSearch();
   const { data, isLoading, isError, refetch } = useRepository(org, repo);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
@@ -47,7 +76,11 @@ function RepositoryDetail(): React.ReactElement {
         onDelete={() => setDeleteOpen(true)}
       />
 
-      <PullCommandCard org={org} repo={repo} />
+      <PullCommandCard
+        org={org}
+        repo={repo}
+        artifactType={initialTypeFilter}
+      />
 
       <DescriptionCard description={data?.description} />
 
@@ -65,7 +98,7 @@ function RepositoryDetail(): React.ReactElement {
         </TabsList>
 
         <TabsContent value="tags">
-          <TagsPanel org={org} repo={repo} />
+          <TagsPanel org={org} repo={repo} initialFilter={initialTypeFilter} />
         </TabsContent>
 
         <TabsContent value="members">

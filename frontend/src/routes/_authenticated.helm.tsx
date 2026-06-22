@@ -37,6 +37,11 @@ function HelmChartsPage(): React.ReactElement {
     React.useState<RepoVisibilityFilter>("all");
   const [createOpen, setCreateOpen] = React.useState(false);
 
+  // F4 follow-up — narrow the list to repositories whose manifests
+  // include at least one Helm chart. Repositories with mixed content
+  // (image + chart on the same /v2/... namespace) appear here AND on
+  // /repositories so a chart user can still discover them; an
+  // image-only repo only shows under Repositories.
   const {
     data,
     isLoading,
@@ -45,11 +50,9 @@ function HelmChartsPage(): React.ReactElement {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useRepositories({ visibility });
+  } = useRepositories({ visibility, artifactType: "helm" });
 
-  // Same flatten + client-side search as /repositories. Server-side
-  // search + artifact-type filtering at the repository level is a
-  // future-tracker item.
+  // Same flatten + client-side search as /repositories.
   const flat = React.useMemo(
     () => data?.pages.flatMap((p) => p.repositories) ?? [],
     [data],
@@ -100,9 +103,11 @@ function HelmChartsPage(): React.ReactElement {
         </p>
       </header>
 
-      {/* Hint banner: the chart-vs-image discrimination lives on per-repo
-          tags pages today. Renders only when the list is non-empty so the
-          empty state can be the primary copy on first-use. */}
+      {/* Hint banner: a repository may hold both images and charts on the
+          same namespace — clicking through to the tags view will show
+          mixed types unless the artifact-type filter chip is engaged.
+          Renders only when the list is non-empty so the empty state has
+          the floor on first-use. */}
       {!isLoading && filtered.length > 0 ? (
         <div
           role="note"
@@ -113,11 +118,16 @@ function HelmChartsPage(): React.ReactElement {
             aria-hidden
           />
           <div>
-            This catalogue shows every repository in the workspace. Open a
-            repository and use the artifact-type filter chips on its{" "}
-            <strong>Tags</strong> tab to see only Helm chart manifests. A
-            dedicated workspace-wide chart browser (flat list of chart
-            name + version across repos) ships in a follow-up sprint.
+            Each repository below holds at least one Helm chart manifest.
+            Repositories that also contain container images appear under{" "}
+            <Link
+              to="/repositories"
+              className="text-[var(--color-accent)] hover:underline"
+            >
+              Repositories
+            </Link>{" "}
+            as well — pick the matching tags view there to switch between
+            images and charts on the same namespace.
           </div>
         </div>
       ) : null}
@@ -188,7 +198,11 @@ function HelmChartsPage(): React.ReactElement {
         </div>
       ) : (
         <>
-          <RepositoriesTable repositories={filtered} loading={isLoading} />
+          <RepositoriesTable
+            repositories={filtered}
+            loading={isLoading}
+            linkArtifactType="helm"
+          />
           {hasNextPage ? (
             <div className="flex justify-center pt-2">
               <Button

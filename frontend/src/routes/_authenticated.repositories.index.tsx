@@ -20,6 +20,12 @@ function RepositoriesPage(): React.ReactElement {
     React.useState<RepoVisibilityFilter>("all");
   const [createOpen, setCreateOpen] = React.useState(false);
 
+  // F4 follow-up — /repositories is now the container-image catalogue.
+  // Helm charts, Cosign signatures, and SBOMs live on their own routes
+  // (/helm today; more dedicated landings to follow). Passing
+  // artifactType: "image" makes the BFF EXISTS-filter manifests so a
+  // shared org/repo namespace that holds both an image AND a chart only
+  // shows up on the matching listing — no double-counting.
   const {
     data,
     isLoading,
@@ -28,7 +34,7 @@ function RepositoriesPage(): React.ReactElement {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useRepositories({ visibility });
+  } = useRepositories({ visibility, artifactType: "image" });
 
   // Flatten infinite pages into a single list. Filtering on the client by
   // name/org is acceptable for the page sizes we expect; server-side search
@@ -56,7 +62,14 @@ function RepositoriesPage(): React.ReactElement {
           Catalog
         </p>
         <div className="flex items-end justify-between">
-          <h1 className="font-display text-3xl font-medium tracking-tight">
+          {/* Icon matches the sidebar Boxes glyph — consistent with the */}
+          {/* /security (ShieldCheck), /activity (Activity), /helm (Ship) */}
+          {/* page-header pattern. */}
+          <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
+            <Boxes
+              className="size-7 text-[var(--color-accent)]"
+              aria-hidden
+            />
             Repositories
           </h1>
           <p className="text-sm text-[var(--color-fg-muted)]">
@@ -108,7 +121,11 @@ function RepositoriesPage(): React.ReactElement {
         />
       ) : (
         <>
-          <RepositoriesTable repositories={filtered} loading={isLoading} />
+          <RepositoriesTable
+            repositories={filtered}
+            loading={isLoading}
+            linkArtifactType="image"
+          />
           {hasNextPage ? (
             <div className="flex justify-center pt-2">
               <Button

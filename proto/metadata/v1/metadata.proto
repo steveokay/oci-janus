@@ -357,7 +357,20 @@ message GetRepositoryByNameRequest {
   string tenant_id = 1;
   string name      = 2; // "org/repo" format
 }
-message ListRepositoriesRequest { string org_id = 1; string tenant_id = 2; string page_token = 3; int32 page_size = 4; }
+message ListRepositoriesRequest {
+  string org_id     = 1;
+  string tenant_id  = 2;
+  string page_token = 3;
+  int32  page_size  = 4;
+  // S-MAINT-1 Batch 5 follow-up — narrow the list to repositories whose
+  // manifests carry a specific artifact_type (image | helm | signature |
+  // sbom | other). Empty = no filter; returns every repository in the
+  // tenant. Repositories with no manifests at all are excluded when this
+  // filter is non-empty, matching the spirit of "show me only repos that
+  // hold artifacts of this kind". A repository that holds a mix
+  // (e.g. image + chart) is returned for any matching filter value.
+  string artifact_type = 5;
+}
 message DeleteRepositoryRequest { string repo_id = 1; string tenant_id = 2; }
 message UpdateRepositoryQuotaRequest { string repo_id = 1; string tenant_id = 2; int64 storage_quota = 3; }
 

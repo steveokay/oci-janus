@@ -1,5 +1,10 @@
 import * as React from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  useNavigate,
+  useSearch,
+} from "@tanstack/react-router";
 import {
   Activity as ActivityIcon,
   ArrowUpCircle,
@@ -10,6 +15,7 @@ import {
   FileSignature,
   Inbox,
   CheckCircle2,
+  Clock,
 } from "lucide-react";
 import {
   Card,
@@ -42,6 +48,51 @@ export const Route = createFileRoute("/_authenticated/activity")({
   component: ActivityPage,
 });
 
+// S-MAINT-1 F3 — date-range chips for the activity feed.
+//
+// Why a chip row rather than a date picker: the audit table grows unbounded
+// over time and operators almost always want one of "what happened today"
+// vs "what happened this week" vs "everything". A fixed-set chip is one
+// click and the URL state ("?range=7d") makes deep-links shareable.
+//
+// Default is "7d" — a typical work-week window keeps the feed lively
+// without dragging in stale events on a quiet weekend. "all" is still
+// reachable for forensic / audit purposes.
+type DateRange = "24h" | "7d" | "30d" | "all";
+const DEFAULT_RANGE: DateRange = "7d";
+
+const RANGE_OPTIONS: ReadonlyArray<{
+  value: DateRange;
+  label: string;
+  // Hover tooltip — used by screen readers + power users wanting to
+  // confirm the boundary semantics ("Events since 7 days ago — at the
+  // millisecond the page rendered").
+  title: string;
+}> = [
+  { value: "24h", label: "Last 24h", title: "Events from the last 24 hours" },
+  { value: "7d", label: "Last 7d", title: "Events from the last 7 days" },
+  { value: "30d", label: "Last 30d", title: "Events from the last 30 days" },
+  { value: "all", label: "All time", title: "Every event in the audit log" },
+];
+
+// rangeToSince converts a chip value into an ISO timestamp suitable for
+// the BFF's `since` query param. The boundary is computed at call time
+// (rather than module-load) so a long-lived tab refreshing the feed
+// doesn't gradually drift its "last 24h" window into the past.
+//
+// "all" maps to undefined — `useNotifications` omits the param entirely,
+// matching the backend's "no since filter" path.
+function rangeToSince(range: DateRange): string | undefined {
+  if (range === "all") return undefined;
+  const now = Date.now();
+  const ms: Record<Exclude<DateRange, "all">, number> = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+  };
+  return new Date(now - ms[range]).toISOString();
+}
+
 // /activity — FE-API-008 live feed.
 //
 // Replaces the Sprint 3 sketched preview with the real /notifications
@@ -50,6 +101,32 @@ export const Route = createFileRoute("/_authenticated/activity")({
 // uses, so the bell badge resets in lockstep).
 function ActivityPage(): React.ReactElement {
   const tenantID = useAuthStore((s) => s.claims?.tenant_id);
+  const navigate = useNavigate();
+  // S-MAINT-1 F3: date-range chip selection lives in the URL search
+  // params so a "?range=24h" deep-link reproduces the operator's view
+  // exactly. The route doesn't declare a validateSearch schema for the
+  // same reason as /api-keys/service-accounts — we set the param
+  // imperatively via navigate({ search }) and read it via cast.
+  const search = useSearch({ strict: false }) as Record<
+    string,
+    string | undefined
+  >;
+  const range = ((): DateRange => {
+    const raw = search.range;
+    if (raw === "24h" || raw === "7d" || raw === "30d" || raw === "all") {
+      return raw;
+    }
+    return DEFAULT_RANGE;
+  })();
+  // Memoise `since` keyed on `range` so the ISO timestamp stays stable
+  // across renders — without this, `Date.now()` ticks forward every render,
+  // producing a fresh ISO string, which propagates into useNotifications'
+  // queryKey. A constantly-changing key means React Query can't return
+  // cached data — only the "all" path (since=undefined) is a stable key,
+  // which is exactly why every other chip rendered empty before this
+  // memo landed.
+  const since = React.useMemo(() => rangeToSince(range), [range]);
+
   const [selected, setSelected] = React.useState<Set<NotificationEventType>>(
     new Set(),
   );
@@ -59,6 +136,7 @@ function ActivityPage(): React.ReactElement {
   const { data, isLoading, isError, refetch, isFetching } = useNotifications({
     limit: pageSize,
     event_types: eventTypes,
+    since,
   });
   const lastSeenAt = React.useMemo(
     () => loadLastSeen(tenantID),
@@ -77,13 +155,34 @@ function ActivityPage(): React.ReactElement {
     });
   }
 
+  // setRange updates the URL search param so a refresh / share preserves
+  // the choice. Default selection clears the param so the URL stays tidy
+  // when the operator picks the implicit default ("7d").
+  function setRange(next: DateRange): void {
+    void navigate({
+      to: "/activity",
+      search: (prev) => ({
+        ...prev,
+        range: next === DEFAULT_RANGE ? undefined : next,
+      }),
+      replace: true,
+    });
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-1">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
           Audit
         </p>
-        <h1 className="font-display text-3xl font-medium tracking-tight">
+        {/* Icon mirrors the sidebar nav entry so the page identity reads */}
+        {/* the same in the topbar and in the page header (consistent with */}
+        {/* /helm's Ship icon + /security's ShieldCheck icon usage). */}
+        <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
+          <ActivityIcon
+            className="size-7 text-[var(--color-accent)]"
+            aria-hidden
+          />
           Activity
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">
@@ -91,6 +190,46 @@ function ActivityPage(): React.ReactElement {
           deletes, scans, webhook deliveries.
         </p>
       </header>
+
+      {/* S-MAINT-1 F3 — date-range chip row. Mounted above the event-
+          type chips so the time window reads as the primary filter
+          ("show me last 24h, then narrow by type") rather than the
+          other way around. */}
+      <div className="flex items-center gap-1.5">
+        <Clock
+          className="size-3.5 text-[var(--color-fg-subtle)]"
+          aria-hidden
+        />
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
+          Range
+        </span>
+        <div
+          role="group"
+          aria-label="Filter activity by date range"
+          className="flex flex-wrap gap-1.5"
+        >
+          {RANGE_OPTIONS.map((opt) => {
+            const active = range === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setRange(opt.value)}
+                aria-pressed={active}
+                title={opt.title}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+                    : "border-[var(--color-border-strong)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]",
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Filter chip row + Mark-all action */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -168,12 +307,18 @@ function ActivityPage(): React.ReactElement {
                 title={
                   selected.size > 0
                     ? "No events match this filter"
-                    : "No recent activity"
+                    : range !== "all"
+                      ? `No activity in the ${
+                          RANGE_OPTIONS.find((o) => o.value === range)?.label
+                        }`
+                      : "No recent activity"
                 }
                 description={
                   selected.size > 0
                     ? "Try a different event type — or clear the filter to see everything."
-                    : "Push an image, run a scan, or wire a webhook to start populating this feed."
+                    : range !== "all"
+                      ? "Widen the range chip above to see older events, or push an image / run a scan / wire a webhook to populate the feed."
+                      : "Push an image, run a scan, or wire a webhook to start populating this feed."
                 }
               />
             ) : (

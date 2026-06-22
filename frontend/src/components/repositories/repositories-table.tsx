@@ -15,16 +15,29 @@ import { Progress } from "@/components/ui/progress";
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import type { Repository } from "@/lib/api/types";
 
+// F4 follow-up — when the table is rendered on /helm or /repositories
+// (which pre-filter the listing by artifact_type), the row link carries
+// the matching ?type=<artifact> so the Tags panel on the repo detail
+// page opens with the correct chip pre-selected. Undefined means "no
+// preference" — used by callers that aren't artifact-typed.
+type RepoLinkArtifactType = "image" | "helm" | "signature" | "sbom" | "other";
+
 interface Props {
   repositories: Repository[];
   loading?: boolean;
+  // Sets ?type= on every row link so the repo detail page opens with
+  // the matching artifact-type chip already engaged. /helm passes "helm";
+  // /repositories passes "image". Other callers may omit it for the
+  // legacy unfiltered behaviour.
+  linkArtifactType?: RepoLinkArtifactType;
 }
 
 // Beacon — RepositoriesTable. The standard list view across all visibility
-// filters. Click row → /repositories/:org/:repo.
+// filters. Click row → /repositories/:org/:repo (with optional ?type=).
 export function RepositoriesTable({
   repositories,
   loading,
+  linkArtifactType,
 }: Props): React.ReactElement {
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
@@ -40,14 +53,26 @@ export function RepositoriesTable({
         <TableBody>
           {loading
             ? Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
-            : repositories.map((r) => <Row key={r.repo_id} repo={r} />)}
+            : repositories.map((r) => (
+                <Row
+                  key={r.repo_id}
+                  repo={r}
+                  linkArtifactType={linkArtifactType}
+                />
+              ))}
         </TableBody>
       </Table>
     </div>
   );
 }
 
-function Row({ repo }: { repo: Repository }): React.ReactElement {
+function Row({
+  repo,
+  linkArtifactType,
+}: {
+  repo: Repository;
+  linkArtifactType?: RepoLinkArtifactType;
+}): React.ReactElement {
   const navigate = useNavigate();
   const pct =
     repo.storage_quota_bytes > 0
@@ -58,6 +83,9 @@ function Row({ repo }: { repo: Repository }): React.ReactElement {
       : 0;
   // Whole-row click is convenience; the real focusable target is the Link in
   // the first cell so keyboard nav + middle-click + right-click all behave.
+  // F4 follow-up — pass ?type= when the caller specified an artifact type
+  // (e.g. /helm passes "helm") so the tag-panel chip arrives pre-selected.
+  const linkSearch = linkArtifactType ? { type: linkArtifactType } : {};
   return (
     <TableRow
       interactive
@@ -65,6 +93,7 @@ function Row({ repo }: { repo: Repository }): React.ReactElement {
         void navigate({
           to: "/repositories/$org/$repo",
           params: { org: repo.org, repo: repo.name },
+          search: linkSearch,
         })
       }
     >
@@ -72,6 +101,7 @@ function Row({ repo }: { repo: Repository }): React.ReactElement {
         <Link
           to="/repositories/$org/$repo"
           params={{ org: repo.org, repo: repo.name }}
+          search={linkSearch}
           onClick={(e) => e.stopPropagation()}
           className="flex items-center gap-3 text-[var(--color-fg)]"
         >

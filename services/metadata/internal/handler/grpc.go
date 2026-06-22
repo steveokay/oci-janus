@@ -30,7 +30,7 @@ type metadataRepo interface {
 	GetRepository(ctx context.Context, tenantID, repoID string) (*metadatav1.Repository, error)
 	GetRepositoryByName(ctx context.Context, tenantID, orgID, name string) (*metadatav1.Repository, error)
 	GetRepositoryByFullName(ctx context.Context, tenantID, fullName string) (*metadatav1.Repository, error)
-	ListRepositories(ctx context.Context, tenantID, orgID string) ([]*metadatav1.Repository, error)
+	ListRepositories(ctx context.Context, tenantID, orgID, artifactType string) ([]*metadatav1.Repository, error)
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
@@ -278,7 +278,7 @@ func (h *MetadataHandler) GetRepositoryByName(ctx context.Context, req *metadata
 }
 
 func (h *MetadataHandler) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
-	repos, err := h.repo.ListRepositories(stream.Context(), req.TenantId, req.OrgId)
+	repos, err := h.repo.ListRepositories(stream.Context(), req.TenantId, req.OrgId, req.ArtifactType)
 	if err != nil {
 		// Temporary diagnostic logging — same reason as UpdateTenantQuota.
 		slog.ErrorContext(stream.Context(), "ListRepositories repo error",
