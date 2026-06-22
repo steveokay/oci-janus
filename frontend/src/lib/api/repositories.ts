@@ -118,3 +118,44 @@ export function useDeleteRepository() {
     },
   });
 }
+
+// PATCH /repositories/{org}/{repo} — updates mutable repository fields.
+// Today: description + tag immutability flag (futures.md Tier 1 #2).
+// Other fields (visibility, quota) live on dedicated routes for audit
+// clarity.
+//
+// `immutable_tags` is encoded as an optional field (omitted from the
+// JSON body when `undefined`) so a PATCH that touches only description
+// doesn't accidentally turn immutability off — the BFF treats a nil
+// pointer as "leave alone" vs a non-nil false as "explicit reset".
+interface UpdateRepoArgs {
+  org: string;
+  repo: string;
+  description?: string;
+  immutable_tags?: boolean;
+}
+
+export function useUpdateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      org,
+      repo,
+      description,
+      immutable_tags,
+    }: UpdateRepoArgs): Promise<Repository> => {
+      const body: Record<string, unknown> = {};
+      if (description !== undefined) body.description = description;
+      if (immutable_tags !== undefined) body.immutable_tags = immutable_tags;
+      const { data } = await apiClient.patch<Repository>(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`,
+        body,
+      );
+      return data;
+    },
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: repoKeys.detail(org, repo) });
+      void qc.invalidateQueries({ queryKey: repoKeys.all });
+    },
+  });
+}

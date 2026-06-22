@@ -4,6 +4,7 @@ package handler
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -504,6 +505,15 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 		r.Context(), tenantID, repo.GetRepoId(), name, reference, mediaType, body, claims.UserID,
 	)
 	if err != nil {
+		// Tag immutability rejection — explicit 400 MANIFEST_INVALID per
+		// OCI Distribution Spec § 4.2.2. Other PutManifest failures
+		// stay on the generic UNKNOWN 500 path so a transient DB blip
+		// doesn't masquerade as a permanent immutability rejection.
+		if errors.Is(err, service.ErrTagImmutable) {
+			ociError(w, http.StatusBadRequest, "MANIFEST_INVALID",
+				"tag is immutable (repo immutable_tags=true or per-tag pin set); push to a new tag or unpin first")
+			return
+		}
 		slog.ErrorContext(r.Context(), "put manifest", "err", err)
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return

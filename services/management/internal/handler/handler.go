@@ -290,6 +290,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/scan", authMW(http.HandlerFunc(h.handleRepoBulkScan)))
 	mux.Handle("POST /api/v1/orgs/{org}/scan", authMW(http.HandlerFunc(h.handleOrgBulkScan)))
 
+	// Tag immutability pin (futures.md Tier 1 #2). POST sets immutable=true,
+	// DELETE clears it. Repo admin/owner only — pinning is a security-
+	// relevant action that gates push admission. Same posture as the
+	// retention + scan policy editors.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handlePinTag)))
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handleUnpinTag)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only
@@ -527,6 +534,11 @@ type RepoResponse struct {
 	StorageQuota int64     `json:"storage_quota_bytes"`
 	CreatedAt    time.Time `json:"created_at"`
 	Description  string    `json:"description"`
+	// Tag immutability (futures.md Tier 1 #2). When true, services/core
+	// rejects any PutManifest that would move an existing tag to a new
+	// digest. Default false; flip via PATCH /repositories/{org}/{repo}
+	// with `{"immutable_tags": true}`.
+	ImmutableTags bool `json:"immutable_tags"`
 }
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {
@@ -628,11 +640,23 @@ type createRepositoryBody struct {
 	StorageQuota int64 `json:"storage_quota"`
 	// Description is an optional markdown README for the repository (FE-API-006).
 	Description string `json:"description"`
+	// Tag immutability (futures.md Tier 1 #2). When true, services/core
+	// rejects any PutManifest that would move an existing tag to a new
+	// digest. Surfaced here so the FE can render the toggle state +
+	// the security pill on the repo header.
+	ImmutableTags bool `json:"immutable_tags"`
 }
 
 // updateRepositoryBody is the expected JSON body for PATCH /api/v1/repositories/{org}/{repo}.
+//
+// Tag immutability (futures.md Tier 1 #2): `immutable_tags` is an
+// optional *bool so the BFF can tell "not provided" (PATCH that only
+// touches description) from "explicit false" (operator turning
+// immutability off). A nil pointer skips the UpdateRepositoryImmutability
+// RPC entirely; a non-nil pointer triggers it.
 type updateRepositoryBody struct {
-	Description string `json:"description"`
+	Description    string `json:"description"`
+	ImmutableTags  *bool  `json:"immutable_tags,omitempty"`
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
@@ -775,6 +799,11 @@ type TagResponse struct {
 	// renders a 🔒 pill on quarantined rows; clicking the badge opens
 	// the quarantine detail / lift dialog on the tag detail page.
 	Quarantined bool `json:"quarantined,omitempty"`
+	// Tag immutability pin (futures.md Tier 1 #2). When true, this tag
+	// cannot be moved to a new manifest_digest regardless of the parent
+	// repository's `immutable_tags` flag. FE renders a 📌 pill on the
+	// tags table + a "Pinned" badge on the tag detail page.
+	Immutable bool `json:"immutable,omitempty"`
 	// S-MAINT-1 Batch 5 (P6 + F4): derived artifact-type discriminator
 	// ("image" | "helm" | "signature" | "sbom" | "other"). Drives the
 	// per-tag artifact pill + the filter chip row on the repo detail
@@ -863,6 +892,8 @@ func (h *Handler) handleListTags(w http.ResponseWriter, r *http.Request) {
 			// S-MAINT-1 Batch 5: surface the per-row artifact-type
 			// discriminator for the pill + filter chips.
 			ArtifactType: tag.GetArtifactType(),
+			// Tag immutability pin (futures.md Tier 1 #2).
+			Immutable: tag.GetImmutable(),
 		}
 		// REM-013 gap 1: surface the soft-delete stamp only when the
 		// upstream proto carries one. The proto's GetX() helper returns
@@ -1217,15 +1248,16 @@ func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*me
 // repoToResponse converts a proto Repository message to its JSON wire form.
 func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	return RepoResponse{
-		RepoID:       r.GetRepoId(),
-		OrgID:        r.GetOrgId(),
-		Org:          r.GetOrg(),
-		Name:         r.GetName(),
-		IsPublic:     r.GetIsPublic(),
-		StorageUsed:  r.GetStorageUsed(),
-		StorageQuota: r.GetStorageQuota(),
-		CreatedAt:    r.GetCreatedAt().AsTime(),
-		Description:  r.GetDescription(),
+		RepoID:        r.GetRepoId(),
+		OrgID:         r.GetOrgId(),
+		Org:           r.GetOrg(),
+		Name:          r.GetName(),
+		IsPublic:      r.GetIsPublic(),
+		StorageUsed:   r.GetStorageUsed(),
+		StorageQuota:  r.GetStorageQuota(),
+		CreatedAt:     r.GetCreatedAt().AsTime(),
+		Description:   r.GetDescription(),
+		ImmutableTags: r.GetImmutableTags(),
 	}
 }
 
@@ -1276,6 +1308,25 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to update repository")
 		return
 	}
+
+	// Tag immutability flip (futures.md Tier 1 #2). Only fires when the
+	// caller explicitly sent `immutable_tags` in the body — a nil
+	// pointer means "leave it alone". Separate RPC so the audit trail
+	// shows the security-relevant transition explicitly.
+	if body.ImmutableTags != nil {
+		updated, err := h.meta.UpdateRepositoryImmutability(r.Context(), &metadatav1.UpdateRepositoryImmutabilityRequest{
+			TenantId:      tenantID,
+			RepoId:        existing.GetRepoId(),
+			ImmutableTags: *body.ImmutableTags,
+		})
+		if err != nil {
+			slog.Error("UpdateRepositoryImmutability", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update immutability")
+			return
+		}
+		repo = updated
+	}
+
 	writeJSON(w, http.StatusOK, repoToResponse(repo))
 }
 

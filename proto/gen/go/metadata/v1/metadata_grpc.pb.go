@@ -27,10 +27,12 @@ const (
 	MetadataService_DeleteRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteRepository"
 	MetadataService_UpdateRepositoryQuota_FullMethodName         = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
 	MetadataService_UpdateRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateRepository"
+	MetadataService_UpdateRepositoryImmutability_FullMethodName  = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
 	MetadataService_PutTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/PutTag"
 	MetadataService_GetTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/GetTag"
 	MetadataService_ListTags_FullMethodName                      = "/registry.metadata.v1.MetadataService/ListTags"
 	MetadataService_DeleteTag_FullMethodName                     = "/registry.metadata.v1.MetadataService/DeleteTag"
+	MetadataService_UpdateTagImmutable_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateTagImmutable"
 	MetadataService_PutManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/PutManifest"
 	MetadataService_GetManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetManifest"
 	MetadataService_DeleteManifest_FullMethodName                = "/registry.metadata.v1.MetadataService/DeleteManifest"
@@ -81,11 +83,20 @@ type MetadataServiceClient interface {
 	DeleteRepository(ctx context.Context, in *DeleteRepositoryRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(ctx context.Context, in *UpdateRepositoryQuotaRequest, opts ...grpc.CallOption) (*Repository, error)
 	UpdateRepository(ctx context.Context, in *UpdateRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
+	// Tag immutability (futures.md Tier 1 #2) — flips the repo-wide
+	// `immutable_tags` flag. Separate RPC from UpdateRepository so the
+	// audit trail records the security-relevant change explicitly
+	// (description edits stay on the existing path).
+	UpdateRepositoryImmutability(ctx context.Context, in *UpdateRepositoryImmutabilityRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Tags
 	PutTag(ctx context.Context, in *PutTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (MetadataService_ListTagsClient, error)
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Tag immutability pin (futures.md Tier 1 #2) — flips the per-tag
+	// `immutable` flag. Returns the updated Tag so the caller (FE,
+	// promotion workflow) can confirm without a follow-up GetTag.
+	UpdateTagImmutable(ctx context.Context, in *UpdateTagImmutableRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Manifests
 	PutManifest(ctx context.Context, in *PutManifestRequest, opts ...grpc.CallOption) (*Manifest, error)
 	GetManifest(ctx context.Context, in *GetManifestRequest, opts ...grpc.CallOption) (*Manifest, error)
@@ -347,6 +358,16 @@ func (c *metadataServiceClient) UpdateRepository(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *metadataServiceClient) UpdateRepositoryImmutability(ctx context.Context, in *UpdateRepositoryImmutabilityRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryImmutability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) PutTag(ctx context.Context, in *PutTagRequest, opts ...grpc.CallOption) (*Tag, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tag)
@@ -404,6 +425,16 @@ func (c *metadataServiceClient) DeleteTag(ctx context.Context, in *DeleteTagRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, MetadataService_DeleteTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateTagImmutable(ctx context.Context, in *UpdateTagImmutableRequest, opts ...grpc.CallOption) (*Tag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Tag)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateTagImmutable_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -828,11 +859,20 @@ type MetadataServiceServer interface {
 	DeleteRepository(context.Context, *DeleteRepositoryRequest) (*emptypb.Empty, error)
 	UpdateRepositoryQuota(context.Context, *UpdateRepositoryQuotaRequest) (*Repository, error)
 	UpdateRepository(context.Context, *UpdateRepositoryRequest) (*Repository, error)
+	// Tag immutability (futures.md Tier 1 #2) — flips the repo-wide
+	// `immutable_tags` flag. Separate RPC from UpdateRepository so the
+	// audit trail records the security-relevant change explicitly
+	// (description edits stay on the existing path).
+	UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error)
 	// Tags
 	PutTag(context.Context, *PutTagRequest) (*Tag, error)
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
 	ListTags(*ListTagsRequest, MetadataService_ListTagsServer) error
 	DeleteTag(context.Context, *DeleteTagRequest) (*emptypb.Empty, error)
+	// Tag immutability pin (futures.md Tier 1 #2) — flips the per-tag
+	// `immutable` flag. Returns the updated Tag so the caller (FE,
+	// promotion workflow) can confirm without a follow-up GetTag.
+	UpdateTagImmutable(context.Context, *UpdateTagImmutableRequest) (*Tag, error)
 	// Manifests
 	PutManifest(context.Context, *PutManifestRequest) (*Manifest, error)
 	GetManifest(context.Context, *GetManifestRequest) (*Manifest, error)
@@ -1018,6 +1058,9 @@ func (UnimplementedMetadataServiceServer) UpdateRepositoryQuota(context.Context,
 func (UnimplementedMetadataServiceServer) UpdateRepository(context.Context, *UpdateRepositoryRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepository not implemented")
 }
+func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryImmutability not implemented")
+}
 func (UnimplementedMetadataServiceServer) PutTag(context.Context, *PutTagRequest) (*Tag, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutTag not implemented")
 }
@@ -1029,6 +1072,9 @@ func (UnimplementedMetadataServiceServer) ListTags(*ListTagsRequest, MetadataSer
 }
 func (UnimplementedMetadataServiceServer) DeleteTag(context.Context, *DeleteTagRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteTag not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateTagImmutable(context.Context, *UpdateTagImmutableRequest) (*Tag, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateTagImmutable not implemented")
 }
 func (UnimplementedMetadataServiceServer) PutManifest(context.Context, *PutManifestRequest) (*Manifest, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutManifest not implemented")
@@ -1279,6 +1325,24 @@ func _MetadataService_UpdateRepository_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_UpdateRepositoryImmutability_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryImmutabilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateRepositoryImmutability(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateRepositoryImmutability_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateRepositoryImmutability(ctx, req.(*UpdateRepositoryImmutabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_PutTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PutTagRequest)
 	if err := dec(in); err != nil {
@@ -1350,6 +1414,24 @@ func _MetadataService_DeleteTag_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).DeleteTag(ctx, req.(*DeleteTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateTagImmutable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTagImmutableRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateTagImmutable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateTagImmutable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateTagImmutable(ctx, req.(*UpdateTagImmutableRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2040,6 +2122,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MetadataService_UpdateRepository_Handler,
 		},
 		{
+			MethodName: "UpdateRepositoryImmutability",
+			Handler:    _MetadataService_UpdateRepositoryImmutability_Handler,
+		},
+		{
 			MethodName: "PutTag",
 			Handler:    _MetadataService_PutTag_Handler,
 		},
@@ -2050,6 +2136,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteTag",
 			Handler:    _MetadataService_DeleteTag_Handler,
+		},
+		{
+			MethodName: "UpdateTagImmutable",
+			Handler:    _MetadataService_UpdateTagImmutable_Handler,
 		},
 		{
 			MethodName: "PutManifest",

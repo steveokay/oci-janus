@@ -420,6 +420,21 @@ func (r *Registry) PutManifest(ctx context.Context, tenantID, repoID, repoName, 
 	ctx5, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// Tag immutability gate (futures.md Tier 1 #2). Only checked when
+	// the reference is a tag — pushes addressed by digest are
+	// content-addressable and can't accidentally move existing tags.
+	// We do the check BEFORE PutManifest so a rejected push doesn't
+	// leave a manifest row in the DB without a tag pointing at it.
+	// Inserting the manifest row would be harmless (it's content-
+	// addressable, the next push of the same content is a no-op) but
+	// declining cleanly keeps the rejection legible from the operator's
+	// perspective: "the request you sent was rejected end-to-end".
+	if !digestRE.MatchString(reference) {
+		if err := r.checkTagImmutable(ctx5, tenantID, repoID, reference, digest); err != nil {
+			return "", "", err
+		}
+	}
+
 	_, err := r.metadata.PutManifest(ctx5, &metadatav1.PutManifestRequest{
 		RepoId:    repoID,
 		TenantId:  tenantID,
@@ -763,6 +778,84 @@ func isGRPCNotFound(err error) bool {
 		return st.Code() == codes.NotFound
 	}
 	return false
+}
+
+// checkTagImmutable rejects a manifest push that would move an existing
+// tag whose parent repository is marked immutable_tags OR whose own
+// `immutable` flag is set. Returns ErrTagImmutable in either case so
+// the HTTP layer can map to MANIFEST_INVALID per OCI Distribution
+// Spec § 4.2.2.
+//
+// New-tag pushes (the tag doesn't exist yet) are allowed regardless of
+// the repo flag — immutability gates re-writes, not initial pushes.
+//
+// Pushing the SAME digest to an already-present tag is also allowed
+// (idempotent — a re-push of an unchanged content fingerprint is a
+// no-op and not the dangerous "silently change what consumers pull"
+// case the flag protects against).
+//
+// Repo-fetch failures fail OPEN with a warn log — the alternative
+// (rejecting every push because metadata blipped) is worse than the
+// occasional missed immutability check during a metadata outage.
+// Tag-not-found is the new-tag case and returns nil.
+//
+// Futures.md Tier 1 #2 — Tag immutability + image promotion workflow.
+func (r *Registry) checkTagImmutable(ctx context.Context, tenantID, repoID, tagName, newDigest string) error {
+	// First: look up the existing tag. NotFound = new tag = allowed.
+	tag, err := r.metadata.GetTag(ctx, &metadatav1.GetTagRequest{
+		RepoId:   repoID,
+		TenantId: tenantID,
+		Name:     tagName,
+	})
+	if err != nil {
+		if isGRPCNotFound(err) {
+			return nil
+		}
+		// Metadata reachability failure — fail OPEN to avoid blocking
+		// every push when the metadata service blips. Log so the issue
+		// surfaces in monitoring.
+		slog.WarnContext(ctx, "tag immutability check: GetTag failed (failing open)",
+			"err", err, "repo_id", repoID, "tag", tagName,
+		)
+		return nil
+	}
+
+	// Idempotent re-push of the same digest is always allowed — the tag
+	// isn't being "moved" in the operator-visible sense.
+	if tag.GetManifestDigest() == newDigest {
+		return nil
+	}
+
+	// Per-tag pin wins regardless of repo flag.
+	if tag.GetImmutable() {
+		slog.WarnContext(ctx, "tag push rejected by per-tag immutability pin",
+			"repo_id", repoID, "tag", tagName, "existing_digest", tag.GetManifestDigest(), "new_digest", newDigest,
+		)
+		return ErrTagImmutable
+	}
+
+	// Otherwise, check the repo-wide flag. One extra RPC per push when
+	// no per-tag pin caught it — but the path is only entered on tag
+	// moves (skipped when the same-digest fast-path matched above), so
+	// the steady-state cost is zero.
+	repo, err := r.metadata.GetRepository(ctx, &metadatav1.GetRepositoryRequest{
+		RepoId:   repoID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		// Same fail-open rationale as the tag lookup above.
+		slog.WarnContext(ctx, "tag immutability check: GetRepository failed (failing open)",
+			"err", err, "repo_id", repoID,
+		)
+		return nil
+	}
+	if repo.GetImmutableTags() {
+		slog.WarnContext(ctx, "tag push rejected by repo immutable_tags flag",
+			"repo_id", repoID, "tag", tagName, "existing_digest", tag.GetManifestDigest(), "new_digest", newDigest,
+		)
+		return ErrTagImmutable
+	}
+	return nil
 }
 
 // extractConfigMediaType pulls `config.mediaType` out of an OCI manifest

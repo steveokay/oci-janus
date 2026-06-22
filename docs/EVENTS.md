@@ -215,3 +215,15 @@ type TenantPlanChangedPayload struct {
 ---
 
 > Other payload types (`PushFailedPayload`, `ManifestDeletedPayload`, `TagDeletedPayload`, `WebhookDeliveredPayload`, `TenantDeletedPayload`, etc.) follow the same shape: a small struct with the resource identifier, tenant ID, and actor. Read the source file rather than re-documenting here — the struct is the contract.
+
+---
+
+### Tag immutability — no dedicated event yet (futures.md Tier 1 #2)
+
+Tag immutability transitions currently ride on the existing repository / tag mutation event paths rather than emitting dedicated routing keys:
+
+- **Repo-wide flag flip** (`PATCH /api/v1/repositories/{org}/{repo}` with `{"immutable_tags": ...}`) — captured as part of the generic repository-update audit row. The diff between old and new `immutable_tags` shows up in the audit trail's `fields` map.
+- **Per-tag pin / unpin** (`POST /pin` and `DELETE /pin`) — currently NOT emitting a dedicated `tag.pinned` / `tag.unpinned` routing key. The mutation lands in `tags.immutable` and is observable via `registry-audit`'s actor-trail join against the repo update timestamp, but webhook subscribers can't subscribe to "tag pinned" directly.
+- **Push rejection** (`MANIFEST_INVALID` on an immutable tag) is logged at `slog.Warn` by `services/core.checkTagImmutable` with `repo_id, tag, existing_digest, new_digest`. No event published — the push was rejected, so `push.completed` doesn't fire either; consumers see the absence rather than a positive "rejected" signal.
+
+**Planned follow-up:** add `tag.pinned`, `tag.unpinned`, and `repository.immutability_changed` routing keys so webhook subscribers can wire dedicated notifications (e.g. Slack alert when a production repo's immutability flag is turned off). Tracked in `status.md` Tag immutability row.

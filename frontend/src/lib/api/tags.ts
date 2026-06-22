@@ -42,6 +42,48 @@ export function useDeleteTag() {
   });
 }
 
+// Tag immutability pin (futures.md Tier 1 #2).
+//
+// POST /pin -> immutable=true, DELETE /pin -> immutable=false. The
+// BFF returns the updated TagResponse so the FE can paint the row
+// without a follow-up GET, but we still invalidate the tags list
+// because other rows on the same page may share state (e.g. when the
+// operator pins multiple in sequence).
+
+interface TagPinArgs {
+  org: string;
+  repo: string;
+  tag: string;
+}
+
+export function usePinTag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ org, repo, tag }: TagPinArgs) => {
+      await apiClient.post(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tag)}/pin`,
+      );
+    },
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: tagKeys.list(org, repo) });
+    },
+  });
+}
+
+export function useUnpinTag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ org, repo, tag }: TagPinArgs) => {
+      await apiClient.delete(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tag)}/pin`,
+      );
+    },
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: tagKeys.list(org, repo) });
+    },
+  });
+}
+
 // FE-API-036 — bulk tag delete.
 //
 // The BFF performs per-tag sub-transactions and returns a per-tag result
