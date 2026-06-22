@@ -737,11 +737,101 @@ services:
     restart: unless-stopped
 
   # Scanner is opt-in via the `scanner` profile. Zero config required:
+  # ── Clair v4 (REM-014, opt-in via --profile clair) ────────────────────────
+  #
+  # Adds a third vulnerability scanner option alongside Trivy + Grype.
+  # The clair-adapter binary baked into the scanner image talks to the
+  # `clair` service below over HTTP on port 6060. Layers are served back
+  # to Clair from the scanner container on a side port (CLAIR_FETCH_PORT
+  # below) — the adapter spins up an embedded HTTP server during a scan
+  # so Clair can pull each layer by URI without needing registry-core
+  # credentials. Production deployments would replace this with Clair
+  # → registry-core direct fetch + a service-account JWT; that's tracked
+  # as a follow-up because the embedded-server path keeps the dev compose
+  # stack stand-alone (no extra service-account provisioning step).
+  #
+  # Bring up:
+  #   docker compose --profile clair up -d clair-db clair
+  #
+  # Then either:
+  #   (a) flip the scanner's active adapter via /admin/scanner UI to
+  #       "clair-adapter", OR
+  #   (b) set SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-clair-adapter
+  #       on the registry-scanner service env block.
+  #
+  # First boot downloads the Clair vulnerability feeds (~1 GB on disk
+  # under the named clair_data volume); subsequent boots reuse the
+  # cache and warm up in seconds.
+  clair-db:
+    # Pinned at Postgres 16 to match the platform's main DB version —
+    # easier for an ops walk-through if the same psql client + tooling
+    # works against both clusters.
+    image: postgres:16-alpine
+    profiles: ["clair"]
+    environment:
+      POSTGRES_USER: clair
+      POSTGRES_PASSWORD: clair
+      POSTGRES_DB: clair
+    volumes:
+      - clair_db:/var/lib/postgresql/data
+    networks:
+      - registry
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clair -d clair"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  clair:
+    # Combo mode runs indexer + matcher + notifier in one process. The
+    # upstream image is quay.io/projectquay/clair; pinning to 4.7.4
+    # (Aug 2024) which is the last patch on the v4.7 line. The config
+    # file lives in infra/clair/ and is mounted read-only.
+    image: quay.io/projectquay/clair:4.7.4
+    profiles: ["clair"]
+    command: ["-mode", "combo", "-conf", "/etc/clair/config.yaml"]
+    environment:
+      # Clair reads CLAIR_CONF in addition to the -conf flag in some
+      # code paths; setting both keeps any future internal refactor on
+      # the upstream side from silently switching back to the default
+      # bundled config.
+      CLAIR_CONF: /etc/clair/config.yaml
+      CLAIR_MODE: combo
+    volumes:
+      - ../clair/config.yaml:/etc/clair/config.yaml:ro
+    ports:
+      # Expose the indexer/matcher HTTP API on the host for ad-hoc
+      # `curl /indexer/api/v1/index_state` debugging. The adapter
+      # reaches the same port via the registry network without needing
+      # this host mapping.
+      - "6060:6060"
+      # Introspection / metrics — Prometheus scrape target hook for a
+      # follow-up integration. 8099 not 8089 — the latter is registry-gc.
+      - "8099:8099"
+    depends_on:
+      clair-db:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      # Clair's own readiness probe — /indexer/api/v1/index_state is
+      # cheap (one DB SELECT) and returns 200 only when the schema
+      # migrations are applied.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:6060/indexer/api/v1/index_state >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
   #   docker compose --profile scanner up -d registry-scanner
   #
-  # The image ships two adapters that satisfy the JSON-RPC plugin contract:
+  # The image ships three adapters that satisfy the JSON-RPC plugin contract:
   #   /usr/local/bin/scanner-dev-stub      (default — hardcoded findings, for UI demos)
   #   /usr/local/bin/scanner-trivy-adapter (real CVE detection via Trivy)
+  #   /usr/local/bin/scanner-grype-adapter (real CVE detection via Grype)
+  #   /usr/local/bin/scanner-clair-adapter (real CVE detection via Clair — needs `--profile clair`)
   #
   # The entrypoint auto-computes SCANNER_PLUGIN_CHECKSUM from the active
   # binary so neither env var needs a value in dev. Operators wanting real
@@ -768,6 +858,20 @@ services:
       # auto-computes SCANNER_PLUGIN_CHECKSUM from the active binary.
       SCANNER_PLUGIN_PATH: ${SCANNER_PLUGIN_PATH:-}
       SCANNER_PLUGIN_CHECKSUM: ${SCANNER_PLUGIN_CHECKSUM:-}
+      # REM-014 — Clair adapter config. Empty when the operator runs
+      # the dev stack without `--profile clair`; the adapter binary
+      # logs + exits cleanly in that case, so picking "clair" from
+      # the /admin/scanner UI surfaces a clear "Clair service is not
+      # reachable" error rather than a generic scan timeout.
+      CLAIR_URL: http://clair:6060
+      # CLAIR_FETCH_PORT controls the embedded HTTP server the adapter
+      # spins up to serve staged layers back to Clair. Defaults to 9099;
+      # change here if a host-port collision on `9099` is observed.
+      CLAIR_FETCH_PORT: "9099"
+      # Hostname the Clair container will use to reach the adapter's
+      # embedded HTTP server. Must resolve on the `registry` Docker
+      # network — the compose service name is the canonical answer.
+      CLAIR_FETCH_HOST: registry-scanner
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/scanner.crt
       MTLS_KEY_PATH: /certs/scanner.key
@@ -813,3 +917,9 @@ volumes:
   # on registry-scanner so the report worker has a stable rendering
   # destination.
   scanner_reports:
+  # REM-014 — Clair's Postgres data directory. Opt-in via `--profile
+  # clair` so the volume only materialises when the operator wants
+  # Clair available. Holds the indexer's manifest_index table + the
+  # matcher's vulnerability feed cache (~1 GB after first updater
+  # run).
+  clair_db:

@@ -25,7 +25,7 @@ import { apiClient } from "./client";
 // BlockOnSeverity uses "" (empty string) to mean "never block on push".
 export type BlockOnSeverity = "" | "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
-export type ScannerPlugin = "trivy" | "grype";
+export type ScannerPlugin = "trivy" | "grype" | "clair";
 
 export const BLOCK_SEVERITY_CHOICES: ReadonlyArray<{
   value: BlockOnSeverity;
@@ -73,6 +73,11 @@ export const SCANNER_PLUGIN_CHOICES: ReadonlyArray<{
     value: "grype",
     label: "Grype",
     description: "Anchore's open-source scanner. Currently behind Trivy on CVE coverage.",
+  },
+  {
+    value: "clair",
+    label: "Clair",
+    description: "Red Hat's open-source scanner. Needs --profile clair on the compose stack.",
   },
 ];
 
