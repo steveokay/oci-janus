@@ -31,6 +31,10 @@ import {
   useScanHistory,
   type ScanHistoryEntry,
 } from "@/lib/api/security";
+import {
+  PageSizeSelector,
+  usePageSize,
+} from "@/components/ui/page-size-selector";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 
 // ScanHistoryTable — FE-API-015.
@@ -43,7 +47,10 @@ import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 // this first pass — the data is already keyset-ordered and 200-cap
 // paginated; we can add filter chips on top later if operators ask.
 export function ScanHistoryTable(): React.ReactElement {
-  const q = useScanHistory();
+  // S-MAINT-1 P5: persisted page size, "scans" key separate from the
+  // vulnerabilities table so each surface remembers its own setting.
+  const [pageSize, setPageSize] = usePageSize("scans");
+  const q = useScanHistory({ limit: pageSize });
   const flat = React.useMemo(
     () => q.data?.pages.flatMap((p) => p.scans) ?? [],
     [q.data],
@@ -72,6 +79,9 @@ export function ScanHistoryTable(): React.ReactElement {
   }
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <PageSizeSelector value={pageSize} onChange={setPageSize} />
+      </div>
       <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
         <Table>
           <TableHeader>

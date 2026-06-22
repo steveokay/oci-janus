@@ -54,9 +54,15 @@ type RepositoryStorageEntry struct {
 // `tenant_storage_used_bytes` is the sum across ALL repos in the tenant,
 // not just the top-50 returned in `repositories`. Percent values in each
 // entry are computed against this total so they sum to ≤100 for the top-50.
+//
+// `tenant_storage_quota_bytes` (S-MAINT-1 P1) is the tenant's quota cap —
+// surfaced alongside used_bytes so the dashboard card can render
+// "used / total" rather than just usage. Zero when the tenant has no
+// quota row yet (lazy-created on first push).
 type StorageBreakdownResponse struct {
-	TenantStorageUsedBytes int64                    `json:"tenant_storage_used_bytes"`
-	Repositories           []RepositoryStorageEntry `json:"repositories"`
+	TenantStorageUsedBytes  int64                    `json:"tenant_storage_used_bytes"`
+	TenantStorageQuotaBytes int64                    `json:"tenant_storage_quota_bytes"`
+	Repositories            []RepositoryStorageEntry `json:"repositories"`
 }
 
 func (h *Handler) handleGetStorageBreakdown(w http.ResponseWriter, r *http.Request) {
@@ -71,11 +77,28 @@ func (h *Handler) handleGetStorageBreakdown(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// S-MAINT-1 P1: pair the per-repo breakdown with the tenant-level quota
+	// so the dashboard card can render "used / total" without a second
+	// round-trip from the frontend. The quota RPC is a single-row read so
+	// the extra latency here is negligible. Failure is logged but does not
+	// fail the breakdown — the card still renders usage if quota fetch
+	// blips. Zero is the correct fallback because the FE renders "—" when
+	// quota is 0.
+	var tenantQuotaBytes int64
+	if quota, quotaErr := h.meta.GetTenantQuotaUsage(r.Context(), &metadatav1.GetTenantQuotaUsageRequest{
+		TenantId: tenantID,
+	}); quotaErr == nil {
+		tenantQuotaBytes = quota.GetQuotaBytes()
+	} else {
+		slog.WarnContext(r.Context(), "GetTenantQuotaUsage (storage breakdown)", "err", quotaErr, "tenant_id", tenantID)
+	}
+
 	// Always emit a non-nil slice on the wire so the dashboard's serde has
 	// a stable shape even for a zero-repo tenant.
 	out := StorageBreakdownResponse{
-		TenantStorageUsedBytes: resp.GetTenantStorageUsedBytes(),
-		Repositories:           make([]RepositoryStorageEntry, 0, len(resp.GetRepositories())),
+		TenantStorageUsedBytes:  resp.GetTenantStorageUsedBytes(),
+		TenantStorageQuotaBytes: tenantQuotaBytes,
+		Repositories:            make([]RepositoryStorageEntry, 0, len(resp.GetRepositories())),
 	}
 	for _, e := range resp.GetRepositories() {
 		entry := RepositoryStorageEntry{

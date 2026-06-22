@@ -69,7 +69,9 @@ function statusTone(s: string): React.ComponentProps<typeof Badge>["tone"] {
 
 export function GCCard(): React.ReactElement {
   const status = useGCStatus();
-  const runs = useGCRuns({ limit: 10 });
+  // S-MAINT-1 P3: last 5 runs (was 10). Keeps the table compact while
+  // still surfacing enough history for an admin to spot a pattern.
+  const runs = useGCRuns({ limit: 5 });
   const [open, setOpen] = React.useState(false);
 
   const flatRuns = React.useMemo(
@@ -205,7 +207,9 @@ export function GCCard(): React.ReactElement {
       <Card>
         <CardHeader className="pb-3">
           <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-            Recent runs
+            {/* S-MAINT-1 P3: prefix with "Garbage collection" so the table */}
+            {/* heading reads correctly when scrolled past the status tiles. */}
+            Garbage collection: Recent runs
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
@@ -233,6 +237,10 @@ export function GCCard(): React.ReactElement {
                 <TableRow>
                   <TableHead>Mode</TableHead>
                   <TableHead>Status</TableHead>
+                  {/* S-MAINT-1 P3: Time run = completed_at (or started_at */}
+                  {/* for in-flight rows). Adds a chronology to the table */}
+                  {/* so admins can sequence what happened when. */}
+                  <TableHead>Time run</TableHead>
                   <TableHead>Triggered by</TableHead>
                   <TableHead className="hidden md:table-cell">Duration</TableHead>
                   <TableHead className="text-right">Freed</TableHead>
@@ -288,6 +296,10 @@ function StatusSkeleton(): React.ReactElement {
 }
 
 function GCRunRow({ r }: { r: GCRun }): React.ReactElement {
+  // S-MAINT-1 P3: prefer completed_at as the "when this ran" anchor for
+  // terminal rows; fall back to started_at for in-flight runs, then
+  // requested_at for the queued state where neither timestamp is set yet.
+  const timeRunIso = r.completed_at ?? r.started_at ?? r.requested_at;
   return (
     <TableRow>
       <TableCell>
@@ -297,6 +309,12 @@ function GCRunRow({ r }: { r: GCRun }): React.ReactElement {
       </TableCell>
       <TableCell>
         <Badge tone={statusTone(r.status)}>{r.status}</Badge>
+      </TableCell>
+      <TableCell
+        className="text-xs text-[var(--color-fg-muted)]"
+        title={timeRunIso ? formatAbsoluteDate(timeRunIso) : undefined}
+      >
+        {timeRunIso ? formatRelativeDate(timeRunIso) : "—"}
       </TableCell>
       <TableCell>
         <code className="font-mono text-xs text-[var(--color-fg-muted)]">

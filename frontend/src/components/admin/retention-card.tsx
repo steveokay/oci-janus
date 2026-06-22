@@ -44,7 +44,10 @@ import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/forma
 // shows a hint rather than a blank rectangle.
 
 const RETENTION_MODES = new Set(["retention", "retention_grace"]);
-const RECENT_LIMIT = 10;
+// S-MAINT-1 P4: keep the table compact at 5 rows (was 10). The Counts
+// strip above still summarises 24h + 7d totals so a wider window is
+// available to operators at a glance.
+const RECENT_LIMIT = 5;
 
 export function RetentionCard(): React.ReactElement {
   // Fetch a larger page than the GCCard so the filter has more rows to
@@ -191,7 +194,9 @@ function RecentRuns({
   return (
     <div className="space-y-2">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-        Recent runs (last {runs.length})
+        {/* S-MAINT-1 P4: prefix with "Retention" so the table heading */}
+        {/* stays self-describing when scrolled away from the card title. */}
+        Retention: Recent runs (last {runs.length})
       </div>
       <Table>
         <TableHeader>
