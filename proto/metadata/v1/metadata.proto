@@ -26,6 +26,16 @@ service MetadataService {
   // the same audit-trail-clarity reason as UpdateRepositoryImmutability.
   rpc UpdateRepositorySignaturePolicy(UpdateRepositorySignaturePolicyRequest) returns (Repository);
 
+  // Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
+  // trusted-key allowlist. When `require_signature=true` AND the list
+  // is non-empty, services/core narrows the admission gate to only
+  // signatures produced by an allowed key_id. Empty list falls back
+  // to Phase 1 "ANY signature passes" so operators can flip the flag
+  // first and pin keys incrementally.
+  rpc ListRepositoryTrustedKeys(ListRepositoryTrustedKeysRequest) returns (ListRepositoryTrustedKeysResponse);
+  rpc AddRepositoryTrustedKey(AddRepositoryTrustedKeyRequest) returns (RepositoryTrustedKey);
+  rpc RemoveRepositoryTrustedKey(RemoveRepositoryTrustedKeyRequest) returns (google.protobuf.Empty);
+
   // Tags
   rpc PutTag(PutTagRequest) returns (Tag);
   rpc GetTag(GetTagRequest) returns (Tag);
@@ -427,6 +437,50 @@ message UpdateRepositorySignaturePolicyRequest {
   string repo_id           = 1;
   string tenant_id         = 2;
   bool   require_signature = 3;
+}
+
+// Signed-image admission Phase 2 (futures.md Tier 1 #3). A single
+// approved signing key for a repo. `key_id` matches the same column
+// services/signer writes on SignManifest (truncated SHA256 of the
+// public key for Vault Transit; Fulcio cert fingerprint for keyless
+// Cosign). `display_name` is operator-facing context so the dashboard
+// table renders meaningful labels.
+message RepositoryTrustedKey {
+  string id            = 1;
+  string repo_id       = 2;
+  string tenant_id     = 3;
+  string key_id        = 4;
+  string display_name  = 5;
+  string added_by      = 6;
+  google.protobuf.Timestamp added_at = 7;
+}
+
+message ListRepositoryTrustedKeysRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+}
+
+message ListRepositoryTrustedKeysResponse {
+  repeated RepositoryTrustedKey keys = 1;
+}
+
+// AddRepositoryTrustedKey is idempotent on the (repo_id, key_id)
+// pair — re-adding an already-approved key returns the existing row
+// with its original added_at. The display_name + added_by from the
+// new request are silently dropped in that case so the audit trail
+// stays anchored to the first approval.
+message AddRepositoryTrustedKeyRequest {
+  string repo_id      = 1;
+  string tenant_id    = 2;
+  string key_id       = 3;
+  string display_name = 4;
+  string added_by     = 5;
+}
+
+message RemoveRepositoryTrustedKeyRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+  string key_id    = 3;
 }
 
 // Tag requests

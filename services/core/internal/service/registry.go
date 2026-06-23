@@ -684,17 +684,24 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 
 // checkSignatureAdmission rejects pulls from repos with
 // `require_signature=true` when the manifest has no recorded
-// signatures. Returns ErrSignatureRequired on rejection so the HTTP
-// layer can map to 403 DENIED.
+// signatures (Phase 1) — or, when the repo has a non-empty trusted-key
+// allowlist, when none of the recorded signatures came from an
+// allowed key_id (Phase 2). Returns ErrSignatureRequired on
+// rejection so the HTTP layer can map to 403 DENIED.
 //
-// Allows the pull in three "no policy / no service" scenarios:
+// Allows the pull in four "no policy / no service" scenarios:
 //   1. Repo fetch fails (metadata blip) → warn + allow.
 //   2. Repo.require_signature is false (the default) → allow.
 //   3. Signer not wired (CORE_SIGNER_GRPC_ADDR unset in dev) → warn + allow.
-// Rejects only when the repo asked for signatures, the signer is up,
-// and ListSignatures returned an empty list for this manifest_digest.
+//   4. Trusted-keys fetch fails (metadata blip on a separate read) → warn + allow.
 //
-// Futures.md Tier 1 #3 — Signed-image admission.
+// Phase 2 contract (empty allowlist = Phase 1 fallback):
+//   - allowlist=[]                  → any signature passes
+//   - allowlist=[k1, k2], sig=k1   → pass
+//   - allowlist=[k1, k2], sig=k3   → reject (key not approved)
+//   - allowlist=[k1], sig=none     → reject (no signature at all)
+//
+// Futures.md Tier 1 #3 — Signed-image admission (Phase 1 + Phase 2).
 func (r *Registry) checkSignatureAdmission(ctx context.Context, tenantID, repoID, manifestDigest string) error {
 	repo, err := r.metadata.GetRepository(ctx, &metadatav1.GetRepositoryRequest{
 		RepoId:   repoID,
@@ -739,7 +746,48 @@ func (r *Registry) checkSignatureAdmission(ctx context.Context, tenantID, repoID
 		)
 		return ErrSignatureRequired
 	}
-	return nil
+
+	// Phase 2 — narrow the gate to the trusted-key allowlist when the
+	// repo has one. Empty list means "any signature passes" by design
+	// so an operator can flip require_signature on first and pin keys
+	// incrementally without breaking pulls in the gap.
+	trusted, err := r.metadata.ListRepositoryTrustedKeys(ctx, &metadatav1.ListRepositoryTrustedKeysRequest{
+		TenantId: tenantID,
+		RepoId:   repoID,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "signature admission: ListRepositoryTrustedKeys failed (failing open)",
+			"err", err, "repo_id", repoID,
+		)
+		return nil
+	}
+	if len(trusted.GetKeys()) == 0 {
+		// Phase 1 fallback — any signature passes. We already confirmed
+		// at least one signature exists above, so we're done.
+		return nil
+	}
+	approved := make(map[string]struct{}, len(trusted.GetKeys()))
+	for _, k := range trusted.GetKeys() {
+		approved[k.GetKeyId()] = struct{}{}
+	}
+	for _, s := range sigs.GetSignatures() {
+		if _, ok := approved[s.GetKeyId()]; ok {
+			return nil
+		}
+	}
+	// Signed, but not by any approved key. Collect the seen key_ids so
+	// the operator gets actionable feedback in the registry-core logs
+	// — the rejection body is generic enough not to leak the
+	// allowlist over the wire, but the log line is for them.
+	seen := make([]string, 0, len(sigs.GetSignatures()))
+	for _, s := range sigs.GetSignatures() {
+		seen = append(seen, s.GetKeyId())
+	}
+	slog.WarnContext(ctx, "signature admission: rejecting — no signature from a trusted key",
+		"repo_id", repoID, "manifest_digest", manifestDigest,
+		"approved_count", len(approved), "seen_key_ids", seen,
+	)
+	return ErrSignatureRequired
 }
 
 // DeleteManifest removes a manifest by digest, or only a tag by name.

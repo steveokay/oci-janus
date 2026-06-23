@@ -379,6 +379,23 @@ func (f *fakeRepo) UpdateRepositorySignaturePolicy(_ context.Context, _, _ strin
 	return f.updateQuotaResult, f.updateQuotaErr
 }
 
+// Trusted-key allowlist (futures.md Tier 1 #3 Phase 2). No-op fakes;
+// integration coverage rides the live-stack smoke (PR #28 description)
+// because the interesting behaviour is the cross-service interaction
+// with services/core's admission gate, not the structural pass-through
+// on this handler.
+func (f *fakeRepo) ListRepositoryTrustedKeys(_ context.Context, _, _ string) ([]*metadatav1.RepositoryTrustedKey, error) {
+	return nil, nil
+}
+
+func (f *fakeRepo) AddRepositoryTrustedKey(_ context.Context, _, _, _, _, _ string) (*metadatav1.RepositoryTrustedKey, error) {
+	return nil, nil
+}
+
+func (f *fakeRepo) RemoveRepositoryTrustedKey(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 func (f *fakeRepo) UpdateTagImmutable(_ context.Context, _, _, _ string, _ bool) (*metadatav1.Tag, error) {
 	return f.putTagResult, f.putTagErr
 }

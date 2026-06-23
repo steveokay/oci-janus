@@ -47,7 +47,7 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     a `tag.promoted` audit event, optionally re-signs the manifest.
 - **Affects:** `services/core`, `services/metadata`, `frontend`.
 
-### 3. Admission policy — signed-image enforcement — DONE (Phase 1, 2026-06-23)
+### 3. Admission policy — signed-image enforcement — DONE (Phase 1 + Phase 2, 2026-06-23)
 - **Why:** Signing exists (REM-011 + FE-API-003/025/026) but nothing
   gates a pull on signature presence. A repo can be "signing required"
   in policy and still serve unsigned images.
@@ -72,11 +72,20 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     flips with the same shape; they compose independently).
   - Docs: README capability matrix, docs/SERVICES.md core+management,
     docs/SIGNING.md §8 admission walkthrough.
-- **Phase 2 (NOT STARTED):** per-repo trusted-signer-key allowlist —
-  current Phase 1 contract is "ANY signature passes". Until then an
-  operator who flips the flag on must also lock down which Cosign
-  identities can sign for the org (via Fulcio OIDC issuer claims,
-  not enforced here).
+- **Phase 2 (DONE 2026-06-23):** per-repo trusted-signer-key allowlist.
+  New `repository_trusted_keys` table (migration 00016) keyed by
+  `(repo_id, key_id)` + 3 metadata RPCs (List/Add/Remove) + 3 BFF
+  routes + `RepoTrustedKeysSection` card on the Settings tab.
+  services/core's `checkSignatureAdmission` intersects recorded
+  signature `key_id`s with the allowlist. Empty allowlist falls back
+  to Phase 1 "ANY signature passes" by design so the policy flip
+  doesn't break pulls in the gap. ListRepositoryTrustedKeys cached
+  for 30s via REM-007; Add/Remove bust the cache via a new
+  `bustTrustedKeysCache` helper so flips take effect on the next
+  pull.
+- **Phase 3 (deferred):** multi-key quorum ("require ≥N distinct
+  approved key_ids"), automated rotation/expiry, Cosign keyless
+  Fulcio identity binding. Not on a sprint yet.
 - **Affects (shipped):** `services/metadata`, `services/core`,
   `services/management`, `frontend`.
 

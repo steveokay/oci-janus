@@ -11,6 +11,7 @@ import { RetentionPanel } from "@/components/repositories/retention-panel";
 import { RepoScanPolicySection } from "@/components/repositories/repo-scan-policy-section";
 import { RepoImmutabilitySection } from "@/components/repositories/repo-immutability-section";
 import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
+import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
@@ -124,6 +125,13 @@ function RepositoryDetail(): React.ReactElement {
           {/* immutable, signed + mutable, etc.) so neither belongs      */}
           {/* "inside" the other.                                        */}
           <RepoSignaturePolicySection org={org} repo={repo} />
+          {/* Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key      */}
+          {/* allowlist. Sits directly under the policy toggle because */}
+          {/* the two compose: the toggle gates pulls on signature     */}
+          {/* presence; the allowlist narrows "any signature" down to  */}
+          {/* an approved set. Empty allowlist = Phase 1 fallback so   */}
+          {/* the cards stay independently useful.                     */}
+          <RepoTrustedKeysSection org={org} repo={repo} />
           {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
           {/* Other settings (quota override, description edit, etc.) */}
           {/* land here in future sprints alongside their backend     */}

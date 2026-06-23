@@ -248,6 +248,20 @@ func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOptio
 			},
 			New: func() proto.Message { return &metadatav1.QuotaUsage{} },
 		},
+		// Trusted-key allowlist read (futures.md Tier 1 #3 Phase 2).
+		// services/core's admission gate calls this on every pull when
+		// the repo's require_signature flag is on, so caching for 30s
+		// keeps the per-pull overhead at one Redis hit. Add/Remove of
+		// trusted keys explicitly bust this slot so the operator's
+		// flip is reflected on the next pull.
+		"/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys": {
+			TTL: 30 * time.Second,
+			KeyFunc: func(req proto.Message) string {
+				r := req.(*metadatav1.ListRepositoryTrustedKeysRequest)
+				return r.GetTenantId() + ":" + r.GetRepoId()
+			},
+			New: func() proto.Message { return &metadatav1.ListRepositoryTrustedKeysResponse{} },
+		},
 	})
 
 	interceptors := append(grpcmw.ServerInterceptors(), cacheInterceptor)

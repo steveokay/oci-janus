@@ -412,11 +412,72 @@ contract. If `SIGNER_GRPC_ADDR` is unset at boot, registry-core logs a
 startup warning and allows all pulls regardless of the flag (dev-stack
 convenience; production deployments always set this).
 
-**Phase 1 contract:** ANY signature passes. A per-repo trusted-key
-allowlist is a planned Phase 2 follow-up — until then, an operator who
-flips the flag on must also lock down which Cosign identities can sign
-for the org (typically via Fulcio OIDC issuer claims, not enforced
-here).
+**Phase 1 contract:** ANY signature passes. The gate only checks that
+the manifest has at least one row in the `signatures` table; the
+identity behind the signing key isn't constrained. Phase 2 (below)
+narrows the gate to an operator-approved allowlist of `key_id`s.
+
+**Phase 2 — per-repo trusted-key allowlist** (shipped 2026-06-23):
+
+Adds a `repository_trusted_keys` table keyed by `(repo_id, key_id)`.
+When `require_signature=true` AND the allowlist for that repo is
+non-empty, services/core's admission gate intersects the recorded
+signature key_ids with the allowlist; an empty intersection rejects
+with the same `403 DENIED` body as Phase 1's unsigned case.
+
+```
+require_signature=true, allowlist=[]            → any signature passes  (Phase 1 fallback)
+require_signature=true, allowlist=[k1, k2]      → only sigs by k1 or k2 pass
+require_signature=true, allowlist=[k1], sig=k2  → 403 DENIED
+require_signature=true, allowlist=[k1], sig=∅   → 403 DENIED (no signature at all)
+```
+
+The "empty allowlist = any signature passes" fallback is deliberate —
+operators can flip `require_signature` on first and pin keys
+incrementally without breaking pulls in the gap. Removing the last
+key in the allowlist widens the gate back to Phase 1 by the same
+contract; the dashboard surfaces this with a `Phase 1 fallback`
+warning pill so the operator knows what posture they're in.
+
+```
+# 1) Find the key_id you want to approve. Any signed tag's Signing
+#    panel surfaces the key_id under the signature, or you can grep
+#    services/signer's logs for the SignManifest result.
+curl -X POST https://api.example.com/api/v1/repositories/acme/api/tags/v1.2.3/sign \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"signer_id": "ci-prod"}'
+# response: {"signer_id":"ci-prod","key_id":"2630bb12c4c045bf",...}
+
+# 2) Approve the key for the repo. display_name is optional but
+#    strongly encouraged so the table doesn't render opaque hex.
+curl -X POST https://api.example.com/api/v1/repositories/acme/api/trusted-keys \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"key_id":"2630bb12c4c045bf","display_name":"ci-prod-2026"}'
+
+# 3) (Optional) revoke a key. Removing the last entry widens the gate
+#    back to Phase 1 "any signature passes" by design.
+curl -X DELETE https://api.example.com/api/v1/repositories/acme/api/trusted-keys/2630bb12c4c045bf \
+     -H "Authorization: Bearer $JWT"
+```
+
+**Dashboard:** the `Trusted signing keys` card on the repo Settings
+tab sits directly below `Signed-image admission`. Empty list with the
+policy on renders a `Phase 1 fallback` pill + warning banner.
+Per-key Approve/Revoke buttons gate on repo admin role.
+
+**What Phase 2 does NOT guarantee:**
+
+- **Key rotation policy.** Approved keys never expire automatically.
+  A rotated key needs the operator to revoke the old + approve the
+  new — there's no built-in TTL or rotation reminder.
+- **Identity verification at sign time.** Phase 2 trusts whatever
+  `key_id` came from services/signer at sign time. If your signing
+  pipeline is compromised, the key_id is too. Real-world deployments
+  should layer Cosign keyless (Fulcio OIDC) signing on top so the
+  identity behind a key_id is rooted in something stronger than
+  "whoever has the Vault token."
+- **Multi-key quorum.** Today, any one approved signature passes. A
+  "require N distinct approved key_ids" mode is a Phase 3 idea.
 
 **Dashboard:** the toggle lives on the repo Settings tab as
 `Signed-image admission` next to `Tag immutability` (both are
@@ -428,12 +489,16 @@ both valid combinations).
 
 | File | Why it exists |
 |---|---|
-| `services/metadata/migrations/00015_repository_require_signature.sql` | Adds the column with `DEFAULT FALSE` |
-| `proto/metadata/v1/metadata.proto` | `Repository.require_signature` field + `UpdateRepositorySignaturePolicy` RPC |
-| `services/core/internal/service/registry.go` (`checkSignatureAdmission`) | The fail-OPEN-on-blip gate called from `GetManifest`/`HeadManifest` |
-| `services/core/internal/service/errors.go` (`ErrSignatureRequired`) | Sentinel error mapped to 403 DENIED |
+| `services/metadata/migrations/00015_repository_require_signature.sql` | Adds the Phase 1 column with `DEFAULT FALSE` |
+| `services/metadata/migrations/00016_repository_trusted_keys.sql` | Phase 2 — `repository_trusted_keys` allowlist table |
+| `proto/metadata/v1/metadata.proto` | `Repository.require_signature` field + `UpdateRepositorySignaturePolicy` RPC (Phase 1); `RepositoryTrustedKey` message + List/Add/Remove RPCs (Phase 2) |
+| `services/core/internal/service/registry.go` (`checkSignatureAdmission`) | The fail-OPEN-on-blip gate called from `GetManifest`/`HeadManifest`; Phase 2 intersects recorded sig key_ids with the allowlist |
+| `services/core/internal/service/errors.go` (`ErrSignatureRequired`) | Sentinel error mapped to 403 DENIED — reused by Phase 2 |
 | `services/management/internal/handler/handler.go` (`updateRepositoryBody.RequireSignature`) | BFF PATCH plumbing — `*bool` nil-check so unrelated PATCHes don't reset the flag |
-| `frontend/src/components/repositories/repo-signature-policy-section.tsx` | Settings-tab card with toggle + explainer |
+| `services/management/internal/handler/trusted_keys.go` | Phase 2 — 3 routes (List/Add/Remove) wrapped behind repo admin gate |
+| `frontend/src/components/repositories/repo-signature-policy-section.tsx` | Phase 1 Settings-tab card with toggle + explainer |
+| `frontend/src/components/repositories/repo-trusted-keys-section.tsx` | Phase 2 Settings-tab card with allowlist table + Approve dialog |
+| `frontend/src/lib/api/trusted-keys.ts` | TanStack Query hooks for the Phase 2 routes |
 
 ---
 
