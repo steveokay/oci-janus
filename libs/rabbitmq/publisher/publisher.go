@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -16,7 +17,15 @@ import (
 
 // Publisher sends events to a RabbitMQ topic exchange using confirm mode.
 // Use New to create an instance; call Close when the service shuts down.
+//
+// Publisher is safe for concurrent use. The mu mutex serialises the publish-
+// then-read-confirmation sequence: AMQP delivery tags are per-channel
+// sequential and NotifyPublish delivers confirmations in tag order without
+// the value attached, so two unsynchronised callers would race and read each
+// other's ACK/NACK — silently breaking confirm mode's durability guarantee
+// (QA-002, 2026-06-23).
 type Publisher struct {
+	mu       sync.Mutex
 	conn     *amqp.Connection
 	ch       *amqp.Channel
 	confirms chan amqp.Confirmation
@@ -62,6 +71,11 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, event events
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
+	// Serialise publish+confirm so concurrent callers can't crosswire each
+	// other's ACK/NACK on the shared confirms channel. See type doc.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	err = p.ch.PublishWithContext(ctx, p.exchange, routingKey,
 		false, // mandatory — don't return if no queue bound (routing is the publisher's problem)
 		false, // immediate — not used with quorum queues
@@ -81,6 +95,17 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, event events
 
 	// Wait for the broker to confirm delivery. This is what makes confirm mode
 	// meaningful — without this wait the call would be fire-and-forget.
+	//
+	// On ctx-done or timeout we drain the still-pending confirmation
+	// synchronously before releasing the mutex. Without that drain a late
+	// confirmation would sit in p.confirms and be misread as the *next*
+	// caller's ACK, defeating the lock's whole purpose. Drain is bounded so
+	// a wedged broker can't deadlock the publisher — if drain itself times
+	// out the channel state is suspect and the broker is unresponsive
+	// anyway, so callers see a sticky error until reconnection logic (ARCH-006)
+	// resets the channel.
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
 	select {
 	case confirm, ok := <-p.confirms:
 		if !ok {
@@ -90,11 +115,23 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, event events
 			return fmt.Errorf("broker nacked message (delivery tag %d)", confirm.DeliveryTag)
 		}
 	case <-ctx.Done():
+		drainStaleConfirm(p.confirms)
 		return fmt.Errorf("context cancelled waiting for broker ack: %w", ctx.Err())
-	case <-time.After(10 * time.Second):
+	case <-timer.C:
+		drainStaleConfirm(p.confirms)
 		return fmt.Errorf("timeout waiting for broker ack")
 	}
 	return nil
+}
+
+// drainStaleConfirm absorbs the late confirmation for an aborted Publish so it
+// doesn't get misread as the next caller's ACK. Synchronous and bounded —
+// must complete (or give up) before Publish releases p.mu.
+func drainStaleConfirm(ch <-chan amqp.Confirmation) {
+	select {
+	case <-ch:
+	case <-time.After(30 * time.Second):
+	}
 }
 
 // Close shuts down the channel and connection. Always call on process exit.
