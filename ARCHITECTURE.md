@@ -229,6 +229,8 @@ Docker CLI         gateway     registry-core    registry-auth  registry-metadata
     │                 │               │──────────────────────────────────────────────────────────────────►│
 ```
 
+**Admission preflight on `PutManifest`** — `registry-core` calls `GetTag` then enforces tag immutability before writing (futures.md Tier 1 #2): if the parent repo has `immutable_tags=true` OR the per-tag `immutable=true` pin is set AND the new digest differs from the existing one, the push is rejected with `400 MANIFEST_INVALID` + body `tag is immutable (…); push to a new tag or unpin first`. Idempotent same-digest re-pushes always succeed (not a "move"). Repo-fetch failures fail OPEN so a transient metadata blip doesn't reject every push.
+
 **After the push** the `push.completed` RabbitMQ event fans out to the scanner, audit, and webhook workers (see §3.4).
 
 ---
@@ -247,6 +249,12 @@ Docker CLI         gateway      registry-core    registry-auth  registry-metadat
     │                 │                │ GetManifest (by tag or digest)  │                  │
     │                 │                │────────────────────────────────►│                  │
     │                 │                │◄───────────────────────────────│                  │
+    │                 │                │ checkSignatureAdmission         │                  │
+    │                 │                │ (futures.md Tier 1 #3):         │                  │
+    │                 │                │ • require_signature=true?       │                  │
+    │                 │                │ • signer.ListSignatures(digest) │                  │
+    │                 │                │ • trusted-key allowlist intersect (Phase 2)        │
+    │                 │                │ → 403 DENIED if no signed match │                  │
     │◄────────────────│────────────────│                │                │                  │
     │ 200 manifest JSON               │                │                │                  │
     │   Content-Type: application/vnd.oci…              │                │                  │

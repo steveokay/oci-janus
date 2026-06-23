@@ -2,6 +2,20 @@
 
 The monorepo has a single `.github/workflows/` directory. Jobs are **path-filtered** — a change under `services/core/` only triggers the `core` pipeline; a change under `libs/` triggers all service pipelines. Each service pipeline runs the same stages.
 
+### Workflow inventory
+
+One workflow file per service (`ci-<name>.yml`) plus shared jobs:
+
+| Workflow | Triggers |
+|---|---|
+| `ci-audit.yml`, `ci-auth.yml`, `ci-core.yml`, `ci-gateway.yml`, `ci-gc.yml`, `ci-metadata.yml`, `ci-proxy.yml`, `ci-scanner.yml`, `ci-signer.yml`, `ci-storage.yml`, `ci-tenant.yml`, `ci-webhook.yml` | Path filter on `services/<name>/**`; runs stages 1–7. |
+| `ci-libs.yml` | Path filter on `libs/**`; runs lint + test, then fans out to all per-service workflows (`libs/` is the shared layer — see "libs/ change triggers" below). |
+| `ci-proto.yml` | Path filter on `proto/**`; runs `make proto-lint` + `make proto-breaking`. |
+| `ci-ui.yml` | Path filter on `frontend/**`; runs `npx tsc --noEmit` + `npm run test` + `npm run build` against the Beacon dashboard. |
+| `ci-gitleaks.yml` | Repo-wide secret scan on every PR. |
+
+> **GAP — `services/management`.** No `ci-management.yml` exists today and no other workflow path-filters on `services/management/**`. A management-only change (BFF route, response shape) currently merges without dedicated CI coverage; reviewers rely on the broader integration suite + manual smoke. A `ci-management.yml` mirroring the other per-service workflows is on the next-sprint maintenance list.
+
 ## Stages
 
 ```
