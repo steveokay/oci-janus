@@ -386,6 +386,16 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
 
 ---
 
+### REM-015 — `libs/rabbitmq/consumer` retry counter is broken (latent bug, OPEN)
+- **Surfaced:** 2026-06-23 during Tier 1 #4 Phase 2 (PR #31) live smoke. The audit-export worker's retries looped infinitely instead of routing to DLX.
+- **Root cause:** `consumer.handle` uses `deathCount(d)` (sum of `x-death` header counts) to decide whether to NACK with requeue=true (retry) or requeue=false (DLX). But `x-death` is added by RabbitMQ only when a message is dead-lettered — `Nack(requeue=true)` returns the message to the same queue WITHOUT incrementing `x-death`. So `retries` stays at 0 forever for transient handler errors and the message bounces between the consumer + queue indefinitely.
+- **Affects every consumer in libs/rabbitmq/consumer** but only triggers when the handler returns an error on a queue config that has `x-dead-letter-exchange` set (every service in this repo). Current behaviour is masked because most handlers today either succeed on retry or return `nil` for permanent errors (ACK).
+- **Workaround (Phase 2 of #4):** `services/audit/internal/exportworker` writes a thin direct `amqp091` consumer instead of using the shared one. `export.Deliver` handles the in-process retry budget; `NACK(requeue=false)` routes straight to DLX. Documented inline in the package.
+- **Proper fix:** track redelivery count via either (a) `Delivery.Redelivered` flag + in-memory counter keyed by `Delivery.DeliveryTag`, (b) a `x-retry-count` custom header the producer/consumer manages, or (c) a delayed-retry queue chain that uses TTL+DLX to cap retries via timer. Option (a) is the smallest change.
+- **Estimated work:** ~2-3 hours including unit tests + a regression test for the requeue-loop scenario. Touches every service that uses `libs/rabbitmq/consumer` only for verification — no API change.
+
+---
+
 ### Tag immutability — repo flag + per-tag pin (2026-06-23, in progress)
 - **Affects:** `proto/metadata/v1`, `services/metadata`, `services/core`, `services/management`, `frontend`
 - **Status:** Backend DONE ✅ on `feat/tag-immutability`; FE toggle + pin affordance pending on the same branch. Promotion workflow (cross-repo manifest copy) deferred to a follow-up PR per futures.md Tier 1 #2.
