@@ -366,6 +366,81 @@ quickly in real operator workflows.
   emits both `.updated` and `.disabled` on a `{disabled:true}` body —
   cosmetic over-emission, can be deduped in a small future PR.
 
+### FUT-007-FE: Domain re-poll reset action — ~1h
+- **Why:** After 48h of failed DNS TXT verification the worker gives
+  up on a `tenant_domains` row. Operator's only recourse today is
+  delete + re-register. A small "Re-arm polling" button on the row
+  (or auto-reset on Verify Now success) closes that cliff without
+  forcing a re-register cycle.
+- **Scope:** repo method to clear the 48h notify timestamps + reset
+  `next_poll_after`, BFF route, FE button on the domain row.
+- **Affects:** `services/tenant`, `services/management`, `frontend`.
+- **Surfaced:** 2026-06-23 custom-domain documentation pass.
+
+### FUT-008: Sign dialog "Recent signer_ids" dropdown — ~1h
+- **Why:** Today the Sign dialog asks for `signer_id` as a free-form
+  string — operators type the label from memory. Mirror PR #36's
+  trusted-key picker pattern: surface the distinct `signer_id` values
+  this tenant has used recently in a dropdown alongside the existing
+  input. Cheap UX patch.
+- **Note:** Only worth doing if FUT-009 is going to wait more than
+  one sprint. FUT-009 supersedes this entirely by replacing free-form
+  `signer_id` strings with service-account principals.
+- **Affects:** `services/management`, `frontend`.
+
+### FUT-009: Service-account-as-signing-identity — ~5h
+- **Why:** Today `POST /repositories/{org}/{repo}/tags/{tag}/sign`
+  takes a free-form `signer_id` string. No validation, no lifecycle,
+  no link to a real principal. The audit trail records the string
+  but can't tie it back to a tenant resource. Service accounts
+  (FE-API-048) already model "non-human principal" with full
+  lifecycle; reusing them as signing identities lines up cleanly.
+- **What:**
+  - BFF Sign route accepts `service_account_id`; resolves the SA
+    (must exist + be enabled + belong to caller's tenant) → records
+    the SA's shadow user_id as `signer_id` in the signatures table.
+  - Sign dialog: replace free-form Input with a `<Select>` populated
+    from the existing `useServiceAccounts()` hook.
+  - Tag detail Signing panel: render SA display name when
+    `signer_id` is a UUID; preserve free-form display for historical
+    rows.
+  - Recommendation: dashboard-only restriction (cosign CLI path
+    stays untouched — it doesn't hit this BFF endpoint).
+- **Scope:** no proto change, no migration. ~2h backend, ~2h FE,
+  ~30min docs, ~30min smoke.
+- **Affects:** `services/management`, `frontend`, `docs/SIGNING.md`.
+
+### DEPLOY-001: Self-hosted vs SaaS deployment-model docs — discussion + ~1 day
+- **Why:** The platform is multi-tenant by design (every row has
+  `tenant_id`; custom domains let a tenant white-label;
+  platform-admin marker `(admin, org, *)` separates super-admin
+  surfaces). But the operator-facing story isn't explicit. Same
+  binary serves both:
+  - **SaaS mode:** one provider runs the stack, many tenants
+    subscribe. Provider holds platform-admin marker;
+    `/admin/tenants` is an active surface.
+  - **Self-hosted mode:** one company runs the stack for
+    themselves. They're both platform admin AND the only tenant.
+    Same code, degenerate multi-tenant case.
+- **Surfaced gaps to address:**
+  - The dev `admin` user holds BOTH tenant-admin role AND the
+    platform-admin marker — testing UI conflates the two views.
+  - No documented "tenant persona" testing path (create a
+    non-admin user, log in, confirm `/admin/*` routes are 404).
+  - No `docs/DEPLOYMENT-MODELS.md` covering the SaaS-vs-self-hosted
+    distinction + which knobs differ + how to onboard a fresh
+    tenant.
+  - Likely follow-ups once tested: tenant self-signup flow (Tier 3
+    already lists this), team-invite flow, per-tenant theming,
+    plan-tier feature gating (`tenants.plan` column exists but
+    nothing reads it).
+- **Scope:** ~30min to seed a tenant-only user (no platform-admin
+  marker) for testing. ~half-day to write `docs/DEPLOYMENT-MODELS.md`
+  covering both modes + persona mapping + onboarding paths.
+  Recommended before any external user trial.
+- **Affects:** `services/auth` (seed migration for tenant-only user),
+  new `docs/DEPLOYMENT-MODELS.md`, possibly small README updates.
+
 ---
 
 ## Tier 3 — Nice-to-have polish
