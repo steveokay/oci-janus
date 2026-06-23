@@ -20,8 +20,6 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/ui/error-state";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Settings } from "lucide-react";
 
 // F4 follow-up — accept an optional ?type=<artifact-type> search param so
 // that landing on a repo detail page from /helm pre-applies the Helm chip

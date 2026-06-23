@@ -10,6 +10,7 @@ import { StorageBreakdownCard } from "@/components/dashboard/storage-breakdown-c
 import { ErrorState } from "@/components/ui/error-state";
 import { SeverityBar } from "@/components/security/severity-bar";
 import { useStats } from "@/lib/api/stats";
+import { useMe } from "@/lib/api/me";
 import { formatCompactNumber } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth/store";
 
@@ -19,9 +20,18 @@ export const Route = createFileRoute("/_authenticated/")({
 
 function DashboardHome(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
+  const { data: me } = useMe();
   const { data, isLoading, isError, refetch } = useStats();
 
   const greeting = useGreeting();
+  // Service-account principals fall back to a non-personal salutation
+  // (DSGN-022). The time-of-day greeting + first-name pattern reads as
+  // affectionate-toward-a-human; surfacing the SA name as the actor it
+  // is, instead of "operator", makes the dashboard feel correct when a
+  // CI bot is the one logged in.
+  const isServiceAccount = (me?.type ?? "user") === "service_account";
+  const saName =
+    me?.service_account?.name ?? me?.display_name ?? "Service Account";
   const subjectName = claims?.username ?? "operator";
 
   return (
@@ -31,7 +41,13 @@ function DashboardHome(): React.ReactElement {
           Overview
         </p>
         <h1 className="font-display text-3xl font-medium tracking-tight">
-          {greeting}, {subjectName}.
+          {isServiceAccount ? (
+            <>Authenticated as {saName}.</>
+          ) : (
+            <>
+              {greeting}, {subjectName}.
+            </>
+          )}
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">
           Your registry control plane — refreshed every 30 seconds.

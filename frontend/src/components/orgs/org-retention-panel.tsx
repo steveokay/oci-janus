@@ -24,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   describeRule,
   ruleLabel,
@@ -138,18 +139,13 @@ function OrgPolicySummary({
 }): React.ReactElement {
   const del = useDeleteOrgRetention(org);
   const disabled = !policy.enabled;
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   async function onRemoveDefault(): Promise<void> {
-    if (
-      !window.confirm(
-        "Remove the org-default retention policy? Every repository inheriting it will fall back to 'no policy'. This does not delete any manifests.",
-      )
-    ) {
-      return;
-    }
     try {
       await del.mutateAsync();
       toast.success("Org-default retention policy removed.");
+      setConfirmOpen(false);
     } catch (e) {
       const status = (e as AxiosError | undefined)?.response?.status;
       toast.error(
@@ -188,7 +184,7 @@ function OrgPolicySummary({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onRemoveDefault}
+              onClick={() => setConfirmOpen(true)}
               disabled={del.isPending}
             >
               <Trash2 className="size-3.5" />
@@ -206,6 +202,17 @@ function OrgPolicySummary({
         <ProtectedPatterns patterns={policy.protected_tag_patterns} />
         <MetaFooter policy={policy} />
       </CardContent>
+
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Remove org-default retention policy?"
+        description="Every repository inheriting it will fall back to 'no policy'. This does not delete any manifests."
+        severity="low"
+        confirmLabel="Remove default"
+        loading={del.isPending}
+        onConfirm={onRemoveDefault}
+      />
     </Card>
   );
 }

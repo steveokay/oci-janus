@@ -91,6 +91,16 @@ function DomainsPage(): React.ReactElement {
                   Register domain
                 </Button>
               }
+              secondaryAction={
+                <a
+                  href="https://github.com/steveokay/oci-janus/blob/main/docs/CUSTOM-DOMAINS.md"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-[var(--color-accent)] underline-offset-4 hover:underline"
+                >
+                  Read the docs
+                </a>
+              }
             />
           </CardContent>
         </Card>

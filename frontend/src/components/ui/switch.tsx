@@ -12,7 +12,8 @@ export const Switch = React.forwardRef<
       className={cn(
         "peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full",
         "border border-transparent transition-colors",
-        "focus-visible:outline-none",
+        // Visible focus ring (DSGN-017, WCAG 2.4.7).
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]",
         "data-[state=checked]:bg-[var(--color-accent)]",
         "data-[state=unchecked]:bg-[var(--color-border-strong)]",
         "disabled:cursor-not-allowed disabled:opacity-50",

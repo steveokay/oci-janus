@@ -30,7 +30,9 @@ export const TabsTrigger = React.forwardRef<
       className={cn(
         "relative inline-flex h-10 items-center gap-2 rounded-sm px-3 text-sm font-medium",
         "text-[var(--color-fg-muted)] transition-colors",
-        "hover:text-[var(--color-fg)] focus-visible:outline-none",
+        // Visible focus ring (DSGN-017). The selected-state underline is
+        // a separate cue; the ring is what keyboard users see when focused.
+        "hover:text-[var(--color-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]",
         "data-[state=active]:text-[var(--color-fg)]",
         // The active state paints a 2px underline that aligns with the bottom
         // border of TabsList — gives the tab a precise selection cue without

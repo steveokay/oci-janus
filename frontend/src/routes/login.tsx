@@ -51,10 +51,11 @@ function LoginPage(): React.ReactElement {
     defaultValues: { username: "", password: "" },
   });
 
-  // Tenant is fixed per environment — see VITE_DEFAULT_TENANT_ID.
-  // We surface the UUID in the form footer for transparency without
-  // making it editable; flipping tenants in dev should be a config change,
-  // not a typed-in UUID at a login form.
+  // Tenant is fixed per environment — see VITE_DEFAULT_TENANT_ID. We
+  // don't surface the UUID pre-login (DSGN-014): no UX value to an
+  // unauthenticated visitor, and tenant IDs are filter keys we'd rather
+  // not leak. Post-login the topbar shows a short chip for the signed-in
+  // tenant.
   const tenantId =
     import.meta.env.VITE_DEFAULT_TENANT_ID ?? "";
 
@@ -191,9 +192,6 @@ function LoginPage(): React.ReactElement {
 
         <div className="mt-6 flex flex-col items-center gap-1 text-center text-xs text-[var(--color-fg-subtle)]">
           <span>Trouble signing in? Ask your platform administrator.</span>
-          {tenantId ? (
-            <span className="font-mono">tenant · {tenantId.slice(0, 8)}…</span>
-          ) : null}
         </div>
       </motion.div>
     </div>

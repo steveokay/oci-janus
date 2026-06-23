@@ -26,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui/error-state";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   useAuditExportConfig,
   useUpdateAuditExportConfig,
@@ -130,6 +131,7 @@ function AuditExportPage(): React.ReactElement {
   const test = useTestAuditExportConfig();
   const drain = useDrainAuditExportDLX();
   const [lastTest, setLastTest] = React.useState<AuditExportTestResponse | null>(null);
+  const [clearOpen, setClearOpen] = React.useState(false);
 
   // Hook form is re-initialised every time the GET resolves so the
   // form state stays in sync with the server-side row. defaultValues
@@ -209,13 +211,11 @@ function AuditExportPage(): React.ReactElement {
   }
 
   async function onDelete(): Promise<void> {
-    if (!window.confirm("Clear the audit export config? Streaming will stop on the next event.")) {
-      return;
-    }
     try {
       await remove.mutateAsync();
       toast.success("Audit export config cleared.");
       setLastTest(null);
+      setClearOpen(false);
     } catch (e) {
       const code = (e as AxiosError | undefined)?.response?.status;
       toast.error(code === 403 ? "Workspace admin role required." : "Couldn't clear config.");
@@ -485,7 +485,7 @@ function AuditExportPage(): React.ReactElement {
                   variant="ghost"
                   className="text-[var(--color-danger)]"
                   disabled={remove.isPending}
-                  onClick={() => void onDelete()}
+                  onClick={() => setClearOpen(true)}
                 >
                   <Trash2 className="size-3.5" /> Clear config
                 </Button>
@@ -496,6 +496,17 @@ function AuditExportPage(): React.ReactElement {
       </Card>
 
       {lastTest ? <TestResultCard result={lastTest} /> : null}
+
+      <ConfirmDestructiveDialog
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title="Clear audit export config?"
+        description="Streaming will stop on the next event. Saved secrets are deleted from the database; you'll need to re-enter them to re-enable export."
+        severity="low"
+        confirmLabel="Clear config"
+        loading={remove.isPending}
+        onConfirm={onDelete}
+      />
     </div>
   );
 }

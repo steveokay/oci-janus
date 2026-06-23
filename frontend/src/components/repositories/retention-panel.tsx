@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   describeRule,
   useDeleteRepoRetention,
@@ -265,25 +266,16 @@ function PolicySummary({
   const inherited = policy.inherited_from === "org";
   const disabled = !policy.enabled;
   const del = useDeleteRepoRetention(org, repo);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   // Remove-override only makes sense for a per-repo row; for inherited
   // rows the DELETE would 404 (no per-repo row to remove). Hide the
   // button so the operator never sees a tooltip they can't fix.
   async function onRemoveOverride(): Promise<void> {
-    // Confirm in-place rather than via a separate dialog — destructive
-    // but reversible (the operator can re-create), and the inheritance
-    // safety net means nothing immediately deletes. Lighter than the
-    // type-to-confirm pattern used for repo delete.
-    if (
-      !window.confirm(
-        "Remove this per-repo retention override? The repo will fall back to the org default (or have no policy if no default exists). This does not delete any manifests.",
-      )
-    ) {
-      return;
-    }
     try {
       await del.mutateAsync();
       toast.success("Per-repo retention override removed.");
+      setConfirmOpen(false);
     } catch (e) {
       const status = (e as AxiosError | undefined)?.response?.status;
       toast.error(
@@ -344,7 +336,7 @@ function PolicySummary({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={onRemoveOverride}
+                onClick={() => setConfirmOpen(true)}
                 disabled={del.isPending}
               >
                 <Trash2 className="size-3.5" />
@@ -364,6 +356,17 @@ function PolicySummary({
         <ProtectedPatterns patterns={policy.protected_tag_patterns} />
         <MetaFooter policy={policy} />
       </CardContent>
+
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Remove per-repo retention override?"
+        description="The repo will fall back to the org default (or have no policy if no default exists). This does not delete any manifests."
+        severity="low"
+        confirmLabel="Remove override"
+        loading={del.isPending}
+        onConfirm={onRemoveOverride}
+      />
     </Card>
   );
 }

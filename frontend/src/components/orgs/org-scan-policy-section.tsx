@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   BLOCK_SEVERITY_CHOICES,
   CVE_ID_REGEX,
@@ -121,18 +122,13 @@ function ScanPolicySummary({
 }): React.ReactElement {
   const del = useDeleteOrgScanPolicy(org);
   const disabled = !policy.enabled;
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   async function onRemove(): Promise<void> {
-    if (
-      !window.confirm(
-        "Remove the org-default scan policy? Every repo inheriting it will fall back to the tenant policy (or the platform default if no tenant row exists). This does not cancel any in-flight scans.",
-      )
-    ) {
-      return;
-    }
     try {
       await del.mutateAsync();
       toast.success("Org-default scan policy removed.");
+      setConfirmOpen(false);
     } catch (e) {
       const status = (e as AxiosError | undefined)?.response?.status;
       toast.error(
@@ -175,7 +171,7 @@ function ScanPolicySummary({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onRemove}
+              onClick={() => setConfirmOpen(true)}
               disabled={del.isPending}
             >
               <Trash2 className="size-3.5" />
@@ -226,6 +222,17 @@ function ScanPolicySummary({
           </span>
         </div>
       </CardContent>
+
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Remove org-default scan policy?"
+        description="Every repo inheriting it will fall back to the tenant policy (or the platform default if no tenant row exists). This does not cancel any in-flight scans."
+        severity="low"
+        confirmLabel="Remove default"
+        loading={del.isPending}
+        onConfirm={onRemove}
+      />
     </Card>
   );
 }

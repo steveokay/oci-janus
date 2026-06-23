@@ -49,7 +49,9 @@ export const DialogContent = React.forwardRef<
           className={cn(
             "absolute right-4 top-4 rounded-md p-1 text-[var(--color-fg-muted)]",
             "transition-colors hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]",
-            "focus-visible:outline-none",
+            // Visible focus ring (DSGN-017). Offset 1 because the button sits
+            // tight against the dialog corner; a wider offset would clip.
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface)]",
           )}
           aria-label="Close"
         >

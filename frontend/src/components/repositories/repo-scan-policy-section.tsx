@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   BLOCK_SEVERITY_CHOICES,
   CVE_ID_REGEX,
@@ -132,18 +133,13 @@ function PolicySummary({
   const del = useDeleteRepoScanPolicy(org, repo);
   const isOverride = policy.inherited_from === "repo";
   const disabled = !policy.enabled;
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   async function onRemove(): Promise<void> {
-    if (
-      !window.confirm(
-        "Remove this per-repo scan policy override? The repo falls back to the org default (or the tenant policy if no org default). This does not cancel any in-flight scans or lift any active quarantines.",
-      )
-    ) {
-      return;
-    }
     try {
       await del.mutateAsync();
       toast.success("Per-repo scan policy override removed.");
+      setConfirmOpen(false);
     } catch (e) {
       const status = (e as AxiosError | undefined)?.response?.status;
       toast.error(
@@ -190,7 +186,7 @@ function PolicySummary({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={onRemove}
+                onClick={() => setConfirmOpen(true)}
                 disabled={del.isPending}
               >
                 <Trash2 className="size-3.5" />
@@ -242,6 +238,17 @@ function PolicySummary({
           </span>
         </div>
       </CardContent>
+
+      <ConfirmDestructiveDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Remove per-repo scan policy override?"
+        description="The repo falls back to the org default (or the tenant policy if no org default). This does not cancel any in-flight scans or lift any active quarantines."
+        severity="low"
+        confirmLabel="Remove override"
+        loading={del.isPending}
+        onConfirm={onRemove}
+      />
     </Card>
   );
 }
