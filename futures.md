@@ -89,7 +89,7 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 - **Affects (shipped):** `services/metadata`, `services/core`,
   `services/management`, `frontend`.
 
-### 4. Audit log streaming to SIEM — DONE (Phase 1, 2026-06-23)
+### 4. Audit log streaming to SIEM — DONE (Phase 1 + Phase 2, 2026-06-23)
 - **Why:** Enterprise procurement asks for syslog/CEF export on day one.
   Customers want every push, pull, role grant, signed scan in Splunk /
   Datadog / Elastic for their own retention + correlation.
@@ -119,15 +119,38 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     button / observability pills + last-success / dlx_depth banner.
   - Live verified: `image.signed` event flowed audit DB → exporter
     → HMAC-signed POST → receiver with sig-ok=true in ~3s end-to-end.
-- **Phase 2 (deferred):** promote dispatch to a separate RabbitMQ
-  queue with proper DLX semantics — `audit.export.<format>` queue
-  per format, `dlx.audit-export` on exhaustion, an admin "drain"
-  action on the dashboard that replays from the DLX after the
-  operator fixes their SIEM. The in-process path stays valid as a
-  fast path once the queue lands (additive design).
+- **What shipped (Phase 2, same branch follow-on 2026-06-23):**
+  - New `services/audit/internal/exportworker/` package — Publisher
+    (eventconsumer enqueue path), Consumer (drains audit.export.tasks
+    + runs `export.Deliver` + ACK on success / NACK→DLX on exhaustion),
+    Drain (one-shot republish from DLX → tasks queue), MgmtClient
+    (RabbitMQ Management HTTP API for live queue depth).
+  - `audit.export` topic exchange + `audit.export.tasks` quorum
+    queue with `x-dead-letter-exchange = dlx.audit-export` + paired
+    `audit.export.dlx` quorum queue bound on `#`.
+  - 5th gRPC RPC: `DrainAuditExportDLX(tenant_id) → republished`.
+    BFF route: `POST /api/v1/workspace/me/audit-export/drain`. FE:
+    "Drain DLX → retry" button appears when `dlx_queue_depth > 0`.
+  - Proto + repo + handler extended with `dlx_queue_depth` (live)
+    distinct from `dlx_depth` (lifetime monotonic). -1 surfaces as
+    "depth unknown" when Mgmt API is unreachable so the FE
+    distinguishes that from "empty."
+  - Producer side becomes near-instant (publish-confirm only) so a
+    slow SIEM never back-pressures the audit DB INSERT path.
+  - Phase 1 inline dispatcher kept as a safety net for environments
+    without RabbitMQ — operator can revert by unsetting RABBITMQ_URL.
+- **Live verified:** kill receiver → fire 3 sign events → DLX fills
+  to 3 (live depth matches Mgmt API) → restart receiver → POST
+  /drain returns `republished: 3` → consumer re-ships → receiver
+  gets all 3 with `sig-ok=true` → DLX back to 0 →
+  `last_success_at` advances.
+- **Phase 3 (deferred):** delayed-retry queues (per-tenant
+  exponential backoff via TTL chains), per-format throughput
+  shaping, Mgmt API auto-rotation for the RabbitMQ user the audit
+  service uses to query the Mgmt API.
 - **Affects (shipped):** `services/audit`, `services/management`,
   `frontend`, `infra/docker-compose`.
-- **Docs:** `docs/SIEM-EXPORT.md`.
+- **Docs:** `docs/SIEM-EXPORT.md` §7 (full retry + DLX walkthrough).
 
 ### 5. SCIM provisioning
 - **Why:** Manual user lifecycle doesn't scale past ~50-user customers.

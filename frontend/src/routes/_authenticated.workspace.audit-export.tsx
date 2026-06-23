@@ -31,6 +31,7 @@ import {
   useUpdateAuditExportConfig,
   useDeleteAuditExportConfig,
   useTestAuditExportConfig,
+  useDrainAuditExportDLX,
 } from "@/lib/api/audit-export";
 import type { AuditExportFormat, AuditExportTestResponse } from "@/lib/api/types";
 
@@ -127,6 +128,7 @@ function AuditExportPage(): React.ReactElement {
   const update = useUpdateAuditExportConfig();
   const remove = useDeleteAuditExportConfig();
   const test = useTestAuditExportConfig();
+  const drain = useDrainAuditExportDLX();
   const [lastTest, setLastTest] = React.useState<AuditExportTestResponse | null>(null);
 
   // Hook form is re-initialised every time the GET resolves so the
@@ -258,7 +260,27 @@ function AuditExportPage(): React.ReactElement {
       {cfg.isLoading ? (
         <Skeleton className="h-24 w-full" />
       ) : cfg.data ? (
-        <ObservabilityCard cfg={cfg.data} />
+        <ObservabilityCard
+          cfg={cfg.data}
+          onDrain={async () => {
+            try {
+              const r = await drain.mutateAsync();
+              toast.success(
+                r.republished === 0
+                  ? "DLX is empty — nothing to drain."
+                  : `Drained ${r.republished} parked event${r.republished === 1 ? "" : "s"}.`,
+              );
+            } catch (e) {
+              const code = (e as AxiosError | undefined)?.response?.status;
+              toast.error(
+                code === 503
+                  ? "DLX probe not wired on the audit service."
+                  : "Couldn't drain DLX. Check the audit logs.",
+              );
+            }
+          }}
+          draining={drain.isPending}
+        />
       ) : null}
 
       <Card>
@@ -478,8 +500,21 @@ function AuditExportPage(): React.ReactElement {
   );
 }
 
-function ObservabilityCard({ cfg }: { cfg: import("@/lib/api/types").AuditExportConfig }): React.ReactElement {
-  const healthy = !!cfg.last_success_at && (cfg.dlx_depth === 0 || !cfg.last_error);
+interface ObservabilityCardProps {
+  cfg: import("@/lib/api/types").AuditExportConfig;
+  onDrain: () => Promise<void>;
+  draining: boolean;
+}
+
+function ObservabilityCard({ cfg, onDrain, draining }: ObservabilityCardProps): React.ReactElement {
+  // dlx_queue_depth is the LIVE count from the RabbitMQ Mgmt API.
+  // dlx_depth is the cumulative monotonic counter. Both are surfaced
+  // but the actionable signal is the live one — drain only does
+  // anything when dlx_queue_depth > 0.
+  const liveQueued = cfg.dlx_queue_depth;
+  const queueUnknown = liveQueued < 0;
+  const stuckInQueue = liveQueued > 0;
+  const healthy = !!cfg.last_success_at && !stuckInQueue && !cfg.last_error;
   return (
     <Card accentBar={healthy ? "accent" : "danger"}>
       <CardContent className="flex flex-wrap items-center gap-4 py-3">
@@ -502,10 +537,26 @@ function ObservabilityCard({ cfg }: { cfg: import("@/lib/api/types").AuditExport
             {cfg.last_success_at ? new Date(cfg.last_success_at).toLocaleString() : "never"}
           </span>
         </span>
-        {cfg.dlx_depth > 0 ? (
+        {stuckInQueue ? (
           <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-warning)]">
             <AlertTriangle className="size-3.5" />
-            {cfg.dlx_depth} event{cfg.dlx_depth === 1 ? "" : "s"} stuck
+            <strong>{liveQueued}</strong> event{liveQueued === 1 ? "" : "s"} parked in DLX
+          </span>
+        ) : queueUnknown ? (
+          <span className="text-xs text-[var(--color-fg-muted)]">
+            DLX depth unavailable (RabbitMQ Mgmt API unreachable)
+          </span>
+        ) : (
+          <span className="text-xs text-[var(--color-fg-muted)]">
+            DLX empty
+          </span>
+        )}
+        {cfg.dlx_depth > 0 ? (
+          <span
+            className="text-[11px] text-[var(--color-fg-subtle)]"
+            title="Cumulative count of events that have ever landed in the DLX"
+          >
+            (lifetime parked: {cfg.dlx_depth})
           </span>
         ) : null}
         {cfg.last_error ? (
@@ -515,6 +566,17 @@ function ObservabilityCard({ cfg }: { cfg: import("@/lib/api/types").AuditExport
           >
             Last error: {cfg.last_error}
           </span>
+        ) : null}
+        {stuckInQueue ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={draining}
+            onClick={() => void onDrain()}
+            className="ml-auto"
+          >
+            {draining ? "Draining…" : "Drain DLX → retry"}
+          </Button>
         ) : null}
       </CardContent>
     </Card>

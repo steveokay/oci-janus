@@ -29,6 +29,7 @@ const (
 	AuditService_PutAuditExportConfig_FullMethodName    = "/registry.audit.v1.AuditService/PutAuditExportConfig"
 	AuditService_DeleteAuditExportConfig_FullMethodName = "/registry.audit.v1.AuditService/DeleteAuditExportConfig"
 	AuditService_TestAuditExportConfig_FullMethodName   = "/registry.audit.v1.AuditService/TestAuditExportConfig"
+	AuditService_DrainAuditExportDLX_FullMethodName     = "/registry.audit.v1.AuditService/DrainAuditExportDLX"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -96,6 +97,13 @@ type AuditServiceClient interface {
 	PutAuditExportConfig(ctx context.Context, in *PutAuditExportConfigRequest, opts ...grpc.CallOption) (*AuditExportConfig, error)
 	DeleteAuditExportConfig(ctx context.Context, in *DeleteAuditExportConfigRequest, opts ...grpc.CallOption) (*DeleteAuditExportConfigResponse, error)
 	TestAuditExportConfig(ctx context.Context, in *TestAuditExportConfigRequest, opts ...grpc.CallOption) (*TestAuditExportConfigResponse, error)
+	// Audit-export DLX drain (futures.md Tier 1 #4 Phase 2). One-shot
+	// admin action that consumes every parked message in dlx.audit-export
+	// belonging to the calling tenant and re-publishes onto the main
+	// audit.export queue. Bounded at 10k messages per call so an
+	// operator triggering it on a catastrophically-full DLX doesn't
+	// hang the request — subsequent calls drain incrementally.
+	DrainAuditExportDLX(ctx context.Context, in *DrainAuditExportDLXRequest, opts ...grpc.CallOption) (*DrainAuditExportDLXResponse, error)
 }
 
 type auditServiceClient struct {
@@ -206,6 +214,16 @@ func (c *auditServiceClient) TestAuditExportConfig(ctx context.Context, in *Test
 	return out, nil
 }
 
+func (c *auditServiceClient) DrainAuditExportDLX(ctx context.Context, in *DrainAuditExportDLXRequest, opts ...grpc.CallOption) (*DrainAuditExportDLXResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DrainAuditExportDLXResponse)
+	err := c.cc.Invoke(ctx, AuditService_DrainAuditExportDLX_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -271,6 +289,13 @@ type AuditServiceServer interface {
 	PutAuditExportConfig(context.Context, *PutAuditExportConfigRequest) (*AuditExportConfig, error)
 	DeleteAuditExportConfig(context.Context, *DeleteAuditExportConfigRequest) (*DeleteAuditExportConfigResponse, error)
 	TestAuditExportConfig(context.Context, *TestAuditExportConfigRequest) (*TestAuditExportConfigResponse, error)
+	// Audit-export DLX drain (futures.md Tier 1 #4 Phase 2). One-shot
+	// admin action that consumes every parked message in dlx.audit-export
+	// belonging to the calling tenant and re-publishes onto the main
+	// audit.export queue. Bounded at 10k messages per call so an
+	// operator triggering it on a catastrophically-full DLX doesn't
+	// hang the request — subsequent calls drain incrementally.
+	DrainAuditExportDLX(context.Context, *DrainAuditExportDLXRequest) (*DrainAuditExportDLXResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -306,6 +331,9 @@ func (UnimplementedAuditServiceServer) DeleteAuditExportConfig(context.Context, 
 }
 func (UnimplementedAuditServiceServer) TestAuditExportConfig(context.Context, *TestAuditExportConfigRequest) (*TestAuditExportConfigResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TestAuditExportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) DrainAuditExportDLX(context.Context, *DrainAuditExportDLXRequest) (*DrainAuditExportDLXResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DrainAuditExportDLX not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -499,6 +527,24 @@ func _AuditService_TestAuditExportConfig_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_DrainAuditExportDLX_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainAuditExportDLXRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).DrainAuditExportDLX(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_DrainAuditExportDLX_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).DrainAuditExportDLX(ctx, req.(*DrainAuditExportDLXRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -545,6 +591,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TestAuditExportConfig",
 			Handler:    _AuditService_TestAuditExportConfig_Handler,
+		},
+		{
+			MethodName: "DrainAuditExportDLX",
+			Handler:    _AuditService_DrainAuditExportDLX_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

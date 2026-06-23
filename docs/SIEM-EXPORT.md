@@ -4,11 +4,13 @@
 > Datadog, Elastic, custom collector) to receive every audit event;
 > developers extending the renderer or adding a new format.
 >
-> **Status:** futures.md Tier 1 #4 Phase 1 shipped 2026-06-23. Three
-> formats (syslog RFC 5424, CEF, HTTPS webhook); per-tenant config;
-> AES-256-GCM-encrypted shared secret + bearer token; SSRF guard;
-> observability counters (`last_success_at`, `last_error`,
-> `dlx_depth`). Async DLX queue + replay is Phase 2.
+> **Status:** futures.md Tier 1 #4 Phase 1 + Phase 2 shipped 2026-06-23.
+> Three formats (syslog RFC 5424, CEF, HTTPS webhook); per-tenant
+> config; AES-256-GCM-encrypted shared secret + bearer token; SSRF
+> guard; observability counters; **Phase 2 adds the durable
+> `audit.export` + `dlx.audit-export` queues, in-process 3-attempt
+> retry then DLX park, live DLX depth via RabbitMQ Mgmt API, and a
+> dashboard Drain button** for operator-controlled replay.
 
 ---
 
@@ -235,22 +237,61 @@ operator troubleshooting.
 
 ---
 
-## 7. v1 retry posture (and Phase 2 plans)
+## 7. Retry + DLX posture (Phase 1 + Phase 2)
 
-v1 ships **in-process retry only**: `MaxAttempts = 3`, exponential
-backoff capped at 5s (`1s → 2s → 4s`). After exhaustion the dispatcher
-calls `TouchAuditExportFailure` + `IncrementAuditExportDLX(1)` and
-returns. The audit event STAYS in the local audit DB (the source of
-truth) but is not re-attempted automatically.
+### Phase 1 — in-process retry (still wired as fallback)
 
-**Phase 2 (deferred):** promote dispatch to a separate RabbitMQ
-queue with proper DLX semantics — `audit.export.<format>` queue per
-format, `dlx.audit-export` on exhaustion, an admin "drain" action
-on the dashboard that replays from the DLX after the operator
-fixes their SIEM. The MVP closes the procurement gate without
-committing to the queue infrastructure up front; the design above
-is intentionally additive (the in-process path stays valid as a
-"fast path" once the queue lands).
+`export.Deliver` runs **3 attempts** with exponential backoff capped
+at 5s (`1s → 2s → 4s`). When `RABBITMQ_URL` is unset (legacy / unit
+tests), the eventconsumer's `dispatch()` is a fire-and-forget
+goroutine that runs this loop and bumps `dlx_depth` on exhaustion.
+Audit events stay in the local audit DB (source of truth) but the
+in-process path doesn't replay automatically.
+
+### Phase 2 — durable queue + DLX (default in production)
+
+When `RABBITMQ_URL` is set, the eventconsumer publishes an
+`AuditExportTask` envelope onto `audit.export` (topic exchange,
+quorum queue, x-dead-letter-exchange → `dlx.audit-export`). A
+dedicated `exportworker.Consumer` drains the queue, runs the
+3-attempt in-process retry from `export.Deliver`, and:
+
+- **success** → `ACK` + `TouchAuditExportSuccess`
+- **transient DB error loading config** → `NACK(requeue=true)`,
+  same message redelivered immediately
+- **delivery exhausted** (3 attempts failed) → `NACK(requeue=false)`
+  → routes to `dlx.audit-export` → message lands in the
+  `audit.export.dlx` quorum queue, stays there until drained
+- **permanent error** (unparseable payload, bad tenant_id, decrypt
+  failure) → `ACK` + log
+
+The producer side (audit eventconsumer's INSERT path) blocks only on
+the publish confirm (~10ms), never on SIEM latency.
+
+### Drain action
+
+The dashboard surfaces a **Drain DLX → retry** button when
+`dlx_queue_depth > 0`. Clicking it calls
+`POST /api/v1/workspace/me/audit-export/drain` which consumes every
+message in `audit.export.dlx` belonging to the calling tenant and
+re-publishes onto `audit.export`. The consumer then re-runs the
+delivery pipeline; messages that succeed leave the system, ones
+that fail again land back in the DLX.
+
+The drain is bounded at 10k messages per call so a catastrophically
+full DLX doesn't hang the request — operators may need to fire
+multiple drains for a long outage. Messages belonging to OTHER
+tenants are NACK'd back to DLX so each tenant's drain only affects
+their own backlog.
+
+### Live DLX depth
+
+The Settings page polls `dlx_queue_depth` via the RabbitMQ
+Management HTTP API on every GET. `-1` signals "depth unknown"
+(Mgmt API unreachable) — the FE renders that distinctly from
+`0` (empty). Mgmt URL defaults to `http://<rabbit-host>:15672`;
+production deployments behind TLS set `RABBITMQ_MGMT_URL`
+explicitly.
 
 ---
 
@@ -314,7 +355,9 @@ to end.
 | `services/audit/internal/handler/audit_export.go` | gRPC handler (Get/Put/Delete/Test) + AES-256-GCM seal/open |
 | `services/audit/internal/export/export.go` | Renderers + transport + SSRF guard + retry |
 | `services/audit/internal/export/tester.go` | Synthetic-event delivery used by the Test RPC |
-| `services/audit/internal/eventconsumer/consumer.go` | Dispatcher wired after each INSERT |
+| `services/audit/internal/eventconsumer/consumer.go` | Phase 1 inline dispatcher + Phase 2 enqueue-then-publish hook |
+| `services/audit/internal/exportworker/exportworker.go` | Phase 2 worker — Publisher / Consumer / Drain / MgmtClient |
+| `services/audit/internal/exportworker/probe.go` | Probe adapter satisfying handler.AuditExportDLXProbe |
 | `services/management/internal/handler/workspace_audit_export.go` | BFF HTTP routes |
 | `frontend/src/lib/api/audit-export.ts` | TanStack Query hooks |
 | `frontend/src/routes/_authenticated.workspace.audit-export.tsx` | Settings page |

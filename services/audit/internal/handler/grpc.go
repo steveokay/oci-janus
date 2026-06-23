@@ -76,6 +76,24 @@ type auditRepo interface {
 	DeleteAuditExportConfig(ctx context.Context, tenantID uuid.UUID) error
 }
 
+// AuditExportDLXProbe surfaces the live RabbitMQ DLX queue depth +
+// drain operation to the handler. The exportworker package owns the
+// AMQP plumbing; this interface keeps the handler free of an AMQP
+// dependency so the handler tests stay table-driven.
+//
+// Futures.md Tier 1 #4 Phase 2 — DLX drain + real-time depth.
+type AuditExportDLXProbe interface {
+	// QueueDepth returns the number of messages currently in
+	// dlx.audit-export. Returns (-1, nil) when the management API
+	// is unreachable so the handler can surface "depth unknown"
+	// rather than conflate with "empty."
+	QueueDepth(ctx context.Context) (int32, error)
+	// Drain consumes parked messages for the given tenant and
+	// re-publishes them onto audit.export. Returns the count of
+	// re-published messages, capped at the worker's MaxDrain.
+	Drain(ctx context.Context, tenantID uuid.UUID) (int32, error)
+}
+
 // defaultActivityEventTypes is the operator-facing allowlist applied when the
 // caller does not specify event_types. Internal queue/plumbing events
 // (webhook.queued, scan.queued, store.queued, gc.*) are deliberately omitted —
@@ -133,6 +151,10 @@ type GRPCHandler struct {
 	// to import services/audit/internal/export directly (avoids a
 	// circular package graph). nil → Test returns Unavailable.
 	tester AuditExportTester
+	// dlxProbe surfaces live RabbitMQ DLX depth + the drain admin
+	// path (futures.md Tier 1 #4 Phase 2). nil → Drain returns
+	// Unavailable + Get/Put return dlx_queue_depth = -1.
+	dlxProbe AuditExportDLXProbe
 }
 
 // AuditExportTester decouples the gRPC handler from the exporter
@@ -142,6 +164,15 @@ type GRPCHandler struct {
 // tester to ship + return the rendered wire payload.
 type AuditExportTester interface {
 	DeliverTest(ctx context.Context, cfg *repository.AuditExportConfig, hmacSecret, bearerToken string) (rendered string, err error)
+}
+
+// WithExportDLXProbe wires the live DLX depth + drain admin path
+// (futures.md Tier 1 #4 Phase 2). Nil leaves DrainAuditExportDLX
+// returning Unavailable + GetAuditExportConfig surfacing
+// dlx_queue_depth = -1 ("depth unknown" — Phase 1 fallback).
+func (h *GRPCHandler) WithExportDLXProbe(p AuditExportDLXProbe) *GRPCHandler {
+	h.dlxProbe = p
+	return h
 }
 
 // NewGRPC returns a GRPCHandler backed by repo.
