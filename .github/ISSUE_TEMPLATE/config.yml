@@ -1,0 +1,13 @@
+# GitHub Issue chooser configuration.
+# Disables blank issues so first-time reporters land on a template; routes
+# questions to Discussions; routes security issues to the private channel.
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/steveokay/oci-janus/discussions
+    about: General questions, architecture discussions, "how do I…" — use Discussions, not Issues.
+  - name: Security vulnerability
+    url: https://github.com/steveokay/oci-janus/security/advisories/new
+    about: Do NOT open a public Issue for security issues. Use the private vulnerability reporting channel.

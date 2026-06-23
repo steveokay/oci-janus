@@ -745,6 +745,8 @@ There's no CLA — Apache 2.0's inbound contribution clause is sufficient. By su
 | Doc | What's in it |
 |---|---|
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute — workflow, style, what gets accepted |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Community standards (Contributor Covenant 2.1) |
+| [`.github/SECURITY.md`](.github/SECURITY.md) | Security policy — how to report a vulnerability + our response commitments |
 | [`CLAUDE.md`](CLAUDE.md) | Canonical architecture + coding rules (the source of truth when code disagrees) |
 | [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) | Fork → configure → deploy in your own infrastructure (Docker Compose + Kubernetes Helm paths) |
 | [`docs/SERVICES.md`](docs/SERVICES.md) | Per-service endpoint / gRPC / schema / env-var reference |

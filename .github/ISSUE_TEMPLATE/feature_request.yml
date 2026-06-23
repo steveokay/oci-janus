@@ -1,0 +1,67 @@
+name: Feature request
+description: Propose a new feature or enhancement
+title: "[feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. A few things worth knowing before filing:
+
+        - For exploratory ideas / "what if we…", prefer [Discussions](https://github.com/steveokay/oci-janus/discussions).
+        - For concrete feature requests with a clear user need, this template fits.
+        - Check [`futures.md`](https://github.com/steveokay/oci-janus/blob/main/futures.md) first — your idea may already be tracked.
+        - Significant features usually warrant a discussion before implementation. If you're planning to send a PR, talk to us first to avoid wasted work.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's broken or missing from your perspective? Avoid jumping to solutions.
+      placeholder: "I run a CI pipeline that signs every image before deploying, but I can't easily…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: who-is-affected
+    attributes:
+      label: Who is affected
+      description: |
+        What kind of users / personas hit this? "Anyone running multi-tenant CI" is more useful than "me."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How could the platform address this? Sketch the user-facing behaviour;
+        feel free to leave implementation details to maintainers.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Other approaches you weighed. Helps us avoid re-deriving the trade-offs.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Estimated tier (your guess)
+      description: |
+        Per `futures.md`'s tiering — Tier 1 = "production-blocking", Tier 2 = "operationally valuable", Tier 3 = "nice-to-have".
+      options:
+        - "Tier 1 — production-blocking"
+        - "Tier 2 — operationally valuable"
+        - "Tier 3 — nice-to-have"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — screenshots, similar features in other registries, customer feedback.
