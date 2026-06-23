@@ -1,0 +1,86 @@
+name: Bug report
+description: Report something that's broken or misbehaving in the platform
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. The clearer the
+        reproduction, the faster we can act.
+
+        Before filing:
+        - Check existing issues to avoid duplicates.
+        - For security issues, do NOT use this template — use [private vulnerability reporting](https://github.com/steveokay/oci-janus/security/advisories/new).
+        - For questions / how-to, use [Discussions](https://github.com/steveokay/oci-janus/discussions) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: |
+        Commit SHA, release tag (when we have them), or "main as of YYYY-MM-DD".
+      placeholder: "main @ 4d1d5bc"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      description: How are you running it?
+      options:
+        - Docker Compose (dev stack from the repo)
+        - Docker Compose (custom)
+        - Kubernetes via Helm chart
+        - Forked + customised
+        - Other (please describe in "Additional context")
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear, concise description of the bug.
+      placeholder: "When I click 'Approve a key' on the Settings tab, the dialog…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal reproduction. Numbered steps, exact commands, sample payloads.
+      placeholder: |
+        1. `docker compose up -d`
+        2. `curl -X POST http://localhost:8091/api/v1/...`
+        3. Observe: …
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        Service logs, browser console errors, HTTP response bodies.
+        Redact secrets before pasting.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Anything else that might help — workarounds you've tried, related issues, screenshots.

@@ -12,7 +12,8 @@ the [Apache License 2.0](LICENSE) that covers the rest of the project.
 
 - **Found a bug?** Open a [GitHub Issue](https://github.com/steveokay/oci-janus/issues/new) using the bug template.
 - **Want to discuss a feature?** Open a [Discussion](https://github.com/steveokay/oci-janus/discussions) or an Issue with the `enhancement` label.
-- **Security issue?** Don't open a public Issue. Email the maintainer privately — see [SECURITY.md](SECURITY.md) (TODO; in the meantime, GitHub's "Report a vulnerability" private channel works).
+- **Security issue?** Don't open a public Issue. Use [private vulnerability reporting](https://github.com/steveokay/oci-janus/security/advisories/new). Full policy in [`.github/SECURITY.md`](.github/SECURITY.md); past resolutions in [`security.md`](security.md).
+- **Project conduct:** see [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). The short version: be kind, be respectful, focus on what's best for the community.
 - **Want to chat?** Comment on an existing Discussion or Issue. There isn't a Discord yet; if usage warrants it, we'll add one.
 
 ---
