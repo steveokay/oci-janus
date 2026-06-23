@@ -3,6 +3,8 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -82,6 +84,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	defer cons.Close()
 
 	ec := eventconsumer.New(repo)
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4): wire the
+	// export dispatcher when the secrets key is configured. Without
+	// a key the consumer falls back to plain INSERT (existing
+	// behaviour) — streaming is opt-in.
+	if len(exportSecretsKey(cfg)) > 0 {
+		ec = ec.WithExporter(eventconsumer.NewExportDispatcher(repo, exportSecretsKey(cfg)))
+	}
 	go func() {
 		slog.Info("audit: starting event consumer")
 		if err := cons.Consume(ctx, ec.HandleEvent); err != nil {
@@ -139,7 +148,22 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	healthSrv := health.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
 	// Register the AuditService so registry-management can query build history.
-	auditv1.RegisterAuditServiceServer(grpcSrv, handler.NewGRPC(repo))
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4): decode the
+	// hex secrets key here once at boot so the per-tenant CRUD
+	// handlers can seal/unseal hmac_secret + bearer_token. Empty key
+	// leaves the streaming RPCs functional for syslog-only flows
+	// (no shared secret to encrypt) but rejects PUT requests that
+	// carry a plaintext webhook secret with FailedPrecondition.
+	var secretsKey []byte
+	if keyHex := cfg.ExportSecretsKeyHex; keyHex != "" {
+		k, err := decodeHexKey(keyHex)
+		if err != nil {
+			return fmt.Errorf("AUDIT_EXPORT_SECRETS_KEY_HEX: %w", err)
+		}
+		secretsKey = k
+	}
+	auditHandler := handler.NewGRPC(repo).WithSecretsKey(secretsKey)
+	auditv1.RegisterAuditServiceServer(grpcSrv, auditHandler)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -247,4 +271,37 @@ func runMigrations(ctx context.Context, dsn string) error {
 		return err
 	}
 	return goose.Up(db, ".")
+}
+
+// decodeHexKey parses the AES-256-GCM key configured via
+// AUDIT_EXPORT_SECRETS_KEY_HEX. Must be exactly 32 bytes (64 hex
+// chars) — same shape as the other AES-256-GCM keys in this codebase
+// (proxy upstream credentials, SSO client_secret). Rejects any other
+// length with a clear error so a typo doesn't silently produce a
+// shorter key.
+func decodeHexKey(s string) ([]byte, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("decode hex: %w", err)
+	}
+	if len(b) != 32 {
+		return nil, errors.New("expected 32 bytes (64 hex chars) of key material")
+	}
+	return b, nil
+}
+
+// exportSecretsKey decodes AUDIT_EXPORT_SECRETS_KEY_HEX. Returns nil
+// when unset so the caller can treat "no streaming key configured"
+// uniformly. Errors panic — the boot path already validates the key
+// shape via decodeHexKey before any goroutine runs; this helper is
+// just to avoid re-decoding the key string in two places.
+func exportSecretsKey(cfg *config.Config) []byte {
+	if cfg.ExportSecretsKeyHex == "" {
+		return nil
+	}
+	k, err := decodeHexKey(cfg.ExportSecretsKeyHex)
+	if err != nil {
+		return nil
+	}
+	return k
 }

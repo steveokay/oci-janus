@@ -70,6 +70,10 @@ type auditRepo interface {
 	// tenant has no recorded pushes — handlers must materialise that into
 	// last_push_at = null on the wire.
 	GetLastTenantPush(ctx context.Context, tenantID uuid.UUID) (time.Time, bool, error)
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4).
+	GetAuditExportConfig(ctx context.Context, tenantID uuid.UUID) (*repository.AuditExportConfig, error)
+	UpsertAuditExportConfig(ctx context.Context, cfg *repository.AuditExportConfig) (*repository.AuditExportConfig, error)
+	DeleteAuditExportConfig(ctx context.Context, tenantID uuid.UUID) error
 }
 
 // defaultActivityEventTypes is the operator-facing allowlist applied when the
@@ -117,11 +121,50 @@ const defaultActivityLimit = 50
 type GRPCHandler struct {
 	auditv1.UnimplementedAuditServiceServer
 	repo auditRepo
+	// secretsKey is the AES-256-GCM key used to seal hmac_secret +
+	// bearer_token on audit_export_configs (futures.md Tier 1 #4).
+	// 32-byte slice when wired; nil when the cipher isn't configured
+	// (Phase 2 / dev without streaming). The Put / Get / Test handlers
+	// fail closed with FailedPrecondition when this is nil + the caller
+	// attempts to set a secret.
+	secretsKey []byte
+	// tester is the runtime hook the Test RPC uses to actually deliver a
+	// synthetic event. Wired from main.go so this package doesn't need
+	// to import services/audit/internal/export directly (avoids a
+	// circular package graph). nil → Test returns Unavailable.
+	tester AuditExportTester
+}
+
+// AuditExportTester decouples the gRPC handler from the exporter
+// package — main.go wires the concrete implementation. The Test RPC
+// hands the resolved config (with secrets already decrypted by the
+// service layer) plus the synthetic event bytes and expects the
+// tester to ship + return the rendered wire payload.
+type AuditExportTester interface {
+	DeliverTest(ctx context.Context, cfg *repository.AuditExportConfig, hmacSecret, bearerToken string) (rendered string, err error)
 }
 
 // NewGRPC returns a GRPCHandler backed by repo.
 func NewGRPC(repo *repository.Repository) *GRPCHandler {
 	return &GRPCHandler{repo: repo}
+}
+
+// WithSecretsKey wires the AES-256-GCM key used by the audit-export
+// streaming RPCs. Must be exactly 32 bytes; main.go validates the env
+// var before calling. When unset, attempts to write a config with a
+// secret (hmac_secret or bearer_token) fail closed.
+func (h *GRPCHandler) WithSecretsKey(key []byte) *GRPCHandler {
+	h.secretsKey = key
+	return h
+}
+
+// WithExportTester wires the synthetic-event delivery hook used by the
+// TestAuditExportConfig RPC. When unset, Test returns Unavailable so
+// the operator gets a clear "feature not wired" surface instead of a
+// silent no-op.
+func (h *GRPCHandler) WithExportTester(t AuditExportTester) *GRPCHandler {
+	h.tester = t
+	return h
 }
 
 // GetBuildHistory returns push/build audit records for a specific repo and tag.

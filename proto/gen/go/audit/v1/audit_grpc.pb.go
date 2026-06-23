@@ -19,12 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	AuditService_GetBuildHistory_FullMethodName   = "/registry.audit.v1.AuditService/GetBuildHistory"
-	AuditService_GetDailyPullCount_FullMethodName = "/registry.audit.v1.AuditService/GetDailyPullCount"
-	AuditService_GetRepoActivity_FullMethodName   = "/registry.audit.v1.AuditService/GetRepoActivity"
-	AuditService_GetNotifications_FullMethodName  = "/registry.audit.v1.AuditService/GetNotifications"
-	AuditService_GetAnalytics_FullMethodName      = "/registry.audit.v1.AuditService/GetAnalytics"
-	AuditService_GetLastTenantPush_FullMethodName = "/registry.audit.v1.AuditService/GetLastTenantPush"
+	AuditService_GetBuildHistory_FullMethodName         = "/registry.audit.v1.AuditService/GetBuildHistory"
+	AuditService_GetDailyPullCount_FullMethodName       = "/registry.audit.v1.AuditService/GetDailyPullCount"
+	AuditService_GetRepoActivity_FullMethodName         = "/registry.audit.v1.AuditService/GetRepoActivity"
+	AuditService_GetNotifications_FullMethodName        = "/registry.audit.v1.AuditService/GetNotifications"
+	AuditService_GetAnalytics_FullMethodName            = "/registry.audit.v1.AuditService/GetAnalytics"
+	AuditService_GetLastTenantPush_FullMethodName       = "/registry.audit.v1.AuditService/GetLastTenantPush"
+	AuditService_GetAuditExportConfig_FullMethodName    = "/registry.audit.v1.AuditService/GetAuditExportConfig"
+	AuditService_PutAuditExportConfig_FullMethodName    = "/registry.audit.v1.AuditService/PutAuditExportConfig"
+	AuditService_DeleteAuditExportConfig_FullMethodName = "/registry.audit.v1.AuditService/DeleteAuditExportConfig"
+	AuditService_TestAuditExportConfig_FullMethodName   = "/registry.audit.v1.AuditService/TestAuditExportConfig"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -79,6 +83,19 @@ type AuditServiceClient interface {
 	// the tenant has never recorded a push. Backs the "last activity" line on
 	// the admin tenant-detail card.
 	GetLastTenantPush(ctx context.Context, in *GetLastTenantPushRequest, opts ...grpc.CallOption) (*GetLastTenantPushResponse, error)
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Per-tenant
+	// CRUD over the export destination + a Test endpoint that emits a
+	// synthetic event with the same envelope so an operator can verify
+	// their config landed in their SIEM. Get returns NotFound when the
+	// tenant has never configured streaming. PutAuditExportConfig is
+	// upsert; hmac_secret + bearer_token are AES-256-GCM-encrypted
+	// server-side before persistence and never returned in clear over
+	// the wire (Get returns hmac_secret_set / bearer_token_set booleans
+	// instead of the raw values).
+	GetAuditExportConfig(ctx context.Context, in *GetAuditExportConfigRequest, opts ...grpc.CallOption) (*AuditExportConfig, error)
+	PutAuditExportConfig(ctx context.Context, in *PutAuditExportConfigRequest, opts ...grpc.CallOption) (*AuditExportConfig, error)
+	DeleteAuditExportConfig(ctx context.Context, in *DeleteAuditExportConfigRequest, opts ...grpc.CallOption) (*DeleteAuditExportConfigResponse, error)
+	TestAuditExportConfig(ctx context.Context, in *TestAuditExportConfigRequest, opts ...grpc.CallOption) (*TestAuditExportConfigResponse, error)
 }
 
 type auditServiceClient struct {
@@ -149,6 +166,46 @@ func (c *auditServiceClient) GetLastTenantPush(ctx context.Context, in *GetLastT
 	return out, nil
 }
 
+func (c *auditServiceClient) GetAuditExportConfig(ctx context.Context, in *GetAuditExportConfigRequest, opts ...grpc.CallOption) (*AuditExportConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuditExportConfig)
+	err := c.cc.Invoke(ctx, AuditService_GetAuditExportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) PutAuditExportConfig(ctx context.Context, in *PutAuditExportConfigRequest, opts ...grpc.CallOption) (*AuditExportConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuditExportConfig)
+	err := c.cc.Invoke(ctx, AuditService_PutAuditExportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) DeleteAuditExportConfig(ctx context.Context, in *DeleteAuditExportConfigRequest, opts ...grpc.CallOption) (*DeleteAuditExportConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteAuditExportConfigResponse)
+	err := c.cc.Invoke(ctx, AuditService_DeleteAuditExportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) TestAuditExportConfig(ctx context.Context, in *TestAuditExportConfigRequest, opts ...grpc.CallOption) (*TestAuditExportConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TestAuditExportConfigResponse)
+	err := c.cc.Invoke(ctx, AuditService_TestAuditExportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -201,6 +258,19 @@ type AuditServiceServer interface {
 	// the tenant has never recorded a push. Backs the "last activity" line on
 	// the admin tenant-detail card.
 	GetLastTenantPush(context.Context, *GetLastTenantPushRequest) (*GetLastTenantPushResponse, error)
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Per-tenant
+	// CRUD over the export destination + a Test endpoint that emits a
+	// synthetic event with the same envelope so an operator can verify
+	// their config landed in their SIEM. Get returns NotFound when the
+	// tenant has never configured streaming. PutAuditExportConfig is
+	// upsert; hmac_secret + bearer_token are AES-256-GCM-encrypted
+	// server-side before persistence and never returned in clear over
+	// the wire (Get returns hmac_secret_set / bearer_token_set booleans
+	// instead of the raw values).
+	GetAuditExportConfig(context.Context, *GetAuditExportConfigRequest) (*AuditExportConfig, error)
+	PutAuditExportConfig(context.Context, *PutAuditExportConfigRequest) (*AuditExportConfig, error)
+	DeleteAuditExportConfig(context.Context, *DeleteAuditExportConfigRequest) (*DeleteAuditExportConfigResponse, error)
+	TestAuditExportConfig(context.Context, *TestAuditExportConfigRequest) (*TestAuditExportConfigResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -224,6 +294,18 @@ func (UnimplementedAuditServiceServer) GetAnalytics(context.Context, *GetAnalyti
 }
 func (UnimplementedAuditServiceServer) GetLastTenantPush(context.Context, *GetLastTenantPushRequest) (*GetLastTenantPushResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLastTenantPush not implemented")
+}
+func (UnimplementedAuditServiceServer) GetAuditExportConfig(context.Context, *GetAuditExportConfigRequest) (*AuditExportConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAuditExportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) PutAuditExportConfig(context.Context, *PutAuditExportConfigRequest) (*AuditExportConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutAuditExportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) DeleteAuditExportConfig(context.Context, *DeleteAuditExportConfigRequest) (*DeleteAuditExportConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteAuditExportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) TestAuditExportConfig(context.Context, *TestAuditExportConfigRequest) (*TestAuditExportConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TestAuditExportConfig not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -345,6 +427,78 @@ func _AuditService_GetLastTenantPush_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetAuditExportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAuditExportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetAuditExportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetAuditExportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetAuditExportConfig(ctx, req.(*GetAuditExportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_PutAuditExportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutAuditExportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).PutAuditExportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_PutAuditExportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).PutAuditExportConfig(ctx, req.(*PutAuditExportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_DeleteAuditExportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteAuditExportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).DeleteAuditExportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_DeleteAuditExportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).DeleteAuditExportConfig(ctx, req.(*DeleteAuditExportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_TestAuditExportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestAuditExportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).TestAuditExportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_TestAuditExportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).TestAuditExportConfig(ctx, req.(*TestAuditExportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -375,6 +529,22 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLastTenantPush",
 			Handler:    _AuditService_GetLastTenantPush_Handler,
+		},
+		{
+			MethodName: "GetAuditExportConfig",
+			Handler:    _AuditService_GetAuditExportConfig_Handler,
+		},
+		{
+			MethodName: "PutAuditExportConfig",
+			Handler:    _AuditService_PutAuditExportConfig_Handler,
+		},
+		{
+			MethodName: "DeleteAuditExportConfig",
+			Handler:    _AuditService_DeleteAuditExportConfig_Handler,
+		},
+		{
+			MethodName: "TestAuditExportConfig",
+			Handler:    _AuditService_TestAuditExportConfig_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

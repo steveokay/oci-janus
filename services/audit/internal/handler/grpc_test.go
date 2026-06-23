@@ -190,6 +190,22 @@ func (f *fakeRepo) GetLastTenantPush(_ context.Context, tenantID uuid.UUID) (tim
 	return t, ok, nil
 }
 
+// Audit-log streaming to SIEM (futures.md Tier 1 #4). Stub the new
+// AuditExportConfig CRUD on the fake — the existing test suites don't
+// exercise these paths; the dedicated audit_export_test.go covers the
+// happy paths + a live-stack smoke covers cross-service integration.
+func (f *fakeRepo) GetAuditExportConfig(_ context.Context, _ uuid.UUID) (*repository.AuditExportConfig, error) {
+	return nil, repository.ErrExportConfigNotFound
+}
+
+func (f *fakeRepo) UpsertAuditExportConfig(_ context.Context, cfg *repository.AuditExportConfig) (*repository.AuditExportConfig, error) {
+	return cfg, nil
+}
+
+func (f *fakeRepo) DeleteAuditExportConfig(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 func newHandler(repo auditRepo) *GRPCHandler {
 	return &GRPCHandler{repo: repo}
 }
