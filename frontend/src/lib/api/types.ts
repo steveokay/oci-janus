@@ -60,6 +60,44 @@ export interface TrustedKey {
   added_at: string;
 }
 
+// Audit-log streaming to SIEM (futures.md Tier 1 #4). Per-tenant
+// config surfaced by the workspace Settings tab's
+// `AuditExportSection`. Secrets are write-only via the PUT body —
+// the GET response carries `hmac_secret_set` / `bearer_token_set`
+// booleans so the FE renders "(saved)" placeholders without
+// round-tripping the secret material. Observability counters
+// (last_success_at, last_error, dlx_depth) let the operator see
+// whether the stream is healthy.
+export type AuditExportFormat = "syslog_rfc5424" | "cef" | "webhook";
+
+export interface AuditExportConfig {
+  id: string;
+  enabled: boolean;
+  format: AuditExportFormat;
+  target_url: string;
+  hmac_secret_set: boolean;
+  bearer_token_set: boolean;
+  event_filters_json?: string;
+  last_success_at?: string;
+  last_attempt_at?: string;
+  last_error?: string;
+  dlx_depth: number;
+  updated_at: string;
+}
+
+// `null` value means "no config yet" — the GET handler returns this
+// shape so the FE renders the empty form rather than treating
+// missing-config as an error toast.
+export interface AuditExportConfigResponse {
+  config: AuditExportConfig | null;
+}
+
+export interface AuditExportTestResponse {
+  delivered: boolean;
+  error?: string;
+  rendered_event?: string;
+}
+
 export interface RepositoriesListResponse {
   repositories: Repository[];
   total: number;

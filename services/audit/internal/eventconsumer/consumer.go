@@ -4,23 +4,70 @@ package eventconsumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/steveokay/oci-janus/libs/crypto/aes"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/services/audit/internal/export"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
+
+// aesDecrypt aliases libs/crypto/aes.Decrypt so the consumer file
+// reads cleanly without an alias import on every call site.
+var aesDecrypt = aes.Decrypt
 
 // Consumer maps platform events to audit records.
 type Consumer struct {
 	repo *repository.Repository
+	// exporter is the optional SIEM-streaming hook (futures.md Tier 1 #4).
+	// nil when AUDIT_EXPORT_SECRETS_KEY_HEX is unset OR when no tenant
+	// has streaming enabled — the consumer just falls back to "INSERT
+	// and done." Set via WithExporter from server bootstrap.
+	exporter *exportDispatcher
 }
 
 // New creates a Consumer.
 func New(repo *repository.Repository) *Consumer {
 	return &Consumer{repo: repo}
+}
+
+// WithExporter wires the audit-export dispatcher (futures.md Tier 1 #4).
+// After each successful audit_events INSERT the consumer looks up the
+// per-tenant streaming config, renders the event in the configured
+// format, and ships it. Failures don't NACK the original RabbitMQ
+// message (the audit DB write already succeeded) — they just bump the
+// dlx_depth counter on the config row so the operator sees the
+// stuck-events count on the dashboard.
+func (c *Consumer) WithExporter(d *exportDispatcher) *Consumer {
+	c.exporter = d
+	return c
+}
+
+// exportDispatcher carries the bits we need from the gRPC handler
+// (cipher key + repository methods) so the consumer's hot path can
+// dispatch a single event without re-decrypting on every send. v1
+// loads the config + decrypts on every event; a per-tenant LRU cache
+// is an obvious Phase 2 optimisation once we observe a real
+// throughput problem.
+type exportDispatcher struct {
+	repo       *repository.Repository
+	secretsKey []byte
+}
+
+// NewExportDispatcher constructs the optional dispatcher. Returns nil
+// when secretsKey is empty — callers can pass the result straight to
+// WithExporter without a nil check (WithExporter handles the no-op
+// case).
+func NewExportDispatcher(repo *repository.Repository, secretsKey []byte) *exportDispatcher {
+	if repo == nil {
+		return nil
+	}
+	return &exportDispatcher{repo: repo, secretsKey: secretsKey}
 }
 
 // HandleEvent is the consumer.Handler for all subscribed event types.
@@ -46,7 +93,154 @@ func (c *Consumer) HandleEvent(ctx context.Context, event events.Event) error {
 		"action", ae.Action,
 		"tenant_id", ae.TenantID,
 	)
+
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Non-blocking
+	// best-effort dispatch — the DB write has already succeeded, so a
+	// downstream SIEM outage must NOT cause the RabbitMQ message to
+	// re-queue and double-insert into audit_events. Failures bump
+	// dlx_depth on the per-tenant config row so the dashboard surfaces
+	// "X events stuck" to the operator. v1 ships synchronous in-process
+	// retry (export.MaxAttempts); a fully async DLX queue is the
+	// natural Phase 2 evolution.
+	if c.exporter != nil {
+		go c.exporter.dispatch(context.Background(), ae)
+	}
 	return nil
+}
+
+// dispatch loads the tenant config, applies the include/exclude filter,
+// decrypts the per-tenant secret material, and runs export.Deliver.
+// Background goroutine so the consumer's NACK signal isn't gated on a
+// slow SIEM. Errors are logged + persisted on the config row; the
+// caller never sees them.
+func (d *exportDispatcher) dispatch(ctx context.Context, ae *repository.AuditEvent) {
+	cfg, err := d.repo.GetAuditExportConfig(ctx, ae.TenantID)
+	if err != nil {
+		if !errors.Is(err, repository.ErrExportConfigNotFound) {
+			slog.WarnContext(ctx, "audit export: load config failed", "tenant_id", ae.TenantID, "err", err)
+		}
+		return
+	}
+	if !cfg.Enabled {
+		return
+	}
+	if !matchesFilter(cfg.EventFilters, ae.Action) {
+		return
+	}
+
+	hmacSecret, err := openSecretBytes(d.secretsKey, cfg.HMACSecret)
+	if err != nil {
+		slog.WarnContext(ctx, "audit export: decrypt hmac_secret failed", "tenant_id", ae.TenantID, "err", err)
+		return
+	}
+	bearerToken, err := openSecretBytes(d.secretsKey, cfg.BearerToken)
+	if err != nil {
+		slog.WarnContext(ctx, "audit export: decrypt bearer_token failed", "tenant_id", ae.TenantID, "err", err)
+		return
+	}
+
+	exp := export.Config{
+		TenantID:    cfg.TenantID.String(),
+		Format:      cfg.Format,
+		TargetURL:   cfg.TargetURL,
+		HMACSecret:  hmacSecret,
+		BearerToken: bearerToken,
+	}
+	evt := export.Event{
+		ID:         ae.ID.String(),
+		TenantID:   ae.TenantID.String(),
+		ActorID:    ae.ActorID,
+		ActorType:  ae.ActorType,
+		ActorIP:    ae.ActorIP,
+		Action:     ae.Action,
+		Resource:   ae.Resource,
+		Outcome:    ae.Outcome,
+		Metadata:   ae.Metadata,
+		OccurredAt: ae.OccurredAt,
+	}
+
+	if _, err := export.Deliver(ctx, exp, evt); err != nil {
+		// Persist the failure for operator visibility. Cap the error
+		// string + bump the dlx_depth so the "stuck events" pill on
+		// the FE config page renders. We deliberately don't push to
+		// a real DLX queue in v1 (see package-level comment).
+		msg := err.Error()
+		if len(msg) > 512 {
+			msg = msg[:512]
+		}
+		_ = d.repo.TouchAuditExportFailure(ctx, ae.TenantID, msg)
+		_ = d.repo.IncrementAuditExportDLX(ctx, ae.TenantID, 1)
+		slog.WarnContext(ctx, "audit export: delivery exhausted",
+			"tenant_id", ae.TenantID, "format", cfg.Format, "err", err)
+		return
+	}
+	_ = d.repo.TouchAuditExportSuccess(ctx, ae.TenantID)
+}
+
+// matchesFilter applies the JSON event_filters expression. Shape:
+//
+//	{"include": ["push.completed", "scan.*"], "exclude": ["webhook.*"]}
+//
+// `exclude` wins over `include`. Empty / null filters means "send
+// everything." Wildcards: trailing `.*` matches any suffix.
+func matchesFilter(raw json.RawMessage, action string) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var f struct {
+		Include []string `json:"include"`
+		Exclude []string `json:"exclude"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return true // malformed filter → fail open (best-effort)
+	}
+	for _, p := range f.Exclude {
+		if matchPattern(p, action) {
+			return false
+		}
+	}
+	if len(f.Include) == 0 {
+		return true
+	}
+	for _, p := range f.Include {
+		if matchPattern(p, action) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchPattern is the simplest practical pattern matcher: exact match
+// or `prefix.*` suffix wildcard. We don't need regex — operators write
+// their filters by hand and prefer the predictable shape.
+func matchPattern(pattern, s string) bool {
+	if pattern == s {
+		return true
+	}
+	if strings.HasSuffix(pattern, ".*") {
+		return strings.HasPrefix(s, strings.TrimSuffix(pattern, "*"))
+	}
+	return false
+}
+
+// openSecretBytes is the consumer-side decrypt helper. Returns "" for
+// nil/empty input so the renderer can branch on `secret == ""`.
+// Duplicated from services/audit/internal/handler/audit_export.go to
+// avoid the handler ↔ consumer import (consumer is upstream of handler
+// in the dependency graph today). Both paths use the same AES-256-GCM
+// envelope so the ciphertext format stays consistent.
+func openSecretBytes(key, ciphertext []byte) (string, error) {
+	if len(ciphertext) == 0 {
+		return "", nil
+	}
+	if len(key) == 0 {
+		return "", errors.New("audit-export secrets key not configured")
+	}
+	plain, err := aesDecrypt(ciphertext, key)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
 }
 
 // mapEvent converts a platform RabbitMQ event into an AuditEvent row.

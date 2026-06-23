@@ -31,6 +31,14 @@ type Config struct {
 	RabbitMQURL        string `mapstructure:"RABBITMQ_URL"`
 	RetentionDays      int    `mapstructure:"AUDIT_RETENTION_DAYS"`
 	TrustedGatewayIP   string `mapstructure:"TRUSTED_GATEWAY_IP"`
+
+	// ExportSecretsKeyHex (futures.md Tier 1 #4) is the 64-char hex
+	// AES-256-GCM key used to seal hmac_secret + bearer_token on
+	// audit_export_configs rows. Empty disables secret writes — Put
+	// requests carrying a plaintext secret then return
+	// FailedPrecondition with a clear error. Audit streaming over
+	// syslog (which doesn't use HMAC) still works without the key.
+	ExportSecretsKeyHex string `mapstructure:"AUDIT_EXPORT_SECRETS_KEY_HEX"`
 }
 
 // Load reads configuration from environment variables and validates required fields.

@@ -89,18 +89,45 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 - **Affects (shipped):** `services/metadata`, `services/core`,
   `services/management`, `frontend`.
 
-### 4. Audit log streaming to SIEM
+### 4. Audit log streaming to SIEM — DONE (Phase 1, 2026-06-23)
 - **Why:** Enterprise procurement asks for syslog/CEF export on day one.
   Customers want every push, pull, role grant, signed scan in Splunk /
   Datadog / Elastic for their own retention + correlation.
-- **What:**
-  - services/audit grows an outbound exporter: syslog (RFC5424), CEF,
-    or generic webhook with HMAC.
-  - Per-tenant config: target URL, format, optional filters (event
-    types to include).
-  - Workspace settings page surfaces the config + a "Send test event"
-    button.
-- **Affects:** `services/audit`, `services/management`, `frontend`.
+- **What shipped (Phase 1, branch `feat/audit-siem-streaming`):**
+  - New `audit_export_configs` table (1:1 with tenant, AES-256-GCM-encrypted
+    `hmac_secret` + `bearer_token`, format enum, JSON event_filters,
+    observability counters).
+  - 4 gRPC RPCs on AuditService: Get / Put / Delete / Test. Secret
+    material never returned over the wire — only `*_set` booleans.
+  - 3 wire formats in `services/audit/internal/export/`:
+    - **syslog_rfc5424** — RFC 5424 line over TCP / TLS with SD block
+      keyed by PEN 53430.
+    - **cef** — ArcSight Common Event Format body, transported over
+      syslog framing.
+    - **webhook** — JSON POST over HTTPS with `X-Signature: sha256=<hex>`
+      HMAC or `Authorization: Bearer …`.
+  - SSRF guard runs at both write time + every delivery (DNS can shift):
+    blocks RFC 1918 / loopback / link-local / CGNAT.
+  - Dispatcher wired into the eventconsumer's INSERT path — after each
+    successful audit_events row, a goroutine renders + ships. v1 ships
+    in-process retry (3 attempts, exponential backoff capped at 5s);
+    exhausted attempts bump `dlx_depth` for FE visibility.
+  - BFF: 4 HTTP routes at `/api/v1/workspace/me/audit-export[/test]`
+    workspace-admin-gated.
+  - Frontend: `/workspace/audit-export` settings page with format
+    selector / URL + secret form / filter editor / "Send test event"
+    button / observability pills + last-success / dlx_depth banner.
+  - Live verified: `image.signed` event flowed audit DB → exporter
+    → HMAC-signed POST → receiver with sig-ok=true in ~3s end-to-end.
+- **Phase 2 (deferred):** promote dispatch to a separate RabbitMQ
+  queue with proper DLX semantics — `audit.export.<format>` queue
+  per format, `dlx.audit-export` on exhaustion, an admin "drain"
+  action on the dashboard that replays from the DLX after the
+  operator fixes their SIEM. The in-process path stays valid as a
+  fast path once the queue lands (additive design).
+- **Affects (shipped):** `services/audit`, `services/management`,
+  `frontend`, `infra/docker-compose`.
+- **Docs:** `docs/SIEM-EXPORT.md`.
 
 ### 5. SCIM provisioning
 - **Why:** Manual user lifecycle doesn't scale past ~50-user customers.

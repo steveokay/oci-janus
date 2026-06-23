@@ -59,6 +59,20 @@ service AuditService {
   // the tenant has never recorded a push. Backs the "last activity" line on
   // the admin tenant-detail card.
   rpc GetLastTenantPush(GetLastTenantPushRequest) returns (GetLastTenantPushResponse);
+
+  // Audit-log streaming to SIEM (futures.md Tier 1 #4). Per-tenant
+  // CRUD over the export destination + a Test endpoint that emits a
+  // synthetic event with the same envelope so an operator can verify
+  // their config landed in their SIEM. Get returns NotFound when the
+  // tenant has never configured streaming. PutAuditExportConfig is
+  // upsert; hmac_secret + bearer_token are AES-256-GCM-encrypted
+  // server-side before persistence and never returned in clear over
+  // the wire (Get returns hmac_secret_set / bearer_token_set booleans
+  // instead of the raw values).
+  rpc GetAuditExportConfig(GetAuditExportConfigRequest) returns (AuditExportConfig);
+  rpc PutAuditExportConfig(PutAuditExportConfigRequest) returns (AuditExportConfig);
+  rpc DeleteAuditExportConfig(DeleteAuditExportConfigRequest) returns (DeleteAuditExportConfigResponse);
+  rpc TestAuditExportConfig(TestAuditExportConfigRequest) returns (TestAuditExportConfigResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -294,4 +308,94 @@ message GetLastTenantPushRequest {
 // rather than relying on absence of the field.
 message GetLastTenantPushResponse {
   google.protobuf.Timestamp last_push_at = 1;
+}
+
+// ─── Futures.md Tier 1 #4: audit log streaming to SIEM ──────────────────────
+
+// AuditExportConfig is the per-tenant streaming destination + filter +
+// observability snapshot. The hmac_secret + bearer_token fields are NEVER
+// returned over the wire — the proto carries hmac_secret_set / bearer_token_set
+// booleans so the FE can render "(saved)" placeholders without round-tripping
+// the secret material. PutAuditExportConfig accepts the plaintext secret on
+// the write path and the audit service AES-256-GCM-encrypts before
+// persistence.
+message AuditExportConfig {
+  string id          = 1;
+  string tenant_id   = 2;
+  bool   enabled     = 3;
+  // format: "syslog_rfc5424" | "cef" | "webhook".
+  string format      = 4;
+  string target_url  = 5;
+
+  // hmac_secret_set is TRUE when the encrypted column is non-NULL; the
+  // raw secret is intentionally absent from the wire. Operator can rotate
+  // by setting hmac_secret on a PUT (sets the column) or by sending the
+  // sentinel `hmac_secret_clear=true` on a PUT (clears the column).
+  bool hmac_secret_set    = 6;
+  bool bearer_token_set   = 7;
+
+  // event_filters is an opaque JSON-encoded string of the form
+  //   {"include":["push.completed","scan.completed"],"exclude":["webhook.*"]}
+  // We don't model it as a structured proto message because the filter
+  // language is operator-facing and may grow new operators (regex,
+  // severity, time-of-day) without a wire break.
+  string event_filters_json = 8;
+
+  google.protobuf.Timestamp last_success_at = 9;
+  google.protobuf.Timestamp last_attempt_at = 10;
+  string last_error  = 11;
+  int32  dlx_depth   = 12;
+
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message GetAuditExportConfigRequest {
+  string tenant_id = 1;
+}
+
+// PutAuditExportConfigRequest is the upsert payload. Fields default-zero
+// (e.g. an empty target_url) are still serialized over the wire — the
+// service-layer validator rejects empty target_url + unsupported format,
+// so a "PUT to disable streaming entirely" goes through DELETE rather
+// than this endpoint.
+message PutAuditExportConfigRequest {
+  string tenant_id           = 1;
+  bool   enabled             = 2;
+  string format              = 3;
+  string target_url          = 4;
+
+  // hmac_secret + bearer_token carry the PLAINTEXT secret. The audit
+  // service AES-256-GCM-encrypts before INSERT/UPDATE. Empty string
+  // means "leave the existing value alone" — explicit clearing rides
+  // on the *_clear sentinel booleans below.
+  string hmac_secret         = 5;
+  bool   hmac_secret_clear   = 6;
+  string bearer_token        = 7;
+  bool   bearer_token_clear  = 8;
+
+  string event_filters_json  = 9;
+  string created_by          = 10;
+}
+
+message DeleteAuditExportConfigRequest {
+  string tenant_id = 1;
+}
+
+message DeleteAuditExportConfigResponse {}
+
+// TestAuditExportConfigRequest fires a single synthetic event with the
+// same envelope used by real audit events so the operator can verify
+// the SIEM target is reachable + the format is parsing on their end.
+// The synthetic event has action="audit_export.test" so it can be
+// distinguished from real events. Returns the rendered payload so the
+// FE can display "what we sent" alongside the SIEM ack.
+message TestAuditExportConfigRequest {
+  string tenant_id = 1;
+}
+
+message TestAuditExportConfigResponse {
+  bool   delivered      = 1;
+  string error          = 2;       // populated when delivered=false
+  string rendered_event = 3;       // the wire-format string we shipped
 }
