@@ -6,6 +6,10 @@ interface EmptyStateProps {
   title: string;
   description?: string;
   action?: React.ReactNode;
+  // secondaryAction renders next to the primary action — typically a
+  // "Read the docs" link for the surface so a first-time visitor can
+  // learn what this is for without leaving the page (DSGN-007).
+  secondaryAction?: React.ReactNode;
   className?: string;
 }
 
@@ -16,6 +20,7 @@ export function EmptyState({
   title,
   description,
   action,
+  secondaryAction,
   className,
 }: EmptyStateProps): React.ReactElement {
   return (
@@ -43,7 +48,12 @@ export function EmptyState({
           <p className="text-sm text-[var(--color-fg-muted)]">{description}</p>
         ) : null}
       </div>
-      {action ? <div className="pt-2">{action}</div> : null}
+      {action || secondaryAction ? (
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          {action}
+          {secondaryAction}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -39,6 +39,32 @@ export function formatRelativeDate(iso: string | undefined | null): string {
   }
 }
 
+// Compact "5m / 3h / 2d ago" form for cramped layouts (dropdown rows, table
+// cells). Mirrors formatRelativeDate but trades the long suffix for short
+// unit letters. Use formatRelativeDate when the surface has room for prose.
+export function formatShortRelativeDate(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  try {
+    const then = parseISO(iso).getTime();
+    const diffSec = Math.floor((Date.now() - then) / 1000);
+    if (!Number.isFinite(diffSec) || diffSec < 0) return "—";
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return `${Math.floor(diffSec / 86400)}d ago`;
+  } catch {
+    return "—";
+  }
+}
+
+// shortenKey collapses a long key_id / SHA256 string to "aaaaaaaa…bbbb"
+// so it fits one line in tight layouts (dropdown rows, alert prompts).
+// Returns the input unchanged when it's already short enough to fit.
+export function shortenKey(k: string): string {
+  if (!k || k.length <= 20) return k ?? "";
+  return `${k.slice(0, 8)}…${k.slice(-4)}`;
+}
+
 // "Jun 19, 2026 14:23" — used in detail surfaces where the exact time matters.
 export function formatAbsoluteDate(iso: string | undefined | null): string {
   if (!iso) return "—";

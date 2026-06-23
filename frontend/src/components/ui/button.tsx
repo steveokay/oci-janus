@@ -12,7 +12,8 @@ const buttonVariants = cva(
     "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md",
     "text-sm font-medium tracking-tight transition-[background-color,box-shadow,color] duration-150",
     "disabled:pointer-events-none disabled:opacity-50",
-    "focus-visible:outline-none",
+    // Visible focus ring for keyboard / screen-reader users (DSGN-017, WCAG 2.4.7).
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]",
     "[&_svg]:size-4 [&_svg]:shrink-0",
   ].join(" "),
   {

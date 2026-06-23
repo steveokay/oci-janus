@@ -6,6 +6,12 @@ import { toast } from "sonner";
 import { AxiosError } from "axios";
 import { KeyRound, Plus, Trash2, ShieldCheck } from "lucide-react";
 import {
+  formatRelativeDate,
+  formatShortRelativeDate,
+  shortenKey,
+} from "@/lib/format";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
   Card,
   CardContent,
   CardDescription,
@@ -103,6 +109,10 @@ export function RepoTrustedKeysSection({
   const { data: keys, isLoading, isError, refetch } = useTrustedKeys(org, repo);
   const remove = useRemoveTrustedKey();
   const [addOpen, setAddOpen] = React.useState(false);
+  const [removeTarget, setRemoveTarget] = React.useState<
+    | { id: string; key_id: string; display_name?: string }
+    | null
+  >(null);
 
   if (isError) {
     return (
@@ -116,19 +126,23 @@ export function RepoTrustedKeysSection({
 
   const hasKeys = (keys?.length ?? 0) > 0;
   const inPhase1Fallback = requireSignature && !hasKeys;
+  // True when removing this key would empty the allowlist while signature
+  // policy is still enforced — flips admission from "trusted-keys-only"
+  // back to "any signature passes" (Phase 1 fallback). We surface this
+  // explicitly in the confirmation dialog (DSGN-012).
+  const removingLastKey =
+    removeTarget !== null && requireSignature && (keys?.length ?? 0) === 1;
 
-  async function onRemove(key: { id: string; key_id: string; display_name?: string }): Promise<void> {
-    const label = key.display_name ? `${key.display_name} (${shortKey(key.key_id)})` : shortKey(key.key_id);
-    if (!window.confirm(`Remove "${label}" from the trusted-key allowlist?`)) {
-      return;
-    }
+  async function confirmRemove(): Promise<void> {
+    if (!removeTarget) return;
     try {
-      await remove.mutateAsync({ org, repo, key_id: key.key_id });
+      await remove.mutateAsync({ org, repo, key_id: removeTarget.key_id });
       toast.success(
-        hasKeys && keys && keys.length === 1
+        keys && keys.length === 1
           ? "Trusted key removed. Allowlist is now empty — any signature passes."
           : "Trusted key removed.",
       );
+      setRemoveTarget(null);
     } catch (e) {
       const code = (e as AxiosError | undefined)?.response?.status;
       toast.error(
@@ -192,14 +206,14 @@ export function RepoTrustedKeysSection({
                       {k.key_id}
                     </div>
                     <div className="text-[10px] text-[var(--color-fg-subtle)]">
-                      added {formatRelative(k.added_at)}
+                      added {formatRelativeDate(k.added_at)}
                     </div>
                   </div>
                   <Button
                     variant="ghost"
                     size="sm"
                     disabled={remove.isPending}
-                    onClick={() => void onRemove(k)}
+                    onClick={() => setRemoveTarget(k)}
                     aria-label={`Remove ${k.display_name ?? k.key_id}`}
                   >
                     <Trash2 className="size-3.5" />
@@ -240,6 +254,43 @@ export function RepoTrustedKeysSection({
         org={org}
         repo={repo}
       />
+
+      <ConfirmDestructiveDialog
+        open={removeTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setRemoveTarget(null);
+        }}
+        title="Remove trusted key?"
+        description={
+          <>
+            This key will no longer be allowed to satisfy signed-image
+            admission on this repository. Existing pulls of already-signed
+            images continue to work — only future admission decisions are
+            affected.
+          </>
+        }
+        severity="medium"
+        resourceName={
+          removeTarget?.display_name && removeTarget.display_name.length > 0
+            ? removeTarget.display_name
+            : shortenKey(removeTarget?.key_id ?? "")
+        }
+        confirmLabel="Remove key"
+        loading={remove.isPending}
+        onConfirm={confirmRemove}
+      >
+        {removingLastKey ? (
+          <p className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning-subtle)]/40 px-3 py-2 text-xs text-[var(--color-fg)]">
+            <span className="mt-0.5 font-bold text-[var(--color-warning)]">!</span>
+            <span>
+              This is the last trusted key. Admission will fall back to{" "}
+              <strong>any signature passes</strong> — Phase 1 behaviour —
+              while <code className="font-mono text-[10px]">require_signature</code>
+              {" "}stays on. Add another key first if that isn't what you want.
+            </span>
+          </p>
+        ) : null}
+      </ConfirmDestructiveDialog>
     </>
   );
 }
@@ -533,7 +584,7 @@ function RecentSignerPicker({
               <div className="flex w-full items-center justify-between gap-3">
                 <span className="flex flex-col items-start">
                   <span className="font-mono text-[11px] text-[var(--color-fg)]">
-                    {truncateKey(s.key_id)}
+                    {shortenKey(s.key_id)}
                   </span>
                   {s.signer_id ? (
                     <span className="text-[10px] text-[var(--color-fg-muted)]">
@@ -542,7 +593,7 @@ function RecentSignerPicker({
                   ) : null}
                 </span>
                 <span className="text-[10px] text-[var(--color-fg-subtle)]">
-                  {relativeFromNow(s.last_signed_at)}
+                  {formatShortRelativeDate(s.last_signed_at)}
                 </span>
               </div>
             </SelectItem>
@@ -611,47 +662,3 @@ function ManualEntryFields({ form }: ManualEntryFieldsProps): React.ReactElement
   );
 }
 
-// truncateKey shrinks a long key_id to "aaaaaaaa…bbbb" so the dropdown
-// row stays one line on a typical 480px-wide dialog. Tooltip on hover
-// (via the underlying SelectItem) shows the full value when needed.
-function truncateKey(k: string): string {
-  if (k.length <= 20) return k;
-  return `${k.slice(0, 8)}…${k.slice(-4)}`;
-}
-
-// relativeFromNow is a lightweight "X ago" formatter for the recent-
-// signer rows. Mirrors formatRelative below but keeps a separate
-// implementation so the dropdown can use a shorter form ("5m" vs
-// "5 min ago") in the cramped row layout.
-function relativeFromNow(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const diffSec = Math.floor((now - then) / 1000);
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
-}
-
-// shortKey trims a key_id for the confirm-prompt fallback when an
-// operator removes a key without a display_name. Keeps the dialog
-// legible without copying a full SHA256 into the alert.
-function shortKey(k: string): string {
-  if (k.length <= 14) return k;
-  return `${k.slice(0, 8)}…${k.slice(-4)}`;
-}
-
-// formatRelative is a one-shot relative formatter for the "added X
-// ago" line. Avoids pulling in a full date-fns just for one card —
-// we already use the lib in other surfaces, but this calc is
-// trivial and the date stays a string-display so locale concerns
-// don't apply.
-function formatRelative(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const diffSec = Math.floor((now - then) / 1000);
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} h ago`;
-  return `${Math.floor(diffSec / 86400)} d ago`;
-}

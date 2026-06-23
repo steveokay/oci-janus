@@ -68,6 +68,26 @@ async function refreshOnce(): Promise<string | null> {
   return refreshPromise;
 }
 
+// Endpoints that must never trigger a refresh+retry — they're the auth flow
+// itself (refresh would recurse) or operate on a token we're about to drop
+// (logout). Exact-match by request URL so a future route like
+// `/users/last-login-at` doesn't accidentally trip the substring check
+// (QA-021).
+const NO_REFRESH_PATHS = new Set<string>([
+  "/login",
+  "/token/refresh",
+  "/logout",
+  "/auth/token",
+]);
+
+function isNoRefreshPath(url: string | undefined): boolean {
+  if (!url) return false;
+  // Strip query string + leading baseURL prefix before comparing.
+  const path = url.split("?")[0];
+  const normalised = path.startsWith(baseURL) ? path.slice(baseURL.length) : path;
+  return NO_REFRESH_PATHS.has(normalised);
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
@@ -77,12 +97,7 @@ apiClient.interceptors.response.use(
     if (error.response?.status !== 401 || !original || original._retried) {
       return Promise.reject(error);
     }
-    // Don't try to refresh from auth endpoints themselves — would recurse.
-    if (
-      original.url?.includes("/login") ||
-      original.url?.includes("/token/refresh") ||
-      original.url?.includes("/logout")
-    ) {
+    if (isNoRefreshPath(original.url)) {
       return Promise.reject(error);
     }
     const fresh = await refreshOnce();
