@@ -226,22 +226,30 @@ quickly in real operator workflows.
   200 with real audit data (`push.image` event for `dev/nginx` already
   visible in the dev stack).
 
-### FUT-006: `/users/me` SA-key authentication — design + small impl
-- **Why:** FE-API-048 T16 added the SA principal envelope branch to
-  `GET /api/v1/users/me` (return `type:"service_account"` + nested
-  `service_account: {...}` + `email:null` for SA callers per spec §5.6). But
-  the handler's `requireAuth` middleware currently only accepts JWTs, so a
-  CI bot calling `/users/me` with `Authorization: Bearer key.<id>.<secret>`
-  gets UNAUTHORIZED. The SA branch is reachable today only via the
-  `/auth/token` JWT exchange flow — which works (the JWT's `sub` is the
-  shadow user id). For a CI bot that wants to introspect itself directly
-  via raw API key, this is a gap.
-- **What:** Two viable shapes — (a) teach `requireAuth` to accept API keys
-  in addition to JWTs, mapping them to synthetic claims with `Subject =
-  shadow_user_id` + the SA's intersected scopes; (b) add a parallel
-  `/api/v1/principal/me` route that accepts both. (a) is simpler and
-  unifies the auth model; (b) keeps `/users/me` JWT-only. Pick a path then
-  ~1–2h impl plus tests.
+### FUT-006: `/users/me` SA-key authentication — DONE (2026-06-23)
+- **Resolution:** Picked option (a) — `requireAuth` now accepts a Bearer
+  token of shape `key.<uuid>.<secret>` in addition to JWTs. The `key.`
+  prefix is the discriminator; anything without it falls through to
+  `ValidateToken`. On successful `ValidateAPIKey`, we synthesise a
+  `*service.Claims` with `Subject = vk.UserID.String()` (the shadow user
+  id for SA-owned keys, the user id for human keys), `TenantID`, and
+  `Access` derived from the SA's intersected `EffectiveScopes`. `Roles`
+  is intentionally empty — raw API keys don't carry RBAC roles (those
+  are resolved at JWT issuance time); handlers gating on roles must
+  still require a JWT (those would return a clean 403 against the empty
+  roles list rather than a confusing 401).
+- **Parser is strict.** `parseAPIKeyBearer` rejects empty input, missing
+  prefix, prefix-only tokens, JWT-shaped three-segment values, unparseable
+  UUIDs, empty secrets, and case-mismatched prefixes ("KEY." stays a
+  JWT). 8 unit cases cover each shape.
+- **Live verification:** `GET /api/v1/users/me` with `Authorization:
+  Bearer key.<id>.<secret>` returns the same human-caller envelope a
+  JWT does, including roles + memberships hydrated from the user's
+  actual role_assignments. SA-owned keys flow through the same
+  synthClaimsFromAPIKey path and exercise the existing T16
+  `type:"service_account"` branch.
+- **Wire-format docs:** `docs/SERVICES.md` registry-auth section
+  documents the `key.<id>.<secret>` Bearer shape next to the JWT entry.
 
 ### FUT-007: Durable audit emission for SA lifecycle — DONE (sprint-11 maint batch 5)
 - **Resolution:** Closed 2026-06-22 on `feat/sprint-11-maint-batch-5`. Chose

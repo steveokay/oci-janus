@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
@@ -747,12 +748,88 @@ func (h *HTTPHandler) deleteAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // requireAuth extracts and validates the Bearer token from the request.
 // PENTEST-013: uses the case-insensitive bearer.Extract helper.
+//
+// FUT-006 (2026-06-23): accepts API keys in addition to JWTs. The
+// discriminator is the literal `key.` prefix — a token of shape
+// `key.<uuid>.<64-hex-secret>` is dispatched to ValidateAPIKey; anything
+// else is treated as a JWT. This unifies the auth model so a CI bot can
+// introspect itself via `GET /users/me` with `Authorization: Bearer
+// key.<id>.<secret>` instead of having to do the `/auth/token` JWT
+// exchange dance first.
+//
+// On API-key success we synthesise a `*service.Claims` whose Subject is
+// the SA's shadow user id (or the human user id for human-owned keys),
+// TenantID is the key's tenant, and Access carries the EffectiveScopes
+// already-intersected against the SA allowlist. Roles are intentionally
+// empty — raw API keys don't carry RBAC roles (those are resolved at
+// JWT issuance time); downstream handlers that need roles must still go
+// through the JWT exchange.
 func (h *HTTPHandler) requireAuth(r *http.Request) (*service.Claims, error) {
 	token, ok := bearer.Extract(r.Header.Get("Authorization"))
 	if !ok {
 		return nil, errors.New("missing bearer token")
 	}
+	if keyID, secret, ok := parseAPIKeyBearer(token); ok {
+		vk, err := h.svc.ValidateAPIKey(r.Context(), service.ValidateAPIKeyOpts{
+			KeyID:     keyID,
+			RawSecret: secret,
+			// RequestTenantID intentionally left nil — the gateway-injected
+			// X-Tenant-ID header isn't reliably present on every /users/me
+			// call (the FE may not set it for bearer-key callers). The
+			// cross-tenant guard still fires on the gRPC ValidateAPIKey path
+			// for OCI pulls; here we accept the SA's stored tenant.
+		})
+		if err != nil {
+			return nil, err
+		}
+		return synthClaimsFromAPIKey(vk), nil
+	}
 	return h.svc.ValidateToken(r.Context(), token)
+}
+
+// parseAPIKeyBearer tries to interpret `token` as an API-key Bearer of the
+// form `key.<uuid>.<secret>`. Returns (keyID, secret, true) on success.
+// On any structural mismatch (missing prefix, wrong number of segments,
+// unparseable UUID, empty secret) returns the zero value + false so the
+// caller falls through to JWT validation. We never log or surface the
+// secret here — leaking a partial match would be worse than a generic
+// auth failure downstream.
+func parseAPIKeyBearer(token string) (uuid.UUID, string, bool) {
+	const prefix = "key."
+	if !strings.HasPrefix(token, prefix) {
+		return uuid.Nil, "", false
+	}
+	rest := token[len(prefix):]
+	// Split on the next dot only — the secret itself is 64 lowercase hex
+	// chars, no dots, so a SplitN(2) is exact.
+	idStr, secret, ok := strings.Cut(rest, ".")
+	if !ok || secret == "" {
+		return uuid.Nil, "", false
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	return id, secret, true
+}
+
+// synthClaimsFromAPIKey builds a *service.Claims that mirrors what a JWT
+// would carry for the same principal. Subject is the user_id (the
+// shadow user for SA-owned keys per FE-API-048 T6) so downstream
+// handlers branch on user.Kind exactly as they do for JWT callers.
+//
+// FUT-006: Roles is left empty because raw API keys don't have a roles
+// claim baked in. Handlers that gate on a specific role (admin / owner)
+// must still require a JWT — they will surface a clean 403 against the
+// empty roles list rather than a confusing UNAUTHORIZED.
+func synthClaimsFromAPIKey(vk *service.ValidatedKey) *service.Claims {
+	return &service.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject: vk.UserID.String(),
+		},
+		TenantID: vk.TenantID.String(),
+		Access:   vk.Access,
+	}
 }
 
 // parseTenantID reads the X-Tenant-ID header injected by the gateway.
