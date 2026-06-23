@@ -30,7 +30,8 @@ External references:
 - [`docs/CI-CD.md`](docs/CI-CD.md) — pipeline stages, Docker build rules, versioning
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Compose + Helm chart layout
 - `security.md` — SEC-001..SEC-036 hardening items (status + resolution notes)
-- `status.md` — current sprint, remediation plans, decision log
+- `status-tracker.md` — currently open remediation + security items (lean by design)
+- `status.md` — completed-work log + resolution notes (items move here once cleared from `status-tracker.md`)
 
 ---
 

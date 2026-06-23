@@ -758,11 +758,11 @@ There's no CLA — Apache 2.0's inbound contribution clause is sufficient. By su
 | [`docs/CI-CD.md`](docs/CI-CD.md) | Pipeline stages, Docker build rules, versioning |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Compose + Helm chart layout |
 | [`docs/postman/`](docs/postman/) | Postman collection covering every public `/api/v1/*` route |
-| [`status-tracker.md`](status-tracker.md) | Currently-open remediation work |
+| [`status-tracker.md`](status-tracker.md) | Currently-open remediation work (lean by design — items live here while in flight) |
+| [`status.md`](status.md) | Completed work log — historical record + per-item resolution notes; items land here once cleared from the tracker |
 | [`security.md`](security.md) | Security issue tracker (SEC-* / PENTEST-* lifecycle) |
 | [`futures.md`](futures.md) | Prioritised backlog of unsprinted items |
 | [`FE-STATUS.md`](FE-STATUS.md) | Frontend roadmap + sprint status |
-| [`deprecate/status.md`](deprecate/status.md) | Historical sprint log (deprecated 2026-06-23; kept for context) |
 
 ---
 

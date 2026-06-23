@@ -2,18 +2,21 @@
 
 > **What this file is for:** the curated set of currently-open
 > remediation (`REM-NNN`) and security (`SEC-NNN` / `PENTEST-NNN`)
-> items, plus partial / blocked surfaces. Lean by design — once an
-> item ships, it moves out of this file.
+> items, plus partial / blocked surfaces. **Lean by design.**
 >
-> **Historical record:** see [`deprecate/status.md`](deprecate/status.md)
-> for the full pre-OSS sprint log + every closed item's resolution
-> note. The deprecated file is kept for context (CVE provenance, why
-> certain design decisions were made) but is no longer updated.
+> **Workflow:**
+> 1. New item surfaces → add a short entry here (rationale, scope, link to branch / PR when in flight).
+> 2. Work happens on a feature branch as usual.
+> 3. When the work is **complete** (merged + verified): **remove the entry from this file** and **append a resolution note to [`status.md`](status.md)** (the completed-work log). One entry per item; PR / commit hash / date.
+> 4. This file stays short. [`status.md`](status.md) accumulates the audit trail.
 >
 > **Forward-looking backlog:** see [`futures.md`](futures.md) for
-> prioritised work that hasn't started yet.
+> prioritised work that hasn't started yet (Tier 1 / 2 / 3 items
+> without active branches).
 >
-> **Security disclosures:** see [`security.md`](security.md).
+> **Security disclosures:** see [`security.md`](security.md) — the
+> full per-CVE lifecycle (`SEC-*` IDs + resolution dates). Only
+> currently-open security items are duplicated here.
 
 ---
 
@@ -79,10 +82,26 @@ The FE work for both slices is wired; only the backend gaps in REM-013 prevent t
 
 ## How to use this file
 
-- **One bullet per open item.** Lean by design.
-- **Move items to `deprecate/status.md`** when they ship — keep a one-line "DONE ✅ <date> — <link to commit/PR>" line for searchability, then strike the section out of this file.
-- **New surfacings** get an entry here first; once the work is in flight, link the branch / PR; once it ships, archive.
-- **`futures.md`** is the natural place for things that haven't started yet. This tracker is for things that are *open work*, not *future ideas*.
+- **One bullet per open item.** Lean by design — if this file passes ~10 sections something is wrong with the workflow.
+- **When work ships:**
+  1. Remove the entry from this file.
+  2. Append a resolution note to [`status.md`](status.md) (one entry per item, with PR / commit hash / date).
+- **New surfacings** get an entry here first; once the work is in flight, link the branch / PR; once it ships, move to `status.md`.
+- **`futures.md`** is the natural place for things that haven't started yet — not yet picked up, not yet on a branch. This tracker is for things that are *open work*, not *future ideas*.
+
+```
+                  ┌──────────────────┐
+   ─surfacing──►  │ status-tracker.md│ ──ships──►  status.md
+                  │  (in flight)     │              (completed log)
+                  └──────────────────┘
+                          ▲
+                          │ pickup
+                          │
+                  ┌──────────────────┐
+                  │   futures.md     │
+                  │  (backlog ideas) │
+                  └──────────────────┘
+```
 
 ---
 

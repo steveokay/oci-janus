@@ -1,21 +1,25 @@
-# Project Status (DEPRECATED — historical record)
+# Project Status — Completed Work Log
 
-> **⚠️ This file is no longer maintained.** It was the active sprint
-> tracker during the pre-OSS phase of the project. The new home for
-> open work is [`status-tracker.md`](../status-tracker.md) (open
-> remediation items only) and [`futures.md`](../futures.md)
-> (prioritised backlog).
+> **What this file is:** the historical record of remediation, sprint,
+> and security work that has been **completed**. Resolution notes,
+> dated sprint summaries, decision context, and closed
+> `REM-NNN` / `SEC-NNN` / `PENTEST-NNN` items live here.
 >
-> This file is kept under `deprecate/` as the historical record —
-> resolution notes for closed `REM-NNN`, `SEC-NNN`, and `PENTEST-NNN`
-> items + the dated sprint summaries — because the audit trail
-> matters for context (why a design exists, when a CVE was closed,
-> what shipped in which sprint). Don't edit it; if you need to
-> reference history, link to the specific line via permalink.
+> **What this file is NOT:** the place for currently-open work.
+> Open remediation items live in [`status-tracker.md`](status-tracker.md),
+> and prioritised future items live in [`futures.md`](futures.md).
 >
-> **Deprecated:** 2026-06-23 (project went open-source under
-> Apache 2.0). The lean replacement is `status-tracker.md` at the
-> repo root.
+> **Workflow:** when an item in `status-tracker.md` is finished, the
+> entry is **removed** from the tracker and **appended** here with a
+> resolution note (commit / PR / date). `status-tracker.md` stays
+> lean by design; this file accumulates the audit trail.
+>
+> **Read order for context:** newer entries are toward the top of
+> each section. The dated "Last updated" log below captures
+> sprint-level summaries; the bulk of the file is per-item
+> resolution notes grouped by ID family (`REM-NNN`, `SEC-NNN`, etc.).
+> Older sprints from the pre-OSS phase are preserved verbatim for
+> audit trail.
 
 ---
 

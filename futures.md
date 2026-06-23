@@ -2,8 +2,10 @@
 
 > Items that are **not yet started** and **not yet bucketed into a sprint or
 > FE-API number**. As an item gets picked up it moves out of this file and
-> into `status.md` (backend) or `FE-STATUS.md` (frontend) with an
-> appropriate FE-API or REM identifier.
+> into [`status-tracker.md`](status-tracker.md) (backend, while in flight)
+> or [`FE-STATUS.md`](FE-STATUS.md) (frontend) with an appropriate FE-API
+> or REM identifier. When work ships, the tracker entry is replaced with
+> a resolution note in [`status.md`](status.md).
 >
 > Convention: items are listed in rough priority within each tier. The
 > tiering is opinionated — see the "How to use this file" section at the
@@ -509,10 +511,12 @@ Real value, but easy to defer.
 **Promotion workflow:**
 
 1. When someone picks up an item, assign it an FE-API or REM number
-   (whichever fits) and move the entry into `status.md` (backend) or
-   `FE-STATUS.md` (UI).
-2. Strike it from this file (or move to a "Done" section if you want
-   the audit trail — your call).
+   (whichever fits) and move the entry into
+   [`status-tracker.md`](status-tracker.md) (backend, while in flight)
+   or [`FE-STATUS.md`](FE-STATUS.md) (UI).
+2. Strike it from this file. The audit trail lives in `status.md`
+   once the work completes (see [`status-tracker.md`](status-tracker.md)
+   for the tracker → done workflow).
 3. Keep this file under ~400 lines. When it grows past that, the
    tiering has lost its meaning; split or prune.
 
@@ -529,7 +533,9 @@ Real value, but easy to defer.
 **Don't add items here:**
 
 - Bug fixes — those are commits, not futures.
-- Items already tracked elsewhere — link to `status.md` or
-  `FE-STATUS.md` instead.
+- Items already tracked elsewhere — link to
+  [`status-tracker.md`](status-tracker.md) (in flight),
+  [`status.md`](status.md) (completed), or
+  [`FE-STATUS.md`](FE-STATUS.md) (UI) instead.
 - Speculation without a clear user need — leave a comment in
   conversation, don't pollute the backlog.
