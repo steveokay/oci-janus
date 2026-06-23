@@ -441,6 +441,55 @@ quickly in real operator workflows.
 - **Affects:** `services/auth` (seed migration for tenant-only user),
   new `docs/DEPLOYMENT-MODELS.md`, possibly small README updates.
 
+### FUT-010: RBAC + FE-RBAC polish pass — ~1 sprint
+- **Why:** DEPLOY-001's tenant-persona testing will surface a class of
+  gaps where the FE renders affordances that the BFF will then reject
+  with 403, or where the sidebar leaks admin-only groups to roles that
+  can't use them. Today the testing user (`admin@dev.local`) holds
+  both tenant-admin and the platform-admin marker, so these gaps
+  don't show up day-to-day.
+- **Scope:**
+  - **BFF audit** — sweep every `/api/v1/*` route, confirm the role
+    gate matches the route's destructiveness. Today most routes use
+    `hasScopedRole(_, "org", _, "admin")` or the `requireDomainAdmin`
+    helper; a small but real subset relies on the platform-admin
+    marker. Build a test matrix (one row per route × role × scope)
+    so regressions surface in CI.
+  - **FE affordance hiding** — every button / settings card / form
+    field that would 403 on save should be disabled (or hidden) for
+    the calling role. Tooltip explains: "Role required: admin".
+    Specifically:
+    - `/workspace/domains` + `/workspace/audit-export` settings
+      groups hidden from sidebar for non-workspace-admin
+    - `/admin/*` groups hidden from sidebar for non-platform-admin
+    - Settings tab toggles (immutability, signed-image, trusted keys,
+      scan policy, retention) read-only for writer/reader
+    - Sign / Verify-now / Approve-key buttons disabled for
+      writer/reader
+    - Tag delete button disabled for reader; visible+enabled for
+      writer/admin/owner
+    - Webhook create/edit/delete/rotate gated on admin+
+    - Member invite + role-grant gated on admin+
+  - **Direct URL access** — when a non-admin types `/admin/tenants`
+    in the URL bar, the route should redirect to a "not authorised"
+    page rather than briefly rendering the admin shell before the
+    BFF 404s come back. Today the route loader probably just renders
+    and lets the data-fetch fail.
+  - **Role-gating helper** — introduce a `useHasRole(role, scope)`
+    hook that components can call, backed by the same JWT claims +
+    role_assignments shape the BFF uses. Avoids the current pattern
+    of hardcoding role checks per surface.
+  - **Documentation** — `docs/RBAC.md` covering the role matrix +
+    which surfaces each role can touch + how the platform-admin
+    marker fits in. Cross-link from README.
+- **Affects:** `services/management` (audit + helpers), `frontend/`
+  (helper hook + every settings/admin surface), new `docs/RBAC.md`.
+- **Estimated:** ~1 sprint. Sized larger than it sounds because the
+  FE has ~30-40 distinct admin-gated affordances and each needs a
+  permission check + disabled state + tooltip.
+- **Surfaced:** 2026-06-23 tenant-persona testing (DEPLOY-001 setup +
+  `tenant_only` writer-role test).
+
 ---
 
 ## Tier 3 — Nice-to-have polish
