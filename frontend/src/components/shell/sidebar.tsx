@@ -14,6 +14,7 @@ import {
   Globe,
   ScanLine,
   Ship,
+  Radio,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -54,7 +55,13 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   },
   {
     title: "Integrations",
-    items: [{ to: "/webhooks", label: "Webhooks", icon: Webhook }],
+    items: [
+      { to: "/webhooks", label: "Webhooks", icon: Webhook },
+      // Audit-log streaming to SIEM (futures.md Tier 1 #4). Lives in
+      // Integrations alongside Webhooks because both are outbound
+      // delivery channels — same admin posture, similar mental model.
+      { to: "/workspace/audit-export", label: "Audit streaming", icon: Radio },
+    ],
   },
   {
     title: "Platform",

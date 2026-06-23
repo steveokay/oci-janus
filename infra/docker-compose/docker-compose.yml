@@ -560,6 +560,13 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/audit.crt
       MTLS_KEY_PATH: /certs/audit.key
+      # Audit-log streaming to SIEM (futures.md Tier 1 #4). 64-char
+      # hex = 32 bytes of AES-256-GCM key material used to seal the
+      # per-tenant hmac_secret + bearer_token at rest. Empty leaves
+      # the streaming RPCs operational for syslog-only flows but
+      # rejects writes that carry a plaintext webhook secret.
+      # Generate with `openssl rand -hex 32`.
+      AUDIT_EXPORT_SECRETS_KEY_HEX: ${AUDIT_EXPORT_SECRETS_KEY_HEX:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
     volumes:
       - certs_data:/certs:ro
     ports:

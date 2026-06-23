@@ -47,9 +47,16 @@ type AuditExportConfig struct {
 // so the gRPC handler can surface NotFound rather than Internal.
 var ErrExportConfigNotFound = errors.New("audit export config not found")
 
+// last_error is nullable in the schema but the Go struct uses a plain
+// string field — COALESCE here so the scanner doesn't trip on NULL.
+// Nullable []byte (hmac_secret / bearer_token) and *uuid.UUID
+// (created_by) handle NULL natively; nullable *time.Time
+// (last_success_at / last_attempt_at) too.
 const auditExportColumns = `id, tenant_id, enabled, format, target_url,
 		hmac_secret, bearer_token, event_filters,
-		last_success_at, last_attempt_at, last_error, dlx_depth,
+		last_success_at, last_attempt_at,
+		COALESCE(last_error, '') AS last_error,
+		dlx_depth,
 		created_by, created_at, updated_at`
 
 // GetAuditExportConfig returns the streaming destination for a tenant.

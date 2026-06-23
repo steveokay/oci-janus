@@ -265,8 +265,9 @@ func validateTargetURL(format, target string) error {
 	case "webhook":
 		if !strings.HasPrefix(target, "https://") &&
 			!strings.HasPrefix(target, "http://localhost") &&
-			!strings.HasPrefix(target, "http://127.0.0.1") {
-			return errors.New("webhook format requires https:// URL (http://localhost permitted for dev)")
+			!strings.HasPrefix(target, "http://127.0.0.1") &&
+			!strings.HasPrefix(target, "http://host.docker.internal") {
+			return errors.New("webhook format requires https:// URL (http://localhost or http://host.docker.internal permitted for dev)")
 		}
 	}
 	return nil

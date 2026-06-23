@@ -347,6 +347,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Workspace custom-domain CRUD (FE-API-027). Routes return 404 when
 	// h.tenant is nil (TENANT_GRPC_ADDR unset).
 	h.RegisterWorkspaceDomains(mux, authMW)
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Mounted
+	// alongside the other workspace-scoped admin surfaces.
+	h.RegisterWorkspaceAuditExport(mux, authMW)
 
 	// Per-repo retention policy CRUD (FE-API-037). All routes require at
 	// least reader on the repo (GET) or repo admin (PUT/DELETE). The

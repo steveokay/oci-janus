@@ -278,11 +278,14 @@ func shipWebhook(ctx context.Context, cfg Config, body string) error {
 		return fmt.Errorf("parse url: %w", err)
 	}
 	if u.Scheme != "https" {
-		// Local-dev escape hatch — accept http://localhost or
-		// http://127.0.0.1 so the smoke test (Go HTTP server on
-		// localhost:port) can drive the path without a TLS cert.
-		// Anywhere else, refuse.
-		if !(u.Scheme == "http" && (strings.HasPrefix(u.Host, "localhost") || strings.HasPrefix(u.Host, "127.0.0.1"))) {
+		// Local-dev escape hatch — accept http://localhost,
+		// http://127.0.0.1, or http://host.docker.internal so the
+		// smoke test (Go HTTP server on localhost:port) can drive the
+		// path without a TLS cert. Anywhere else, refuse.
+		devHost := strings.HasPrefix(u.Host, "localhost") ||
+			strings.HasPrefix(u.Host, "127.0.0.1") ||
+			strings.HasPrefix(u.Host, "host.docker.internal")
+		if !(u.Scheme == "http" && devHost) {
 			return fmt.Errorf("webhook url must be HTTPS (got %s)", u.Scheme)
 		}
 	}
@@ -337,8 +340,12 @@ func guardTargetURL(target string) error {
 		return errors.New("missing host")
 	}
 	host := u.Hostname()
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-		return nil // dev escape hatch
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "host.docker.internal" {
+		return nil // dev escape hatch (host.docker.internal is the
+		// canonical way to reach the dev machine from inside a docker
+		// container — the audit container only knows about the docker
+		// network; the operator's webhook receiver typically lives on
+		// the host OS during smoke tests)
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {

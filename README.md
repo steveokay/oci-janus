@@ -44,6 +44,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Per-tenant scan policies + compliance reports | Implemented (FE-API-018/019: block-on-severity rules per repo; SPDX JSON 2.3 SBOMs + hand-rolled PDF reports) — see [`docs/SCANNER.md`](docs/SCANNER.md) |
 | Retention policies (age / version-count / max-idle-days) | Implemented (FE-API-037..043: dry-run preview, daily evaluation, audit trail) |
 | Pull / push analytics + per-repo activity | Implemented (FE-API-030/042: PG14 `date_bin` time-series, configurable sample rate, repo-scoped activity tab) |
+| Audit log streaming to SIEM | Implemented (futures.md Tier 1 #4: per-tenant config; syslog RFC 5424 / CEF / HTTPS webhook with HMAC; AES-256-GCM-encrypted secrets; SSRF guard) — see [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) |
 
 ### Technology Stack
 
@@ -631,6 +632,7 @@ The current UI is the Beacon rebuild (PR #14 merged 2026-06-19), tracked in [`FE
 | Members + RBAC (workspace + org-scoped) | `/members`, `/orgs/:org/members`, `/orgs/:org/settings` | ✅ Done |
 | Webhooks (list + detail + CRUD + delivery log + test + rotate) | `/webhooks`, `/webhooks/:id` | ✅ Done |
 | Workspace identity + custom domains | `/workspace/domains` | ✅ Done |
+| Audit log streaming to SIEM (config + test event) | `/workspace/audit-export` | ✅ Done (Tier 1 #4 Phase 1) |
 | Profile | `/profile` | ✅ Done |
 | Access hub — personal keys, service accounts, activity, preview surfaces (trust / helpers / policies / review) | `/api-keys`, `/api-keys/service-accounts`, `/api-keys/activity` | ✅ Done (FE-API-048) |
 | Platform admin — tenants + scanner adapter selector | `/admin/tenants`, `/admin/scanner` | ✅ Done (REM-011 Phase 2) |
@@ -657,6 +659,7 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 | [`docs/SERVICES.md`](docs/SERVICES.md) | Per-service endpoint / gRPC / schema / env-var reference |
 | [`docs/EVENTS.md`](docs/EVENTS.md) | RabbitMQ routing keys + payload shapes |
 | [`docs/SIGNING.md`](docs/SIGNING.md) | Image signing + signed-image admission policy (Phase 1 + Phase 2) |
+| [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) | Audit-log streaming to syslog / CEF / HTTPS webhook |
 | [`docs/SAML.md`](docs/SAML.md) | Per-tenant SAML SP setup + IdP metadata flow |
 | [`docs/SCANNER.md`](docs/SCANNER.md) | Scanner plugin protocol + adapter selection (Trivy / Grype / Clair) |
 | [`docs/TESTING.md`](docs/TESTING.md) | Coverage targets, integration tests, OCI conformance |

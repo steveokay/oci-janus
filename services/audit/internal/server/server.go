@@ -32,6 +32,7 @@ import (
 	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
+	"github.com/steveokay/oci-janus/services/audit/internal/export"
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
@@ -162,7 +163,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		secretsKey = k
 	}
-	auditHandler := handler.NewGRPC(repo).WithSecretsKey(secretsKey)
+	auditHandler := handler.NewGRPC(repo).
+		WithSecretsKey(secretsKey).
+		WithExportTester(export.NewTester())
 	auditv1.RegisterAuditServiceServer(grpcSrv, auditHandler)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 

@@ -79,6 +79,14 @@ CREATE INDEX idx_audit_export_configs_tenant
     ON audit_export_configs(tenant_id)
     WHERE enabled = TRUE;
 
+-- registry_audit_app is the low-privilege runtime role (SEC-001 +
+-- migration 20240101000002_audit_rls_role). Every pgxpool connection
+-- assumes this role before any query runs, so without explicit
+-- GRANTs the new table is invisible to the running service. Mirror
+-- the rights granted on audit_events except UPDATE — config rows
+-- are mutable by design (last_success_at, dlx_depth, etc.).
+GRANT SELECT, INSERT, UPDATE, DELETE ON audit_export_configs TO registry_audit_app;
+
 -- +goose Down
 
 DROP TABLE IF EXISTS audit_export_configs;
