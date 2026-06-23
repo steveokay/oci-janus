@@ -329,7 +329,73 @@ Gatekeeper, or your own webhook).
 
 ---
 
-## 8. Related decisions & open work
+## 8. Signed-image admission (futures.md Tier 1 #3)
+
+A signed image only enforces supply-chain trust if pulls of *unsigned*
+images get blocked. Setting `repositories.require_signature = TRUE` flips
+that gate on at the repo level:
+
+```
+oci client → registry-core GET /v2/<org>/<repo>/manifests/<ref>
+   → metadata.GetRepository  → require_signature?
+       false → return manifest as usual
+       true  → signer.ListSignatures(manifest_digest)
+                 empty → 403 DENIED
+                          body: "repository requires a signed manifest;
+                                 sign the image or turn require_signature off"
+                 non-empty → return manifest as usual
+```
+
+**Operator workflow:**
+
+```
+# 1) Push the image (still allowed even on a require_signature repo —
+#    the gate is on the PULL side so CI can push, sign, then promote).
+docker push registry.local/acme/api:v1.2.3
+
+# 2) Sign with cosign (or via POST .../sign from the dashboard).
+cosign sign registry.local/acme/api:v1.2.3
+
+# 3) Flip the flag (only after step 2 succeeds for every digest
+#    currently in the repo, or pulls of older tags will start failing).
+curl -X PATCH https://api.example.com/api/v1/repositories/acme/api \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"require_signature": true}'
+```
+
+**Posture:** fail OPEN on metadata or signer reachability blips (warn +
+continue) so a transient outage doesn't break every pull. Fail CLOSED on
+"flag is on AND zero signatures recorded" — that's the deliberate
+contract. If `SIGNER_GRPC_ADDR` is unset at boot, registry-core logs a
+startup warning and allows all pulls regardless of the flag (dev-stack
+convenience; production deployments always set this).
+
+**Phase 1 contract:** ANY signature passes. A per-repo trusted-key
+allowlist is a planned Phase 2 follow-up — until then, an operator who
+flips the flag on must also lock down which Cosign identities can sign
+for the org (typically via Fulcio OIDC issuer claims, not enforced
+here).
+
+**Dashboard:** the toggle lives on the repo Settings tab as
+`Signed-image admission` next to `Tag immutability` (both are
+security-relevant repo-wide flips with the same shape, but they
+compose independently — signed+mutable and unsigned+immutable are
+both valid combinations).
+
+**Files:**
+
+| File | Why it exists |
+|---|---|
+| `services/metadata/migrations/00015_repository_require_signature.sql` | Adds the column with `DEFAULT FALSE` |
+| `proto/metadata/v1/metadata.proto` | `Repository.require_signature` field + `UpdateRepositorySignaturePolicy` RPC |
+| `services/core/internal/service/registry.go` (`checkSignatureAdmission`) | The fail-OPEN-on-blip gate called from `GetManifest`/`HeadManifest` |
+| `services/core/internal/service/errors.go` (`ErrSignatureRequired`) | Sentinel error mapped to 403 DENIED |
+| `services/management/internal/handler/handler.go` (`updateRepositoryBody.RequireSignature`) | BFF PATCH plumbing — `*bool` nil-check so unrelated PATCHes don't reset the flag |
+| `frontend/src/components/repositories/repo-signature-policy-section.tsx` | Settings-tab card with toggle + explainer |
+
+---
+
+## 9. Related decisions & open work
 
 - **status.md Decision #14** — chose Vault dev mode for local development;
   same `SIGNER_KEY_BACKEND=vault` path used in production

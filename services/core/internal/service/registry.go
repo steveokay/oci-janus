@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -52,6 +53,14 @@ type Registry struct {
 	// pullSample (FE-API-042) gates pull.image publishes. Defaults to a
 	// rand.Float64() < sampleRate check, but tests inject deterministic samplers.
 	pullSample pullSampler
+	// signer (futures.md Tier 1 #3) is optional. When nil, repositories
+	// with `require_signature=true` skip the admission check with a
+	// warning log — the alternative (failing every pull from those
+	// repos because the signer wasn't wired) would be a worse default.
+	// `services/core` should ALWAYS dial the signer in production; this
+	// nil-tolerance is purely a dev-stack convenience for the cases
+	// where the operator hasn't started `registry-signer` yet.
+	signer signerv1.SignerServiceClient
 }
 
 // NewRegistry constructs a Registry. PullEventSampleRate=1.0 publishes every
@@ -73,6 +82,19 @@ func NewRegistry(
 		publisher:  pub,
 		pullSample: defaultPullSampler(pullEventSampleRate),
 	}
+}
+
+// WithSigner wires the optional signer gRPC client so the GetManifest
+// admission path can call ListSignatures. When this option is NOT
+// applied, signature admission warns + allows (see
+// checkSignatureAdmission).
+//
+// Futures.md Tier 1 #3 — Signed-image admission.
+func (r *Registry) WithSigner(signerConn *grpc.ClientConn) *Registry {
+	if signerConn != nil {
+		r.signer = signerv1.NewSignerServiceClient(signerConn)
+	}
+	return r
 }
 
 // defaultPullSampler returns a sampler that uses the package-level rand source.
@@ -646,7 +668,78 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 		}
 		return nil, fmt.Errorf("get manifest rpc: %w", err)
 	}
+
+	// Signed-image admission (futures.md Tier 1 #3). Check AFTER the
+	// manifest fetch — we only want to gate manifests that actually
+	// exist (a 404 from above should stay a 404, not flip to a
+	// "signature required" message that confirms the digest exists).
+	// Repo-fetch failures here fail OPEN (warn + allow) for the same
+	// reason as checkTagImmutable: a transient metadata blip shouldn't
+	// suddenly block every pull from every repo.
+	if err := r.checkSignatureAdmission(ctx5, tenantID, repoID, m.GetDigest()); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// checkSignatureAdmission rejects pulls from repos with
+// `require_signature=true` when the manifest has no recorded
+// signatures. Returns ErrSignatureRequired on rejection so the HTTP
+// layer can map to 403 DENIED.
+//
+// Allows the pull in three "no policy / no service" scenarios:
+//   1. Repo fetch fails (metadata blip) → warn + allow.
+//   2. Repo.require_signature is false (the default) → allow.
+//   3. Signer not wired (CORE_SIGNER_GRPC_ADDR unset in dev) → warn + allow.
+// Rejects only when the repo asked for signatures, the signer is up,
+// and ListSignatures returned an empty list for this manifest_digest.
+//
+// Futures.md Tier 1 #3 — Signed-image admission.
+func (r *Registry) checkSignatureAdmission(ctx context.Context, tenantID, repoID, manifestDigest string) error {
+	repo, err := r.metadata.GetRepository(ctx, &metadatav1.GetRepositoryRequest{
+		RepoId:   repoID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "signature admission: GetRepository failed (failing open)",
+			"err", err, "repo_id", repoID,
+		)
+		return nil
+	}
+	if !repo.GetRequireSignature() {
+		return nil
+	}
+	if r.signer == nil {
+		// Dev-stack convenience — see Registry struct comment for the
+		// rationale. Production must always wire the signer dial; the
+		// boot path can hard-fail when `CORE_SIGNER_GRPC_ADDR` is unset
+		// and the operator wants the gate to be load-bearing.
+		slog.WarnContext(ctx, "signature admission: signer not wired — allowing pull",
+			"repo_id", repoID, "manifest_digest", manifestDigest,
+		)
+		return nil
+	}
+	sigs, err := r.signer.ListSignatures(ctx, &signerv1.ListSignaturesRequest{
+		TenantId:       tenantID,
+		ManifestDigest: manifestDigest,
+	})
+	if err != nil {
+		// Signer reachable failure — fail OPEN like the metadata path.
+		// Logging the error gives operators a signal that the gate is
+		// degraded; rejecting every pull would be worse than briefly
+		// missing the check.
+		slog.WarnContext(ctx, "signature admission: ListSignatures failed (failing open)",
+			"err", err, "manifest_digest", manifestDigest,
+		)
+		return nil
+	}
+	if len(sigs.GetSignatures()) == 0 {
+		slog.WarnContext(ctx, "signature admission: rejecting unsigned manifest",
+			"repo_id", repoID, "manifest_digest", manifestDigest,
+		)
+		return ErrSignatureRequired
+	}
+	return nil
 }
 
 // DeleteManifest removes a manifest by digest, or only a tag by name.

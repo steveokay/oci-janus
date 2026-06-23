@@ -83,6 +83,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// successful manifest GET. Validated at startup to be in [0.0, 1.0].
 	registry := service.NewRegistry(metaConn, storageConn, uploadStore, referrerStore, pub, cfg.PullEventSampleRate)
 
+	// Futures.md Tier 1 #3 — signed-image admission. Optional dial:
+	// when SIGNER_GRPC_ADDR is unset we leave the signer field nil
+	// and the admission gate logs+allows instead of failing closed
+	// (dev-stack convenience). Production deployments always set this.
+	if cfg.SignerGRPCAddr != "" {
+		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, grpcCreds)
+		if err != nil {
+			return fmt.Errorf("dial signer: %w", err)
+		}
+		defer signerConn.Close()
+		signerConn.Connect()
+		registry = registry.WithSigner(signerConn)
+		slog.Info("signed-image admission wired", "signer_grpc_addr", cfg.SignerGRPCAddr)
+	} else {
+		slog.Warn("SIGNER_GRPC_ADDR not set — repos with require_signature=true will warn+allow (dev only)")
+	}
+
 	// HTTP handler
 	h := handler.New(authClient, registry, cfg.AuthRealm)
 	mux := http.NewServeMux()

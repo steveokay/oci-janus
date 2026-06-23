@@ -64,7 +64,7 @@ const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
 	r.storage_quota,
 	COALESCE((SELECT SUM(image_size_bytes) FROM manifests WHERE repo_id = r.id), 0) AS storage_used,
 	r.created_at, o.name, r.description,
-	r.immutable_tags`
+	r.immutable_tags, r.require_signature`
 
 // CreateRepository inserts a new repository row.
 func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
@@ -78,7 +78,7 @@ func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name
 		WITH inserted AS (
 			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
 		)
 		SELECT ` + repoSelectCols + `
 		FROM inserted r
@@ -112,7 +112,7 @@ func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, des
 			SET    description = $1
 			WHERE  id = $2 AND tenant_id = $3
 			RETURNING id, org_id, tenant_id, name, is_public,
-			          storage_quota, created_at, description, immutable_tags
+			          storage_quota, created_at, description, immutable_tags, require_signature
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
@@ -241,7 +241,8 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 		if err := rows.Scan(&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
 			&repo.Description,
-			&repo.ImmutableTags); err != nil {
+			&repo.ImmutableTags,
+			&repo.RequireSignature); err != nil {
 			return nil, fmt.Errorf("scan repository: %w", err)
 		}
 		repo.CreatedAt = timestamppb.New(createdAt)
@@ -274,12 +275,31 @@ func (r *Repository) UpdateRepositoryQuota(ctx context.Context, tenantID, repoID
 		WITH updated AS (
 			UPDATE repositories SET storage_quota = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
 		JOIN   organizations o ON o.id = r.org_id`
 	return r.scanOneRepo(ctx, q, quota, repoID, tenantID)
+}
+
+// UpdateRepositorySignaturePolicy flips the repo-wide `require_signature`
+// flag. Returns the updated Repository so the caller can echo state back
+// without a follow-up GetRepository. Separate RPC from UpdateRepository
+// for the same audit-trail-clarity reason as UpdateRepositoryImmutability.
+//
+// Futures.md Tier 1 #3 — Signed-image admission policy.
+func (r *Repository) UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error) {
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET require_signature = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	return r.scanOneRepo(ctx, q, requireSignature, repoID, tenantID)
 }
 
 // UpdateRepositoryImmutability flips the repo-wide `immutable_tags` flag.
@@ -293,7 +313,7 @@ func (r *Repository) UpdateRepositoryImmutability(ctx context.Context, tenantID,
 		WITH updated AS (
 			UPDATE repositories SET immutable_tags = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
@@ -341,6 +361,7 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
 		&repo.Description,
 		&repo.ImmutableTags,
+		&repo.RequireSignature,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

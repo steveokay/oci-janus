@@ -10,6 +10,7 @@ import { DescriptionCard } from "@/components/repositories/description-card";
 import { RetentionPanel } from "@/components/repositories/retention-panel";
 import { RepoScanPolicySection } from "@/components/repositories/repo-scan-policy-section";
 import { RepoImmutabilitySection } from "@/components/repositories/repo-immutability-section";
+import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Tabs,
@@ -117,6 +118,12 @@ function RepositoryDetail(): React.ReactElement {
           {/* repo-shape decision the operator makes before tuning      */}
           {/* policies.                                                 */}
           <RepoImmutabilitySection org={org} repo={repo} />
+          {/* Futures.md Tier 1 #3 — signed-image admission toggle.     */}
+          {/* Sits next to immutability because both are security flags  */}
+          {/* with the same shape; they compose independently (signed +  */}
+          {/* immutable, signed + mutable, etc.) so neither belongs      */}
+          {/* "inside" the other.                                        */}
+          <RepoSignaturePolicySection org={org} repo={repo} />
           {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
           {/* Other settings (quota override, description edit, etc.) */}
           {/* land here in future sprints alongside their backend     */}

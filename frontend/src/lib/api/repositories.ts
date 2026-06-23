@@ -133,6 +133,10 @@ interface UpdateRepoArgs {
   repo: string;
   description?: string;
   immutable_tags?: boolean;
+  // Signed-image admission (futures.md Tier 1 #3). Same "omit to leave
+  // alone, send to flip" contract as `immutable_tags` — a missing key
+  // never accidentally resets the security policy.
+  require_signature?: boolean;
 }
 
 export function useUpdateRepository() {
@@ -143,10 +147,12 @@ export function useUpdateRepository() {
       repo,
       description,
       immutable_tags,
+      require_signature,
     }: UpdateRepoArgs): Promise<Repository> => {
       const body: Record<string, unknown> = {};
       if (description !== undefined) body.description = description;
       if (immutable_tags !== undefined) body.immutable_tags = immutable_tags;
+      if (require_signature !== undefined) body.require_signature = require_signature;
       const { data } = await apiClient.patch<Repository>(
         `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`,
         body,

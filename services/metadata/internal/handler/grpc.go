@@ -34,6 +34,7 @@ type metadataRepo interface {
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
+	UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error)
 	UpdateTagImmutable(ctx context.Context, tenantID, repoID, name string, immutable bool) (*metadatav1.Tag, error)
 	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
 	// Tags
@@ -310,6 +311,15 @@ func (h *MetadataHandler) UpdateRepositoryQuota(ctx context.Context, req *metada
 // before calling here.
 func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req *metadatav1.UpdateRepositoryImmutabilityRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositoryImmutability(ctx, req.GetTenantId(), req.GetRepoId(), req.GetImmutableTags())
+	return repo, mapErr(err)
+}
+
+// UpdateRepositorySignaturePolicy flips the repo-wide require-signature
+// flag (futures.md Tier 1 #3). Same posture as UpdateRepositoryImmutability:
+// the BFF gates on repo admin and records the audit event; this handler
+// is structural pass-through to the repository.
+func (h *MetadataHandler) UpdateRepositorySignaturePolicy(ctx context.Context, req *metadatav1.UpdateRepositorySignaturePolicyRequest) (*metadatav1.Repository, error) {
+	repo, err := h.repo.UpdateRepositorySignaturePolicy(ctx, req.GetTenantId(), req.GetRepoId(), req.GetRequireSignature())
 	return repo, mapErr(err)
 }
 

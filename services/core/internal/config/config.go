@@ -27,6 +27,12 @@ type Config struct {
 	AuthRealm        string `mapstructure:"AUTH_REALM"`
 	MetadataGRPCAddr string `mapstructure:"METADATA_GRPC_ADDR"`
 	StorageGRPCAddr  string `mapstructure:"STORAGE_GRPC_ADDR"`
+	// SignerGRPCAddr (futures.md Tier 1 #3) wires the signed-image
+	// admission gate. When empty, repos with `require_signature=true`
+	// log a warning and ALLOW the pull rather than failing closed —
+	// a dev-stack convenience so the registry boots without a running
+	// signer service. Production deployments should always set this.
+	SignerGRPCAddr string `mapstructure:"SIGNER_GRPC_ADDR"`
 
 	RedisAddr     string `mapstructure:"REDIS_ADDR"`
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`

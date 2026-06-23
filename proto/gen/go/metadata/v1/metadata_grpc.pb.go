@@ -20,55 +20,56 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	MetadataService_CreateRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/CreateRepository"
-	MetadataService_GetRepository_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetRepository"
-	MetadataService_GetRepositoryByName_FullMethodName           = "/registry.metadata.v1.MetadataService/GetRepositoryByName"
-	MetadataService_ListRepositories_FullMethodName              = "/registry.metadata.v1.MetadataService/ListRepositories"
-	MetadataService_DeleteRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteRepository"
-	MetadataService_UpdateRepositoryQuota_FullMethodName         = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
-	MetadataService_UpdateRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateRepository"
-	MetadataService_UpdateRepositoryImmutability_FullMethodName  = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
-	MetadataService_PutTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/PutTag"
-	MetadataService_GetTag_FullMethodName                        = "/registry.metadata.v1.MetadataService/GetTag"
-	MetadataService_ListTags_FullMethodName                      = "/registry.metadata.v1.MetadataService/ListTags"
-	MetadataService_DeleteTag_FullMethodName                     = "/registry.metadata.v1.MetadataService/DeleteTag"
-	MetadataService_UpdateTagImmutable_FullMethodName            = "/registry.metadata.v1.MetadataService/UpdateTagImmutable"
-	MetadataService_PutManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/PutManifest"
-	MetadataService_GetManifest_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetManifest"
-	MetadataService_DeleteManifest_FullMethodName                = "/registry.metadata.v1.MetadataService/DeleteManifest"
-	MetadataService_UpdateManifestQuarantine_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateManifestQuarantine"
-	MetadataService_ListUntaggedManifests_FullMethodName         = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
-	MetadataService_LinkBlob_FullMethodName                      = "/registry.metadata.v1.MetadataService/LinkBlob"
-	MetadataService_UnlinkBlob_FullMethodName                    = "/registry.metadata.v1.MetadataService/UnlinkBlob"
-	MetadataService_ListOrphanedBlobs_FullMethodName             = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
-	MetadataService_GetTenantQuotaUsage_FullMethodName           = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
-	MetadataService_UpdateTenantQuota_FullMethodName             = "/registry.metadata.v1.MetadataService/UpdateTenantQuota"
-	MetadataService_IncrementTenantStorage_FullMethodName        = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
-	MetadataService_DecrementTenantStorage_FullMethodName        = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
-	MetadataService_UpdateScanStatus_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
-	MetadataService_GetScanResult_FullMethodName                 = "/registry.metadata.v1.MetadataService/GetScanResult"
-	MetadataService_UpsertScanSBOM_FullMethodName                = "/registry.metadata.v1.MetadataService/UpsertScanSBOM"
-	MetadataService_GetScanSBOM_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetScanSBOM"
-	MetadataService_GetTenantVulnerabilityCount_FullMethodName   = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
-	MetadataService_CountRepositories_FullMethodName             = "/registry.metadata.v1.MetadataService/CountRepositories"
-	MetadataService_GetSecurityOverview_FullMethodName           = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
-	MetadataService_ListTenantVulnerabilities_FullMethodName     = "/registry.metadata.v1.MetadataService/ListTenantVulnerabilities"
-	MetadataService_ListScanHistory_FullMethodName               = "/registry.metadata.v1.MetadataService/ListScanHistory"
-	MetadataService_ListTenantRemediations_FullMethodName        = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
-	MetadataService_GetTenantStorageBreakdown_FullMethodName     = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
-	MetadataService_GetTenantUsage_FullMethodName                = "/registry.metadata.v1.MetadataService/GetTenantUsage"
-	MetadataService_GetRepoRetentionPolicy_FullMethodName        = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
-	MetadataService_UpsertRepoRetentionPolicy_FullMethodName     = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
-	MetadataService_DeleteRepoRetentionPolicy_FullMethodName     = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
-	MetadataService_EvaluateRetention_FullMethodName             = "/registry.metadata.v1.MetadataService/EvaluateRetention"
-	MetadataService_GetOrgRetentionPolicy_FullMethodName         = "/registry.metadata.v1.MetadataService/GetOrgRetentionPolicy"
-	MetadataService_UpsertOrgRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/UpsertOrgRetentionPolicy"
-	MetadataService_DeleteOrgRetentionPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/DeleteOrgRetentionPolicy"
-	MetadataService_GetEffectiveRetentionPolicy_FullMethodName   = "/registry.metadata.v1.MetadataService/GetEffectiveRetentionPolicy"
-	MetadataService_MarkManifestRetentionPending_FullMethodName  = "/registry.metadata.v1.MetadataService/MarkManifestRetentionPending"
-	MetadataService_ClearManifestRetentionPending_FullMethodName = "/registry.metadata.v1.MetadataService/ClearManifestRetentionPending"
-	MetadataService_ListPendingDeleteManifests_FullMethodName    = "/registry.metadata.v1.MetadataService/ListPendingDeleteManifests"
-	MetadataService_LookupOrgIDByName_FullMethodName             = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
+	MetadataService_CreateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/CreateRepository"
+	MetadataService_GetRepository_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetRepository"
+	MetadataService_GetRepositoryByName_FullMethodName             = "/registry.metadata.v1.MetadataService/GetRepositoryByName"
+	MetadataService_ListRepositories_FullMethodName                = "/registry.metadata.v1.MetadataService/ListRepositories"
+	MetadataService_DeleteRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/DeleteRepository"
+	MetadataService_UpdateRepositoryQuota_FullMethodName           = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
+	MetadataService_UpdateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateRepository"
+	MetadataService_UpdateRepositoryImmutability_FullMethodName    = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
+	MetadataService_UpdateRepositorySignaturePolicy_FullMethodName = "/registry.metadata.v1.MetadataService/UpdateRepositorySignaturePolicy"
+	MetadataService_PutTag_FullMethodName                          = "/registry.metadata.v1.MetadataService/PutTag"
+	MetadataService_GetTag_FullMethodName                          = "/registry.metadata.v1.MetadataService/GetTag"
+	MetadataService_ListTags_FullMethodName                        = "/registry.metadata.v1.MetadataService/ListTags"
+	MetadataService_DeleteTag_FullMethodName                       = "/registry.metadata.v1.MetadataService/DeleteTag"
+	MetadataService_UpdateTagImmutable_FullMethodName              = "/registry.metadata.v1.MetadataService/UpdateTagImmutable"
+	MetadataService_PutManifest_FullMethodName                     = "/registry.metadata.v1.MetadataService/PutManifest"
+	MetadataService_GetManifest_FullMethodName                     = "/registry.metadata.v1.MetadataService/GetManifest"
+	MetadataService_DeleteManifest_FullMethodName                  = "/registry.metadata.v1.MetadataService/DeleteManifest"
+	MetadataService_UpdateManifestQuarantine_FullMethodName        = "/registry.metadata.v1.MetadataService/UpdateManifestQuarantine"
+	MetadataService_ListUntaggedManifests_FullMethodName           = "/registry.metadata.v1.MetadataService/ListUntaggedManifests"
+	MetadataService_LinkBlob_FullMethodName                        = "/registry.metadata.v1.MetadataService/LinkBlob"
+	MetadataService_UnlinkBlob_FullMethodName                      = "/registry.metadata.v1.MetadataService/UnlinkBlob"
+	MetadataService_ListOrphanedBlobs_FullMethodName               = "/registry.metadata.v1.MetadataService/ListOrphanedBlobs"
+	MetadataService_GetTenantQuotaUsage_FullMethodName             = "/registry.metadata.v1.MetadataService/GetTenantQuotaUsage"
+	MetadataService_UpdateTenantQuota_FullMethodName               = "/registry.metadata.v1.MetadataService/UpdateTenantQuota"
+	MetadataService_IncrementTenantStorage_FullMethodName          = "/registry.metadata.v1.MetadataService/IncrementTenantStorage"
+	MetadataService_DecrementTenantStorage_FullMethodName          = "/registry.metadata.v1.MetadataService/DecrementTenantStorage"
+	MetadataService_UpdateScanStatus_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateScanStatus"
+	MetadataService_GetScanResult_FullMethodName                   = "/registry.metadata.v1.MetadataService/GetScanResult"
+	MetadataService_UpsertScanSBOM_FullMethodName                  = "/registry.metadata.v1.MetadataService/UpsertScanSBOM"
+	MetadataService_GetScanSBOM_FullMethodName                     = "/registry.metadata.v1.MetadataService/GetScanSBOM"
+	MetadataService_GetTenantVulnerabilityCount_FullMethodName     = "/registry.metadata.v1.MetadataService/GetTenantVulnerabilityCount"
+	MetadataService_CountRepositories_FullMethodName               = "/registry.metadata.v1.MetadataService/CountRepositories"
+	MetadataService_GetSecurityOverview_FullMethodName             = "/registry.metadata.v1.MetadataService/GetSecurityOverview"
+	MetadataService_ListTenantVulnerabilities_FullMethodName       = "/registry.metadata.v1.MetadataService/ListTenantVulnerabilities"
+	MetadataService_ListScanHistory_FullMethodName                 = "/registry.metadata.v1.MetadataService/ListScanHistory"
+	MetadataService_ListTenantRemediations_FullMethodName          = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
+	MetadataService_GetTenantStorageBreakdown_FullMethodName       = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
+	MetadataService_GetTenantUsage_FullMethodName                  = "/registry.metadata.v1.MetadataService/GetTenantUsage"
+	MetadataService_GetRepoRetentionPolicy_FullMethodName          = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
+	MetadataService_UpsertRepoRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
+	MetadataService_DeleteRepoRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
+	MetadataService_EvaluateRetention_FullMethodName               = "/registry.metadata.v1.MetadataService/EvaluateRetention"
+	MetadataService_GetOrgRetentionPolicy_FullMethodName           = "/registry.metadata.v1.MetadataService/GetOrgRetentionPolicy"
+	MetadataService_UpsertOrgRetentionPolicy_FullMethodName        = "/registry.metadata.v1.MetadataService/UpsertOrgRetentionPolicy"
+	MetadataService_DeleteOrgRetentionPolicy_FullMethodName        = "/registry.metadata.v1.MetadataService/DeleteOrgRetentionPolicy"
+	MetadataService_GetEffectiveRetentionPolicy_FullMethodName     = "/registry.metadata.v1.MetadataService/GetEffectiveRetentionPolicy"
+	MetadataService_MarkManifestRetentionPending_FullMethodName    = "/registry.metadata.v1.MetadataService/MarkManifestRetentionPending"
+	MetadataService_ClearManifestRetentionPending_FullMethodName   = "/registry.metadata.v1.MetadataService/ClearManifestRetentionPending"
+	MetadataService_ListPendingDeleteManifests_FullMethodName      = "/registry.metadata.v1.MetadataService/ListPendingDeleteManifests"
+	MetadataService_LookupOrgIDByName_FullMethodName               = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -88,6 +89,10 @@ type MetadataServiceClient interface {
 	// audit trail records the security-relevant change explicitly
 	// (description edits stay on the existing path).
 	UpdateRepositoryImmutability(ctx context.Context, in *UpdateRepositoryImmutabilityRequest, opts ...grpc.CallOption) (*Repository, error)
+	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
+	// `require_signature` flag. Separate RPC from UpdateRepository for
+	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
+	UpdateRepositorySignaturePolicy(ctx context.Context, in *UpdateRepositorySignaturePolicyRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Tags
 	PutTag(ctx context.Context, in *PutTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
@@ -362,6 +367,16 @@ func (c *metadataServiceClient) UpdateRepositoryImmutability(ctx context.Context
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryImmutability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateRepositorySignaturePolicy(ctx context.Context, in *UpdateRepositorySignaturePolicyRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositorySignaturePolicy_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -864,6 +879,10 @@ type MetadataServiceServer interface {
 	// audit trail records the security-relevant change explicitly
 	// (description edits stay on the existing path).
 	UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error)
+	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
+	// `require_signature` flag. Separate RPC from UpdateRepository for
+	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
+	UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error)
 	// Tags
 	PutTag(context.Context, *PutTagRequest) (*Tag, error)
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
@@ -1060,6 +1079,9 @@ func (UnimplementedMetadataServiceServer) UpdateRepository(context.Context, *Upd
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryImmutability not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositorySignaturePolicy not implemented")
 }
 func (UnimplementedMetadataServiceServer) PutTag(context.Context, *PutTagRequest) (*Tag, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutTag not implemented")
@@ -1339,6 +1361,24 @@ func _MetadataService_UpdateRepositoryImmutability_Handler(srv interface{}, ctx 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositoryImmutability(ctx, req.(*UpdateRepositoryImmutabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateRepositorySignaturePolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositorySignaturePolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateRepositorySignaturePolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateRepositorySignaturePolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateRepositorySignaturePolicy(ctx, req.(*UpdateRepositorySignaturePolicyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2124,6 +2164,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositoryImmutability",
 			Handler:    _MetadataService_UpdateRepositoryImmutability_Handler,
+		},
+		{
+			MethodName: "UpdateRepositorySignaturePolicy",
+			Handler:    _MetadataService_UpdateRepositorySignaturePolicy_Handler,
 		},
 		{
 			MethodName: "PutTag",

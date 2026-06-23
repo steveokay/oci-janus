@@ -37,6 +37,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Immutable audit log | Implemented (append-only PostgreSQL partition) |
 | Garbage collection worker | Implemented (mark-sweep, dry-run / manifests / blobs / full modes) |
 | Tag immutability — repo-wide flag + per-tag pin | Implemented (rejects re-pushes with `400 MANIFEST_INVALID`) |
+| Signed-image admission — repo-wide `require_signature` | Implemented (rejects unsigned pulls with `403 DENIED`; Phase 1 ANY signature passes) |
 | RBAC at org / repo / tag level | Scaffold |
 
 ### Technology Stack

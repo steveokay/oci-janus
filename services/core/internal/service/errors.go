@@ -17,4 +17,11 @@ var (
 	// to MANIFEST_INVALID per the OCI Distribution Spec § 4.2.2.
 	// Futures.md Tier 1 #2.
 	ErrTagImmutable = errors.New("tag is immutable")
+
+	// ErrSignatureRequired is returned by GetManifest when the parent
+	// repository has `require_signature=true` and the manifest has no
+	// recorded signatures. The HTTP layer maps this to 403 DENIED with
+	// a clear body so the operator can act (sign the image first or
+	// turn the policy off). Futures.md Tier 1 #3.
+	ErrSignatureRequired = errors.New("repository requires a signed manifest")
 )

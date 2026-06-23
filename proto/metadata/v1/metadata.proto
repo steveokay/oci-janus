@@ -21,6 +21,10 @@ service MetadataService {
   // audit trail records the security-relevant change explicitly
   // (description edits stay on the existing path).
   rpc UpdateRepositoryImmutability(UpdateRepositoryImmutabilityRequest) returns (Repository);
+  // Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
+  // `require_signature` flag. Separate RPC from UpdateRepository for
+  // the same audit-trail-clarity reason as UpdateRepositoryImmutability.
+  rpc UpdateRepositorySignaturePolicy(UpdateRepositorySignaturePolicyRequest) returns (Repository);
 
   // Tags
   rpc PutTag(PutTagRequest) returns (Tag);
@@ -251,6 +255,14 @@ message Repository {
   // immutability gates re-writes, not initial pushes. Defaults to false
   // so the flag is invisible to operators who never opt in.
   bool   immutable_tags = 11;
+  // Signed-image admission (futures.md Tier 1 #3). When true,
+  // services/core consults services/signer on every manifest GET; an
+  // unsigned manifest returns 403 DENIED with a clear error body.
+  // Defaults to false so the flag is invisible to operators who never
+  // opt in. Phase 1 accepts ANY recorded signature; a per-repo
+  // trusted-key allowlist is a Phase 2 enhancement tracked in
+  // futures.md.
+  bool   require_signature = 12;
 }
 
 message Tag {
@@ -404,6 +416,17 @@ message UpdateRepositoryImmutabilityRequest {
   string repo_id        = 1;
   string tenant_id      = 2;
   bool   immutable_tags = 3;
+}
+
+// Signed-image admission (futures.md Tier 1 #3). `require_signature=true`
+// flips the repo into "every pull checks for a recorded signature"
+// mode. The next `GetManifest` for an unsigned manifest in the repo
+// returns 403 DENIED until either the manifest gets a signature or
+// the flag is turned back off.
+message UpdateRepositorySignaturePolicyRequest {
+  string repo_id           = 1;
+  string tenant_id         = 2;
+  bool   require_signature = 3;
 }
 
 // Tag requests

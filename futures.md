@@ -47,21 +47,38 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     a `tag.promoted` audit event, optionally re-signs the manifest.
 - **Affects:** `services/core`, `services/metadata`, `frontend`.
 
-### 3. Admission policy — signed-image enforcement
+### 3. Admission policy — signed-image enforcement — DONE (Phase 1, 2026-06-23)
 - **Why:** Signing exists (REM-011 + FE-API-003/025/026) but nothing
   gates a pull on signature presence. A repo can be "signing required"
   in policy and still serve unsigned images.
-- **What:**
-  - New `repositories.require_signature BOOLEAN` flag.
-  - services/core consults services/signer on every manifest GET — if
-    the repo requires signatures and the manifest isn't signed by any
-    trusted key, return `403 UNAUTHORIZED` with a clear error.
-  - Per-repo "trusted signer key" list (PR also touches services/signer
-    to surface key IDs).
-  - Policy editor in the repo settings page (which also needs to ship —
-    see Tier 2 #2).
-- **Affects:** `services/core`, `services/signer`, `services/metadata`,
-  `frontend`.
+- **What shipped (Phase 1, branch `feat/signed-image-admission`):**
+  - `repositories.require_signature BOOLEAN DEFAULT FALSE` (migration
+    `00015`) + `Repository.require_signature` proto field +
+    `UpdateRepositorySignaturePolicy` metadata RPC.
+  - services/core's `GetManifest` + `HeadManifest` consult
+    services/signer's `ListSignatures` when the repo flag is on; zero
+    signatures → `403 DENIED` with body
+    `repository requires a signed manifest; sign the image or turn require_signature off`.
+  - Fail-OPEN posture on metadata / signer reachability blips (warn +
+    continue) so a transient outage doesn't break every pull.
+    `SIGNER_GRPC_ADDR` unset → registry-core warns at startup and
+    allows all pulls (dev-stack convenience).
+  - BFF: `PATCH /api/v1/repositories/{org}/{repo}` accepts
+    `require_signature: bool` (optional `*bool` so unrelated PATCHes
+    don't reset it); separate RPC so audit log shows the
+    security-relevant flip explicitly.
+  - Frontend: `RepoSignaturePolicySection` card on the repo Settings
+    tab next to `RepoImmutabilitySection` (both are repo-wide security
+    flips with the same shape; they compose independently).
+  - Docs: README capability matrix, docs/SERVICES.md core+management,
+    docs/SIGNING.md §8 admission walkthrough.
+- **Phase 2 (NOT STARTED):** per-repo trusted-signer-key allowlist —
+  current Phase 1 contract is "ANY signature passes". Until then an
+  operator who flips the flag on must also lock down which Cosign
+  identities can sign for the org (via Fulcio OIDC issuer claims,
+  not enforced here).
+- **Affects (shipped):** `services/metadata`, `services/core`,
+  `services/management`, `frontend`.
 
 ### 4. Audit log streaming to SIEM
 - **Why:** Enterprise procurement asks for syslog/CEF export on day one.

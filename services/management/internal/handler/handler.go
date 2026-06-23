@@ -539,6 +539,12 @@ type RepoResponse struct {
 	// digest. Default false; flip via PATCH /repositories/{org}/{repo}
 	// with `{"immutable_tags": true}`.
 	ImmutableTags bool `json:"immutable_tags"`
+	// Signed-image admission (futures.md Tier 1 #3). When true,
+	// services/core blocks GetManifest unless registry-signer has at
+	// least one signature recorded for the manifest digest. Default
+	// false; flip via PATCH /repositories/{org}/{repo} with
+	// `{"require_signature": true}`.
+	RequireSignature bool `json:"require_signature"`
 }
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {
@@ -655,8 +661,13 @@ type createRepositoryBody struct {
 // immutability off). A nil pointer skips the UpdateRepositoryImmutability
 // RPC entirely; a non-nil pointer triggers it.
 type updateRepositoryBody struct {
-	Description    string `json:"description"`
-	ImmutableTags  *bool  `json:"immutable_tags,omitempty"`
+	Description   string `json:"description"`
+	ImmutableTags *bool  `json:"immutable_tags,omitempty"`
+	// Signed-image admission (futures.md Tier 1 #3). Optional *bool
+	// for the same "nil = leave alone, non-nil = update" reason as
+	// ImmutableTags above — a separate RPC fires so the audit log
+	// shows the security-relevant transition explicitly.
+	RequireSignature *bool `json:"require_signature,omitempty"`
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
@@ -1257,7 +1268,8 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 		StorageQuota:  r.GetStorageQuota(),
 		CreatedAt:     r.GetCreatedAt().AsTime(),
 		Description:   r.GetDescription(),
-		ImmutableTags: r.GetImmutableTags(),
+		ImmutableTags:    r.GetImmutableTags(),
+		RequireSignature: r.GetRequireSignature(),
 	}
 }
 
@@ -1322,6 +1334,24 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			slog.Error("UpdateRepositoryImmutability", "err", err, "repo_id", existing.GetRepoId())
 			writeError(w, http.StatusInternalServerError, "failed to update immutability")
+			return
+		}
+		repo = updated
+	}
+
+	// Signed-image admission flip (futures.md Tier 1 #3). Same nil-check
+	// contract as ImmutableTags — only fire the RPC when the caller
+	// explicitly sent `require_signature` in the body. Separate RPC so
+	// the audit trail records this security-relevant flip explicitly.
+	if body.RequireSignature != nil {
+		updated, err := h.meta.UpdateRepositorySignaturePolicy(r.Context(), &metadatav1.UpdateRepositorySignaturePolicyRequest{
+			TenantId:         tenantID,
+			RepoId:           existing.GetRepoId(),
+			RequireSignature: *body.RequireSignature,
+		})
+		if err != nil {
+			slog.Error("UpdateRepositorySignaturePolicy", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update signature policy")
 			return
 		}
 		repo = updated
