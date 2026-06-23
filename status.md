@@ -386,6 +386,19 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
 
 ---
 
+### REM-016 — `libs/errors/codes.MapDBError` doesn't recognise PostgreSQL error codes (OPEN)
+- **Surfaced:** 2026-06-23 during the custom-domain triage (PR #32). Operator hit a generic "Couldn't register, try again or check BFF logs" toast; the real cause was a foreign-key violation (tenant row missing in the tenant service's DB), but `MapDBError` only special-cases `context.DeadlineExceeded` → `ResourceExhausted` and lumps everything else into `Internal` with a fallback message. The 1-line PgErr stayed buried in the audit log.
+- **Affects every service:** any repository that catches a Postgres error and routes it through `errcodes.MapDBError`. That's all of them.
+- **Proposed fix:** detect `*pgconn.PgError` and map:
+  - `23503` (foreign_key_violation) → `codes.NotFound` with a body explaining the missing parent row (best-effort — extract the constraint name from `pgErr.ConstraintName` so the operator sees "tenant not found" not "FK 23503").
+  - `23505` (unique_violation) → `codes.AlreadyExists` (e.g. "domain already registered for this tenant").
+  - `23514` (check_violation) → `codes.InvalidArgument` (catches `format CHECK (format IN (...))` and similar).
+  - Everything else → existing fallback (`Internal`).
+- **Estimated work:** ~1-2 hours including unit tests in `libs/errors/codes/codes_test.go`. Touches every service for verification only (no API change — same error codes the gRPC handlers already map to HTTP).
+- **Why it matters:** would have made the PR #32 bug actionable instantly. Generic "Internal" errors waste investigation time when the underlying Postgres error is precise.
+
+---
+
 ### REM-015 — `libs/rabbitmq/consumer` retry counter is broken (latent bug, OPEN)
 - **Surfaced:** 2026-06-23 during Tier 1 #4 Phase 2 (PR #31) live smoke. The audit-export worker's retries looped infinitely instead of routing to DLX.
 - **Root cause:** `consumer.handle` uses `deathCount(d)` (sum of `x-death` header counts) to decide whether to NACK with requeue=true (retry) or requeue=false (DLX). But `x-death` is added by RabbitMQ only when a message is dead-lettered — `Nack(requeue=true)` returns the message to the same queue WITHOUT incrementing `x-death`. So `retries` stays at 0 forever for transient handler errors and the message bounces between the consumer + queue indefinitely.
