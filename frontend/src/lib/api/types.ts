@@ -45,6 +45,21 @@ export interface Repository {
   require_signature?: boolean;
 }
 
+// Signed-image admission Phase 2 (futures.md Tier 1 #3). One entry
+// in the per-repo trusted-key allowlist. Surfaced by the Settings
+// tab's RepoTrustedKeysSection card. When require_signature=true
+// AND the list is non-empty, services/core narrows the admission
+// gate to signatures produced by an approved key_id only. Empty
+// list falls back to "ANY signature passes" so the operator can
+// flip the flag first and pin keys incrementally.
+export interface TrustedKey {
+  id: string;
+  key_id: string;
+  display_name?: string;
+  added_by?: string;
+  added_at: string;
+}
+
 export interface RepositoriesListResponse {
   repositories: Repository[];
   total: number;

@@ -302,6 +302,103 @@ func (r *Repository) UpdateRepositorySignaturePolicy(ctx context.Context, tenant
 	return r.scanOneRepo(ctx, q, requireSignature, repoID, tenantID)
 }
 
+// ListRepositoryTrustedKeys returns every approved signing key for a
+// repo. services/core's admission gate calls this on every pull when
+// `require_signature=true`; the dashboard calls it to render the
+// allowlist table on the Settings tab. Ordered by `added_at` so the
+// most recently approved key is at the bottom of the list — operators
+// typically scan top-down for the original approval.
+//
+// Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key allowlist.
+func (r *Repository) ListRepositoryTrustedKeys(ctx context.Context, tenantID, repoID string) ([]*metadatav1.RepositoryTrustedKey, error) {
+	const q = `
+		SELECT id, repo_id, tenant_id, key_id,
+		       COALESCE(display_name, ''),
+		       COALESCE(added_by::text, ''),
+		       added_at
+		FROM   repository_trusted_keys
+		WHERE  tenant_id = $1 AND repo_id = $2
+		ORDER  BY added_at ASC`
+	rows, err := r.reader().Query(ctx, q, tenantID, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("list trusted keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []*metadatav1.RepositoryTrustedKey
+	for rows.Next() {
+		var k metadatav1.RepositoryTrustedKey
+		var addedAt time.Time
+		if err := rows.Scan(&k.Id, &k.RepoId, &k.TenantId, &k.KeyId,
+			&k.DisplayName, &k.AddedBy, &addedAt); err != nil {
+			return nil, fmt.Errorf("scan trusted key: %w", err)
+		}
+		k.AddedAt = timestamppb.New(addedAt)
+		keys = append(keys, &k)
+	}
+	return keys, rows.Err()
+}
+
+// AddRepositoryTrustedKey idempotently approves a signing key for the
+// repo. Re-adding an already-approved (repo_id, key_id) is a no-op
+// that returns the existing row — display_name and added_by from the
+// new request are silently dropped so the original approval stays the
+// load-bearing audit anchor. `added_by` is permitted to be empty
+// (system-driven add); when set it must be a UUID matching the user
+// or service-account that authorised the change.
+//
+// Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key allowlist.
+func (r *Repository) AddRepositoryTrustedKey(ctx context.Context, tenantID, repoID, keyID, displayName, addedBy string) (*metadatav1.RepositoryTrustedKey, error) {
+	// addedBy is a string in the proto so the caller doesn't have to
+	// parse UUIDs; we convert to *string here so empty maps to NULL
+	// rather than the literal "" — keeps the column type-clean and
+	// preserves the audit chain when the database is inspected raw.
+	var addedByArg any
+	if addedBy != "" {
+		addedByArg = addedBy
+	}
+	const q = `
+		INSERT INTO repository_trusted_keys (repo_id, tenant_id, key_id, display_name, added_by)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5)
+		ON CONFLICT (repo_id, key_id) DO UPDATE
+		    SET key_id = EXCLUDED.key_id  -- no-op; just triggers RETURNING
+		RETURNING id, repo_id, tenant_id, key_id,
+		          COALESCE(display_name, ''),
+		          COALESCE(added_by::text, ''),
+		          added_at`
+	var k metadatav1.RepositoryTrustedKey
+	var addedAt time.Time
+	if err := r.pool.QueryRow(ctx, q, repoID, tenantID, keyID, displayName, addedByArg).Scan(
+		&k.Id, &k.RepoId, &k.TenantId, &k.KeyId,
+		&k.DisplayName, &k.AddedBy, &addedAt,
+	); err != nil {
+		return nil, fmt.Errorf("add trusted key: %w", err)
+	}
+	k.AddedAt = timestamppb.New(addedAt)
+	return &k, nil
+}
+
+// RemoveRepositoryTrustedKey deletes an approval. Removing the last
+// key in the allowlist widens the gate back to "ANY signature passes"
+// (Phase 1 fallback) by design — see migration 00016 header for the
+// rationale. ErrNotFound when the (repo_id, key_id) pair doesn't
+// exist so the caller can distinguish "already removed" from real
+// failures.
+//
+// Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key allowlist.
+func (r *Repository) RemoveRepositoryTrustedKey(ctx context.Context, tenantID, repoID, keyID string) error {
+	const q = `DELETE FROM repository_trusted_keys
+	            WHERE tenant_id = $1 AND repo_id = $2 AND key_id = $3`
+	tag, err := r.pool.Exec(ctx, q, tenantID, repoID, keyID)
+	if err != nil {
+		return fmt.Errorf("delete trusted key: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // UpdateRepositoryImmutability flips the repo-wide `immutable_tags` flag.
 // Returns the updated Repository so the caller can echo state back
 // without a follow-up GetRepository. Separate RPC from UpdateRepository

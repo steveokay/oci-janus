@@ -35,6 +35,12 @@ type metadataRepo interface {
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
 	UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error)
+	// Trusted-key allowlist (futures.md Tier 1 #3 Phase 2). Three
+	// CRUD verbs; List is read-heavy and called from services/core's
+	// admission gate on every pull. Add/Remove fire from BFF only.
+	ListRepositoryTrustedKeys(ctx context.Context, tenantID, repoID string) ([]*metadatav1.RepositoryTrustedKey, error)
+	AddRepositoryTrustedKey(ctx context.Context, tenantID, repoID, keyID, displayName, addedBy string) (*metadatav1.RepositoryTrustedKey, error)
+	RemoveRepositoryTrustedKey(ctx context.Context, tenantID, repoID, keyID string) error
 	UpdateTagImmutable(ctx context.Context, tenantID, repoID, name string, immutable bool) (*metadatav1.Tag, error)
 	UpdateRepository(ctx context.Context, tenantID, repoID, description string) (*metadatav1.Repository, error)
 	// Tags
@@ -335,6 +341,45 @@ func (h *MetadataHandler) UpdateRepositorySignaturePolicy(ctx context.Context, r
 	return repo, mapErr(err)
 }
 
+// ListRepositoryTrustedKeys returns every approved signing key for a
+// repo (futures.md Tier 1 #3 Phase 2). Called on every pull from
+// services/core's admission gate, so the repository method reads
+// from the replica when DB_DSN_REPLICA is configured (REM-008).
+func (h *MetadataHandler) ListRepositoryTrustedKeys(ctx context.Context, req *metadatav1.ListRepositoryTrustedKeysRequest) (*metadatav1.ListRepositoryTrustedKeysResponse, error) {
+	keys, err := h.repo.ListRepositoryTrustedKeys(ctx, req.GetTenantId(), req.GetRepoId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.ListRepositoryTrustedKeysResponse{Keys: keys}, nil
+}
+
+// AddRepositoryTrustedKey approves a signing key for the repo
+// (futures.md Tier 1 #3 Phase 2). Idempotent on (repo_id, key_id) —
+// the BFF gates on repo admin role and emits the audit event before
+// calling here. Bust the trusted-keys cache slot so services/core
+// picks up the new key on the next pull.
+func (h *MetadataHandler) AddRepositoryTrustedKey(ctx context.Context, req *metadatav1.AddRepositoryTrustedKeyRequest) (*metadatav1.RepositoryTrustedKey, error) {
+	k, err := h.repo.AddRepositoryTrustedKey(ctx, req.GetTenantId(), req.GetRepoId(),
+		req.GetKeyId(), req.GetDisplayName(), req.GetAddedBy())
+	if err == nil {
+		h.bustTrustedKeysCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return k, mapErr(err)
+}
+
+// RemoveRepositoryTrustedKey revokes an approval. Removing the last
+// entry widens the gate back to "ANY signature passes" by design
+// (see migration 00016 header). Bust the trusted-keys cache so the
+// transition takes effect on the next pull instead of waiting up to
+// the cache TTL.
+func (h *MetadataHandler) RemoveRepositoryTrustedKey(ctx context.Context, req *metadatav1.RemoveRepositoryTrustedKeyRequest) (*emptypb.Empty, error) {
+	err := h.repo.RemoveRepositoryTrustedKey(ctx, req.GetTenantId(), req.GetRepoId(), req.GetKeyId())
+	if err == nil {
+		h.bustTrustedKeysCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return &emptypb.Empty{}, mapErr(err)
+}
+
 // ── Tags ─────────────────────────────────────────────────────────────────────
 
 func (h *MetadataHandler) PutTag(ctx context.Context, req *metadatav1.PutTagRequest) (*metadatav1.Tag, error) {
@@ -497,6 +542,25 @@ func (h *MetadataHandler) bustRepositoryCache(ctx context.Context, tenantID, rep
 		return
 	}
 	const prefix = "grpc:/registry.metadata.v1.MetadataService/GetRepository:"
+	key := prefix + tenantID + ":" + repoID
+	if err := h.rdb.Del(ctx, key).Err(); err != nil {
+		slog.Warn("cache bust: redis Del failed",
+			"err", err, "key", key)
+	}
+}
+
+// bustTrustedKeysCache deletes the REM-007 ListRepositoryTrustedKeys
+// cache entry so services/core's admission gate sees a key add/remove
+// on the next pull. Same shape + best-effort posture as
+// bustRepositoryCache; rdb=nil is a no-op so tests + Redis-less dev
+// runs still work (the gate just lags by the cache TTL).
+//
+// Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key allowlist.
+func (h *MetadataHandler) bustTrustedKeysCache(ctx context.Context, tenantID, repoID string) {
+	if h.rdb == nil {
+		return
+	}
+	const prefix = "grpc:/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys:"
 	key := prefix + tenantID + ":" + repoID
 	if err := h.rdb.Del(ctx, key).Err(); err != nil {
 		slog.Warn("cache bust: redis Del failed",

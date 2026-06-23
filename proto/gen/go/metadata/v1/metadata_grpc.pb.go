@@ -29,6 +29,9 @@ const (
 	MetadataService_UpdateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateRepository"
 	MetadataService_UpdateRepositoryImmutability_FullMethodName    = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
 	MetadataService_UpdateRepositorySignaturePolicy_FullMethodName = "/registry.metadata.v1.MetadataService/UpdateRepositorySignaturePolicy"
+	MetadataService_ListRepositoryTrustedKeys_FullMethodName       = "/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys"
+	MetadataService_AddRepositoryTrustedKey_FullMethodName         = "/registry.metadata.v1.MetadataService/AddRepositoryTrustedKey"
+	MetadataService_RemoveRepositoryTrustedKey_FullMethodName      = "/registry.metadata.v1.MetadataService/RemoveRepositoryTrustedKey"
 	MetadataService_PutTag_FullMethodName                          = "/registry.metadata.v1.MetadataService/PutTag"
 	MetadataService_GetTag_FullMethodName                          = "/registry.metadata.v1.MetadataService/GetTag"
 	MetadataService_ListTags_FullMethodName                        = "/registry.metadata.v1.MetadataService/ListTags"
@@ -93,6 +96,15 @@ type MetadataServiceClient interface {
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
 	UpdateRepositorySignaturePolicy(ctx context.Context, in *UpdateRepositorySignaturePolicyRequest, opts ...grpc.CallOption) (*Repository, error)
+	// Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
+	// trusted-key allowlist. When `require_signature=true` AND the list
+	// is non-empty, services/core narrows the admission gate to only
+	// signatures produced by an allowed key_id. Empty list falls back
+	// to Phase 1 "ANY signature passes" so operators can flip the flag
+	// first and pin keys incrementally.
+	ListRepositoryTrustedKeys(ctx context.Context, in *ListRepositoryTrustedKeysRequest, opts ...grpc.CallOption) (*ListRepositoryTrustedKeysResponse, error)
+	AddRepositoryTrustedKey(ctx context.Context, in *AddRepositoryTrustedKeyRequest, opts ...grpc.CallOption) (*RepositoryTrustedKey, error)
+	RemoveRepositoryTrustedKey(ctx context.Context, in *RemoveRepositoryTrustedKeyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Tags
 	PutTag(ctx context.Context, in *PutTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
@@ -377,6 +389,36 @@ func (c *metadataServiceClient) UpdateRepositorySignaturePolicy(ctx context.Cont
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositorySignaturePolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListRepositoryTrustedKeys(ctx context.Context, in *ListRepositoryTrustedKeysRequest, opts ...grpc.CallOption) (*ListRepositoryTrustedKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRepositoryTrustedKeysResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListRepositoryTrustedKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) AddRepositoryTrustedKey(ctx context.Context, in *AddRepositoryTrustedKeyRequest, opts ...grpc.CallOption) (*RepositoryTrustedKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepositoryTrustedKey)
+	err := c.cc.Invoke(ctx, MetadataService_AddRepositoryTrustedKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) RemoveRepositoryTrustedKey(ctx context.Context, in *RemoveRepositoryTrustedKeyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_RemoveRepositoryTrustedKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -883,6 +925,15 @@ type MetadataServiceServer interface {
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
 	UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error)
+	// Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
+	// trusted-key allowlist. When `require_signature=true` AND the list
+	// is non-empty, services/core narrows the admission gate to only
+	// signatures produced by an allowed key_id. Empty list falls back
+	// to Phase 1 "ANY signature passes" so operators can flip the flag
+	// first and pin keys incrementally.
+	ListRepositoryTrustedKeys(context.Context, *ListRepositoryTrustedKeysRequest) (*ListRepositoryTrustedKeysResponse, error)
+	AddRepositoryTrustedKey(context.Context, *AddRepositoryTrustedKeyRequest) (*RepositoryTrustedKey, error)
+	RemoveRepositoryTrustedKey(context.Context, *RemoveRepositoryTrustedKeyRequest) (*emptypb.Empty, error)
 	// Tags
 	PutTag(context.Context, *PutTagRequest) (*Tag, error)
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
@@ -1082,6 +1133,15 @@ func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.C
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositorySignaturePolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListRepositoryTrustedKeys(context.Context, *ListRepositoryTrustedKeysRequest) (*ListRepositoryTrustedKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListRepositoryTrustedKeys not implemented")
+}
+func (UnimplementedMetadataServiceServer) AddRepositoryTrustedKey(context.Context, *AddRepositoryTrustedKeyRequest) (*RepositoryTrustedKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddRepositoryTrustedKey not implemented")
+}
+func (UnimplementedMetadataServiceServer) RemoveRepositoryTrustedKey(context.Context, *RemoveRepositoryTrustedKeyRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveRepositoryTrustedKey not implemented")
 }
 func (UnimplementedMetadataServiceServer) PutTag(context.Context, *PutTagRequest) (*Tag, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutTag not implemented")
@@ -1379,6 +1439,60 @@ func _MetadataService_UpdateRepositorySignaturePolicy_Handler(srv interface{}, c
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositorySignaturePolicy(ctx, req.(*UpdateRepositorySignaturePolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListRepositoryTrustedKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRepositoryTrustedKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListRepositoryTrustedKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListRepositoryTrustedKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListRepositoryTrustedKeys(ctx, req.(*ListRepositoryTrustedKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_AddRepositoryTrustedKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddRepositoryTrustedKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).AddRepositoryTrustedKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_AddRepositoryTrustedKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).AddRepositoryTrustedKey(ctx, req.(*AddRepositoryTrustedKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_RemoveRepositoryTrustedKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveRepositoryTrustedKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).RemoveRepositoryTrustedKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_RemoveRepositoryTrustedKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).RemoveRepositoryTrustedKey(ctx, req.(*RemoveRepositoryTrustedKeyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2168,6 +2282,18 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositorySignaturePolicy",
 			Handler:    _MetadataService_UpdateRepositorySignaturePolicy_Handler,
+		},
+		{
+			MethodName: "ListRepositoryTrustedKeys",
+			Handler:    _MetadataService_ListRepositoryTrustedKeys_Handler,
+		},
+		{
+			MethodName: "AddRepositoryTrustedKey",
+			Handler:    _MetadataService_AddRepositoryTrustedKey_Handler,
+		},
+		{
+			MethodName: "RemoveRepositoryTrustedKey",
+			Handler:    _MetadataService_RemoveRepositoryTrustedKey_Handler,
 		},
 		{
 			MethodName: "PutTag",

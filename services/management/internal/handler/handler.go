@@ -297,6 +297,16 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handlePinTag)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin", authMW(http.HandlerFunc(h.handleUnpinTag)))
 
+	// Trusted-key allowlist (futures.md Tier 1 #3 Phase 2). List is
+	// reader-allowed (the keys are not secrets — they're public-key
+	// identifiers operators choose); add + remove require repo admin
+	// because they're security-relevant policy flips. ServeMux's
+	// path-param routing means key_id can contain colons/hex without
+	// quoting concerns; we validate the shape in the handler.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/trusted-keys", authMW(http.HandlerFunc(h.handleListTrustedKeys)))
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/trusted-keys", authMW(http.HandlerFunc(h.handleAddTrustedKey)))
+	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}", authMW(http.HandlerFunc(h.handleRemoveTrustedKey)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only
