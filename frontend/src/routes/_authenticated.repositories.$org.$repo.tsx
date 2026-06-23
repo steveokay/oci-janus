@@ -79,15 +79,22 @@ function RepositoryDetail(): React.ReactElement {
         onDelete={() => setDeleteOpen(true)}
       />
 
-      <PullCommandCard
-        org={org}
-        repo={repo}
-        artifactType={initialTypeFilter}
-      />
+      {/* Pull/install instructions and Repository activity sit side-by-side */}
+      {/* on wide viewports so the operator sees "how do I get this" and    */}
+      {/* "what's been happening here" without scrolling. The two cards have */}
+      {/* roughly equivalent height (3-step walkthrough vs. analytics       */}
+      {/* sparkline) so md:grid-cols-2 keeps the row balanced. Stacks back  */}
+      {/* to single-column below md so narrow viewports stay readable.      */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <PullCommandCard
+          org={org}
+          repo={repo}
+          artifactType={initialTypeFilter}
+        />
+        <AnalyticsCard scope="repo" org={org} repo={repo} />
+      </div>
 
       <DescriptionCard description={data?.description} />
-
-      <AnalyticsCard scope="repo" org={org} repo={repo} />
 
       <Tabs defaultValue="tags">
         <TabsList>
