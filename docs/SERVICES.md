@@ -285,6 +285,14 @@ GET  /v2/<name>/referrers/<digest>                  # OCI referrers API (§4.5)
 - `org/*` patterns match any repo whose name begins with `org/` (org-scoped role assignment expansion).
 - `GET /v2/` version check is intentionally exempt — OCI spec requires it to be reachable unauthenticated.
 
+**Environment variables (in addition to the common set):**
+
+| Variable | Description | Default |
+|---|---|---|
+| `SIGNER_GRPC_ADDR` | Address of `registry-signer` for the signed-image admission gate. **Required in production** when any repo has `require_signature=true`; unset in dev causes a startup warning + "allow all pulls" fail-OPEN (see [`docs/SIGNING.md`](SIGNING.md) §8). | empty (dev only) |
+| `PULL_EVENT_SAMPLE_RATE` | Probability (range `[0.0, 1.0]`) that a successful `GetManifest` publishes a `pull.image` event. Lower to reduce event volume on hot repos. FE-API-043's `max_idle_days` retention rule keeps working as long as the rate is > 0 because services/metadata debounces `last_pulled_at` updates to 24h. | `1.0` |
+| `AUTH_REALM` | URL Docker clients use to fetch tokens — must be publicly reachable. PENTEST-010: must be HTTPS in production (validated at startup). | `http://localhost:8080/auth/token` |
+
 ---
 
 ## 4. registry-storage
@@ -382,22 +390,35 @@ Notable RPCs:
   - `GetTenantStorageBreakdown(tenant_id)` — tenant total + top-50 repos with `percent_of_tenant` materialised server-side.
 - **SBOM (FE-API-033):**
   - `UpsertScanSBOM(scan_id, format, sbom_json)` / `GetScanSBOM(scan_id)` — write path is the metadata RPC itself today (scanner integration deferred).
+- **Admission gates (futures.md Tier 1 #2 + Tier 1 #3):**
+  - `UpdateRepositoryImmutability(tenant_id, repo_id, immutable_tags)` — Tier 1 #2; busts the GetRepository cache slot via the new `bustRepositoryCache` helper so `services/core`'s `checkTagImmutable` reflects the flip on the next pull.
+  - `UpdateTagImmutable(tenant_id, repo_id, name, immutable)` — Tier 1 #2 per-tag pin; CTE-then-join SELECT so the response carries the joined manifests row fields.
+  - `UpdateRepositorySignaturePolicy(tenant_id, repo_id, require_signature)` — Tier 1 #3 Phase 1; same cache-bust posture.
+  - `ListRepositoryTrustedKeys` / `AddRepositoryTrustedKey` / `RemoveRepositoryTrustedKey` — Tier 1 #3 Phase 2; List is cached (30s TTL); Add idempotent on (repo_id, key_id); Remove returns `ErrNotFound` when the pair doesn't exist. Add/Remove bust the trusted-keys cache via `bustTrustedKeysCache`.
 
 **Database schema:** Canonical source is `services/metadata/migrations/`. Core tables:
 - `tenants(id, name, created_at)`
 - `organizations(id, tenant_id, name)`
-- `repositories(id, org_id, tenant_id, name, is_public, storage_quota, storage_used, description)`
-- `manifests(id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes)`
-- `tags(id, repo_id, tenant_id, name, manifest_digest, updated_at)`
+- `repositories(id, org_id, tenant_id, name, is_public, storage_quota, storage_used, description, immutable_tags, require_signature)`
+- `manifests(id, repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes, config_media_type, artifact_type, last_pulled_at, retention_pending_delete_at, quarantined, quarantine_reason, quarantined_by, quarantined_at)`
+- `tags(id, repo_id, tenant_id, name, manifest_digest, immutable, updated_at)`
 - `blobs(digest PRIMARY KEY, size_bytes, storage_key)`
 - `blob_links(repo_id, blob_digest)` — deduplication
 - `scan_results(id, manifest_digest, repo_id, tenant_id, scanner_name, status, severity_counts, findings, trigger, sbom_format, sbom_json, completed_at)`
+- `repository_trusted_keys(id, repo_id, tenant_id, key_id, display_name, added_by, added_at)` — futures.md Tier 1 #3 Phase 2
 
 Migrations of note:
 - `00004_manifest_image_size.sql` — column add only (per PENTEST-028); operator-run batched backfill in `infra/runbooks/manifest-image-size-backfill.md`.
 - `00005_repo_description.sql` — FE-API-006.
 - `00006_scan_results_trigger.sql` — FE-API-015 (`trigger` ∈ `{push, manual, scheduled}`).
 - `00007_scan_results_sbom.sql` — FE-API-033 (`sbom_format` + `sbom_json BYTEA`).
+- `00010_manifest_retention_pending.sql` — FE-API-040: `manifests.retention_pending_delete_at` for the soft-delete grace window.
+- `00011_manifest_last_pulled.sql` — FE-API-042: `manifests.last_pulled_at` (24h-debounced updates) driving the FE-API-043 `max_idle_days` retention rule.
+- `00012_manifest_quarantine.sql` — FE-API-050: quarantine state machine on `manifests`.
+- `00013_manifest_artifact_type.sql` — S-MAINT-1 P6: `config_media_type` + derived `artifact_type` discriminator (`image` / `helm` / `signature` / `sbom` / `other`) for scanner-skip + dashboard pill.
+- `00014_tag_immutability.sql` — futures.md Tier 1 #2: `repositories.immutable_tags` + `tags.immutable`.
+- `00015_repository_require_signature.sql` — futures.md Tier 1 #3 Phase 1: `repositories.require_signature`.
+- `00016_repository_trusted_keys.sql` — futures.md Tier 1 #3 Phase 2: per-repo trusted-key allowlist (UNIQUE on (repo_id, key_id), composite index on (tenant_id, repo_id)).
 
 `PutManifest` enforces `maxManifestJSONBytes = 4 << 20` (PENTEST-029); `parseImageSize` truncates `Layers`/`Manifests` at `maxManifestEntries = 1000`.
 

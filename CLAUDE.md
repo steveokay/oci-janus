@@ -80,7 +80,7 @@ github.com/steveokay/oci-janus/
 ├── infra/                        # Compose, Helm charts, runbooks
 ├── docs/                         # Detailed references split out of CLAUDE.md
 ├── .github/workflows/            # Path-filtered CI jobs per service
-├── Makefile                      # make build-all, make test-all, make lint-all
+├── Makefile                      # make build / test / lint (each fans out to per-service targets via `$(addprefix …,$(SERVICES))`)
 └── .golangci.yml                 # Shared linter config
 ```
 
@@ -181,26 +181,26 @@ All shared packages live here. Services import specific sub-packages.
 
 ```
 libs/
-├── auth/jwt              # JWT validation (public key only — no signing here)
-├── auth/apikey           # API key hashing + validation helpers
-├── auth/mtls             # mTLS client + server config builders
-├── storage/driver        # Driver interface definition (no implementations)
-├── scanner/plugin        # Scanner interface + ScanRequest/ScanResult types
-├── observability/otel    # OTEL bootstrap (Bootstrap, shutdown)
-├── observability/tracing # Span helpers, trace ID propagation
-├── observability/metrics # Common metric definitions
-├── errors/codes          # Canonical error codes → gRPC + HTTP
-├── errors/types          # Typed errors with tenant context
-├── middleware/grpc       # Unary + stream interceptors
-├── middleware/http       # Request ID, tracing, auth, secure headers
-├── config/loader         # Viper config loader + DBConfig pool tuning
+├── auth/bearer           # Bearer-token header parsing (RFC 7235, case-insensitive scheme)
+├── auth/mtls             # mTLS client + server config builders (cert reloading)
+├── cmd/healthcheck       # Tiny CLI used as the Kubernetes liveness/readiness probe
+├── config/loader         # Viper config loader + DBConfig pool tuning + dev defaults
 ├── crypto/aes            # AES-256-GCM helpers
 ├── crypto/argon2         # Argon2id password hashing helpers
+├── errors/codes          # Canonical error codes + MapDBError (pgxpool exhaustion → ResourceExhausted)
+├── middleware/grpc       # Unary + stream interceptors + REM-007 read cache
+├── middleware/http       # Request ID, tracing, auth, secure headers
+├── observability/metrics # Common Prometheus metric definitions
+├── observability/otel    # OTEL bootstrap (Bootstrap + shutdown; HTTP + gRPC instrumentation)
+├── rabbitmq/consumer     # Consumer with DLX + manual ack
+├── rabbitmq/events       # All typed event definitions (see docs/EVENTS.md)
 ├── rabbitmq/publisher    # Typed event publisher with confirm mode
-├── rabbitmq/consumer     # Consumer with DLX + retry logic
-├── rabbitmq/events       # All event type definitions (see docs/EVENTS.md)
-└── testutil/             # testcontainers helpers + fixtures
+├── scanner/plugin        # Scanner interface + ScanRequest/ScanResult types
+├── storage/driver        # Driver interface definition (no implementations)
+└── testutil/             # testcontainers helpers (PG/Redis/RabbitMQ/MinIO + auth+audit bundle) + fixtures
 ```
+
+JWT signing + verification lives in `services/auth` (not in `libs/`) — production code only ever needs to *validate* tokens, so the validator helper sits next to its single caller (the auth-service HTTP middleware). API-key hashing also lives in `services/auth/internal/service/apikey.go` for the same reason — the hashing is paired with the polymorphic owner lookup that only auth owns.
 
 **Rules:**
 - No business logic in `libs/`. Only utilities and interfaces.

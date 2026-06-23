@@ -13,7 +13,7 @@
 
 - Location: `internal/testutil/integration/` or alongside the unit tests under `//go:build integration`.
 - Use `testcontainers-go` (helpers in `libs/testutil/containers`).
-- Spin up real PostgreSQL, Redis, RabbitMQ, MinIO per test suite.
+- Spin up real PostgreSQL, Redis, RabbitMQ, MinIO per test suite. Each service that owns its own DB schema (`auth`, `metadata`, `audit`, `webhook`, `tenant`, `proxy`, `scanner`, `gc`, `signer`) gets a fresh PG container with that service's `embed.FS` migrations applied; cross-service tests use `libs/testutil/containers/auth_with_audit.go` or provision their own multi-DB bundles inline.
 - Integration tests tagged with `//go:build integration` — excluded from default `go test ./...`.
 - Run with `make test-integration`.
 

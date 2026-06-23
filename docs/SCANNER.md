@@ -5,10 +5,13 @@
 > engine); reviewers asking "how does `registry-scanner` actually do its
 > job."
 >
-> **Status:** REM-011 Phase 1 — dev-stub + Trivy adapter shipped, both
-> work end-to-end against `docker compose --profile scanner up -d`.
-> Phase 2 (admin UI for adapter selection + test scans) is tracked
-> separately on the same REM line.
+> **Status:** REM-011 + REM-014 — four adapters shipped (dev-stub,
+> Trivy, Grype, Clair). All work end-to-end against `docker compose
+> --profile scanner up -d`. The admin UI for adapter selection
+> (`/admin/scanner`) ships as REM-011 Phase 2. Per-tenant scan policies
+> (FE-API-018) + compliance reports (FE-API-019) ride on top — the
+> scanner respects `block_on_severity` rules and renders SPDX SBOMs +
+> PDF reports per scan.
 
 ---
 
@@ -31,16 +34,23 @@ plugins") materialized.
 
 ## 2. Adapters shipped today
 
-Both ship inside the `registry-scanner` Docker image; pick one by
-setting `SCANNER_PLUGIN_PATH` before bringing the profile up.
+All four ship inside the `registry-scanner` Docker image; pick one by
+setting `SCANNER_PLUGIN_PATH` before bringing the profile up. The
+`/admin/scanner` dashboard route renders the same selector backed by
+the live `SCANNER_PLUGIN_CHOICES` env var so an operator can swap
+adapters without redeploying.
 
 | Adapter | Path inside image | Real CVE detection? | When to use |
 |---|---|---|---|
 | `dev-stub` | `/usr/local/bin/scanner-dev-stub` | **No** — returns 4 hardcoded findings (1 CRITICAL / 1 HIGH / 1 MEDIUM / 1 LOW) regardless of input | Local UI work, demos, CI smoke tests. Lets you exercise the full trigger → pending → complete → findings flow without waiting on a vuln DB download. |
-| `trivy-adapter` | `/usr/local/bin/scanner-trivy-adapter` | **Yes** — translates the JSON-RPC request into a `trivy rootfs` invocation against the staged layers | Real vulnerability scanning. First scan is slower (Trivy DB download), subsequent scans are fast. |
+| `trivy-adapter` | `/usr/local/bin/scanner-trivy-adapter` | **Yes** — translates the JSON-RPC request into a `trivy rootfs` invocation against the staged layers | Real vulnerability scanning. First scan is slower (Trivy DB download), subsequent scans are fast. Default in dev compose when `--profile scanner` is selected without an explicit override. |
+| `grype-adapter` | `/usr/local/bin/scanner-grype-adapter` | **Yes** — runs `grype dir:<staged-layers>` and translates Grype JSON to the platform's finding shape | Alternative to Trivy. Same input/output contract; useful when Grype's vuln DB matches your downstream tooling, or for cross-adapter comparison runs. |
+| `clair-adapter` | `/usr/local/bin/scanner-clair-adapter` | **Yes** — embeds an HTTP layer-server bridging Clair v4's pull-style API to the platform's stage-then-scan contract (REM-014) | Use when your existing Clair deployment is the source of truth for vulnerability data. Needs `--profile clair` so the `clair` + `clair-db` containers come up; configured via `CLAIR_*` env vars (allowlisted by the subprocess env filter). |
 
 Source: `infra/scanner-plugins/dev-stub/main.go`,
-`infra/scanner-plugins/trivy-adapter/main.go`.
+`infra/scanner-plugins/trivy-adapter/main.go`,
+`infra/scanner-plugins/grype-adapter/main.go`,
+`infra/scanner-plugins/clair-adapter/main.go`.
 
 ### Zero-config dev
 
@@ -214,7 +224,52 @@ adapter swap is purely an env-var flip.
 
 ---
 
-## 5. End-to-end verification
+## 5. Scan policies + compliance reports (FE-API-018 / FE-API-019)
+
+The adapter contract is artifact-agnostic — it scans whatever layers
+are staged. Two pieces of operator-facing policy sit *on top* of the
+scan results to decide what to do with them:
+
+**Per-tenant scan policies (`scan_policies` table).** A repo (or its
+parent org) can declare a `block_on_severity` rule (`critical`, `high`,
+`medium`, `low`, or `none`). When the scanner finishes, if any finding
+meets-or-exceeds the configured severity threshold, the scanner emits
+`manifest.quarantined` via the metadata RPC — services/core then fails
+pulls of that manifest with `451 Unavailable For Legal Reasons` and an
+explanatory body. The policy is configured via the dashboard's
+per-repo Settings tab (FE-API-049) or via the management BFF directly:
+
+```
+GET    /api/v1/repositories/{org}/{repo}/scan-policy
+PUT    /api/v1/repositories/{org}/{repo}/scan-policy   {"block_on_severity":"high"}
+DELETE /api/v1/repositories/{org}/{repo}/scan-policy   # falls back to org-level / off
+```
+
+Org-level policies cascade down — a repo with no policy inherits its
+org's setting. Org policies in turn inherit a workspace-wide default
+(off in dev, recommended `high` in prod). `none` at any layer disables
+the gate without changing the scan itself; the scan still runs and
+the dashboard still shows findings.
+
+**Compliance reports (`compliance_reports` table).** On every
+completed scan the scanner writes an SPDX JSON 2.3 SBOM and a
+plain-text PDF report and persists them under
+`/var/lib/registry-scanner/reports/<tenant>/<repo>/<manifest>.{json,pdf}`.
+The async worker uses `FOR UPDATE SKIP LOCKED` to safely claim jobs
+across multiple replicas. Reports are served via the management BFF:
+
+```
+GET /api/v1/repositories/{org}/{repo}/tags/{tag}/sbom            # SPDX JSON
+GET /api/v1/repositories/{org}/{repo}/tags/{tag}/compliance.pdf  # PDF
+```
+
+The PDF renderer is hand-rolled (no third-party PDF library — kept the
+dependency footprint shallow) and emits one section per finding with
+package name, version, CVE id, severity, and remediation hint.
+
+---
+
+## 6. End-to-end verification
 
 The acceptance criteria for REM-011 are:
 
@@ -250,7 +305,7 @@ network).
 
 ---
 
-## 6. Known limitations + follow-ups
+## 7. Known limitations + follow-ups
 
 These are not blockers for REM-011 Phase 1 but should be tracked when
 extending the surface:

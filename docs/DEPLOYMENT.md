@@ -37,7 +37,8 @@ helm/
 │       ├── registry-webhook/
 │       ├── registry-audit/
 │       ├── registry-gc/
-│       └── registry-tenant/
+│       ├── registry-tenant/
+│       └── registry-management/      # REST BFF for the dashboard (and CLI/Terraform); HTTP-only, no gRPC server
 ```
 
 ## Per-service Helm chart requirements

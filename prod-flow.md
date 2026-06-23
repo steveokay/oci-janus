@@ -638,16 +638,27 @@ DB_DSN_REPLICA=postgres://...?sslmode=require   # read replica; optional
 |---|---|---|
 | Helm charts tested against real cluster | Not yet | Charts have correct structure; untested. Sprint 6 backlog. |
 | Terraform for cloud infra | Not started | `infra/terraform/` is present but empty. Decision #10. |
-| OCI conformance suite in CI | ✅ Done | 75/75 PASS. Runs in CI on every PR to `main`. |
-| Integration tests (testcontainers) | ✅ Done | auth, core, metadata, storage covered. |
+| OCI conformance suite in CI | ✅ Done | 75/75 PASS, 5 skipped (optional features). Runs in CI on every PR to `main`. |
+| Integration tests (testcontainers) | ✅ Done | Every service that owns a DB schema has its own integration suite; `libs/testutil/containers/auth_with_audit.go` covers the cross-service auth+audit case. |
 | Prometheus metrics wired | ✅ Done | All services expose `/metrics` on dedicated port `:9090` via `libs/observability/metrics` (SEC-025). |
 | `sslmode=require` for dev Postgres | Accepted risk | Dev compose uses `sslmode=prefer`. `libs/config/loader` warns at startup. Never use compose DSNs in prod. |
-| RBAC at org / repo level | ✅ Done | Full schema (owner/admin/writer/reader), `GetUserPermissions` gRPC, enforced in `registry-core` via `requireAccess()`, enforced in `registry-management` REST routes. Tag-level scope deferred — Sprint 6 backlog. |
-| Frontend UI | ✅ Done | All 5 Stitch screens shipped pixel-perfect (Login, Dashboard, Image Details & Tags, Security Scan, Build History) and wired to the management API via TanStack Query. JWT auto-refresh + Zustand memory-only token store. |
+| RBAC at org / repo level | ✅ Done | Full schema (owner/admin/writer/reader), `GetUserPermissions` gRPC, enforced in `registry-core` via `requireAccess()`, enforced in `registry-management` REST routes. Service-account assignments built on top (FE-API-048). Tag-level scope deferred. |
+| Frontend UI | ✅ Done (Beacon rebuild merged 2026-06-19, PR #14) | Full repo / tag / security / activity / members / webhooks / workspace / API-keys hub / admin surfaces shipped. JWT auto-refresh + Zustand memory-only token store. |
+| Per-tenant SSO (OAuth + SAML) | ✅ Done | OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) + SAML 2.0 SP via `crewjam/saml`. Auto-provisioning; `client_secret` AES-256-GCM-encrypted. See `docs/SAML.md`. |
+| Service accounts + scoped API keys | ✅ Done | FE-API-048: shadow-user model, polymorphic api_keys table, per-key scope intersection, `key.<id>.<secret>` Bearer form on `/users/me` (FUT-006). |
+| Signed-image admission (Phase 1 + Phase 2) | ✅ Done | Per-repo `require_signature` flag + per-repo trusted-key allowlist. `services/core`'s `checkSignatureAdmission` rejects unsigned pulls with `403 DENIED`; Phase 2 narrows to approved `key_id`s only. Fail-OPEN on metadata / signer reachability blips. See `docs/SIGNING.md` §8. |
+| Tag immutability (repo flag + per-tag pin) | ✅ Done | `services/core`'s `PutManifest` preflight rejects re-pushes with `400 MANIFEST_INVALID` when `repositories.immutable_tags=true` OR `tags.immutable=true`. Same-digest re-pushes always succeed. |
+| Retention policies | ✅ Done | FE-API-037..043: rule kinds `max_tags` / `max_age_days` / `max_idle_days`; dry-run preview; grace-then-hard-delete; audit trail. Three FE surfaces (pending-delete pill, per-repo run history, dashboard retention column) gated on REM-013 metadata extensions. |
+| Per-tenant scan policies + compliance reports | ✅ Done | FE-API-018/019: `block_on_severity` rules per repo (with org-level inheritance); SPDX JSON 2.3 SBOMs + hand-rolled PDF reports per scan. |
+| Pull/push analytics + per-repo activity | ✅ Done | FE-API-030/042: PG14 `date_bin` time-series; configurable `PULL_EVENT_SAMPLE_RATE`; repo-scoped activity tab. |
 | SEC-015 signer volatile store | ✅ Resolved | PostgreSQL persistence via `signatures` table with write-through cache. `SigB64` not stored in cleartext. Commit `0f95144`. |
+| SEC-006 / SEC-025 | ✅ Resolved | Connection-pool exhaustion now maps to `codes.ResourceExhausted` and `/metrics` lives on a dedicated port `:9090` separate from the business surface. Resolution notes in `security.md`. |
 | Per-tenant storage quota | ✅ Done | Tenant-level `storage_quota` column; `PUT /api/v1/admin/tenants/<id>/quota` for platform admins; `CheckQuota` enforcement on push paths. Commit `bc88353`. |
-| Signer Vault / KMS backends | Not yet | Only `env` backend works; `vault` / `awskms` / `gcpkms` / `azurekms` return "not yet implemented". Sprint 6 backlog. |
-| Notary v2 | Not yet | TUF code unimplemented despite `infra/runbooks/notary-root-key-ceremony.md` documenting the ceremony. Only Cosign (ECDSA P-256) is shipped. Sprint 6 backlog. |
+| Signer Vault backend | ✅ Done | `SIGNER_KEY_BACKEND=vault` is the same code path in dev (Vault dev mode locally) and prod (Vault cluster) — see Decision #14 + `docs/SIGNING.md`. AWS / GCP / Azure KMS backends remain deferred. |
+| Notary v2 | Not yet | TUF code unimplemented despite `infra/runbooks/notary-root-key-ceremony.md` documenting the ceremony. Only Cosign (ECDSA P-256) is shipped. |
+| MFA (Tier 1 #1) | Not yet | TOTP / WebAuthn step-up for admin actions. Open Tier 1 backlog. |
+| Audit log streaming to SIEM (Tier 1 #4) | Not yet | Syslog / CEF / HMAC webhook exporter on `services/audit`. Open Tier 1 backlog. |
+| SCIM v2 provisioning (Tier 1 #5) | Not yet | Okta / Azure AD admin lifecycle automation. Open Tier 1 backlog. |
 
 ---
 

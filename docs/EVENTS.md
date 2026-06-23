@@ -14,6 +14,7 @@ Exchange: registry.dlx       (topic, durable) — dead-letter target
 Routing keys:
   push.completed
   push.failed
+  pull.image                     # FE-API-042 (publisher: registry-core after a successful GetManifest; sampled via PULL_EVENT_SAMPLE_RATE; powers /activity pull events + max_idle_days retention)
   manifest.deleted
   tag.deleted
   scan.queued
@@ -33,6 +34,10 @@ Routing keys:
   store.queued              # proxy background-store retry
   rbac.role_granted         # published by registry-auth on GrantRole success
   rbac.role_revoked         # published by registry-auth on RevokeRole success
+  retention.evaluated       # FE-API-038/043 (publisher: registry-metadata retention evaluator; one event per repo per evaluation)
+  retention.applied         # FE-API-040 (publisher: registry-metadata retention executor; emitted when a tag is soft-deleted into grace)
+  retention.grace_completed # FE-API-041 (publisher: registry-metadata retention executor; emitted when a graced tag is hard-deleted)
+  service_account.lifecycle # FE-API-048 (publisher: registry-auth; one routing key with embedded Action ∈ {created, updated, disabled, deleted, key_issued, key_revoked})
   auth.provider_created     # FE-API-034 (publisher: registry-auth SSO admin handler)
   auth.provider_updated     # FE-API-034
   auth.provider_deleted     # FE-API-034
@@ -79,11 +84,14 @@ Rules:
 
 ```go
 type PushCompletedPayload struct {
+    RepoID         string `json:"repo_id"`        // canonical UUID identifier
     RepositoryName string `json:"repository_name"`
     Tag            string `json:"tag"`
     ManifestDigest string `json:"manifest_digest"`
-    PushedBy       string `json:"pushed_by"`     // actor user ID
+    PushedBy       string `json:"pushed_by"`      // actor user ID
     SizeBytes      int64  `json:"size_bytes"`
+    ArtifactType   string `json:"artifact_type"`  // S-MAINT-1 P6: "image" | "helm" | "signature" | "sbom" | "other"
+                                                  // used by registry-scanner to skip non-image artifacts
 }
 ```
 
@@ -211,6 +219,96 @@ type TenantPlanChangedPayload struct {
     ActorID  string `json:"actor_id"`
 }
 ```
+
+---
+
+### `pull.image` (FE-API-042)
+
+```go
+type PullImagePayload struct {
+    RepoID         string `json:"repo_id"`
+    RepositoryName string `json:"repository_name"`
+    Tag            string `json:"tag"`
+    ManifestDigest string `json:"manifest_digest"`
+    PulledBy       string `json:"pulled_by"`      // actor user ID; "" for anonymous pulls
+    UserAgent      string `json:"user_agent"`     // docker/helm/oras client string
+}
+```
+
+**Publishers:** `registry-core` after each successful `GetManifest`,
+gated by `PULL_EVENT_SAMPLE_RATE` (default 1.0 — every pull publishes).
+Lower the rate to reduce event volume on hot repos; the FE-API-043
+`max_idle_days` retention rule still works as long as the rate is > 0
+because services/metadata debounces `last_pulled_at` updates to ~24h.
+
+**Consumers:** `registry-audit` (drives `/activity` pull events),
+`registry-metadata` (updates `manifests.last_pulled_at` with the
+24h debounce).
+
+---
+
+### `retention.*` (FE-API-038 / 040 / 041 / 043)
+
+```go
+type RetentionEvaluatedPayload struct {
+    RepoID         string `json:"repo_id"`
+    RepositoryName string `json:"repository_name"`
+    RuleKind       string `json:"rule_kind"`         // "max_tags" | "max_age_days" | "max_idle_days"
+    Matched        int32  `json:"matched"`           // tags identified for grace
+    Pending        int32  `json:"pending_delete"`    // tags currently in grace
+    DryRun         bool   `json:"dry_run"`
+}
+
+type RetentionAppliedPayload struct {
+    RepoID         string    `json:"repo_id"`
+    Tag            string    `json:"tag"`
+    ManifestDigest string    `json:"manifest_digest"`
+    GraceUntil     time.Time `json:"grace_until"`    // hard-delete cut-over
+    RuleKind       string    `json:"rule_kind"`
+}
+
+type RetentionGraceCompletedPayload struct {
+    RepoID         string `json:"repo_id"`
+    Tag            string `json:"tag"`
+    ManifestDigest string `json:"manifest_digest"`   // empty if the manifest also got GCed
+}
+```
+
+**Publishers:** `registry-metadata`'s retention evaluator + executor
+(both run as background workers on a cron schedule). `retention.evaluated`
+is one event per repo per evaluation; `retention.applied` is one per
+tag entering grace; `retention.grace_completed` is one per graced tag
+that hits hard-delete.
+
+**Consumers:** `registry-audit` (drives the Activity tab's retention
+entries), `registry-webhook` (operators can subscribe to retention
+deletions for downstream cleanup).
+
+---
+
+### `service_account.lifecycle` (FE-API-048)
+
+```go
+type ServiceAccountLifecyclePayload struct {
+    Action           string `json:"action"`        // "created" | "updated" | "disabled" | "deleted" | "key_issued" | "key_revoked"
+    ServiceAccountID string `json:"service_account_id"`
+    ShadowUserID     string `json:"shadow_user_id"`
+    ActorID          string `json:"actor_id"`      // the human (or SA) that performed the action
+    KeyID            string `json:"key_id,omitempty"` // populated for key_issued / key_revoked
+}
+```
+
+One routing key handles every SA mutation — the discriminator is the
+embedded `Action` field. The audit consumer rehydrates each action
+into a distinct audit event so the dashboard /activity feed renders
+"alice@acme.com issued key for ci-prod-bot" rather than a generic
+"service_account.lifecycle" line.
+
+**Publishers:** `registry-auth` (every `ServiceAccountService` write
+path emits this; durable persistence rides on top of the slog-only
+stand-in tracked as FUT-007 — already shipped).
+
+**Consumers:** `registry-audit`.
 
 ---
 
