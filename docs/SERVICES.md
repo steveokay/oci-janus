@@ -111,6 +111,46 @@ DELETE /api/v1/admin/sso/providers/:id   # Delete
 - Password policy: minimum 12 characters, 1 uppercase, 1 lowercase, 1 number, 1 symbol. Enforce server-side — never rely on client.
 - Rate limit: 10 failed auth attempts per IP per minute before returning 429.
 
+**Authenticating to JSON HTTP routes — three Bearer flavours:**
+
+The HTTP handler's `requireAuth` accepts three Bearer-token shapes; all
+other JSON routes (`/users/me`, `/apikeys`, `/access/activity`, the SSO
+admin surface, etc.) flow through it. Choose by use case:
+
+| Mode | Bearer header value | Issued by | Typical caller | Roles claim | TTL |
+|---|---|---|---|---|---|
+| **JWT session** | `Bearer <RS256 jwt>` (3 base64url dot-segments, starts with `eyJ`) | `POST /api/v1/login` (password) or `POST /auth/token` (key→JWT exchange) | Browsers, FE clients | Yes — RBAC role names embedded at issuance time | 300s (silent refresh 60s before) |
+| **API key (FUT-006, 2026-06-23)** | `Bearer key.<uuid>.<64-hex-secret>` | `POST /api/v1/apikeys` (human owner) or the SA-key issue path on the `/api-keys` admin hub (FE-API-048) | CI bots, machine accounts, `curl` from scripts | **No** — raw API keys carry no roles; handlers that gate on a specific role still require a JWT | Forever (until `DELETE /api/v1/apikeys/:id`) |
+| **Docker OCI token** | `Bearer <RS256 jwt>` issued by `POST /auth/token` against Basic Auth | Same JWT signer; scoped to one OCI action | `docker push` / `docker pull` clients hitting `registry-core` | No (scope-only) | 300s |
+
+**How `requireAuth` dispatches:**
+
+```
+Authorization: Bearer <token>
+  ├─ token starts with "key." ─→ parseAPIKeyBearer → ValidateAPIKey
+  │                                                ├─ argon2.Verify(secret, key.KeyHash)
+  │                                                ├─ check expiry + is_active + SA disabled
+  │                                                ├─ intersect key.Scopes ∩ SA.AllowedScopes (SA only)
+  │                                                └─ synthesise *Claims:
+  │                                                     Subject  = vk.UserID (shadow user id for SA-owned keys)
+  │                                                     TenantID = vk.TenantID
+  │                                                     Access   = vk.Access (intersected OCI scopes)
+  │                                                     Roles    = []  ← intentionally empty
+  └─ default ────────────────────→ ValidateToken (JWT verify + JTI revocation check)
+```
+
+The discriminator is the literal `key.` prefix. Anything without it (including the empty string) falls through to `ValidateToken`. The API-key parser is strict — see `parseAPIKeyBearer` for the rejection rules; structural mismatches return a generic 401 rather than leaking which half of the token shape was malformed.
+
+**Why API-key auth ships with empty `Roles`:** RBAC role resolution happens at JWT issuance time (`POST /auth/token`'s Basic-auth path looks up the principal's role grants and embeds them in the JWT). A raw API key is just the credential — promoting it to a session token via `/auth/token` is what hydrates roles. Handlers that need roles (e.g. `requireSAAdmin`) should continue to require a JWT; they'll surface a clean 403 against the empty roles list rather than a confusing 401, telling the operator *what* is missing rather than just *that* auth failed.
+
+**Per-route auth contract:**
+- `/auth/token` — accepts Basic Auth (key-id-as-UUID:secret, OR username:password). Returns an OCI-scoped JWT.
+- `/api/v1/login` — accepts JSON `{tenant_id, username, password}`. Returns a session JWT with roles claim.
+- `/api/v1/users/me` — accepts ANY of the three Bearer flavours via `requireAuth`. Branches on `user.Kind == "service_account"` to return the SA principal envelope (FE-API-048 T16); human callers get `currentUserResponse`.
+- `/api/v1/apikeys` create/list/delete — accepts JWT only today (gated by `requireSAAdmin`-style helpers that read `roles` from claims).
+- `/api/v1/admin/sso/*` — JWT only (admin role required).
+- `/api/v1/access/activity` — accepts ANY Bearer flavour; the API-key path lets a bot inspect its own activity log without an exchange step.
+
 **gRPC (internal, mTLS):**
 
 ```protobuf

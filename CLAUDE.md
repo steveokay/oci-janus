@@ -281,6 +281,17 @@ Dev fallback: when cert paths are unset, services log `slog.Warn` and use `insec
 - On cache miss: call `registry-auth.ValidateToken` gRPC.
 - If `registry-auth` is unreachable: fail closed (deny all), log error, increment metric.
 
+### HTTP Bearer Auth — JWT and API-key forms (FUT-006)
+
+`registry-auth`'s `requireAuth` HTTP helper accepts **two** Bearer-token shapes and dispatches internally:
+
+| Form | When | Routes |
+|---|---|---|
+| `Bearer <RS256 jwt>` (3-segment base64url, starts with `eyJ`) | Browsers / FE clients after `POST /api/v1/login` or `/auth/token` exchange | All authenticated routes |
+| `Bearer key.<uuid>.<64-hex-secret>` (FUT-006, 2026-06-23) | CI bots / `curl` scripts wanting to introspect themselves directly | `/api/v1/users/me`, `/api/v1/access/activity`, anything that doesn't require a role claim |
+
+The discriminator is the literal `key.` prefix. API-key validation flows through `ValidateAPIKey` (argon2 verify + expiry/disabled/SA-allowlist checks) and synthesises a `*Claims` with `Subject = vk.UserID` (shadow user id for SA keys), `TenantID`, `Access` (intersected scopes), and **empty `Roles`** — raw API keys don't carry RBAC roles, so any handler that gates on `Roles` (e.g. admin-only endpoints) must continue to require a JWT and will surface a clean 403 rather than 401. Full per-route contract + auth dispatch flow lives in [`docs/SERVICES.md` §2](docs/SERVICES.md#2-registry-auth).
+
 ### Environment Variables — Security Rules
 
 - **Never** commit `.env` files. Only `.env.example` with placeholder values.
@@ -571,6 +582,7 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 21 | Generic `GetAnalytics` RPC over `services/audit` with BFF-supplied bucket origin (FE-API-030) | Audit is already the system of record for `push.image` etc.; PG14 `date_bin` aligns buckets across replicas; BFF owns the range→bucket mapping (24h→1h×24, 7d→6h×28, 30d→1d×30) and pre-allocates empty buckets so quiet periods report `count=0` rather than gaps | 2026-06-21 |
 | 22 | Service-account principal pattern: shadow users (FE-API-048) | Each service account auto-provisions a `users.kind='service_account'` row. `ValidateAPIKey`/`ValidateToken` return that id in `user_id`; downstream services treat it as an opaque actor. RBAC/audit/RLS/JWT machinery unchanged. Distinguishing principal kind is a read-path concern (`LEFT JOIN users ON kind`), not a write-path one. | 2026-06-22 |
 | 23 | Two-layer tag immutability — `repositories.immutable_tags` + `tags.immutable` (futures.md Tier 1 #2) | Repo-wide flag is the table-stakes posture; per-tag pin is the lighter alternative for repos that mix mutable dev tags + a small set of pinned releases. `services/core.checkTagImmutable` short-circuits on idempotent same-digest re-pushes (not a "move") and fails OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. Per-tag pin wins precedence — repo flag is the second RPC only when the same-digest fast path didn't fire | 2026-06-23 |
+| 24 | Unified Bearer dispatch in `requireAuth` — JWT + `key.<id>.<secret>` (FUT-006) | Picked option (a) over a parallel `/principal/me` route. One auth surface keeps the mental model simple; the `key.` literal prefix is a cheap structural discriminator that can't collide with a JWT (JWT segment 0 starts with `eyJ` after base64-encoding `{`). Synthesised `*Claims` set `Roles: []` deliberately — raw API keys aren't expected to carry RBAC, so role-gated handlers return a legible 403 instead of misrouting to a 401 | 2026-06-23 |
 
 ---
 
