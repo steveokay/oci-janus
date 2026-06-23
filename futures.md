@@ -494,6 +494,132 @@ quickly in real operator workflows.
 
 ---
 
+## Review batch — 2026-06-23
+
+Three review agents (design / quality / architecture) did a deep cross-cutting
+review on 2026-06-23, surfacing 74 findings (24 `DSGN-*` + 28 `QA-*` + 22 `ARCH-*`).
+Full per-finding detail (file paths, line numbers, proposed fixes) lives in
+[`.claude/reviews/`](.claude/reviews/). Listed below are the curated items
+prioritised for backlog uptake.
+
+### Tier 1 — must-fix correctness/security from the review batch
+
+- **ARCH-001** — Implement PostgreSQL RLS on metadata / auth / webhook / proxy /
+  tenant schemas. Documented as a second defence layer in CLAUDE.md §9; only
+  `audit_events` actually has it today. Per-service migration + `SET LOCAL
+  app.tenant_id` middleware + low-privilege role per service. **Effort:** M.
+- **ARCH-002** — Add a transactional outbox for RabbitMQ event publication.
+  `push.completed` / `scan.completed` / `image.signed` / `rbac.*` /
+  `service_account.lifecycle` are all "DB commit → publish" — a broker outage
+  or crash between the two silently drops the event. Per-service
+  `outbox_events` table + background drainer using `FOR UPDATE SKIP LOCKED`.
+  **Effort:** M.
+- **ARCH-005** — Enforce production-mode config invariants in `libs/config/loader`.
+  CLAUDE.md §7 says "reject empty cert paths when `OTEL_ENVIRONMENT=production`" —
+  no service does this. Apache 2.0 release means anyone can stand this up; silent
+  insecure defaults are a footgun. **Effort:** S.
+- **QA-001** — Add `tenant_id` to `signatures` table + propagate through
+  `services/signer`. Global `(manifest_digest, signer_id)` key lets one tenant
+  see another's signature for the same public-image digest. **Effort:** M.
+- **QA-002** — Make `libs/rabbitmq/publisher.Publish` goroutine-safe. Today the
+  shared `confirms` channel correlates ACKs to the wrong publisher under
+  concurrent load, silently breaking the confirm-mode durability promise.
+  One-line `sync.Mutex` fix with outsized impact across audit/scan/push/signing/
+  retention/webhook flows. **Effort:** M.
+- **QA-003** — Fix `services/webhook.PollDueDeliveries` lock semantics.
+  `FOR UPDATE SKIP LOCKED` on a pooled `Query` (no explicit tx) releases locks
+  on `rows.Close()`; overlapping ticks dispatch the same delivery twice. Wrap
+  in `BeginTx`, UPDATE-to-`in_flight` in the same tx, COMMIT before dispatch.
+  **Effort:** S.
+- **ARCH-016** — Ship `make bootstrap` / `tools/bootstrap` for self-hosters.
+  `SELF-HOSTING.md` §3 is 9 manual openssl+base64 steps before first push;
+  the "10 min to first push" claim is aspirational without this. **Effort:** S.
+
+### Tier 2 — robustness, security & UX polish from the review batch
+
+- **DSGN-001** — Add `isWorkspaceAdmin(claims)` helper; remove the
+  `isPlatformAdmin` misuse in `AccessSubNav` + `ServiceAccountsPage`. Today
+  tenant admins lose Service-accounts + Workspace settings nav. **Effort:** M.
+- **DSGN-003** — Unified `ConfirmDestructiveDialog` primitive with 3 severity
+  levels. Replace every `window.confirm` (trusted-key remove, audit-export
+  clear) + bump primary-domain delete to typed-confirm. **Effort:** M.
+- **DSGN-004** — Extend `ErrorState` with `code?: number` + `detail?: string` +
+  "Show request details" expander. Self-hosted operators have the BFF logs —
+  surface the HTTP status + `response.data.error` instead of generic prose.
+  **Effort:** M.
+- **DSGN-021** — Custom-domain row-expand revealing TXT name + value + copy +
+  "Check DNS now" + `next_poll_after` countdown. Today TXT challenge is only
+  shown at registration; you can't re-display it for verification debugging.
+  **Effort:** M.
+- **DSGN-023** — Mobile / narrow-viewport sidebar fallback. Below 1024px the
+  sidebar vanishes and Topbar has no nav control. **Effort:** M.
+- **QA-004** — Fix JWT cache key in `services/core` + `services/proxy`. Today
+  keyed on raw token; CLAUDE.md §7 specifies `<jti>`. **Effort:** S.
+- **QA-005** — GC the `services/scanner.Store` — unbounded map of scan records
+  leaks forever in long-running workers. **Effort:** S.
+- **QA-007** — Close webhook SSRF TOCTOU. Dialer validates resolved IPs then
+  dials by hostname, triggering fresh DNS lookup — rebinding attack vector.
+  Pass the resolved IP literally to `DialContext`. **Effort:** S.
+- **QA-013** — Add `tenant_id` to upload Redis keys + constant-time tenant
+  check in `services/core` upload handler. **Effort:** S.
+- **QA-015** — Either drop the unused `tenant_id` from `Signer.SignPayload` or
+  include it in the Cosign critical claims. Coupled with QA-001. **Effort:** S-M.
+- **QA-020** — Frontend test coverage pass: 3 test files for ~140 components.
+  Prioritise `lib/api/client.ts` (refresh+retry stampede), `lib/auth/store.ts`,
+  `lib/auth/jwt.ts`, plus auth route + role-gate snapshots. **Effort:** L.
+- **ARCH-003** — Helm migration `Job` + `initContainer` for multi-replica
+  rollouts. Today every replica races on goose's advisory lock at boot.
+  **Effort:** M.
+- **ARCH-004** — Helm graceful shutdown: `terminationGracePeriodSeconds: 120` +
+  `preStop` sleep across every deployment chart. **Effort:** S.
+- **ARCH-006** — `libs/rabbitmq/publisher` reconnection + channel recovery on
+  `NotifyClose`. ~50 lines. **Effort:** S.
+- **ARCH-009** — Circuit breaker + singleflight on `auth.ValidateToken` client.
+  Today the documented 3× retry amplifies the thundering herd on JWT key
+  rotation / cache flush. **Effort:** S.
+- **ARCH-010** — Wire `tenant.deleted` cascade across every service that holds
+  `tenant_id` columns (auth/webhook/audit/proxy/scanner). Nightly orphan-row
+  reconciliation. **Effort:** M.
+- **ARCH-012** — Helm `ServiceMonitor` + starter `PrometheusRule` + Grafana
+  dashboard JSON. Self-hosters install the chart and see nothing in Grafana
+  today. Biggest "self-hoster smiles" lever. **Effort:** M.
+- **ARCH-021** — Local JWKS verifier `libs/auth/jwt-verify` so services
+  verify signatures locally + only hit `services/auth` for the revocation
+  check. Today auth-down wedges every service (fail-closed). **Effort:** M.
+
+### Tier 3 — hygiene & polish from the review batch
+
+Lower priority — pick when picking up neighbouring work in the same file:
+
+- **DSGN-002 / -006 / -008 / -009 / -010 / -017 / -018 / -024** — nav IA
+  cleanup, repo-Settings sub-sections, topbar breadcrumb wiring, audit-export
+  tile redesign, scanner-active-adapter affordance, dialog focus-ring fix,
+  unified secret-input primitive, `<PageHeader>` extraction.
+- **DSGN-007 / -011 / -012 / -013 / -014 / -015 / -016 / -019 / -020 / -022** —
+  EmptyState secondary-action, Preview-routes opt-in, trusted-key remove dialog
+  warning, date-helper dedup, login tenant-UUID leak, `/security` filler card,
+  notifications-bell "see all", tag-detail empty-scan affordance, webhook
+  Pause/Resume button, SA-greeting polish.
+- **QA-006 / -008 / -009 / -010 / -011 / -012 / -014 / -016 / -017 / -018 /
+  -019 / -021 / -022 / -023 / -025 / -026 / -027 / -028** — config-loader
+  hygiene, bounded webhook dispatch, retry-interceptor cleanup, ctx-aware DNS,
+  stream-interceptor request_id, scanner queue-full surfacing, gateway stub
+  doc, signer ctx propagation, repository.storage_used denorm, ListRepositories
+  pagination, frontend ErrorBoundary, axios exact-match exempt list,
+  `time.Sleep` removal in integration tests, RequireAuth caching, scanner
+  policy-resolver fail-closed, handler.go split, scanner publish-after-write
+  ordering, `DetachContext` helper.
+- **ARCH-007 / -008 / -011 / -013 / -014 / -015 / -017 / -018 / -019 / -020 /
+  -022** — BFF/RBAC ownership cleanup, TenantPolicyService read facade,
+  tenant-export tooling, read-replica adoption in audit + auth, Compose
+  per-service-db profile, storage backend smoke profiles, GC CronJob + Deployment
+  split, schema-evolution docs, `libs/delivery` reuse, in-process Cosign
+  verification, multipart storage driver interface.
+
+(Each item has the full where/why/fix breakdown in [`.claude/reviews/`](.claude/reviews/).)
+
+---
+
 ## Tier 3 — Nice-to-have polish
 
 Real value, but easy to defer.

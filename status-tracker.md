@@ -87,13 +87,27 @@ Surfaced by PR #42 (Apache 2.0 OSS launch, 2026-06-23). These items aren't bug f
 | ID | Item | Effort | Why |
 |---|---|---|---|
 | **HYG-001** | README hero screenshot / dashboard GIF | ~30 min | Biggest first-impression lever on the repo page. People decide whether to read the README in ~5 seconds based on the visual. |
-| **HYG-002** | `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1) | ~10 min | Adopt-from-template. Increases trust signal for OSS contributors. GitHub also auto-detects + surfaces it on the repo. |
-| **HYG-003** | `SECURITY.md` at repo root | ~15 min | Canonical location for private vulnerability reporting instructions. `CONTRIBUTING.md` currently mentions it; `SECURITY.md` is the standard file GitHub looks for. |
-| **HYG-004** | `.github/ISSUE_TEMPLATE/` (bug + feature) + `PULL_REQUEST_TEMPLATE.md` | ~20 min | Quality-of-life for first contributors. Filters out low-effort issues. Standard YAML templates work. |
 | **HYG-005** | 3-5 `good first issue` labels populated | ~1h | The single biggest lever for first-time contributors. People can't contribute if they don't know where to start. Pick 3-5 small items from this tracker or futures.md and label them. |
 | **HYG-006** | Architecture diagram image (replace ASCII in README §2) | ~1h | Cleaner first impression than the ASCII diagram. Excalidraw / draw.io export → committed PNG. |
 | **HYG-007** | Enable GitHub Discussions (Settings → Features) | ~2 min | Routes "questions" / "ideas" away from Issues. Required for `CONTRIBUTING.md`'s "open a Discussion" instruction to actually work. |
 | **HYG-008** | Enable private vulnerability reporting (Settings → Security) | ~2 min | Required for `SECURITY.md` to actually have a working private channel. |
+
+> HYG-002 / HYG-003 / HYG-004 shipped in PR #44 (2026-06-23) — see [`status.md`](status.md).
+
+---
+
+## Review batch — 2026-06-23
+
+Three review agents (design / quality / architecture) did a deep cross-cutting review.
+**74 findings total** — 24 design (`DSGN-*`), 28 code quality (`QA-*`), 22 architecture
+(`ARCH-*`). Full per-finding detail with file paths + line numbers lives in:
+
+- [`.claude/reviews/design-review-2026-06-23.md`](.claude/reviews/design-review-2026-06-23.md)
+- [`.claude/reviews/quality-review-2026-06-23.md`](.claude/reviews/quality-review-2026-06-23.md)
+- [`.claude/reviews/architecture-review-2026-06-23.md`](.claude/reviews/architecture-review-2026-06-23.md)
+
+Curated P0/P1/P2 backlog lives in [`futures.md`](futures.md) under the
+"Review batch — 2026-06-23" section. Pick from there as work cycles open up.
 
 ---
 
