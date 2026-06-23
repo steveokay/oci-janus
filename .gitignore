@@ -57,6 +57,11 @@ certs/
 # Personal notes / scratchpad — never committed
 understand.md
 
+# Pricing / packaging strategy — kept on disk for working reference,
+# never committed (commercial detail; lives in the public repo only as
+# a tracked feature surface via tenants.plan when ready).
+docs/PRICING-TIERS.md
+
 # Claude Code: keep .claude/agents/*.md tracked (team agent definitions),
 # but ignore the per-machine settings.local.json (Bash allowlist etc.).
 .claude/settings.local.json
