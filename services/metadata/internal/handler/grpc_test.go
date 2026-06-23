@@ -372,6 +372,13 @@ func (f *fakeRepo) UpdateRepositoryImmutability(_ context.Context, _, _ string, 
 	return f.updateQuotaResult, f.updateQuotaErr
 }
 
+// Signed-image admission (futures.md Tier 1 #3) — same fake shape as
+// UpdateRepositoryImmutability; both flips ride the same audit
+// security-relevant path.
+func (f *fakeRepo) UpdateRepositorySignaturePolicy(_ context.Context, _, _ string, _ bool) (*metadatav1.Repository, error) {
+	return f.updateQuotaResult, f.updateQuotaErr
+}
+
 func (f *fakeRepo) UpdateTagImmutable(_ context.Context, _, _, _ string, _ bool) (*metadatav1.Tag, error) {
 	return f.putTagResult, f.putTagErr
 }

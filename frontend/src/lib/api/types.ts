@@ -35,6 +35,14 @@ export interface Repository {
   // tab. Note: per-tag pins (Tag.immutable) work independently of this
   // flag.
   immutable_tags?: boolean;
+  // Signed-image admission (futures.md Tier 1 #3). When true,
+  // services/core blocks every GetManifest that has no recorded
+  // signature with 403 DENIED. Default false; flipped via the
+  // Signed-image-required switch on the repo Settings tab. Pulls
+  // of signed manifests succeed normally; unsigned pulls fail
+  // closed so the operator must sign (cosign) or turn the policy
+  // off explicitly.
+  require_signature?: boolean;
 }
 
 export interface RepositoriesListResponse {

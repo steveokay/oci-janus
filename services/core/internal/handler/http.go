@@ -365,6 +365,14 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 		ociError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
 		return
 	}
+	// Signed-image admission (futures.md Tier 1 #3). 403 DENIED is the
+	// OCI Distribution Spec's match for "you're not authorised for this
+	// content"; the body carries the operator-actionable hint.
+	if errors.Is(err, service.ErrSignatureRequired) {
+		ociError(w, http.StatusForbidden, "DENIED",
+			"repository requires a signed manifest; sign the image or turn require_signature off")
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -439,6 +447,14 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 	manifest, err := h.registry.GetManifest(r.Context(), tenantID, repo.GetRepoId(), reference)
 	if err == service.ErrNotFound {
 		ociError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
+		return
+	}
+	// Signed-image admission (futures.md Tier 1 #3) — HEAD mirrors GET
+	// so OCI clients running the HEAD-then-GET dance see a consistent
+	// rejection rather than passing HEAD then 403-ing GET.
+	if errors.Is(err, service.ErrSignatureRequired) {
+		ociError(w, http.StatusForbidden, "DENIED",
+			"repository requires a signed manifest; sign the image or turn require_signature off")
 		return
 	}
 	if err != nil {

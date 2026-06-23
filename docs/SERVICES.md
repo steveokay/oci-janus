@@ -231,6 +231,8 @@ On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / 
 
 **Purpose:** OCI Distribution Spec v1.1 implementation. The primary interface for Docker/OCI clients.
 
+**Supported clients:** anything that speaks OCI v1.1 — `docker push/pull`, `helm push/pull/install`, `oras`, `crane`, `skopeo`, etc. Helm charts use the same `/v2/<name>/manifests/<reference>` surface (just with `application/vnd.cncf.helm.config.v1+json` as the config media type), so tag immutability, signed-image admission, quotas, RBAC, audit, and quarantine all apply uniformly across artifact types. The dashboard's per-tag artifact-type pill (`image` / `helm` / `signature` / `sbom`) is a read-side discriminator only — write-path rules don't branch on it.
+
 **Endpoints (all under `/v2/`):**
 
 ```
@@ -261,6 +263,7 @@ GET  /v2/<name>/referrers/<digest>                  # OCI referrers API (§4.5)
 - Never buffer a full blob in memory. Stream blobs directly to `registry-storage` via gRPC streaming.
 - On successful manifest push: publish `push.completed` event to RabbitMQ (see `docs/EVENTS.md`).
 - Enforce per-tenant storage quota (check before accepting upload, fail fast with 403 if exceeded).
+- **Signed-image admission (futures.md Tier 1 #3).** `GetManifest` and `HeadManifest` check the parent repository's `require_signature` flag after the metadata resolve. When `TRUE`, the handler calls `registry-signer.ListSignatures(manifest_digest)`; if zero rows come back, the response is `403 DENIED` with body `repository requires a signed manifest; sign the image or turn require_signature off`. Phase 1 contract is "ANY signature passes" — a per-repo trusted-key allowlist is a Phase 2 follow-up. Flipped via `PATCH /api/v1/repositories/{org}/{repo}` with `{"require_signature": true}`. Fails OPEN on metadata or signer reachability blips (warn + continue) so a transient outage doesn't break every pull; if `SIGNER_GRPC_ADDR` is unset at boot, the registry logs a startup warning and allows all pulls (dev-stack convenience). Push side is unaffected — operators sign with `cosign sign` after the push lands.
 - **Tag immutability preflight (futures.md Tier 1 #2).** `PutManifest` checks two flags before writing whenever `reference` is a tag (digest pushes skip the check — content-addressable, can't move tags). Rejects with `400 MANIFEST_INVALID` + body `tag is immutable (repo immutable_tags=true or per-tag pin set); push to a new tag or unpin first` when EITHER:
   - `repositories.immutable_tags = TRUE` (repo-wide flag — flipped via `PATCH /api/v1/repositories/{org}/{repo}` with `{"immutable_tags": true}`); OR
   - `tags.immutable = TRUE` (per-tag pin — flipped via `POST/DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin`).
@@ -774,7 +777,7 @@ GET  /api/v1/stats                        # Tenant-scoped aggregated stats
 GET  /api/v1/repositories                 # List repositories for tenant
 POST /api/v1/repositories                 # Create repository
 GET  /api/v1/repositories/:org/:repo      # Get single repository
-PATCH /api/v1/repositories/:org/:repo     # Update repository (description + immutable_tags)
+PATCH /api/v1/repositories/:org/:repo     # Update repository (description + immutable_tags + require_signature)
 DELETE /api/v1/repositories/:org/:repo    # Delete repository
 
 # Tag management

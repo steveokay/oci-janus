@@ -329,7 +329,115 @@ Gatekeeper, or your own webhook).
 
 ---
 
-## 8. Related decisions & open work
+## 8. Signed-image admission (futures.md Tier 1 #3)
+
+A signed image only enforces supply-chain trust if pulls of *unsigned*
+images get blocked. Setting `repositories.require_signature = TRUE` flips
+that gate on at the repo level:
+
+```
+oci client → registry-core GET /v2/<org>/<repo>/manifests/<ref>
+   → metadata.GetRepository  → require_signature?
+       false → return manifest as usual
+       true  → signer.ListSignatures(manifest_digest)
+                 empty → 403 DENIED
+                          body: "repository requires a signed manifest;
+                                 sign the image or turn require_signature off"
+                 non-empty → return manifest as usual
+```
+
+**Operator workflow (container image):**
+
+```
+# 1) Push the image (still allowed even on a require_signature repo —
+#    the gate is on the PULL side so CI can push, sign, then promote).
+docker push registry.local/acme/api:v1.2.3
+
+# 2) Sign with cosign (or via POST .../sign from the dashboard).
+cosign sign registry.local/acme/api:v1.2.3
+
+# 3) Flip the flag (only after step 2 succeeds for every digest
+#    currently in the repo, or pulls of older tags will start failing).
+curl -X PATCH https://api.example.com/api/v1/repositories/acme/api \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"require_signature": true}'
+```
+
+**Operator workflow (Helm chart):**
+
+Both gates (tag immutability + signed-image admission) sit on the OCI
+distribution layer, so they apply to Helm charts pushed via
+`helm push oci://...` the same way they apply to container images. The
+charts go through `services/core`'s `PutManifest` / `GetManifest`
+exactly like Docker images do; the artifact type doesn't change the
+admission code path. Verified live with the smoke matrix in PR #27.
+
+```
+# 1) Login to the OCI registry. --plain-http is only needed against
+#    the local dev gateway (HTTP); production / custom-domain hosts
+#    served over HTTPS drop the flag.
+helm registry login registry.local -u <user> --plain-http
+
+# 2) Push a chart. helm appends the chart name to the URL, so the
+#    target is `oci://<host>/<org>` and the chart lands at
+#    `<host>/<org>/<chart-name>`.
+helm push my-chart-0.1.0.tgz oci://registry.local/acme --plain-http
+
+# 3) Sign the chart's manifest digest via the dashboard API. cosign
+#    sign also works against the same digest if you have the CLI
+#    installed; both routes write to the shared `signatures` table.
+curl -X POST https://api.example.com/api/v1/repositories/acme/my-chart/tags/0.1.0/sign \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"signer_id": "ci-bot"}'
+
+# 4) Flip the flag — same PATCH as the image workflow.
+curl -X PATCH https://api.example.com/api/v1/repositories/acme/my-chart \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"require_signature": true}'
+
+# 5) Pull / install. Both go through the admission gate; unsigned
+#    manifests fail with the same `403 DENIED` body as docker pull.
+helm pull oci://registry.local/acme/my-chart --version 0.1.0 --plain-http
+helm install my-release oci://registry.local/acme/my-chart --version 0.1.0 --plain-http
+```
+
+The Settings tab toggle in the dashboard does step (4) for you. The
+Pull / Install snippets shown next to a Helm repo include all of
+steps (1) + (5) so an operator can copy-paste straight from the UI.
+
+**Posture:** fail OPEN on metadata or signer reachability blips (warn +
+continue) so a transient outage doesn't break every pull. Fail CLOSED on
+"flag is on AND zero signatures recorded" — that's the deliberate
+contract. If `SIGNER_GRPC_ADDR` is unset at boot, registry-core logs a
+startup warning and allows all pulls regardless of the flag (dev-stack
+convenience; production deployments always set this).
+
+**Phase 1 contract:** ANY signature passes. A per-repo trusted-key
+allowlist is a planned Phase 2 follow-up — until then, an operator who
+flips the flag on must also lock down which Cosign identities can sign
+for the org (typically via Fulcio OIDC issuer claims, not enforced
+here).
+
+**Dashboard:** the toggle lives on the repo Settings tab as
+`Signed-image admission` next to `Tag immutability` (both are
+security-relevant repo-wide flips with the same shape, but they
+compose independently — signed+mutable and unsigned+immutable are
+both valid combinations).
+
+**Files:**
+
+| File | Why it exists |
+|---|---|
+| `services/metadata/migrations/00015_repository_require_signature.sql` | Adds the column with `DEFAULT FALSE` |
+| `proto/metadata/v1/metadata.proto` | `Repository.require_signature` field + `UpdateRepositorySignaturePolicy` RPC |
+| `services/core/internal/service/registry.go` (`checkSignatureAdmission`) | The fail-OPEN-on-blip gate called from `GetManifest`/`HeadManifest` |
+| `services/core/internal/service/errors.go` (`ErrSignatureRequired`) | Sentinel error mapped to 403 DENIED |
+| `services/management/internal/handler/handler.go` (`updateRepositoryBody.RequireSignature`) | BFF PATCH plumbing — `*bool` nil-check so unrelated PATCHes don't reset the flag |
+| `frontend/src/components/repositories/repo-signature-policy-section.tsx` | Settings-tab card with toggle + explainer |
+
+---
+
+## 9. Related decisions & open work
 
 - **status.md Decision #14** — chose Vault dev mode for local development;
   same `SIGNER_KEY_BACKEND=vault` path used in production

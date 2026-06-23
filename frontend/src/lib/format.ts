@@ -71,14 +71,47 @@ export function pullCommand(
 // Returned shape carries the label + verb separately so the card can
 // re-headline "Pull this image" → "Pull this chart" without rebuilding
 // the command string elsewhere.
+// A single numbered step in the pull/install walkthrough — a short
+// label ("Pull the chart") above the actual shell command. The card
+// renders each step as its own monospaced snippet with its own copy
+// button so an operator can grab just the command they need.
+export interface PullCommandStep {
+  label: string;
+  cmd: string;
+}
+
 export interface PullCommandSpec {
-  // The shell command line, including the `helm` or `docker` prefix.
+  // First-step shell command, kept as a backwards-compat shorthand
+  // for older callers (TagHeader's inline copy snippet). Equivalent
+  // to `steps.find(s => s.label.startsWith('Pull'))?.cmd` for the new
+  // multi-step shape.
   cmd: string;
   // Card heading — what the operator is being shown how to do.
   heading: string;
   // Short subject noun ("image" | "chart" | "artifact") for the body
   // copy if a caller needs to interpolate it.
   artifact: string;
+  // Numbered walkthrough rendered by PullCommandCard. The first step
+  // is always the login (one-time, copy-once), then the primary
+  // verb (pull), then optional follow-ups (helm install).
+  steps: PullCommandStep[];
+}
+
+// looksLocalHost is a heuristic: true when the workspace host looks
+// like the local dev stack (loopback or explicit dev domain). We use
+// it to decide whether to append `--plain-http` to helm commands and
+// `--insecure` hints to docker login, since the dev gateway serves
+// HTTP only. Production / custom-domain hosts get clean HTTPS-ready
+// commands without the flag. Hostnames that include a port (`:8081`)
+// also count as local because production hosts on standard 443
+// rarely carry one.
+function looksLocalHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h.includes("localhost") || h.includes("127.0.0.1") || h.includes(".local")) {
+    return true;
+  }
+  // host:port → port presence implies dev / non-443 endpoint
+  return /:\d+($|\/)/.test(h);
 }
 
 export function pullCommandFor(
@@ -88,18 +121,61 @@ export function pullCommandFor(
   tag = "latest",
   host = "registry.localhost",
 ): PullCommandSpec {
+  const plain = looksLocalHost(host) ? " --plain-http" : "";
+  const insecureNote = looksLocalHost(host) ? " # dev stack: HTTP" : "";
+  const ref = `oci://${host}/${org}/${repo}`;
+
   switch (artifactType) {
-    case "helm":
+    case "helm": {
+      // Helm chart walkthrough. `helm registry login` is a once-per-host
+      // step; `helm pull` is what the existing card surfaced; `helm
+      // install` is the natural follow-up the operator usually wants
+      // anyway. `--plain-http` only appears on local-looking hosts —
+      // production charts served behind real TLS get clean commands.
       return {
-        cmd: `helm pull oci://${host}/${org}/${repo} --version ${tag}`,
+        cmd: `helm pull ${ref} --version ${tag}${plain}`,
         heading: "Pull this chart",
         artifact: "chart",
+        steps: [
+          {
+            label: "Login (one-time)",
+            cmd: `helm registry login ${host} -u <user>${plain}`,
+          },
+          {
+            label: "Pull the chart",
+            cmd: `helm pull ${ref} --version ${tag}${plain}`,
+          },
+          {
+            label: "Or install directly",
+            cmd: `helm install my-release ${ref} --version ${tag}${plain}`,
+          },
+        ],
       };
-    default:
+    }
+    default: {
+      // Container image walkthrough. Docker doesn't have a `--plain-http`
+      // flag — operators have to add the host to `insecure-registries`
+      // in dockerd config when they're hitting a local HTTP gateway, so
+      // we show that as a side comment instead of inlining a flag.
       return {
         cmd: `docker pull ${host}/${org}/${repo}:${tag}`,
         heading: "Pull this image",
         artifact: "image",
+        steps: [
+          {
+            label: "Login (one-time)",
+            cmd: `docker login ${host} -u <user>${insecureNote}`,
+          },
+          {
+            label: "Pull the image",
+            cmd: `docker pull ${host}/${org}/${repo}:${tag}`,
+          },
+          {
+            label: "Or run directly",
+            cmd: `docker run --rm ${host}/${org}/${repo}:${tag}`,
+          },
+        ],
       };
+    }
   }
 }
