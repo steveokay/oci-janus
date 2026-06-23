@@ -231,6 +231,8 @@ On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / 
 
 **Purpose:** OCI Distribution Spec v1.1 implementation. The primary interface for Docker/OCI clients.
 
+**Supported clients:** anything that speaks OCI v1.1 — `docker push/pull`, `helm push/pull/install`, `oras`, `crane`, `skopeo`, etc. Helm charts use the same `/v2/<name>/manifests/<reference>` surface (just with `application/vnd.cncf.helm.config.v1+json` as the config media type), so tag immutability, signed-image admission, quotas, RBAC, audit, and quarantine all apply uniformly across artifact types. The dashboard's per-tag artifact-type pill (`image` / `helm` / `signature` / `sbom`) is a read-side discriminator only — write-path rules don't branch on it.
+
 **Endpoints (all under `/v2/`):**
 
 ```

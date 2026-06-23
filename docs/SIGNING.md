@@ -346,7 +346,7 @@ oci client → registry-core GET /v2/<org>/<repo>/manifests/<ref>
                  non-empty → return manifest as usual
 ```
 
-**Operator workflow:**
+**Operator workflow (container image):**
 
 ```
 # 1) Push the image (still allowed even on a require_signature repo —
@@ -362,6 +362,48 @@ curl -X PATCH https://api.example.com/api/v1/repositories/acme/api \
      -H "Authorization: Bearer $JWT" \
      -d '{"require_signature": true}'
 ```
+
+**Operator workflow (Helm chart):**
+
+Both gates (tag immutability + signed-image admission) sit on the OCI
+distribution layer, so they apply to Helm charts pushed via
+`helm push oci://...` the same way they apply to container images. The
+charts go through `services/core`'s `PutManifest` / `GetManifest`
+exactly like Docker images do; the artifact type doesn't change the
+admission code path. Verified live with the smoke matrix in PR #27.
+
+```
+# 1) Login to the OCI registry. --plain-http is only needed against
+#    the local dev gateway (HTTP); production / custom-domain hosts
+#    served over HTTPS drop the flag.
+helm registry login registry.local -u <user> --plain-http
+
+# 2) Push a chart. helm appends the chart name to the URL, so the
+#    target is `oci://<host>/<org>` and the chart lands at
+#    `<host>/<org>/<chart-name>`.
+helm push my-chart-0.1.0.tgz oci://registry.local/acme --plain-http
+
+# 3) Sign the chart's manifest digest via the dashboard API. cosign
+#    sign also works against the same digest if you have the CLI
+#    installed; both routes write to the shared `signatures` table.
+curl -X POST https://api.example.com/api/v1/repositories/acme/my-chart/tags/0.1.0/sign \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"signer_id": "ci-bot"}'
+
+# 4) Flip the flag — same PATCH as the image workflow.
+curl -X PATCH https://api.example.com/api/v1/repositories/acme/my-chart \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"require_signature": true}'
+
+# 5) Pull / install. Both go through the admission gate; unsigned
+#    manifests fail with the same `403 DENIED` body as docker pull.
+helm pull oci://registry.local/acme/my-chart --version 0.1.0 --plain-http
+helm install my-release oci://registry.local/acme/my-chart --version 0.1.0 --plain-http
+```
+
+The Settings tab toggle in the dashboard does step (4) for you. The
+Pull / Install snippets shown next to a Helm repo include all of
+steps (1) + (5) so an operator can copy-paste straight from the UI.
 
 **Posture:** fail OPEN on metadata or signer reachability blips (warn +
 continue) so a transient outage doesn't break every pull. Fail CLOSED on
