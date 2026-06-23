@@ -308,18 +308,30 @@ func (h *MetadataHandler) UpdateRepositoryQuota(ctx context.Context, req *metada
 // UpdateRepositoryImmutability flips the repo-wide tag-immutability flag
 // (futures.md Tier 1 #2). Validation is structural only at this layer —
 // the management BFF gates by repo admin role and emits the audit event
-// before calling here.
+// before calling here. Bust the REM-007 GetRepository cache on the way
+// out so services/core's checkTagImmutable / checkSignatureAdmission see
+// the new value on the next pull instead of waiting up to 30s for the
+// cached entry to expire.
 func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req *metadatav1.UpdateRepositoryImmutabilityRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositoryImmutability(ctx, req.GetTenantId(), req.GetRepoId(), req.GetImmutableTags())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
 	return repo, mapErr(err)
 }
 
 // UpdateRepositorySignaturePolicy flips the repo-wide require-signature
 // flag (futures.md Tier 1 #3). Same posture as UpdateRepositoryImmutability:
 // the BFF gates on repo admin and records the audit event; this handler
-// is structural pass-through to the repository.
+// is structural pass-through to the repository. Bust the GetRepository
+// cache too — without this, services/core's checkSignatureAdmission
+// reads a stale require_signature=false for up to 30s after the flip
+// and lets unsigned pulls slip through.
 func (h *MetadataHandler) UpdateRepositorySignaturePolicy(ctx context.Context, req *metadatav1.UpdateRepositorySignaturePolicyRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositorySignaturePolicy(ctx, req.GetTenantId(), req.GetRepoId(), req.GetRequireSignature())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
 	return repo, mapErr(err)
 }
 
@@ -469,6 +481,26 @@ func (h *MetadataHandler) bustManifestCache(ctx context.Context, tenantID, repoI
 	if err := h.rdb.Del(ctx, keys...).Err(); err != nil {
 		slog.Warn("cache bust: redis Del failed",
 			"err", err, "keys", keys)
+	}
+}
+
+// bustRepositoryCache deletes the REM-007 GetRepository cache entry
+// for one repo so the next read sees the latest row from Postgres.
+// Called from the Update*Policy RPCs (immutability + require_signature)
+// because services/core's admission gates read through this cache on
+// every pull — without a bust here, policy flips lag by up to the
+// 30s TTL configured in services/metadata/internal/server/server.go.
+// Best-effort: rdb=nil disables the bust (tests / dev without Redis),
+// Redis errors are logged but never propagated to the caller.
+func (h *MetadataHandler) bustRepositoryCache(ctx context.Context, tenantID, repoID string) {
+	if h.rdb == nil {
+		return
+	}
+	const prefix = "grpc:/registry.metadata.v1.MetadataService/GetRepository:"
+	key := prefix + tenantID + ":" + repoID
+	if err := h.rdb.Del(ctx, key).Err(); err != nil {
+		slog.Warn("cache bust: redis Del failed",
+			"err", err, "key", key)
 	}
 }
 
