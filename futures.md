@@ -521,11 +521,12 @@ prioritised for backlog uptake.
 - **QA-001** — Add `tenant_id` to `signatures` table + propagate through
   `services/signer`. Global `(manifest_digest, signer_id)` key lets one tenant
   see another's signature for the same public-image digest. **Effort:** M.
-- **QA-002** — Make `libs/rabbitmq/publisher.Publish` goroutine-safe. Today the
-  shared `confirms` channel correlates ACKs to the wrong publisher under
-  concurrent load, silently breaking the confirm-mode durability promise.
-  One-line `sync.Mutex` fix with outsized impact across audit/scan/push/signing/
-  retention/webhook flows. **Effort:** M.
+- ~~**QA-002**~~ — DONE 2026-06-23 (PR #46 main fix + PR #47 deterministic
+  regression tests). `libs/rabbitmq/publisher.Publish` now serialises the
+  publish-then-read-confirmation sequence with `sync.Mutex` + synchronously
+  drains stale confirmations on ctx-cancel/timeout. Two follow-up nits
+  (Close() lock + configurable timeout) tracked at the bottom of this
+  batch. See [`status.md`](status.md) for the full resolution note.
 - **QA-003** — Fix `services/webhook.PollDueDeliveries` lock semantics.
   `FOR UPDATE SKIP LOCKED` on a pooled `Query` (no explicit tx) releases locks
   on `rows.Close()`; overlapping ticks dispatch the same delivery twice. Wrap
@@ -615,6 +616,16 @@ Lower priority — pick when picking up neighbouring work in the same file:
   per-service-db profile, storage backend smoke profiles, GC CronJob + Deployment
   split, schema-evolution docs, `libs/delivery` reuse, in-process Cosign
   verification, multipart storage driver interface.
+
+### QA-002 follow-ups (small)
+
+- **QA-002a** — `Publisher.Close()` doesn't take `p.mu`; concurrent shutdown
+  returns ambiguous errors. Add `ErrPublisherClosed` sentinel + lock in
+  Close, with a test that distinguishes shutdown from broker failure.
+  Surfaced by qa-agent review during PR #46. **Effort:** S.
+- **QA-002b** — 10s publish timeout is hardcoded; make it a `PublishTimeout`
+  field on the struct (configurable). Surfaced by qa-agent review during
+  PR #46. **Effort:** S.
 
 (Each item has the full where/why/fix breakdown in [`.claude/reviews/`](.claude/reviews/).)
 
