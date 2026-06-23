@@ -144,6 +144,15 @@ func TestPublisher_ConcurrentPublish_AllAcked(t *testing.T) {
 	}
 }
 
+// Note on broker-driven deterministic regression testing: an earlier draft
+// of this file attempted to force NACKs via a queue with max-length=1 +
+// overflow=reject-publish, hoping a mixed-ACK-NACK pair of concurrent
+// publishes would expose the bug. It didn't: Go's runtime FIFO ordering of
+// select waiters keeps the goroutine that published tag N also reading
+// confirm{N} in practice, so the bug becomes invisible against a real
+// broker. The deterministic regression tests now live in publisher_test.go
+// and use an injectable fake amqpChannel to bypass the runtime.
+
 // TestPublisher_CancelledPublish_DoesNotPoisonNext exercises the
 // drainStaleConfirm path. A cancelled Publish leaves a confirmation in flight
 // on the broker side; without the drain it would sit in p.confirms and be

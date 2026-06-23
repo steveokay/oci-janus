@@ -15,19 +15,29 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 )
 
+// amqpChannel is the subset of *amqp.Channel that Publisher uses. Extracted
+// to an interface so unit tests can substitute a fake that gives the test
+// deterministic control over publish-call timing — Go's runtime FIFO channel
+// fairness masks the AMQP confirmation race against a real broker, so the
+// regression test for QA-002 needs to bypass the runtime.
+type amqpChannel interface {
+	PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error
+	Close() error
+}
+
 // Publisher sends events to a RabbitMQ topic exchange using confirm mode.
 // Use New to create an instance; call Close when the service shuts down.
 //
 // Publisher is safe for concurrent use. The mu mutex serialises the publish-
 // then-read-confirmation sequence: AMQP delivery tags are per-channel
 // sequential and NotifyPublish delivers confirmations in tag order without
-// the value attached, so two unsynchronised callers would race and read each
-// other's ACK/NACK — silently breaking confirm mode's durability guarantee
-// (QA-002, 2026-06-23).
+// the tag attached on the receiving side, so two unsynchronised callers
+// would race and read each other's ACK/NACK — silently breaking confirm
+// mode's durability guarantee (QA-002, 2026-06-23).
 type Publisher struct {
 	mu       sync.Mutex
 	conn     *amqp.Connection
-	ch       *amqp.Channel
+	ch       amqpChannel
 	confirms chan amqp.Confirmation
 	exchange string
 }
@@ -139,5 +149,16 @@ func (p *Publisher) Close() error {
 	if err := p.ch.Close(); err != nil {
 		return fmt.Errorf("close channel: %w", err)
 	}
-	return p.conn.Close()
+	if p.conn != nil {
+		return p.conn.Close()
+	}
+	return nil
+}
+
+// newWithChannel constructs a Publisher around a pre-built amqpChannel and
+// confirmation receiver. It exists so unit tests can inject a fake channel
+// that gives them deterministic control over publish timing. Production code
+// must use New, which owns dialling the broker and enabling confirm mode.
+func newWithChannel(ch amqpChannel, confirms chan amqp.Confirmation, exchange string) *Publisher {
+	return &Publisher{ch: ch, confirms: confirms, exchange: exchange}
 }
