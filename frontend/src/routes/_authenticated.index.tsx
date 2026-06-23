@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_authenticated/")({
 function DashboardHome(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const { data: me } = useMe();
-  const { data, isLoading, isError, refetch } = useStats();
+  const { data, isLoading, isError, error, refetch } = useStats();
 
   const greeting = useGreeting();
   // Service-account principals fall back to a non-personal salutation
@@ -58,6 +58,7 @@ function DashboardHome(): React.ReactElement {
         <ErrorState
           title="Couldn't load stats"
           description="The management API is unreachable. Check that the BFF (`registry-management`) is running, then try again."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : (

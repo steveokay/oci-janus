@@ -13,7 +13,7 @@ export const Route = createFileRoute("/_authenticated/webhooks/")({
 });
 
 function WebhooksPage(): React.ReactElement {
-  const { data, isLoading, isError, refetch } = useWebhooks();
+  const { data, isLoading, isError, error, refetch } = useWebhooks();
   const [createOpen, setCreateOpen] = React.useState(false);
 
   return (
@@ -41,6 +41,7 @@ function WebhooksPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load webhooks"
           description="The BFF didn't answer. The webhook routes are gated by the WEBHOOK_GRPC_ADDR env var — confirm the service is wired in your stack."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : !isLoading && (data?.length ?? 0) === 0 ? (

@@ -36,7 +36,7 @@ export const Route = createFileRoute("/_authenticated/security")({
 });
 
 function SecurityPage(): React.ReactElement {
-  const { data, isLoading, isError, refetch } = useStats();
+  const { data, isLoading, isError, error, refetch } = useStats();
   const vulnCount = data?.vulnerability_count ?? 0;
 
   // FE-API-016 — pull the per-severity counts into the shape SeverityBar +
@@ -82,6 +82,7 @@ function SecurityPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load security overview"
           description="Stats endpoint didn't answer. Check that the management BFF is reachable."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : (

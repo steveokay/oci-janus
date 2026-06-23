@@ -133,7 +133,7 @@ function ActivityPage(): React.ReactElement {
   const eventTypes = selected.size > 0 ? Array.from(selected) : undefined;
   // S-MAINT-1 P5: persisted page size, "notifications" key.
   const [pageSize, setPageSize] = usePageSize("notifications");
-  const { data, isLoading, isError, refetch, isFetching } = useNotifications({
+  const { data, isLoading, isError, error, refetch, isFetching } = useNotifications({
     limit: pageSize,
     event_types: eventTypes,
     since,
@@ -281,6 +281,7 @@ function ActivityPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load notifications"
           description="The audit service didn't answer. Retry, or check the BFF logs."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : (
