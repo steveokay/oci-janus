@@ -1,6 +1,18 @@
 # OCI-Janus — Production-Grade Multi-Tenant Docker Registry
 
-A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform built in Go. Feature-equivalent to Docker Hub, Nexus, or AWS ECR with multi-tenancy, custom domains, pull-through proxy caching, vulnerability scanning, and image signing.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.25.7-00ADD8?logo=go)](https://go.dev)
+[![OCI Distribution Spec](https://img.shields.io/badge/OCI_Spec-v1.1-262261)](https://github.com/opencontainers/distribution-spec)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/steveokay)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+> **An open-source, self-hostable OCI registry platform.** Apache 2.0 licensed — fork it, run it in your own infrastructure, contribute back. Feature scope sits alongside Docker Hub, Harbor, Nexus, and AWS ECR.
+
+If your team needs a self-hosted registry with multi-tenancy, custom domains, vulnerability scanning, signed-image admission, audit-log streaming, and RBAC — OCI-Janus is built to be the thing you `git clone`, configure, and run. See **[Quick Start (Local Dev)](#quick-start-local-dev)** to be pushing images in 5 minutes, or **[`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md)** to deploy it in your own infrastructure.
+
+## 💖 Support the project
+
+If this saves your team time, please consider [sponsoring on GitHub](https://github.com/sponsors/steveokay). Sponsorship directly funds maintenance time and helps prioritise community-requested features. Reporting bugs, opening PRs, and writing docs all help just as much.
 
 ---
 
@@ -10,12 +22,15 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 2. [Architecture](#architecture)
 3. [Services](#services)
 4. [Quick Start (Local Dev)](#quick-start-local-dev)
-5. [Configuration Reference](#configuration-reference)
-6. [Development Guide](#development-guide)
-7. [Testing](#testing)
-8. [Security](#security)
-9. [Deployment](#deployment)
-10. [Operations](#operations)
+5. [Self-Hosting](#self-hosting)
+6. [Configuration Reference](#configuration-reference)
+7. [Development Guide](#development-guide)
+8. [Testing](#testing)
+9. [Security](#security)
+10. [Deployment](#deployment)
+11. [Operations](#operations)
+12. [Contributing](#contributing)
+13. [License](#license)
 
 ---
 
@@ -235,6 +250,50 @@ docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
 # Dashboard
 open http://localhost:5173        # local FE (npm run dev)
 ```
+
+---
+
+## Self-Hosting
+
+OCI-Janus is built to be self-hosted from day one. There's no proprietary "cloud" version — running it yourself gives you the same feature set as anyone else.
+
+### Pick your deployment path
+
+| Path | Best for | Time to first push |
+|---|---|---|
+| **Docker Compose** | Single-host deployments, dev environments, small teams | ~10 min |
+| **Kubernetes (Helm chart)** | Production deployments, multi-replica, cloud providers | ~30 min |
+| **Fork and customise** | You want to vendor / brand / modify before deploying | varies |
+
+Full walkthrough in **[`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md)** — covers the fork → configure → deploy → operate lifecycle. The short version:
+
+```bash
+# 1. Fork on GitHub, then clone YOUR fork
+git clone https://github.com/<your-org>/oci-janus.git
+cd oci-janus
+
+# 2. Generate production secrets
+openssl genrsa -out jwt.pem 4096                              # JWT signing key
+openssl rsa -in jwt.pem -pubout -out jwt.pub                  # Public counterpart
+openssl rand -hex 32                                          # Proxy credential AES key
+openssl rand -hex 32                                          # Audit-export AES key
+
+# 3. Configure
+cd infra/docker-compose
+cp .env.example .env                                          # Edit secrets, change defaults
+# (See docs/SELF-HOSTING.md for the full env-var list per service)
+
+# 4. Bring up the stack
+docker compose up -d
+
+# 5. Verify
+curl http://localhost:8081/v2/                                # 401 = working (needs auth)
+docker login localhost:8081 -u admin -p <your-admin-password>
+docker tag alpine:3.20 localhost:8081/<org>/alpine:3.20
+docker push localhost:8081/<org>/alpine:3.20
+```
+
+Kubernetes path uses the Helm chart at `infra/helm/registry/` — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for chart layout and [`prod-flow.md`](prod-flow.md) for the production wiring (cert-manager, External Secrets Operator, TLS, etc.).
 
 ---
 
@@ -643,11 +702,41 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 
 ## Contributing
 
-1. Follow the conventions in [CLAUDE.md](CLAUDE.md) — it is the canonical reference for architecture decisions, security rules, and coding standards.
-2. Run `make lint test` before opening a PR.
-3. All proto changes must pass `make proto-breaking` (no backward-incompatible field removals).
-4. New services must include unit tests (80% coverage minimum) and an integration test suite.
-5. Security issues go in `security.md` with the `SEC-NNN` identifier format.
+We welcome contributions of every size — bug reports, doc improvements, feature PRs, security disclosures, the works. Full guide in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+### Quick rules
+1. Read [`CLAUDE.md`](CLAUDE.md) before you write code — it's the canonical reference for architecture decisions, security rules, and coding standards.
+2. **One change per PR.** Run `make lint test` before opening.
+3. Proto changes must pass `make proto-breaking` (no backward-incompatible field removals).
+4. New code needs unit tests. Bug fixes need a regression test.
+5. Security issues: don't open public issues — use [GitHub's private vulnerability reporting](https://github.com/steveokay/oci-janus/security/advisories/new) instead.
+
+### Picking something to work on
+- **Open remediation work:** [`status-tracker.md`](status-tracker.md) — currently-open `REM-*` and `PENTEST-*` items.
+- **Prioritised backlog:** [`futures.md`](futures.md) — Tier 1 (production gates) / Tier 2 (operationally valuable) / Tier 3 (polish).
+- **`good first issue`** label on GitHub Issues (when populated) — small, well-scoped tasks.
+
+### Sponsorship
+
+If your company uses OCI-Janus, [sponsor the project on GitHub](https://github.com/sponsors/steveokay). It directly funds maintenance time and helps prioritise community requests.
+
+---
+
+## License
+
+OCI-Janus is licensed under the [Apache License 2.0](LICENSE). You are free to:
+
+- Use it commercially (run it in production, host it for paying customers)
+- Modify it (fork, vendor, customise)
+- Distribute it (rebrand, redistribute, embed)
+- Use it privately
+
+Subject to:
+- Including the original LICENSE in distributions
+- Stating significant changes you've made
+- Including any NOTICE file we ship (currently none)
+
+There's no CLA — Apache 2.0's inbound contribution clause is sufficient. By submitting a PR, you agree to license your contribution under the same Apache 2.0 terms.
 
 ---
 
@@ -655,7 +744,9 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 
 | Doc | What's in it |
 |---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute — workflow, style, what gets accepted |
 | [`CLAUDE.md`](CLAUDE.md) | Canonical architecture + coding rules (the source of truth when code disagrees) |
+| [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) | Fork → configure → deploy in your own infrastructure (Docker Compose + Kubernetes Helm paths) |
 | [`docs/SERVICES.md`](docs/SERVICES.md) | Per-service endpoint / gRPC / schema / env-var reference |
 | [`docs/EVENTS.md`](docs/EVENTS.md) | RabbitMQ routing keys + payload shapes |
 | [`docs/SIGNING.md`](docs/SIGNING.md) | Image signing + signed-image admission policy (Phase 1 + Phase 2) |
@@ -667,12 +758,13 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 | [`docs/CI-CD.md`](docs/CI-CD.md) | Pipeline stages, Docker build rules, versioning |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Compose + Helm chart layout |
 | [`docs/postman/`](docs/postman/) | Postman collection covering every public `/api/v1/*` route |
-| [`status.md`](status.md) | Current sprint + decision log |
+| [`status-tracker.md`](status-tracker.md) | Currently-open remediation work (lean by design — items live here while in flight) |
+| [`status.md`](status.md) | Completed work log — historical record + per-item resolution notes; items land here once cleared from the tracker |
 | [`security.md`](security.md) | Security issue tracker (SEC-* / PENTEST-* lifecycle) |
 | [`futures.md`](futures.md) | Prioritised backlog of unsprinted items |
 | [`FE-STATUS.md`](FE-STATUS.md) | Frontend roadmap + sprint status |
 
 ---
 
-> Architecture questions? Open an issue with the label `architecture`.
-> Security issues? Follow the remediation steps in `security.md`.
+> Architecture questions? Open a [Discussion](https://github.com/steveokay/oci-janus/discussions).
+> Security issues? [Report privately](https://github.com/steveokay/oci-janus/security/advisories/new) — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.

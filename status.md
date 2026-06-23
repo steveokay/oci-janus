@@ -1,4 +1,27 @@
-# Project Status
+# Project Status — Completed Work Log
+
+> **What this file is:** the historical record of remediation, sprint,
+> and security work that has been **completed**. Resolution notes,
+> dated sprint summaries, decision context, and closed
+> `REM-NNN` / `SEC-NNN` / `PENTEST-NNN` items live here.
+>
+> **What this file is NOT:** the place for currently-open work.
+> Open remediation items live in [`status-tracker.md`](status-tracker.md),
+> and prioritised future items live in [`futures.md`](futures.md).
+>
+> **Workflow:** when an item in `status-tracker.md` is finished, the
+> entry is **removed** from the tracker and **appended** here with a
+> resolution note (commit / PR / date). `status-tracker.md` stays
+> lean by design; this file accumulates the audit trail.
+>
+> **Read order for context:** newer entries are toward the top of
+> each section. The dated "Last updated" log below captures
+> sprint-level summaries; the bulk of the file is per-item
+> resolution notes grouped by ID family (`REM-NNN`, `SEC-NNN`, etc.).
+> Older sprints from the pre-OSS phase are preserved verbatim for
+> audit trail.
+
+---
 
 > Last audited: 2026-06-21 (full doc audit — verified every OPEN/NOT STARTED row against the codebase; pruned stale Beacon-rebuild rows; marked Round-3 pentest items resolved where verified).
 >
