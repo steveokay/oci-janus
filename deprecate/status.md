@@ -1,4 +1,23 @@
-# Project Status
+# Project Status (DEPRECATED — historical record)
+
+> **⚠️ This file is no longer maintained.** It was the active sprint
+> tracker during the pre-OSS phase of the project. The new home for
+> open work is [`status-tracker.md`](../status-tracker.md) (open
+> remediation items only) and [`futures.md`](../futures.md)
+> (prioritised backlog).
+>
+> This file is kept under `deprecate/` as the historical record —
+> resolution notes for closed `REM-NNN`, `SEC-NNN`, and `PENTEST-NNN`
+> items + the dated sprint summaries — because the audit trail
+> matters for context (why a design exists, when a CVE was closed,
+> what shipped in which sprint). Don't edit it; if you need to
+> reference history, link to the specific line via permalink.
+>
+> **Deprecated:** 2026-06-23 (project went open-source under
+> Apache 2.0). The lean replacement is `status-tracker.md` at the
+> repo root.
+
+---
 
 > Last audited: 2026-06-21 (full doc audit — verified every OPEN/NOT STARTED row against the codebase; pruned stale Beacon-rebuild rows; marked Round-3 pentest items resolved where verified).
 >
