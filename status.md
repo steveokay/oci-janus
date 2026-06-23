@@ -387,6 +387,37 @@ All work goes on `feat/sprint-11-maint-*` branches (one per batch), each landing
 ---
 
 ### REM-015 — `libs/rabbitmq/consumer` retry counter is broken (DONE ✅ 2026-06-23)
+### FUT-009 — Service-account-as-signing-identity (OPEN, ~5h)
+- **Surfaced:** 2026-06-23 conversation. Today `POST /repositories/{org}/{repo}/tags/{tag}/sign` takes a free-form `signer_id` string — operators can type any label, no validation, no lifecycle, no link to a real principal. The audit trail records the typed string but can't tie it back to a tenant resource.
+- **Proposal:** Sign action accepts `service_account_id` instead of (or alongside, for back-compat) `signer_id`. BFF resolves the SA → must exist + be enabled + belong to caller's tenant → records the SA's shadow user_id as `signer_id` in the signatures table. Sign dialog becomes a `<Select>` populated from the existing `useServiceAccounts()` hook (FE-API-048 already shipped this).
+- **Why now-ish:** the trusted-key picker (PR #36) handled key_id discovery; this closes the same friction on signer_id. Reuses the SA lifecycle (disable/delete) so signing capability inherits that governance for free. Cleaner audit trail — every signature traces to a real principal, not a typed string.
+- **Scope:** no proto change, no migration. ~2h backend (validation + resolution), ~2h FE (Select + tag-detail display name lookup), ~30min docs, ~30min smoke. Recommendation in the conversation: dashboard-only restriction — cosign CLI path stays untouched.
+- **Affects:** `services/management`, `frontend`, `docs/SIGNING.md`.
+
+---
+
+### FUT-008 — Sign dialog: "Recent signer_ids" dropdown (OPEN, ~1h)
+- **Smaller sibling of FUT-009.** Same UX problem (typing signer_id from memory) but a tactical fix: gather distinct signer_id strings from the tenant's recent signatures, surface as a dropdown alongside the existing input. Mirror of PR #36's trusted-key picker pattern.
+- **Why this might NOT be worth doing:** if FUT-009 ships, free-form signer_ids stop being a thing anyway. Only do FUT-008 if FUT-009 is going to wait > 1 sprint.
+
+---
+
+### FUT-007-FE — Domain re-poll reset action (OPEN, ~1h)
+- **Surfaced:** 2026-06-23 custom-domain documentation. After 48h of failed verification the worker gives up on a domain (sets some internal "stop polling" state); the operator's only recourse today is to delete + re-register. A "Re-arm polling" button on the row (or auto-reset on Verify Now success) would close that cliff without forcing a delete.
+- **Effort:** ~1h — repo method to clear the 48h notify timestamps + reset `next_poll_after`, BFF route, FE button.
+
+---
+
+### DEPLOY-001 — Self-hosted vs SaaS deployment model (DISCUSSION OPEN)
+- **Surfaced:** 2026-06-23 conversation. The platform is fundamentally multi-tenant (every row carries `tenant_id`; custom domains let a tenant white-label; platform-admin marker `(admin, org, *)` separates super-admin surfaces from tenant surfaces). But the deployment-mode story isn't explicit:
+  - **SaaS mode** — one provider runs the platform, many tenants subscribe. Provider holds the platform-admin marker, sees `/admin/tenants`; tenant users see only their workspace.
+  - **Self-hosted mode** — one company runs the whole stack for themselves. They're both platform admin AND the only tenant. Same code, degenerate multi-tenant case.
+  - The dev `admin` user holds BOTH the tenant-admin role AND the platform-admin marker, so the current testing UI conflates both views.
+- **Needs:** an explicit "tenant persona" testing path (create a non-admin user in a fresh tenant, log in as them, confirm `/admin/*` routes are 404 + workspace UI is clean). Also a docs page `docs/DEPLOYMENT-MODELS.md` covering the SaaS-vs-self-hosted distinction + which knobs differ.
+- **Not blocking anything; recommended before any external user trial.**
+
+---
+
 ### REM-016 — `libs/errors/codes.MapDBError` doesn't recognise PostgreSQL error codes (OPEN)
 - **Surfaced:** 2026-06-23 during the custom-domain triage (PR #32). Operator hit a generic "Couldn't register, try again or check BFF logs" toast; the real cause was a foreign-key violation (tenant row missing in the tenant service's DB), but `MapDBError` only special-cases `context.DeadlineExceeded` → `ResourceExhausted` and lumps everything else into `Internal` with a fallback message. The 1-line PgErr stayed buried in the audit log.
 - **Affects every service:** any repository that catches a Postgres error and routes it through `errcodes.MapDBError`. That's all of them.
