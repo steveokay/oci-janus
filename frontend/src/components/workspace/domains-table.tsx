@@ -202,10 +202,9 @@ function DomainRow({
             size="sm"
             onClick={onDelete}
             className="text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-            disabled={d.is_primary}
             title={
               d.is_primary
-                ? "Promote another verified domain to primary before deleting this one"
+                ? "Deleting the primary domain falls the workspace back to the platform-derived host"
                 : ""
             }
           >
@@ -230,8 +229,18 @@ function DeleteDomainDialog({
   const del = useDeleteDomain();
   async function handleConfirm() {
     try {
-      await del.mutateAsync(domain.domain);
-      toast.success(`Removed ${domain.domain}.`);
+      const headers = await del.mutateAsync(domain.domain);
+      // The BFF passes the tenant-service "x-janus-was-primary" gRPC
+      // metadata through as the X-Janus-Warning HTTP header. Surface
+      // it on the success toast so the operator sees that the primary
+      // fell back to the platform host (rather than silently losing
+      // their custom hostname).
+      const wasPrimaryWarning = headers?.["x-janus-warning"] === "primary-domain-removed";
+      toast.success(
+        wasPrimaryWarning
+          ? `Removed ${domain.domain}. Workspace primary fell back to the platform-derived host.`
+          : `Removed ${domain.domain}.`,
+      );
       onOpenChange(false);
     } catch {
       toast.error("Couldn't delete. Try again.");
@@ -243,9 +252,22 @@ function DeleteDomainDialog({
         <DialogHeader>
           <DialogTitle>Delete custom domain</DialogTitle>
           <DialogDescription>
-            This removes <code className="font-mono">{domain.domain}</code> from
-            this workspace. The platform-derived host stays available, so docker
-            clients still resolve — just not via your custom hostname.
+            {domain.is_primary ? (
+              <>
+                <strong>This is your workspace&apos;s primary domain.</strong>{" "}
+                Removing it falls the workspace back to the platform-derived
+                host. Docker clients pointing at{" "}
+                <code className="font-mono">{domain.domain}</code> will stop
+                resolving until DNS is repointed. Continue?
+              </>
+            ) : (
+              <>
+                This removes <code className="font-mono">{domain.domain}</code>{" "}
+                from this workspace. The platform-derived host stays available,
+                so docker clients still resolve — just not via your custom
+                hostname.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

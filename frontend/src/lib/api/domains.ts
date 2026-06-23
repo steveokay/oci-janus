@@ -112,10 +112,18 @@ export function usePromoteDomain() {
 export function useDeleteDomain() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (domain: string) => {
-      await apiClient.delete(
+    // Returns the response headers (lowercased, axios convention) so the
+    // caller can surface the X-Janus-Warning the BFF sets when the deleted
+    // row was the workspace's primary. Without that the operator gets a
+    // bland "Removed" toast even when the workspace silently fell back to
+    // the platform host — which is a meaningful state change.
+    mutationFn: async (domain: string): Promise<Record<string, string>> => {
+      const res = await apiClient.delete(
         `/workspace/me/domains/${encodeURIComponent(domain)}`,
       );
+      // Axios lowercases response header keys in v1; callers should index
+      // with lowercase names.
+      return (res.headers ?? {}) as Record<string, string>;
     },
     onSuccess: () => invalidateDomainsAndWorkspace(qc),
   });

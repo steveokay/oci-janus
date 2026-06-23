@@ -39,8 +39,14 @@ func CORS(allowedOrigins string) func(http.Handler) http.Handler {
 			origin := r.Header.Get("Origin")
 			if origin != "" && originAllowed(origin, allowlist) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				// Expose-Headers lets browser callers read custom response
+				// headers the BFF sets — without this, browsers strip them
+				// from the response that fetch()/axios sees. X-Janus-Warning
+				// surfaces side-channel state like "you just deleted the
+				// primary domain, workspace fell back to the platform host."
+				w.Header().Set("Access-Control-Expose-Headers", "X-Janus-Warning")
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
 			// Preflight: respond 204 regardless of allowlist outcome — if the
