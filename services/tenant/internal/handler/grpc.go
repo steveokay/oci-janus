@@ -427,19 +427,32 @@ func (h *GRPCHandler) VerifyDomainNow(ctx context.Context, req *tenantv1.VerifyD
 	if !rec.Verified {
 		target := "_registry-verify." + rec.Domain
 		records, lookupErr := txtLookup(target)
-		if lookupErr != nil {
-			return nil, status.Errorf(codes.FailedPrecondition, "DNS TXT lookup failed for %s", target)
-		}
+		// "Pending" outcomes — DNS lookup failed (NXDOMAIN — TXT record
+		// not yet propagated) OR token not found in returned records —
+		// are NOT errors. The operator clicking "Verify now" before
+		// propagation is the expected fast-path; the FE renders a
+		// "Verification still pending — TXT record not visible yet"
+		// info toast when `verified=false` comes back. Returning
+		// FailedPrecondition here is technically accurate but it
+		// degrades into a generic "Couldn't run verification" toast
+        // on the FE, which is misleading. Only DB errors (and similar
+		// genuine failures further down) should propagate as gRPC
+		// errors so the BFF can surface them as 5xx.
 		matched := false
-		for _, r := range records {
-			if r == rec.VerificationToken {
-				matched = true
-				break
+		if lookupErr == nil {
+			for _, r := range records {
+				if r == rec.VerificationToken {
+					matched = true
+					break
+				}
 			}
 		}
 		if !matched {
-			return nil, status.Errorf(codes.FailedPrecondition,
-				"verification token not found in TXT records for %s", target)
+			// rec is the unverified row we read above; return it as-is
+			// (verified=false). The handler's tail uses the same
+			// domainRecordToProto so this matches the post-update
+			// path's response shape exactly.
+			return domainRecordToProto(rec), nil
 		}
 		if err := h.repo.MarkDomainVerified(ctx, rec.ID); err != nil {
 			return nil, errcodes.MapDBError(err, "mark domain verified")
