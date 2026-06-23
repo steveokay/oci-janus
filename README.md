@@ -660,6 +660,7 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 | [`docs/EVENTS.md`](docs/EVENTS.md) | RabbitMQ routing keys + payload shapes |
 | [`docs/SIGNING.md`](docs/SIGNING.md) | Image signing + signed-image admission policy (Phase 1 + Phase 2) |
 | [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) | Audit-log streaming to syslog / CEF / HTTPS webhook |
+| [`docs/CUSTOM-DOMAINS.md`](docs/CUSTOM-DOMAINS.md) | Per-tenant custom domain registration + DNS verification + primary swap (Cloudflare walkthrough, troubleshooting) |
 | [`docs/SAML.md`](docs/SAML.md) | Per-tenant SAML SP setup + IdP metadata flow |
 | [`docs/SCANNER.md`](docs/SCANNER.md) | Scanner plugin protocol + adapter selection (Trivy / Grype / Clair) |
 | [`docs/TESTING.md`](docs/TESTING.md) | Coverage targets, integration tests, OCI conformance |
