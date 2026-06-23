@@ -83,6 +83,18 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   for 30s via REM-007; Add/Remove bust the cache via a new
   `bustTrustedKeysCache` helper so flips take effect on the next
   pull.
+- **Recent-signers picker (2026-06-23):** Approve-Trusted-Key dialog
+  now has a "Pick from recent signers" mode that surfaces every
+  `key_id` that recently signed in this repo so the operator no
+  longer has to copy-paste from the tag-detail Signing panel.
+  BFF-orchestrated only — new
+  `GET /api/v1/repositories/{org}/{repo}/recent-signers` route on
+  services/management walks the most recent N tags, fans out
+  `signer.ListSignatures(manifest_digest)` per tag, dedupes by
+  key_id, and returns the top N by recency. No proto change. Empty
+  result falls back to Manual entry transparently; SIGNER_GRPC_ADDR
+  unset returns 200 + empty list so the picker degrades gracefully
+  without an error toast.
 - **Phase 3 (deferred):** multi-key quorum ("require ≥N distinct
   approved key_ids"), automated rotation/expiry, Cosign keyless
   Fulcio identity binding. Not on a sprint yet.

@@ -440,9 +440,13 @@ contract; the dashboard surfaces this with a `Phase 1 fallback`
 warning pill so the operator knows what posture they're in.
 
 ```
-# 1) Find the key_id you want to approve. Any signed tag's Signing
-#    panel surfaces the key_id under the signature, or you can grep
-#    services/signer's logs for the SignManifest result.
+# 1) Find the key_id you want to approve. Two paths:
+#    a) Dashboard — click "Approve a key" on the repo Settings tab. The
+#       Recent signer mode lists every key_id that recently signed in
+#       this repo (BFF-orchestrated rollup over signer.ListSignatures)
+#       so you can pick by signer_id / relative time without copy-paste.
+#    b) curl — POST /sign and read key_id off the response (or grep the
+#       signer service logs for the SignManifest result).
 curl -X POST https://api.example.com/api/v1/repositories/acme/api/tags/v1.2.3/sign \
      -H "Authorization: Bearer $JWT" \
      -d '{"signer_id": "ci-prod"}'
@@ -463,7 +467,15 @@ curl -X DELETE https://api.example.com/api/v1/repositories/acme/api/trusted-keys
 **Dashboard:** the `Trusted signing keys` card on the repo Settings
 tab sits directly below `Signed-image admission`. Empty list with the
 policy on renders a `Phase 1 fallback` pill + warning banner.
-Per-key Approve/Revoke buttons gate on repo admin role.
+Per-key Approve/Revoke buttons gate on repo admin role. The Approve
+dialog has a dual mode — click **"Pick from recent signers"** in the
+Approve dialog to choose from a list of `key_id`s that have recently
+signed images in this repo (auto-fills the display name from the
+signer_id), or flip to **"Manual entry"** to paste a `key_id`
+directly. The picker is BFF-orchestrated over
+`signer.ListSignatures` per recent tag and exposed at
+`GET /api/v1/repositories/{org}/{repo}/recent-signers`; no new signer
+RPC was required.
 
 **What Phase 2 does NOT guarantee:**
 
@@ -495,7 +507,7 @@ both valid combinations).
 | `services/core/internal/service/registry.go` (`checkSignatureAdmission`) | The fail-OPEN-on-blip gate called from `GetManifest`/`HeadManifest`; Phase 2 intersects recorded sig key_ids with the allowlist |
 | `services/core/internal/service/errors.go` (`ErrSignatureRequired`) | Sentinel error mapped to 403 DENIED — reused by Phase 2 |
 | `services/management/internal/handler/handler.go` (`updateRepositoryBody.RequireSignature`) | BFF PATCH plumbing — `*bool` nil-check so unrelated PATCHes don't reset the flag |
-| `services/management/internal/handler/trusted_keys.go` | Phase 2 — 3 routes (List/Add/Remove) wrapped behind repo admin gate |
+| `services/management/internal/handler/trusted_keys.go` | Phase 2 — 3 routes (List/Add/Remove) wrapped behind repo admin gate + the reader-allowed `/recent-signers` picker source (2026-06-23 follow-up) |
 | `frontend/src/components/repositories/repo-signature-policy-section.tsx` | Phase 1 Settings-tab card with toggle + explainer |
 | `frontend/src/components/repositories/repo-trusted-keys-section.tsx` | Phase 2 Settings-tab card with allowlist table + Approve dialog |
 | `frontend/src/lib/api/trusted-keys.ts` | TanStack Query hooks for the Phase 2 routes |
