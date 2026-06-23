@@ -65,7 +65,7 @@ func (h *GRPCHandler) GetAuditExportConfig(ctx context.Context, req *auditv1.Get
 		}
 		return nil, status.Errorf(codes.Internal, "get audit export config: %v", err)
 	}
-	return toAuditExportProto(cfg), nil
+	return h.toAuditExportProto(ctx, cfg), nil
 }
 
 // PutAuditExportConfig (futures.md Tier 1 #4) — upsert the
@@ -140,7 +140,7 @@ func (h *GRPCHandler) PutAuditExportConfig(ctx context.Context, req *auditv1.Put
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert: %v", err)
 	}
-	return toAuditExportProto(out), nil
+	return h.toAuditExportProto(ctx, out), nil
 }
 
 // DeleteAuditExportConfig (futures.md Tier 1 #4) — clears the
@@ -283,10 +283,33 @@ func truncateString(s string, byteLen int) string {
 	return s[:byteLen]
 }
 
+// DrainAuditExportDLX (futures.md Tier 1 #4 Phase 2) — admin RPC that
+// consumes parked messages in dlx.audit-export belonging to this
+// tenant and re-publishes onto audit.export. Bounded to MaxDrain
+// (10k) per call so a catastrophically full DLX doesn't hang the
+// request; the operator may need to call it repeatedly after a
+// long outage.
+func (h *GRPCHandler) DrainAuditExportDLX(ctx context.Context, req *auditv1.DrainAuditExportDLXRequest) (*auditv1.DrainAuditExportDLXResponse, error) {
+	if h.dlxProbe == nil {
+		return nil, status.Error(codes.Unavailable, "audit-export DLX probe not wired")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	n, err := h.dlxProbe.Drain(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "drain: %v", err)
+	}
+	return &auditv1.DrainAuditExportDLXResponse{Republished: n}, nil
+}
+
 // toAuditExportProto converts the repository struct to the wire proto.
 // hmac_secret + bearer_token are NEVER serialised; presence is
-// surfaced via *_set booleans only.
-func toAuditExportProto(c *repository.AuditExportConfig) *auditv1.AuditExportConfig {
+// surfaced via *_set booleans only. dlx_queue_depth is fetched live
+// from the RabbitMQ Management API when the probe is wired; `-1`
+// signals "unknown" so the FE renders that distinctly from "empty."
+func (h *GRPCHandler) toAuditExportProto(ctx context.Context, c *repository.AuditExportConfig) *auditv1.AuditExportConfig {
 	out := &auditv1.AuditExportConfig{
 		Id:               c.ID.String(),
 		TenantId:         c.TenantID.String(),
@@ -297,6 +320,7 @@ func toAuditExportProto(c *repository.AuditExportConfig) *auditv1.AuditExportCon
 		BearerTokenSet:   len(c.BearerToken) > 0,
 		LastError:        c.LastError,
 		DlxDepth:         c.DLXDepth,
+		DlxQueueDepth:    -1,
 		CreatedAt:        timestamppb.New(c.CreatedAt),
 		UpdatedAt:        timestamppb.New(c.UpdatedAt),
 		EventFiltersJson: string(c.EventFilters),
@@ -306,6 +330,11 @@ func toAuditExportProto(c *repository.AuditExportConfig) *auditv1.AuditExportCon
 	}
 	if c.LastAttemptAt != nil {
 		out.LastAttemptAt = timestamppb.New(*c.LastAttemptAt)
+	}
+	if h.dlxProbe != nil {
+		if d, err := h.dlxProbe.QueueDepth(ctx); err == nil {
+			out.DlxQueueDepth = d
+		}
 	}
 	return out
 }

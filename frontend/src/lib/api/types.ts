@@ -81,8 +81,17 @@ export interface AuditExportConfig {
   last_success_at?: string;
   last_attempt_at?: string;
   last_error?: string;
+  // dlx_depth is the cumulative count of events ever parked
+  // (Phase 1 metric). dlx_queue_depth is the live count currently
+  // sitting in dlx.audit-export waiting for drain (Phase 2). -1
+  // signals "depth unknown" — the RabbitMQ Mgmt API was unreachable.
   dlx_depth: number;
+  dlx_queue_depth: number;
   updated_at: string;
+}
+
+export interface AuditExportDrainResponse {
+  republished: number;
 }
 
 // `null` value means "no config yet" — the GET handler returns this

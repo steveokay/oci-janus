@@ -48,7 +48,13 @@ type AuditExportConfigResponse struct {
 	LastSuccessAt    *string `json:"last_success_at,omitempty"`
 	LastAttemptAt    *string `json:"last_attempt_at,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`
+	// DLXDepth is the cumulative monotonic counter (Phase 1 metric).
 	DLXDepth         int32   `json:"dlx_depth"`
+	// DLXQueueDepth is the live count of currently-parked messages in
+	// dlx.audit-export (Phase 2). `-1` signals the Mgmt API is
+	// unreachable so the FE can render "depth unknown" distinct from
+	// "empty."
+	DLXQueueDepth    int32   `json:"dlx_queue_depth"`
 	UpdatedAt        string  `json:"updated_at"`
 }
 
@@ -85,6 +91,7 @@ func (h *Handler) RegisterWorkspaceAuditExport(mux *http.ServeMux, authMW func(h
 	mux.Handle("PUT /api/v1/workspace/me/audit-export", authMW(http.HandlerFunc(h.handlePutAuditExport)))
 	mux.Handle("DELETE /api/v1/workspace/me/audit-export", authMW(http.HandlerFunc(h.handleDeleteAuditExport)))
 	mux.Handle("POST /api/v1/workspace/me/audit-export/test", authMW(http.HandlerFunc(h.handleTestAuditExport)))
+	mux.Handle("POST /api/v1/workspace/me/audit-export/drain", authMW(http.HandlerFunc(h.handleDrainAuditExport)))
 }
 
 func (h *Handler) handleGetAuditExport(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +184,28 @@ func (h *Handler) handleDeleteAuditExport(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) handleDrainAuditExport(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if !h.requireDomainAdmin(r) {
+		writeError(w, http.StatusForbidden, "workspace admin role required")
+		return
+	}
+	resp, err := h.audit.DrainAuditExportDLX(r.Context(), &auditv1.DrainAuditExportDLXRequest{TenantId: tenantID})
+	if err != nil {
+		if s, ok := status.FromError(err); ok {
+			switch s.Code() {
+			case codes.Unavailable:
+				writeError(w, http.StatusServiceUnavailable, "audit-export DLX probe not wired on the audit service")
+				return
+			}
+		}
+		slog.Error("DrainAuditExportDLX", "err", err, "tenant_id", tenantID)
+		writeError(w, http.StatusInternalServerError, "failed to drain audit-export DLX")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"republished": resp.GetRepublished()})
+}
+
 func (h *Handler) handleTestAuditExport(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if !h.requireDomainAdmin(r) {
@@ -220,6 +249,7 @@ func toAuditExportResponse(c *auditv1.AuditExportConfig) AuditExportConfigRespon
 		EventFiltersJSON: c.GetEventFiltersJson(),
 		LastError:        c.GetLastError(),
 		DLXDepth:         c.GetDlxDepth(),
+		DLXQueueDepth:    c.GetDlxQueueDepth(),
 		UpdatedAt:        c.GetUpdatedAt().AsTime().UTC().Format(time.RFC3339Nano),
 	}
 	if c.GetLastSuccessAt() != nil {

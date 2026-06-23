@@ -14,6 +14,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/crypto/aes"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/audit/internal/export"
+	"github.com/steveokay/oci-janus/services/audit/internal/exportworker"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 
@@ -25,10 +26,13 @@ var aesDecrypt = aes.Decrypt
 type Consumer struct {
 	repo *repository.Repository
 	// exporter is the optional SIEM-streaming hook (futures.md Tier 1 #4).
-	// nil when AUDIT_EXPORT_SECRETS_KEY_HEX is unset OR when no tenant
-	// has streaming enabled — the consumer just falls back to "INSERT
-	// and done." Set via WithExporter from server bootstrap.
-	exporter *exportDispatcher
+	// Phase 1 wired an in-process fire-and-forget dispatcher; Phase 2
+	// replaces it with a RabbitMQ publish to the audit.export queue.
+	// Both paths still go through this Consumer — the choice is
+	// determined by `publisher` below. When neither is wired, the
+	// audit INSERT happens as usual and SIEM streaming is disabled.
+	exporter  *exportDispatcher        // Phase 1 fallback (inline retry, no DLX)
+	publisher *exportworker.Publisher  // Phase 2 (durable queue + real DLX)
 }
 
 // New creates a Consumer.
@@ -36,15 +40,28 @@ func New(repo *repository.Repository) *Consumer {
 	return &Consumer{repo: repo}
 }
 
-// WithExporter wires the audit-export dispatcher (futures.md Tier 1 #4).
-// After each successful audit_events INSERT the consumer looks up the
-// per-tenant streaming config, renders the event in the configured
-// format, and ships it. Failures don't NACK the original RabbitMQ
-// message (the audit DB write already succeeded) — they just bump the
-// dlx_depth counter on the config row so the operator sees the
-// stuck-events count on the dashboard.
+// WithExporter wires the Phase 1 in-process dispatcher as a fallback
+// for environments without RabbitMQ (legacy or unit-test setups).
+// In production, WithExportPublisher is preferred — see
+// services/audit/internal/exportworker for the queue-based path.
 func (c *Consumer) WithExporter(d *exportDispatcher) *Consumer {
 	c.exporter = d
+	return c
+}
+
+// WithExportPublisher wires the Phase 2 RabbitMQ-queue publisher
+// (futures.md Tier 1 #4). When set, HandleEvent enqueues an
+// AuditExportTask after each successful audit_events INSERT and the
+// exportworker.Consumer drains + ships independently. The producer
+// path becomes near-instant (publisher-confirms only) so a slow SIEM
+// no longer back-pressures the audit DB write path.
+//
+// When both WithExporter + WithExportPublisher are wired,
+// WithExportPublisher wins — the queue is the preferred path. The
+// inline dispatcher stays as a no-op fallback the operator can revert
+// to by unsetting the publisher env var.
+func (c *Consumer) WithExportPublisher(p *exportworker.Publisher) *Consumer {
+	c.publisher = p
 	return c
 }
 
@@ -94,18 +111,81 @@ func (c *Consumer) HandleEvent(ctx context.Context, event events.Event) error {
 		"tenant_id", ae.TenantID,
 	)
 
-	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Non-blocking
-	// best-effort dispatch — the DB write has already succeeded, so a
-	// downstream SIEM outage must NOT cause the RabbitMQ message to
-	// re-queue and double-insert into audit_events. Failures bump
-	// dlx_depth on the per-tenant config row so the dashboard surfaces
-	// "X events stuck" to the operator. v1 ships synchronous in-process
-	// retry (export.MaxAttempts); a fully async DLX queue is the
-	// natural Phase 2 evolution.
-	if c.exporter != nil {
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4). After the
+	// audit DB write succeeds, hand the event off to whichever
+	// transport the operator wired:
+	//
+	//   • Phase 2 (preferred): publish to the audit.export RabbitMQ
+	//     queue. Synchronous via publisher-confirms, so we learn
+	//     about broker outages immediately and don't silently drop
+	//     events. The exportworker.Consumer drains + ships
+	//     independently with full DLX semantics + replay support.
+	//
+	//   • Phase 1 (fallback): in-process fire-and-forget goroutine.
+	//     Used when no broker URL is configured (legacy / unit tests).
+	//     Exhausted retries bump the cumulative dlx_depth counter on
+	//     the config row but the event itself is gone — Phase 2
+	//     supersedes this path.
+	//
+	// We never NACK the original audit RabbitMQ message based on
+	// streaming outcome — the DB write is already durable and a
+	// retry would duplicate the audit_events row.
+	if c.publisher != nil {
+		c.enqueueExportTask(ae)
+	} else if c.exporter != nil {
 		go c.exporter.dispatch(context.Background(), ae)
 	}
 	return nil
+}
+
+// enqueueExportTask publishes an AuditExportTask onto audit.export.
+// Synchronous (publisher-confirms) but bounded by a short context
+// timeout so a hung broker doesn't stall the audit consumer's main
+// loop. On failure we log + bump the failure counter so the operator
+// sees the gap on the dashboard — and fall through to the legacy
+// inline dispatcher when it's wired (defence in depth).
+func (c *Consumer) enqueueExportTask(ae *repository.AuditEvent) {
+	pubCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	task := exportworker.AuditExportTask{
+		TenantID:   ae.TenantID.String(),
+		EnqueuedAt: time.Now().UTC(),
+		Event: export.Event{
+			ID:         ae.ID.String(),
+			TenantID:   ae.TenantID.String(),
+			ActorID:    ae.ActorID,
+			ActorType:  ae.ActorType,
+			ActorIP:    ae.ActorIP,
+			Action:     ae.Action,
+			Resource:   ae.Resource,
+			Outcome:    ae.Outcome,
+			Metadata:   ae.Metadata,
+			OccurredAt: ae.OccurredAt,
+		},
+	}
+	if err := c.publisher.Enqueue(pubCtx, task); err != nil {
+		slog.WarnContext(pubCtx, "audit export: enqueue failed",
+			"tenant_id", ae.TenantID, "action", ae.Action, "err", err)
+		_ = c.repo.TouchAuditExportFailure(pubCtx, ae.TenantID,
+			"enqueue: "+truncateError(err))
+		// Fall through to the Phase 1 dispatcher if it's wired — a
+		// broker outage shouldn't take the SIEM stream down too.
+		if c.exporter != nil {
+			go c.exporter.dispatch(context.Background(), ae)
+		}
+	}
+}
+
+// truncateError clips an error string to fit the last_error column.
+func truncateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	if len(s) > 512 {
+		s = s[:512]
+	}
+	return s
 }
 
 // dispatch loads the tenant config, applies the include/exclude filter,

@@ -73,6 +73,13 @@ service AuditService {
   rpc PutAuditExportConfig(PutAuditExportConfigRequest) returns (AuditExportConfig);
   rpc DeleteAuditExportConfig(DeleteAuditExportConfigRequest) returns (DeleteAuditExportConfigResponse);
   rpc TestAuditExportConfig(TestAuditExportConfigRequest) returns (TestAuditExportConfigResponse);
+  // Audit-export DLX drain (futures.md Tier 1 #4 Phase 2). One-shot
+  // admin action that consumes every parked message in dlx.audit-export
+  // belonging to the calling tenant and re-publishes onto the main
+  // audit.export queue. Bounded at 10k messages per call so an
+  // operator triggering it on a catastrophically-full DLX doesn't
+  // hang the request — subsequent calls drain incrementally.
+  rpc DrainAuditExportDLX(DrainAuditExportDLXRequest) returns (DrainAuditExportDLXResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -344,10 +351,22 @@ message AuditExportConfig {
   google.protobuf.Timestamp last_success_at = 9;
   google.protobuf.Timestamp last_attempt_at = 10;
   string last_error  = 11;
+  // dlx_depth is the cumulative count of events that have EVER landed
+  // in the DLX since the config row was created. Use dlx_queue_depth
+  // (16) for the live count of currently-parked messages.
   int32  dlx_depth   = 12;
 
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+
+  // Phase 2 (futures.md Tier 1 #4) — live queue depth from the
+  // RabbitMQ Management API. Distinct from dlx_depth because the
+  // latter is monotonic (counts every park-event for life) whereas
+  // dlx_queue_depth is what's actually waiting for drain RIGHT NOW.
+  // Set to -1 when the Management API is unreachable so the FE can
+  // render a "depth unknown" surface instead of conflating "0
+  // queued" with "broker unreachable."
+  int32 dlx_queue_depth = 15;
 }
 
 message GetAuditExportConfigRequest {
@@ -398,4 +417,18 @@ message TestAuditExportConfigResponse {
   bool   delivered      = 1;
   string error          = 2;       // populated when delivered=false
   string rendered_event = 3;       // the wire-format string we shipped
+}
+
+// ─── Futures.md Tier 1 #4 Phase 2: DLX drain ────────────────────────────────
+
+message DrainAuditExportDLXRequest {
+  string tenant_id = 1;
+}
+
+message DrainAuditExportDLXResponse {
+  // republished is the number of messages we pulled from
+  // dlx.audit-export and re-queued onto audit.export. Bounded by the
+  // server-side MaxDrain constant; the operator may need to call this
+  // multiple times after a long outage.
+  int32 republished = 1;
 }

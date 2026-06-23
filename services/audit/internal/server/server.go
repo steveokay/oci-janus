@@ -33,6 +33,7 @@ import (
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/audit/internal/export"
+	"github.com/steveokay/oci-janus/services/audit/internal/exportworker"
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
@@ -85,13 +86,48 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	defer cons.Close()
 
 	ec := eventconsumer.New(repo)
-	// Audit-log streaming to SIEM (futures.md Tier 1 #4): wire the
-	// export dispatcher when the secrets key is configured. Without
-	// a key the consumer falls back to plain INSERT (existing
-	// behaviour) — streaming is opt-in.
-	if len(exportSecretsKey(cfg)) > 0 {
-		ec = ec.WithExporter(eventconsumer.NewExportDispatcher(repo, exportSecretsKey(cfg)))
+	// Audit-log streaming to SIEM (futures.md Tier 1 #4).
+	//   Phase 1 fallback: in-process dispatcher (no DLX, lossy on
+	//                     exhausted retries; kept for dev/legacy).
+	//   Phase 2 (default): RabbitMQ audit.export queue + exportworker
+	//                     consumer for durable delivery + drain.
+	//
+	// Both ride on the same secrets key — empty key disables both
+	// paths so the audit service still boots cleanly without
+	// streaming.
+	var exportConsumer *exportworker.Consumer
+	if k := exportSecretsKey(cfg); len(k) > 0 {
+		// Always wire the legacy dispatcher as a safety net — if the
+		// publisher's broker connection drops, audit events still
+		// reach the SIEM via the in-process path (lossy, but better
+		// than silent).
+		ec = ec.WithExporter(eventconsumer.NewExportDispatcher(repo, k))
+		// Phase 2 publisher + consumer. NewPublisher / NewConsumer
+		// return nil + nil when the broker URL is empty so this
+		// block is idempotent in dev.
+		pub, err := exportworker.NewPublisher(cfg.RabbitMQURL)
+		if err != nil {
+			return fmt.Errorf("audit export publisher: %w", err)
+		}
+		if pub != nil {
+			defer func() { _ = pub.Close() }()
+			ec = ec.WithExportPublisher(pub)
+		}
+		cons, err := exportworker.NewConsumer(cfg.RabbitMQURL, repo, k)
+		if err != nil {
+			return fmt.Errorf("audit export consumer: %w", err)
+		}
+		if cons != nil {
+			exportConsumer = cons
+			go func() {
+				slog.Info("audit-export worker starting")
+				if err := cons.Run(ctx); err != nil && err != context.Canceled {
+					slog.Error("audit-export worker stopped", "err", err)
+				}
+			}()
+		}
 	}
+	_ = exportConsumer // referenced for future graceful-shutdown hook
 	go func() {
 		slog.Info("audit: starting event consumer")
 		if err := cons.Consume(ctx, ec.HandleEvent); err != nil {
@@ -166,6 +202,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	auditHandler := handler.NewGRPC(repo).
 		WithSecretsKey(secretsKey).
 		WithExportTester(export.NewTester())
+	// Phase 2 — wire the DLX probe + drain (futures.md Tier 1 #4).
+	// Nil when RABBITMQ_URL is unset (legacy / unit-test stack) so
+	// the handler falls back to Phase 1 behaviour (Drain returns
+	// Unavailable, dlx_queue_depth = -1).
+	if probe, err := exportworker.NewProbe(cfg.RabbitMQURL, cfg.RabbitMQMgmtURL); err != nil {
+		return fmt.Errorf("audit export probe: %w", err)
+	} else if probe != nil {
+		auditHandler = auditHandler.WithExportDLXProbe(probe)
+	}
 	auditv1.RegisterAuditServiceServer(grpcSrv, auditHandler)
 	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 

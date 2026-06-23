@@ -3,6 +3,7 @@ import { apiClient } from "./client";
 import type {
   AuditExportConfig,
   AuditExportConfigResponse,
+  AuditExportDrainResponse,
   AuditExportFormat,
   AuditExportTestResponse,
 } from "./types";
@@ -86,6 +87,30 @@ export function useTestAuditExportConfig() {
         "/workspace/me/audit-export/test",
       );
       return data;
+    },
+  });
+}
+
+// useDrainAuditExportDLX (futures.md Tier 1 #4 Phase 2) — admin
+// action that consumes parked messages from dlx.audit-export and
+// re-queues them onto the main audit.export queue. Surfaced as a
+// button on the settings page when dlx_queue_depth > 0. Bounded by
+// the server-side MaxDrain so an operator triggering it on a
+// catastrophically-full DLX gets a quick response — they can re-fire
+// until the depth indicator settles at 0.
+export function useDrainAuditExportDLX() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<AuditExportDrainResponse> => {
+      const { data } = await apiClient.post<AuditExportDrainResponse>(
+        "/workspace/me/audit-export/drain",
+      );
+      return data;
+    },
+    onSuccess: () => {
+      // Refresh the config so the FE picks up the new dlx_queue_depth
+      // (which should drop by `republished` if the consumer is healthy).
+      void qc.invalidateQueries({ queryKey: auditExportKeys.config() });
     },
   });
 }

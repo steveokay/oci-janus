@@ -39,6 +39,13 @@ type Config struct {
 	// FailedPrecondition with a clear error. Audit streaming over
 	// syslog (which doesn't use HMAC) still works without the key.
 	ExportSecretsKeyHex string `mapstructure:"AUDIT_EXPORT_SECRETS_KEY_HEX"`
+
+	// RabbitMQMgmtURL (futures.md Tier 1 #4 Phase 2) overrides the
+	// auto-derived RabbitMQ Management HTTP API endpoint used to
+	// query live `audit.export.dlx` queue depth. Empty falls back to
+	// `http://<rabbit-host>:15672` (RabbitMQ's default plugin port).
+	// Set to your TLS-terminated mgmt endpoint in production.
+	RabbitMQMgmtURL string `mapstructure:"RABBITMQ_MGMT_URL"`
 }
 
 // Load reads configuration from environment variables and validates required fields.

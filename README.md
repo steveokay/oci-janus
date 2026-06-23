@@ -44,7 +44,7 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Per-tenant scan policies + compliance reports | Implemented (FE-API-018/019: block-on-severity rules per repo; SPDX JSON 2.3 SBOMs + hand-rolled PDF reports) — see [`docs/SCANNER.md`](docs/SCANNER.md) |
 | Retention policies (age / version-count / max-idle-days) | Implemented (FE-API-037..043: dry-run preview, daily evaluation, audit trail) |
 | Pull / push analytics + per-repo activity | Implemented (FE-API-030/042: PG14 `date_bin` time-series, configurable sample rate, repo-scoped activity tab) |
-| Audit log streaming to SIEM | Implemented (futures.md Tier 1 #4: per-tenant config; syslog RFC 5424 / CEF / HTTPS webhook with HMAC; AES-256-GCM-encrypted secrets; SSRF guard) — see [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) |
+| Audit log streaming to SIEM | Implemented (futures.md Tier 1 #4 Phase 1 + Phase 2: syslog RFC 5424 / CEF / HTTPS webhook; AES-256-GCM-encrypted secrets; SSRF guard; durable `audit.export` + `dlx.audit-export` queues with operator-controlled drain + live DLX depth) — see [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) |
 
 ### Technology Stack
 
