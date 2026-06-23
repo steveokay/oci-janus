@@ -39,6 +39,11 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Tag immutability — repo-wide flag + per-tag pin | Implemented (rejects re-pushes with `400 MANIFEST_INVALID`) |
 | Signed-image admission — repo-wide `require_signature` + per-repo trusted-key allowlist | Implemented (Phase 1 + Phase 2: rejects unsigned pulls with `403 DENIED`; non-empty allowlist narrows to approved `key_id`s only) |
 | RBAC at org / repo level | Implemented (4 roles — owner / admin / writer / reader — assignable to users + service accounts; platform-admin marker scope `(admin, org, *)`) |
+| Per-tenant SSO — OAuth 2.0 + PKCE + SAML 2.0 SP | Implemented (Google / GitHub / Microsoft / generic OIDC + SAML IdP; auto-provisioning; AES-256-GCM-encrypted client secrets) — see [`docs/SAML.md`](docs/SAML.md) |
+| Service accounts + scoped API keys | Implemented (FE-API-048: shadow-user model, per-key scope intersection, polymorphic api_keys table) |
+| Per-tenant scan policies + compliance reports | Implemented (FE-API-018/019: block-on-severity rules per repo; SPDX JSON 2.3 SBOMs + hand-rolled PDF reports) — see [`docs/SCANNER.md`](docs/SCANNER.md) |
+| Retention policies (age / version-count / max-idle-days) | Implemented (FE-API-037..043: dry-run preview, daily evaluation, audit trail) |
+| Pull / push analytics + per-repo activity | Implemented (FE-API-030/042: PG14 `date_bin` time-series, configurable sample rate, repo-scoped activity tab) |
 
 ### Technology Stack
 
@@ -105,17 +110,18 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 | Service | Port (HTTP) | Port (gRPC) | Description |
 |---|---|---|---|
 | `registry-gateway` | 443/80 | — | Traefik ingress, TLS, host routing |
-| `registry-auth` | 8080 | 50051 | JWT issuance, API key management, credential validation |
-| `registry-core` | 8081 | 50052 | OCI Distribution Spec v1.1 implementation |
+| `registry-auth` | 8080 | 50051 | JWT issuance, API key management, per-tenant SSO (OAuth + SAML), RBAC, service accounts |
+| `registry-core` | 8081 | 50052 | OCI Distribution Spec v1.1 implementation; signed-image + tag-immutability admission |
 | `registry-storage` | 8082 | 50053 | Storage abstraction (MinIO/S3/GCS/Azure) |
-| `registry-metadata` | 8083 | 50054 | Registry metadata (repos, tags, manifests, blobs) |
+| `registry-metadata` | 8083 | 50054 | Registry metadata (repos, tags, manifests, blobs, retention, trusted keys) |
 | `registry-proxy` | 8084 | 50055 | Pull-through proxy cache for upstream registries |
-| `registry-scanner` | 8085 | 50056 | Vulnerability scan orchestration + plugin host |
+| `registry-scanner` | 8085 | 50056 | Vulnerability scan orchestration + plugin host + scan policies + compliance reports |
 | `registry-signer` | 8086 | 50057 | Cosign + Notary v2 image signing — see [`docs/SIGNING.md`](docs/SIGNING.md) |
 | `registry-webhook` | 8087 | — | Webhook delivery worker |
-| `registry-audit` | 8088 | — | Immutable audit log writer + query API |
+| `registry-audit` | 8088 | — | Immutable audit log writer + query / analytics API |
 | `registry-gc` | 8089 | — | Garbage collection worker |
 | `registry-tenant` | 8090 | 50060 | Tenant lifecycle + custom domain management |
+| `registry-management` | 8091 | — | REST BFF for the dashboard (and CLI / Terraform) — translates HTTP → gRPC, no gRPC server of its own |
 
 ---
 
@@ -123,10 +129,12 @@ A self-hosted, OCI Distribution Spec v1.1-compliant Docker registry platform bui
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.23+ (toolchain in `go.mod` pins `go1.25.7`)
+- Node.js 20+ and `npm` (for the frontend)
 - Docker + Docker Compose v2
 - `buf` CLI v1.x (for proto codegen)
 - `golangci-lint` v1.61+ (for linting)
+- (Optional) `helm` v3.14+ and `cosign` v2.x if you want to exercise the OCI helm push/pull and cosign sign workflows against the dev stack
 
 ### 1. Clone and set up the workspace
 
@@ -204,10 +212,27 @@ docker login localhost:8081 -u <user> -p <api-key>
 docker tag myimage:latest localhost:8081/myorg/myimage:latest
 docker push localhost:8081/myorg/myimage:latest
 
+# Helm push / pull / install (charts use the same /v2/ surface as images
+# — admission gates and immutability apply uniformly across artifact types)
+helm registry login localhost:8081 -u <user> --password-stdin --plain-http
+helm push my-chart-0.1.0.tgz oci://localhost:8081/myorg --plain-http
+helm pull oci://localhost:8081/myorg/my-chart --version 0.1.0 --plain-http
+
+# Sign an image (any OCI artifact — works for helm charts too)
+# via the dashboard API…
+curl -X POST http://localhost:8091/api/v1/repositories/myorg/myimage/tags/v1/sign \
+     -H "Authorization: Bearer $JWT" \
+     -d '{"signer_id":"ci-bot"}'
+# …or with cosign CLI against the same public key
+cosign verify --key /tmp/registry-signer-pub.pem localhost:8081/myorg/myimage:v1
+
 # Pull through proxy cache (once an upstream is registered — see local-setup.md §6)
 # The proxy participates in the standard Docker token-auth flow — no manual token needed.
 docker login localhost:8084 -u <user> -p <password>
 docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
+
+# Dashboard
+open http://localhost:5173        # local FE (npm run dev)
 ```
 
 ---
@@ -299,14 +324,21 @@ All services use environment variables. No YAML config files are committed (only
 │   ├── observability/       # OpenTelemetry bootstrap
 │   ├── rabbitmq/            # Typed publisher + consumer + event definitions
 │   └── testutil/            # Testcontainers helpers, fixtures
-├── services/
-│   ├── auth/                # JWT token service
+├── services/                # 13 services — one per row in the catalogue above
+│   ├── audit/               # Append-only audit log + analytics
+│   ├── auth/                # JWT, API keys, SSO, RBAC, service accounts
 │   ├── core/                # OCI Distribution Spec
-│   ├── storage/             # Storage abstraction
+│   ├── gateway/             # Traefik ingress wrapper + TLS termination
+│   ├── gc/                  # Garbage collection worker
+│   ├── management/          # REST BFF for the dashboard / CLI / Terraform
 │   ├── metadata/            # Registry metadata (PostgreSQL)
 │   ├── proxy/               # Pull-through proxy cache
-│   ├── scanner/             # Vulnerability scanning
-│   └── ...
+│   ├── scanner/             # Vulnerability scanning + compliance reports
+│   ├── signer/              # Cosign + Notary v2 signing
+│   ├── storage/             # Storage abstraction
+│   ├── tenant/              # Tenant lifecycle + custom domains
+│   └── webhook/             # Outbound webhook dispatcher
+├── frontend/                # React + TanStack Router dashboard
 └── infra/
     ├── docker-compose/      # Full local dev stack
     ├── helm/                # Kubernetes Helm charts
@@ -455,13 +487,12 @@ SSRF protection: the upstream HTTP client validates all upstream URLs against pr
 
 ### Known Security Issues
 
-See [`security.md`](security.md) for the full issue tracker. All MEDIUM+ issues from the initial audit have been resolved. Three LOW-severity items are deferred:
+See [`security.md`](security.md) for the full issue tracker. **All SEC-001..SEC-036 are RESOLVED** as of 2026-06-19 (resolution notes inline in each row). The three rounds of post-merge pentests also closed every CRITICAL + HIGH + MEDIUM finding; the remaining open items are LOW-severity follow-ups:
 
 | ID | Severity | Description |
 |---|---|---|
-| SEC-006 | LOW | Connection pool exhaustion not mapped to `codes.ResourceExhausted`; retry interceptor amplifies load |
-| SEC-015 | MEDIUM | `registry-signer` in-memory sigstore is volatile — signatures lost on restart/rolling deploy |
-| SEC-025 | LOW | `/metrics` endpoints served on same port as business endpoints — should be a separate internal-only port |
+| PENTEST-030 | LOW | No per-endpoint test-dispatch throttle on the webhook `Test` action — already gated by RBAC; tracked for a global rate-limit pass |
+| PENTEST-033 | LOW (partial) | Postman environment file: login password is now a secret-typed `{{password}}` var, but `NewUser1234!` is still inlined in the `createUser` body and the dev tenant UUID still has a defaulted value — cosmetic cleanup |
 
 ---
 
@@ -543,7 +574,10 @@ Standard Prometheus metrics (defined in `libs/observability/metrics`):
 - `registry_http_request_duration_seconds` — HTTP request latency histogram
 - `registry_grpc_request_duration_seconds` — gRPC request latency histogram
 - `registry_storage_operation_duration_seconds` — storage operation latency
+- `registry_rabbitmq_messages_consumed_total` — async event throughput
 - `registry_active_uploads_total` — in-progress blob upload gauge
+
+Each service exposes `/metrics` on a dedicated port `:9090` (separate from the business port) so Kubernetes NetworkPolicy can grant Prometheus access without exposing the OCI API surface (SEC-025).
 
 ### Runbooks
 
@@ -589,15 +623,17 @@ The current UI is the Beacon rebuild (PR #14 merged 2026-06-19), tracked in [`FE
 |---|---|---|
 | Login (+ SSO buttons) | `/login` | ✅ Done |
 | Dashboard | `/` | ✅ Done |
-| Repositories list / detail | `/repositories`, `/repositories/:org/:repo` | ✅ Done |
+| Repositories list / detail (with Settings tab: immutability + signed-image admission + trusted-keys allowlist + scan policy + retention) | `/repositories`, `/repositories/:org/:repo` | ✅ Done |
+| Helm charts list / detail (artifact-type-filtered view of the same repo) | `/helm` | ✅ Done |
 | Tag detail (Security / Push history / Layers / Signing) | `/repositories/:org/:repo/tags/:tag` | ✅ Done |
-| Security center (Overview / Vulnerabilities / Scans / Remediation / Policies) | `/security` | ✅ Overview + Vulns + Scans wired; Remediation / Policies pending |
-| Activity / Notifications | `/activity` | ✅ Done |
-| Members + RBAC | `/members`, `/orgs/:org/members` | ✅ Done |
+| Security center (Overview / Vulnerabilities / Scans / Remediation) | `/security` | ✅ Done (Policies → per-repo Settings tab) |
+| Activity / Notifications (range chips + event-type filters) | `/activity` | ✅ Done |
+| Members + RBAC (workspace + org-scoped) | `/members`, `/orgs/:org/members`, `/orgs/:org/settings` | ✅ Done |
 | Webhooks (list + detail + CRUD + delivery log + test + rotate) | `/webhooks`, `/webhooks/:id` | ✅ Done |
 | Workspace identity + custom domains | `/workspace/domains` | ✅ Done |
-| Profile + API keys | `/profile` | ✅ Done |
-| Platform admin (tenants + GC) | `/admin/tenants` | ✅ Done; admin GC view pending |
+| Profile | `/profile` | ✅ Done |
+| Access hub — personal keys, service accounts, activity, preview surfaces (trust / helpers / policies / review) | `/api-keys`, `/api-keys/service-accounts`, `/api-keys/activity` | ✅ Done (FE-API-048) |
+| Platform admin — tenants + scanner adapter selector | `/admin/tenants`, `/admin/scanner` | ✅ Done (REM-011 Phase 2) |
 
 The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zustand memory only (never `localStorage` — FE-SEC-001/002) and is silently refreshed 60 seconds before expiry via `POST /api/v1/token/refresh`. The Axios 401 interceptor clears auth state and redirects to `/login?reason=session_expired`. Beacon ships with full dark-mode parity, Cmd+K command palette, sonner toasts, and TanStack Query for all data fetching.
 
@@ -610,6 +646,27 @@ The login page POSTs to `POST /api/v1/login`; the Bearer token is stored in Zust
 3. All proto changes must pass `make proto-breaking` (no backward-incompatible field removals).
 4. New services must include unit tests (80% coverage minimum) and an integration test suite.
 5. Security issues go in `security.md` with the `SEC-NNN` identifier format.
+
+---
+
+### Documentation map
+
+| Doc | What's in it |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | Canonical architecture + coding rules (the source of truth when code disagrees) |
+| [`docs/SERVICES.md`](docs/SERVICES.md) | Per-service endpoint / gRPC / schema / env-var reference |
+| [`docs/EVENTS.md`](docs/EVENTS.md) | RabbitMQ routing keys + payload shapes |
+| [`docs/SIGNING.md`](docs/SIGNING.md) | Image signing + signed-image admission policy (Phase 1 + Phase 2) |
+| [`docs/SAML.md`](docs/SAML.md) | Per-tenant SAML SP setup + IdP metadata flow |
+| [`docs/SCANNER.md`](docs/SCANNER.md) | Scanner plugin protocol + adapter selection (Trivy / Grype / Clair) |
+| [`docs/TESTING.md`](docs/TESTING.md) | Coverage targets, integration tests, OCI conformance |
+| [`docs/CI-CD.md`](docs/CI-CD.md) | Pipeline stages, Docker build rules, versioning |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Compose + Helm chart layout |
+| [`docs/postman/`](docs/postman/) | Postman collection covering every public `/api/v1/*` route |
+| [`status.md`](status.md) | Current sprint + decision log |
+| [`security.md`](security.md) | Security issue tracker (SEC-* / PENTEST-* lifecycle) |
+| [`futures.md`](futures.md) | Prioritised backlog of unsprinted items |
+| [`FE-STATUS.md`](FE-STATUS.md) | Frontend roadmap + sprint status |
 
 ---
 
