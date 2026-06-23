@@ -76,8 +76,13 @@ services:
       # .env file. Never use the default outside a local-only developer environment.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-registry}
       POSTGRES_DB: registry_auth
-      # init-multi-db.sh creates additional databases listed here
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner
+      # init-multi-db.sh creates additional databases listed here. Every
+      # service that talks to its own DB must appear here so a fresh
+      # docker volume comes up complete on first boot. registry_gc was
+      # added per Decision #18 (GC needs its own DB for status visibility
+      # + async RunNow queue); without it registry-gc crash-loops with
+      # `FATAL: database "registry_gc" does not exist`.
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner,registry_gc
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
