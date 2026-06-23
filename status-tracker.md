@@ -80,6 +80,39 @@ The FE work for both slices is wired; only the backend gaps in REM-013 prevent t
 
 ---
 
+## Post-OSS launch hygiene
+
+Surfaced by PR #42 (Apache 2.0 OSS launch, 2026-06-23). These items aren't bug fixes — they're the contributor-onboarding surface that should exist before the repo gets meaningful inbound traffic.
+
+| ID | Item | Effort | Why |
+|---|---|---|---|
+| **HYG-001** | README hero screenshot / dashboard GIF | ~30 min | Biggest first-impression lever on the repo page. People decide whether to read the README in ~5 seconds based on the visual. |
+| **HYG-002** | `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1) | ~10 min | Adopt-from-template. Increases trust signal for OSS contributors. GitHub also auto-detects + surfaces it on the repo. |
+| **HYG-003** | `SECURITY.md` at repo root | ~15 min | Canonical location for private vulnerability reporting instructions. `CONTRIBUTING.md` currently mentions it; `SECURITY.md` is the standard file GitHub looks for. |
+| **HYG-004** | `.github/ISSUE_TEMPLATE/` (bug + feature) + `PULL_REQUEST_TEMPLATE.md` | ~20 min | Quality-of-life for first contributors. Filters out low-effort issues. Standard YAML templates work. |
+| **HYG-005** | 3-5 `good first issue` labels populated | ~1h | The single biggest lever for first-time contributors. People can't contribute if they don't know where to start. Pick 3-5 small items from this tracker or futures.md and label them. |
+| **HYG-006** | Architecture diagram image (replace ASCII in README §2) | ~1h | Cleaner first impression than the ASCII diagram. Excalidraw / draw.io export → committed PNG. |
+| **HYG-007** | Enable GitHub Discussions (Settings → Features) | ~2 min | Routes "questions" / "ideas" away from Issues. Required for `CONTRIBUTING.md`'s "open a Discussion" instruction to actually work. |
+| **HYG-008** | Enable private vulnerability reporting (Settings → Security) | ~2 min | Required for `SECURITY.md` to actually have a working private channel. |
+
+---
+
+## Backlog (not in this file)
+
+Prioritised feature work that hasn't been picked up yet lives in [`futures.md`](futures.md). The tracker doesn't duplicate them — once an item gets picked up + assigned a REM / FE-API number + put on a branch, it migrates here.
+
+Quick pointer to the largest open backlog items (see `futures.md` for full detail):
+
+- **Tier 1 #1** — MFA (TOTP step-up) — ~2 weeks
+- **Tier 1 #5** — SCIM v2 provisioning — ~1.5 weeks
+- **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
+- **FUT-009** — service-account-as-signing-identity — ~5h
+- **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
+- **DEPLOY-001** — SaaS vs self-hosted deployment docs + tenant-persona testing — ~half day
+- Smaller Tier 2 items: FUT-007-FE, FUT-008, etc.
+
+---
+
 ## How to use this file
 
 - **One bullet per open item.** Lean by design — if this file passes ~10 sections something is wrong with the workflow.
