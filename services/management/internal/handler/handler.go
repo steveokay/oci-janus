@@ -307,6 +307,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/trusted-keys", authMW(http.HandlerFunc(h.handleAddTrustedKey)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}", authMW(http.HandlerFunc(h.handleRemoveTrustedKey)))
 
+	// Recent-signers picker source (futures.md Tier 1 #3 — 2026-06-23 follow-up).
+	// BFF-orchestrated: walks the most recent tags + calls signer.ListSignatures
+	// per manifest_digest, dedupes by key_id, returns top N by recency.
+	// Reader-accessible — the key_ids are already visible on tag detail pages,
+	// and the dialog needs the data before the operator has admin context to
+	// approve. When SIGNER_GRPC_ADDR is unset the route returns an empty list
+	// with 200 so the dialog falls back to Manual entry without an error toast.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/recent-signers", authMW(http.HandlerFunc(h.handleListRecentSigners)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only

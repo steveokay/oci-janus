@@ -26,11 +26,21 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   useTrustedKeys,
   useAddTrustedKey,
   useRemoveTrustedKey,
+  useRecentSigners,
+  type RecentSigner,
 } from "@/lib/api/trusted-keys";
 import { useRepository } from "@/lib/api/repositories";
+import { cn } from "@/lib/utils";
 
 // RepoTrustedKeysSection — Settings-tab card on the repo detail page.
 //
@@ -241,6 +251,11 @@ interface AddTrustedKeyDialogProps {
   repo: string;
 }
 
+// AddTrustedKeyMode — picker vs manual entry. Two pill buttons up top
+// flip between them. Auto-selects "manual" when the recent-signers list
+// comes back empty so the operator doesn't land on a dead-end tab.
+type AddTrustedKeyMode = "recent" | "manual";
+
 function AddTrustedKeyDialog({
   open,
   onOpenChange,
@@ -248,16 +263,80 @@ function AddTrustedKeyDialog({
   repo,
 }: AddTrustedKeyDialogProps): React.ReactElement {
   const add = useAddTrustedKey();
+  // Recent-signers feeds the "Pick from recent signers" mode. Hook is
+  // gated on `open` so we don't fan out the per-tag ListSignatures call
+  // when the dialog is closed — saves ~20 gRPC hops per page mount.
+  const {
+    data: recentSigners,
+    isLoading: recentSignersLoading,
+  } = useRecentSigners(org, repo, open);
   const form = useForm<AddValues>({
     resolver: zodResolver(addSchema),
     defaultValues: { key_id: "", display_name: "" },
   });
 
-  // Reset the form state on open transitions so re-opening after a
-  // submit doesn't replay the previous values + errors.
+  const [mode, setMode] = React.useState<AddTrustedKeyMode>("recent");
+  // Tracks which recent-signer entry is currently selected. Stored as
+  // key_id rather than index so the Select stays stable across refetches
+  // that might reorder the underlying list.
+  const [pickedKeyID, setPickedKeyID] = React.useState<string>("");
+
+  // Reset the form + mode + selection on open transitions so re-opening
+  // after a submit doesn't replay the previous values + errors.
   React.useEffect(() => {
-    if (open) form.reset({ key_id: "", display_name: "" });
+    if (open) {
+      form.reset({ key_id: "", display_name: "" });
+      setMode("recent");
+      setPickedKeyID("");
+    }
   }, [open, form]);
+
+  // When the recent-signers query resolves to empty, downgrade the
+  // default mode to "manual" so the dialog opens straight on a usable
+  // tab. Operators with an unsigned repo would otherwise see the empty-
+  // state and have to click the second pill before they can type.
+  React.useEffect(() => {
+    if (!open) return;
+    if (!recentSignersLoading && (recentSigners?.length ?? 0) === 0) {
+      setMode("manual");
+    }
+  }, [open, recentSigners, recentSignersLoading]);
+
+  // When the operator picks a recent signer, sync its key_id into the
+  // form's hidden value + auto-fill the display_name input with the
+  // signer_id. Operator can still edit display_name afterward — the
+  // form's `setValue` keeps the input controlled.
+  function handlePickRecent(keyID: string): void {
+    setPickedKeyID(keyID);
+    const entry = recentSigners?.find((s) => s.key_id === keyID);
+    if (entry) {
+      form.setValue("key_id", entry.key_id, { shouldValidate: true });
+      // Only auto-fill the display_name when the operator hasn't typed
+      // anything yet — don't overwrite their work if they're flipping
+      // back and forth between picker rows.
+      if (!form.getValues("display_name") && entry.signer_id) {
+        form.setValue("display_name", entry.signer_id);
+      }
+    }
+  }
+
+  // When the operator flips between Recent / Manual we need to reset
+  // the hidden key_id field so a stale picker selection doesn't get
+  // submitted from manual mode (or vice versa).
+  function handleModeChange(next: AddTrustedKeyMode): void {
+    setMode(next);
+    if (next === "manual") {
+      // Don't blow away whatever the operator may have started typing
+      // already; just clear the picker's selection state.
+      setPickedKeyID("");
+    } else {
+      // Switching back to picker → clear any half-typed manual value so
+      // the form doesn't submit a stale string when the operator then
+      // picks an entry that doesn't validate.
+      form.setValue("key_id", "");
+      form.setValue("display_name", "");
+    }
+  }
 
   async function onSubmit(values: AddValues): Promise<void> {
     try {
@@ -282,6 +361,8 @@ function AddTrustedKeyDialog({
     }
   }
 
+  const hasRecent = (recentSigners?.length ?? 0) > 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -294,44 +375,65 @@ function AddTrustedKeyDialog({
             allowlist falls back to &quot;any signature passes.&quot;
           </DialogDescription>
         </DialogHeader>
+
+        {/* Mode pill bar — picker vs manual. Two Button variants styled
+            as pills so we don't have to introduce a new RadioGroup
+            primitive. role=tablist keeps the toggle semantically
+            keyboard-navigable for screen readers. */}
+        <div
+          role="tablist"
+          aria-label="Approval mode"
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-1"
+        >
+          <ModePill
+            label="Recent signer"
+            active={mode === "recent"}
+            onSelect={() => handleModeChange("recent")}
+          />
+          <ModePill
+            label="Manual entry"
+            active={mode === "manual"}
+            onSelect={() => handleModeChange("manual")}
+          />
+        </div>
+
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="key_id">Key id</Label>
-            <Input
-              id="key_id"
-              autoFocus
-              autoComplete="off"
-              placeholder="e.g. 2630bb12c4c045bf"
-              {...form.register("key_id")}
+          {mode === "recent" ? (
+            <RecentSignerPicker
+              loading={recentSignersLoading}
+              signers={recentSigners ?? []}
+              picked={pickedKeyID}
+              onPick={handlePickRecent}
             />
-            <p className="text-[11px] text-[var(--color-fg-muted)]">
-              Find this on any signed tag&apos;s Signing panel
-              (it&apos;s the short hex string under the signature).
-            </p>
-            {form.formState.errors.key_id ? (
-              <p className="text-[11px] text-[var(--color-danger)]">
-                {form.formState.errors.key_id.message}
+          ) : (
+            <ManualEntryFields form={form} />
+          )}
+
+          {/* The display_name input is shared across both modes — the
+              picker auto-fills it from signer_id but the operator can
+              still edit. Lives outside the mode-specific blocks so the
+              picker→manual switch doesn't lose a typed-in name. */}
+          {mode === "recent" && hasRecent ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="display_name_recent">Display name (optional)</Label>
+              <Input
+                id="display_name_recent"
+                autoComplete="off"
+                placeholder="e.g. ci-prod-2026"
+                {...form.register("display_name")}
+              />
+              <p className="text-[11px] text-[var(--color-fg-muted)]">
+                Auto-filled from the signer&apos;s identity above — feel
+                free to override with something more operator-friendly.
               </p>
-            ) : null}
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="display_name">Display name (optional)</Label>
-            <Input
-              id="display_name"
-              autoComplete="off"
-              placeholder="e.g. ci-prod-2026"
-              {...form.register("display_name")}
-            />
-            <p className="text-[11px] text-[var(--color-fg-muted)]">
-              Operator-facing label so the allowlist table doesn&apos;t
-              render opaque hex.
-            </p>
-            {form.formState.errors.display_name ? (
-              <p className="text-[11px] text-[var(--color-danger)]">
-                {form.formState.errors.display_name.message}
-              </p>
-            ) : null}
-          </div>
+              {form.formState.errors.display_name ? (
+                <p className="text-[11px] text-[var(--color-danger)]">
+                  {form.formState.errors.display_name.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <DialogFooter>
             <Button
               type="button"
@@ -340,7 +442,16 @@ function AddTrustedKeyDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={add.isPending}>
+            <Button
+              type="submit"
+              disabled={
+                add.isPending ||
+                // Block submit on picker mode without a selection to
+                // avoid the awkward "approve" → 400 round-trip on an
+                // empty key_id.
+                (mode === "recent" && !pickedKeyID)
+              }
+            >
               {add.isPending ? "Approving…" : "Approve key"}
             </Button>
           </DialogFooter>
@@ -348,6 +459,178 @@ function AddTrustedKeyDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// ModePill — one of the two segmented-control buttons that flips the
+// dialog between picker + manual. Visual: looks like a subtle inline
+// tab; active state uses the accent surface so the choice is obvious.
+// Keeps the inline layout flat instead of pulling in a full
+// RadioGroup primitive for two options.
+interface ModePillProps {
+  label: string;
+  active: boolean;
+  onSelect: () => void;
+}
+
+function ModePill({ label, active, onSelect }: ModePillProps): React.ReactElement {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onSelect}
+      className={cn(
+        "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+        active
+          ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent-fg)]"
+          : "text-[var(--color-fg-muted)] hover:bg-[var(--color-surface)]",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+// RecentSignerPicker — Select-based dropdown listing recent signers.
+// Renders empty-state copy when the BFF returned no rows, prompting the
+// operator to switch to Manual entry instead of dead-ending the flow.
+interface RecentSignerPickerProps {
+  loading: boolean;
+  signers: RecentSigner[];
+  picked: string;
+  onPick: (keyID: string) => void;
+}
+
+function RecentSignerPicker({
+  loading,
+  signers,
+  picked,
+  onPick,
+}: RecentSignerPickerProps): React.ReactElement {
+  if (loading) {
+    return <Skeleton className="h-9 w-full" />;
+  }
+  if (signers.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-3 text-xs text-[var(--color-fg-muted)]">
+        No recent signatures in this repo — sign a tag first, or switch
+        to <strong>Manual entry</strong> and paste the{" "}
+        <code className="font-mono text-[10px]">key_id</code>.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="recent-signer-select">Recent signer</Label>
+      <Select value={picked} onValueChange={onPick}>
+        <SelectTrigger id="recent-signer-select" className="h-auto w-full py-1.5">
+          <SelectValue placeholder="Select a recent signer…" />
+        </SelectTrigger>
+        <SelectContent>
+          {signers.map((s) => (
+            <SelectItem key={s.key_id} value={s.key_id}>
+              <div className="flex w-full items-center justify-between gap-3">
+                <span className="flex flex-col items-start">
+                  <span className="font-mono text-[11px] text-[var(--color-fg)]">
+                    {truncateKey(s.key_id)}
+                  </span>
+                  {s.signer_id ? (
+                    <span className="text-[10px] text-[var(--color-fg-muted)]">
+                      {s.signer_id}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-[10px] text-[var(--color-fg-subtle)]">
+                  {relativeFromNow(s.last_signed_at)}
+                </span>
+              </div>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-[11px] text-[var(--color-fg-muted)]">
+        Showing the most recent {signers.length}{" "}
+        {signers.length === 1 ? "signer" : "signers"} from this repo.
+      </p>
+    </div>
+  );
+}
+
+// ManualEntryFields — the original key_id + display_name input pair,
+// kept verbatim from the FE-API-003 dialog so operators with an
+// off-platform key_id (e.g. a freshly-rotated Cosign keyless cert)
+// can still pin it directly.
+interface ManualEntryFieldsProps {
+  form: ReturnType<typeof useForm<AddValues>>;
+}
+
+function ManualEntryFields({ form }: ManualEntryFieldsProps): React.ReactElement {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label htmlFor="key_id">Key id</Label>
+        <Input
+          id="key_id"
+          autoFocus
+          autoComplete="off"
+          placeholder="e.g. 2630bb12c4c045bf"
+          {...form.register("key_id")}
+        />
+        <p className="text-[11px] text-[var(--color-fg-muted)]">
+          Click <strong>Recent signer</strong> above to choose from keys
+          that recently signed in this repo, or paste a{" "}
+          <code className="font-mono text-[10px]">key_id</code> directly
+          here.
+        </p>
+        {form.formState.errors.key_id ? (
+          <p className="text-[11px] text-[var(--color-danger)]">
+            {form.formState.errors.key_id.message}
+          </p>
+        ) : null}
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="display_name">Display name (optional)</Label>
+        <Input
+          id="display_name"
+          autoComplete="off"
+          placeholder="e.g. ci-prod-2026"
+          {...form.register("display_name")}
+        />
+        <p className="text-[11px] text-[var(--color-fg-muted)]">
+          Operator-facing label so the allowlist table doesn&apos;t
+          render opaque hex.
+        </p>
+        {form.formState.errors.display_name ? (
+          <p className="text-[11px] text-[var(--color-danger)]">
+            {form.formState.errors.display_name.message}
+          </p>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+// truncateKey shrinks a long key_id to "aaaaaaaa…bbbb" so the dropdown
+// row stays one line on a typical 480px-wide dialog. Tooltip on hover
+// (via the underlying SelectItem) shows the full value when needed.
+function truncateKey(k: string): string {
+  if (k.length <= 20) return k;
+  return `${k.slice(0, 8)}…${k.slice(-4)}`;
+}
+
+// relativeFromNow is a lightweight "X ago" formatter for the recent-
+// signer rows. Mirrors formatRelative below but keeps a separate
+// implementation so the dropdown can use a shorter form ("5m" vs
+// "5 min ago") in the cramped row layout.
+function relativeFromNow(iso: string): string {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diffSec = Math.floor((now - then) / 1000);
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
 // shortKey trims a key_id for the confirm-prompt fallback when an
