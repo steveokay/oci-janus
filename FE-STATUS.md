@@ -166,15 +166,40 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - Per-repo Run history panel on Retention tab — needs `repo_id` + `mode` filters on `gcv1.ListRunsRequest` + new BFF list route.
 - Dashboard storage-breakdown "Retention" column — needs `retention_summary` + `retention_source` on `RepositoryStorageEntry` + per-row effective-policy fan-out.
 
+## Review batch — 2026-06-23 (FE-facing items)
+
+A cross-cutting review by three subagents on 2026-06-23 surfaced 74 findings across
+the whole platform. The full report + per-finding detail (file paths, line numbers,
+proposed fixes) lives in [`.claude/reviews/`](.claude/reviews/); the curated
+Tier 1 / 2 / 3 backlog is in [`futures.md`](futures.md) under the
+"Review batch — 2026-06-23" section.
+
+**FE-facing slices** to pick from there:
+
+| Tier | What | Source |
+|---|---|---|
+| **1 — P0** | `DSGN-001` workspace-admin helper · `DSGN-003` unified `ConfirmDestructive` primitive · `DSGN-004` `ErrorState` with HTTP code + detail | [design review](.claude/reviews/design-review-2026-06-23.md) |
+| **2 — P1** | `DSGN-005` first-run guidance · `DSGN-006` repo-Settings sub-sections · `DSGN-010` `/admin/scanner` active-adapter affordance · `DSGN-012` trusted-key remove Phase-1 warning · `DSGN-017` focus rings (WCAG 2.4.7) · `DSGN-021` custom-domain TXT row-expand · `DSGN-023` mobile sidebar drawer · `QA-019` top-level ErrorBoundary · `QA-020` FE test coverage pass · `FUT-007-FE` domain re-poll reset | [design review](.claude/reviews/design-review-2026-06-23.md) + [quality review](.claude/reviews/quality-review-2026-06-23.md) |
+| **3 — P2** | `DSGN-002 / -007 / -008 / -009 / -011 / -013 / -014 / -015 / -016 / -018 / -019 / -020 / -022 / -024` nav IA, primitive maturation, polish · `QA-021` axios exempt-path exact match · `FUT-008` Sign dialog "recent signer_ids" picker | [design review](.claude/reviews/design-review-2026-06-23.md) |
+
+Other open backlog items live alongside them in `futures.md`:
+
+- **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
+- **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
+
 ## Sprint 8 — Polish pass (remaining)
 
+The S8 checklist below is the catch-all polish bucket. Specific items from the
+review batch above absorb most of "A11y audit" and "Responsive QA"; the
+remaining S8 sub-items are bundled here so nothing slips:
+
 - [ ] Dark-mode parity sweep — toggle every route, log any contrast / token gaps
-- [ ] Responsive QA — sub-`lg` sidebar behaviour, table horizontal scroll, dialog widths on mobile
-- [ ] A11y audit — keyboard nav across every interactive surface, focus rings, aria-labels on icon-only buttons, color contrast vs WCAG AA
+- [ ] Responsive QA — sub-`lg` sidebar behaviour (`DSGN-023`), table horizontal scroll, dialog widths on mobile
+- [ ] A11y audit — keyboard nav across every interactive surface (`DSGN-017` focus rings), aria-labels on icon-only buttons, color contrast vs WCAG AA
 - [ ] Motion review — confirm count-up timing, severity-pulse cadence, route transitions feel intentional not fidgety
 - [ ] Loading-state geometry parity — skeleton tiles should match real card heights to remove layout shift
-- [ ] Empty-state copy review — every empty pane should name a concrete next action
-- [ ] Network-error UX — verify retry recoveries across every query
+- [ ] Empty-state copy review — every empty pane should name a concrete next action (`DSGN-007` EmptyState gains `secondaryAction` for docs link)
+- [ ] Network-error UX — verify retry recoveries across every query (`DSGN-004` ErrorState surfaces HTTP code + detail)
 
 ## Known UI bugs fixed in flight (this branch)
 
