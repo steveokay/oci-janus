@@ -1,5 +1,5 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Boxes, ArrowDownToLine, ShieldAlert } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { StorageCard } from "@/components/dashboard/storage-card";
@@ -7,10 +7,12 @@ import { HealthCard } from "@/components/dashboard/health-card";
 import { QuickActions } from "@/components/dashboard/quick-actions";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import { StorageBreakdownCard } from "@/components/dashboard/storage-breakdown-card";
+import { FirstSteps } from "@/components/dashboard/first-steps";
 import { ErrorState } from "@/components/ui/error-state";
 import { SeverityBar } from "@/components/security/severity-bar";
 import { useStats } from "@/lib/api/stats";
 import { useMe } from "@/lib/api/me";
+import { useWorkspace } from "@/lib/api/workspace";
 import { formatCompactNumber } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth/store";
 
@@ -22,6 +24,8 @@ function DashboardHome(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const { data: me } = useMe();
   const { data, isLoading, isError, error, refetch } = useStats();
+  const { data: workspace } = useWorkspace();
+  const navigate = useNavigate();
 
   const greeting = useGreeting();
   // Service-account principals fall back to a non-personal salutation
@@ -33,6 +37,35 @@ function DashboardHome(): React.ReactElement {
   const saName =
     me?.service_account?.name ?? me?.display_name ?? "Service Account";
   const subjectName = claims?.username ?? "operator";
+
+  // DSGN-005 — first-run guidance. When stats load and report zero
+  // repos, swap the stat row for the FirstSteps walkthrough. The route
+  // also owns the "first-image-arrived" transition: we latch on the
+  // first poll that flips total_repos > 0 so the success state holds
+  // long enough to render before navigation. Once latched, push the
+  // operator into /repositories so they land on the repo they just
+  // created instead of staring at a stale empty dashboard.
+  const totalRepos = data?.total_repos;
+  const isEmptyTenant = !isLoading && !isError && totalRepos === 0;
+  const sawEmpty = React.useRef(false);
+  const [firstRepoSeen, setFirstRepoSeen] = React.useState(false);
+  React.useEffect(() => {
+    if (totalRepos === 0) {
+      sawEmpty.current = true;
+      return;
+    }
+    if (sawEmpty.current && totalRepos !== undefined && totalRepos > 0) {
+      // Latch the success state first so the green check + "opening…"
+      // message has a beat to render, then navigate. 800ms is the same
+      // budget we use elsewhere for transient success affordances.
+      setFirstRepoSeen(true);
+      const t = window.setTimeout(() => {
+        void navigate({ to: "/repositories" });
+      }, 800);
+      return () => window.clearTimeout(t);
+    }
+    return;
+  }, [totalRepos, navigate]);
 
   return (
     <div className="space-y-8">
@@ -61,6 +94,13 @@ function DashboardHome(): React.ReactElement {
           error={error}
           onRetry={() => void refetch()}
         />
+      ) : isEmptyTenant ? (
+        // First-run path: drop the stat row + the per-severity row in
+        // favour of the FirstSteps walkthrough. The Analytics +
+        // StorageBreakdown cards below still render — they degrade
+        // gracefully to their own empty states — and QuickActions
+        // shows up muted below so it's clearly a secondary affordance.
+        <FirstSteps workspace={workspace} firstRepoSeen={firstRepoSeen} />
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -135,9 +175,20 @@ function DashboardHome(): React.ReactElement {
         <StorageBreakdownCard />
       </div>
 
-      <section className="space-y-3">
+      <section
+        className={
+          // DSGN-005 — when the tenant hasn't pushed anything yet, the
+          // QuickActions tiles link to mostly-empty pages. They stay
+          // available as a "go explore" affordance but are visually
+          // demoted (muted, smaller heading) so the FirstSteps card
+          // stack above remains the clear primary path.
+          isEmptyTenant
+            ? "space-y-2 opacity-70"
+            : "space-y-3"
+        }
+      >
         <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-          Where would you like to go
+          {isEmptyTenant ? "Or explore the dashboard" : "Where would you like to go"}
         </h2>
         <QuickActions />
       </section>

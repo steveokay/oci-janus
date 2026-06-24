@@ -131,13 +131,54 @@ export interface PullCommandSpec {
 // commands without the flag. Hostnames that include a port (`:8081`)
 // also count as local because production hosts on standard 443
 // rarely carry one.
-function looksLocalHost(host: string): boolean {
+export function looksLocalHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h.includes("localhost") || h.includes("127.0.0.1") || h.includes(".local")) {
     return true;
   }
   // host:port → port presence implies dev / non-443 endpoint
   return /:\d+($|\/)/.test(h);
+}
+
+// PushCommandSpec mirrors PullCommandSpec for the first-run empty state.
+// New tenants don't have a repo yet, so we surface a generic
+// `your-org / your-image` placeholder. The walkthrough is the canonical
+// "tag your local image, push it up" sequence — same dev-stack-aware
+// notes that pullCommandFor uses.
+export interface PushCommandSpec {
+  heading: string;
+  steps: PullCommandStep[];
+}
+
+// pushCommandFor emits the `docker login` + `docker tag` + `docker push`
+// walkthrough used by the first-run dashboard guidance (DSGN-005).
+// `host` is the workspace's resolved registry hostname. Local dev stacks
+// (loopback / .local / :port) get the `# dev stack: HTTP` side-comment
+// since dockerd needs the host in `insecure-registries` to talk plain HTTP.
+export function pushCommandFor(host: string = "registry.localhost"): PushCommandSpec {
+  const insecureNote = looksLocalHost(host) ? " # dev stack: HTTP" : "";
+  // Generic placeholders — the operator hasn't created a repo yet, so we
+  // intentionally use `your-org/your-image` rather than guessing. Tags
+  // default to `:1.0.0` to nudge toward semantic versioning rather than
+  // the easy-to-overwrite `:latest`.
+  const ref = `${host}/your-org/your-image:1.0.0`;
+  return {
+    heading: "Push your first image",
+    steps: [
+      {
+        label: "Login (one-time)",
+        cmd: `docker login ${host} -u <user>${insecureNote}`,
+      },
+      {
+        label: "Tag a local image for this registry",
+        cmd: `docker tag local-image:latest ${ref}`,
+      },
+      {
+        label: "Push it up",
+        cmd: `docker push ${ref}`,
+      },
+    ],
+  };
 }
 
 export function pullCommandFor(
