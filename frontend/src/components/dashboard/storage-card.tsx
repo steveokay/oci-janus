@@ -38,7 +38,7 @@ export function StorageCard({
     : ("accent" as const);
 
   return (
-    <Card accentBar={accentBar} className="col-span-1 md:col-span-2">
+    <Card accentBar={accentBar} className="col-span-1">
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">

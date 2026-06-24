@@ -7,7 +7,7 @@ import { HealthCard } from "@/components/dashboard/health-card";
 import { QuickActions } from "@/components/dashboard/quick-actions";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import { StorageBreakdownCard } from "@/components/dashboard/storage-breakdown-card";
-import { FirstSteps } from "@/components/dashboard/first-steps";
+import { FirstStepsStrip } from "@/components/dashboard/first-steps-strip";
 import { ErrorState } from "@/components/ui/error-state";
 import { SeverityBar } from "@/components/security/severity-bar";
 import { useStats } from "@/lib/api/stats";
@@ -38,13 +38,18 @@ function DashboardHome(): React.ReactElement {
     me?.service_account?.name ?? me?.display_name ?? "Service Account";
   const subjectName = claims?.username ?? "operator";
 
-  // DSGN-005 — first-run guidance. When stats load and report zero
-  // repos, swap the stat row for the FirstSteps walkthrough. The route
-  // also owns the "first-image-arrived" transition: we latch on the
-  // first poll that flips total_repos > 0 so the success state holds
-  // long enough to render before navigation. Once latched, push the
-  // operator into /repositories so they land on the repo they just
-  // created instead of staring at a stale empty dashboard.
+  // DSGN-005 v2 — hybrid first-run guidance. The original DSGN-005
+  // swapped the stat row for a 4-card vertical FirstSteps stack at
+  // zero repos, but operators reported losing useful signals at zero
+  // (workspace health, quota allocated, "0/100 GB used"). The refined
+  // behaviour keeps the full stat row visible always and surfaces a
+  // single compact horizontal "Get started" strip below it when the
+  // tenant has no repos yet. The route still owns the
+  // "first-image-arrived" transition: we latch on the first poll that
+  // flips total_repos > 0 so the success state holds long enough to
+  // render before navigation, then push the operator into
+  // /repositories so they land on the repo they just created instead
+  // of staring at a stale empty dashboard.
   const totalRepos = data?.total_repos;
   const isEmptyTenant = !isLoading && !isError && totalRepos === 0;
   const sawEmpty = React.useRef(false);
@@ -94,16 +99,12 @@ function DashboardHome(): React.ReactElement {
           error={error}
           onRetry={() => void refetch()}
         />
-      ) : isEmptyTenant ? (
-        // First-run path: drop the stat row + the per-severity row in
-        // favour of the FirstSteps walkthrough. The Analytics +
-        // StorageBreakdown cards below still render — they degrade
-        // gracefully to their own empty states — and QuickActions
-        // shows up muted below so it's clearly a secondary affordance.
-        <FirstSteps workspace={workspace} firstRepoSeen={firstRepoSeen} />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {/* All five KPI tiles in one row at lg+ so the dashboard
+              reads at a glance. At md the grid wraps to 2-col (3+2);
+              at sm everything stacks. */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <StatCard
               label="Repositories"
               icon={<Boxes className="size-4" />}
@@ -125,9 +126,6 @@ function DashboardHome(): React.ReactElement {
               loading={isLoading}
               caption="Image pulls served by registry-core in the last 24 hours."
             />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <StatCard
               label="Vulnerabilities"
               icon={<ShieldAlert className="size-4" />}
@@ -157,16 +155,24 @@ function DashboardHome(): React.ReactElement {
                       }}
                       className="h-1"
                     />
-                    <span>
-                      Across the latest scan per tag.
-                    </span>
+                    <span>Across the latest scan per tag.</span>
                   </div>
                 )
               }
             />
             <HealthCard pct={data?.system_health_pct} loading={isLoading} />
-            <div className="md:col-span-1" />
           </div>
+
+          {/* DSGN-005 v2 — compact "Get started" strip slots below the
+              stat row when the tenant has no repos yet. Once
+              total_repos > 0, the strip vanishes; the rest of the
+              dashboard is unchanged. */}
+          {isEmptyTenant ? (
+            <FirstStepsStrip
+              workspace={workspace}
+              firstRepoSeen={firstRepoSeen}
+            />
+          ) : null}
         </>
       )}
 
@@ -175,20 +181,9 @@ function DashboardHome(): React.ReactElement {
         <StorageBreakdownCard />
       </div>
 
-      <section
-        className={
-          // DSGN-005 — when the tenant hasn't pushed anything yet, the
-          // QuickActions tiles link to mostly-empty pages. They stay
-          // available as a "go explore" affordance but are visually
-          // demoted (muted, smaller heading) so the FirstSteps card
-          // stack above remains the clear primary path.
-          isEmptyTenant
-            ? "space-y-2 opacity-70"
-            : "space-y-3"
-        }
-      >
+      <section className="space-y-3">
         <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-          {isEmptyTenant ? "Or explore the dashboard" : "Where would you like to go"}
+          Where would you like to go
         </h2>
         <QuickActions />
       </section>
