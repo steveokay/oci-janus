@@ -6,15 +6,14 @@ import { ServiceAccountsTable } from "@/components/access/ServiceAccountsTable";
 import { CreateServiceAccountDialog } from "@/components/access/CreateServiceAccountDialog";
 import { ServiceAccountDetail } from "@/components/access/ServiceAccountDetail";
 import { authStore } from "@/lib/auth/store";
-import { isPlatformAdmin } from "@/lib/auth/jwt";
+import { isWorkspaceAdmin } from "@/lib/auth/jwt";
 
 // /api-keys/service-accounts — workspace admin-only list + create surface.
 //
-// Admin guard: mirrors _authenticated.admin.scanner.tsx exactly — uses
-// `authStore.getClaims()` (imperative, outside React) so we can redirect
-// before the component mounts. `isPlatformAdmin` checks `roles.includes("admin")`
-// in the JWT claims — the same primitive AccessSubNav uses to gate the
-// "Workspace" section.
+// Admin guard: `authStore.getClaims()` is read imperatively (outside React)
+// so we can redirect before the component mounts. `isWorkspaceAdmin` matches
+// the BFF's `requireDomainAdmin` posture (any admin/owner grant within the
+// tenant). The same primitive gates the "Workspace" section in AccessSubNav.
 //
 // The route does NOT render a detail drawer — that is T26's job.
 // TODO (T26): Mount <ServiceAccountDetail id={selectedId} /> here once
@@ -24,7 +23,7 @@ export const Route = createFileRoute(
 )({
   beforeLoad: () => {
     const claims = authStore.getClaims();
-    if (!isPlatformAdmin(claims)) {
+    if (!isWorkspaceAdmin(claims)) {
       // Non-admins are bounced back to the personal-keys index rather than
       // /login so they see a page rather than an unexpected redirect.
       throw redirect({ to: "/api-keys" });
