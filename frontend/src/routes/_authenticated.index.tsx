@@ -101,7 +101,10 @@ function DashboardHome(): React.ReactElement {
         />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {/* All five KPI tiles in one row at lg+ so the dashboard
+              reads at a glance. At md the grid wraps to 2-col (3+2);
+              at sm everything stacks. */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <StatCard
               label="Repositories"
               icon={<Boxes className="size-4" />}
@@ -123,20 +126,6 @@ function DashboardHome(): React.ReactElement {
               loading={isLoading}
               caption="Image pulls served by registry-core in the last 24 hours."
             />
-          </div>
-
-          {/* DSGN-005 v2 — compact "Get started" strip slots between
-              the stat row and the per-severity row when the tenant
-              has no repos yet. Once total_repos > 0, the strip
-              vanishes; the rest of the dashboard is unchanged. */}
-          {isEmptyTenant ? (
-            <FirstStepsStrip
-              workspace={workspace}
-              firstRepoSeen={firstRepoSeen}
-            />
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <StatCard
               label="Vulnerabilities"
               icon={<ShieldAlert className="size-4" />}
@@ -166,16 +155,24 @@ function DashboardHome(): React.ReactElement {
                       }}
                       className="h-1"
                     />
-                    <span>
-                      Across the latest scan per tag.
-                    </span>
+                    <span>Across the latest scan per tag.</span>
                   </div>
                 )
               }
             />
             <HealthCard pct={data?.system_health_pct} loading={isLoading} />
-            <div className="md:col-span-1" />
           </div>
+
+          {/* DSGN-005 v2 — compact "Get started" strip slots below the
+              stat row when the tenant has no repos yet. Once
+              total_repos > 0, the strip vanishes; the rest of the
+              dashboard is unchanged. */}
+          {isEmptyTenant ? (
+            <FirstStepsStrip
+              workspace={workspace}
+              firstRepoSeen={firstRepoSeen}
+            />
+          ) : null}
         </>
       )}
 
