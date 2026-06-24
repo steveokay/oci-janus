@@ -538,16 +538,13 @@ prioritised for backlog uptake.
 
 ### Tier 2 — robustness, security & UX polish from the review batch
 
-- **DSGN-001** — Add `isWorkspaceAdmin(claims)` helper; remove the
-  `isPlatformAdmin` misuse in `AccessSubNav` + `ServiceAccountsPage`. Today
-  tenant admins lose Service-accounts + Workspace settings nav. **Effort:** M.
-- **DSGN-003** — Unified `ConfirmDestructiveDialog` primitive with 3 severity
-  levels. Replace every `window.confirm` (trusted-key remove, audit-export
-  clear) + bump primary-domain delete to typed-confirm. **Effort:** M.
-- **DSGN-004** — Extend `ErrorState` with `code?: number` + `detail?: string` +
-  "Show request details" expander. Self-hosted operators have the BFF logs —
-  surface the HTTP status + `response.data.error` instead of generic prose.
-  **Effort:** M.
+- ~~**DSGN-001**~~ — DONE 2026-06-24 (PR #53). `isWorkspaceAdmin` helper +
+  3 call-site swaps + AccessSubNav tests.
+- ~~**DSGN-003**~~ — DONE 2026-06-24 (PR #50). `ConfirmDestructiveDialog`
+  primitive with 3 severity levels + 6 `window.confirm` migrations + DSGN-012
+  Phase-1 fallback warning folded in.
+- ~~**DSGN-004**~~ — DONE 2026-06-24 (PR #52). `ErrorState` w/ HTTP code +
+  detail + request-id expander. New `lib/api/error.ts` helper.
 - **DSGN-021** — Custom-domain row-expand revealing TXT name + value + copy +
   "Check DNS now" + `next_poll_after` countdown. Today TXT challenge is only
   shown at registration; you can't re-display it for verification debugging.
@@ -565,6 +562,8 @@ prioritised for backlog uptake.
   check in `services/core` upload handler. **Effort:** S.
 - **QA-015** — Either drop the unused `tenant_id` from `Signer.SignPayload` or
   include it in the Cosign critical claims. Coupled with QA-001. **Effort:** S-M.
+- **QA-019** — Top-level React `ErrorBoundary` in `__root.tsx`. Render-time
+  exceptions currently show a blank page with no diagnostic. **Effort:** S.
 - **QA-020** — Frontend test coverage pass: 3 test files for ~140 components.
   Prioritise `lib/api/client.ts` (refresh+retry stampede), `lib/auth/store.ts`,
   `lib/auth/jwt.ts`, plus auth route + role-gate snapshots. **Effort:** L.
@@ -592,15 +591,17 @@ prioritised for backlog uptake.
 
 Lower priority — pick when picking up neighbouring work in the same file:
 
-- **DSGN-002 / -006 / -008 / -009 / -010 / -017 / -018 / -024** — nav IA
-  cleanup, repo-Settings sub-sections, topbar breadcrumb wiring, audit-export
-  tile redesign, scanner-active-adapter affordance, dialog focus-ring fix,
-  unified secret-input primitive, `<PageHeader>` extraction.
-- **DSGN-007 / -011 / -012 / -013 / -014 / -015 / -016 / -019 / -020 / -022** —
-  EmptyState secondary-action, Preview-routes opt-in, trusted-key remove dialog
-  warning, date-helper dedup, login tenant-UUID leak, `/security` filler card,
-  notifications-bell "see all", tag-detail empty-scan affordance, webhook
-  Pause/Resume button, SA-greeting polish.
+- ~~DSGN-006~~ DONE PR #55 (repo Settings sub-sections + sticky ToC).
+  ~~DSGN-010~~ DONE PR #57 (scanner adapter sort + active-name button).
+  ~~DSGN-017~~ DONE PR #50 (focus rings on Button/Dialog/Switch/Tabs).
+  **Still open:** **DSGN-002** (sidebar IA — Workspace cluster split from Access),
+  **DSGN-008** (topbar `<Breadcrumbs/>` from `useMatches`),
+  **DSGN-009** (audit-export observability tiles redesign),
+  **DSGN-018** (extract `<SecretInput>` primitive from audit-export pattern),
+  **DSGN-024** (extract `<PageHeader>` primitive — 8+ header shapes today).
+- ~~DSGN-007 / -011 / -012 / -013 / -014 / -015 / -016 / -019 / -020 / -022~~ —
+  all DONE (PR #50 shipped 007/012/013/014/017/022 + folded 012 into 003;
+  PR #57 shipped 011/015/016/019/020).
 - **QA-006 / -008 / -009 / -010 / -011 / -012 / -014 / -016 / -017 / -018 /
   -019 / -021 / -022 / -023 / -025 / -026 / -027 / -028** — config-loader
   hygiene, bounded webhook dispatch, retry-interceptor cleanup, ctx-aware DNS,
@@ -616,6 +617,114 @@ Lower priority — pick when picking up neighbouring work in the same file:
   per-service-db profile, storage backend smoke profiles, GC CronJob + Deployment
   split, schema-evolution docs, `libs/delivery` reuse, in-process Cosign
   verification, multipart storage driver interface.
+
+### REM-017 — Platform-admin "claim a new org" route (chicken-egg)
+
+**Surfaced:** 2026-06-24 during new-user-onboarding smoke testing on the
+local stack. Platform admins can't bootstrap a new org from the FE: org
+creation is side-effected by repo creation, which requires `hasScopedRole(
+"org", body.Org, "admin")` — and the platform-admin marker
+(`(admin, org, *)`) is treated as a literal scope_value, not a wildcard
+(deliberate per PENTEST-024). Result: admins can only create repos under
+the seeded `dev` org. To get a different org name, an operator must run
+`INSERT INTO role_assignments...` via SQL — not viable for self-hosters
+following SELF-HOSTING.md.
+
+**Scope:**
+
+- New BFF route `POST /api/v1/admin/orgs/{org}/claim` gated on the
+  platform-admin marker. Validates org name, calls
+  `metadata.GetOrCreateOrganization`, then `auth.GrantRole(admin, org,
+  <org>)` to the caller. Atomic — rollback if either step fails.
+- FE: small affordance on the Create Repository dialog. When the typed
+  org doesn't match any existing org and the caller has the platform-
+  admin marker, show "This org doesn't exist yet — claim it" inline
+  call-to-action that calls the new route then proceeds with the
+  original create-repo. Non-platform-admin sees the existing
+  "insufficient permissions" message.
+- Optional: dedicated `/admin/orgs` page listing all orgs with member
+  counts + a "Create org" CTA. Pairs naturally with DEPLOY-001 tenant-
+  persona docs.
+
+**Effort:** half-day backend + half-day FE. ~1 day total.
+
+**Affects:** `services/management` (new route), `services/auth`
+(GrantRole already exists, no change needed), `frontend` (Create
+Repository dialog + optional `/admin/orgs` route).
+
+### REM-018 — UI user-ID → username + enforce display_name on user creation
+
+**Surfaced:** 2026-06-24 during onboarding smoke testing. The dashboard
+surfaces raw UUIDs in member lists, audit-event actor cells, grant-by
+columns, and tenant-detail "created by" — none of which are human-
+readable. Operators routinely need to cross-reference UUIDs against a
+mental table of "who is that?" which is exactly the cognitive load the
+dashboard should be removing.
+
+Also: today `POST /api/v1/users` only requires `username` + `email` +
+`password` (and treats `display_name` as optional). Operators creating
+real accounts skip `display_name`, the surfaces above then show
+`username` as a fallback (better than UUID, still inconsistent). The
+right posture is to make a human-friendly `display_name` part of the
+contract.
+
+**Scope:**
+
+Backend (services/management):
+- Extend `MemberResponse` shape with `username` + `display_name`. Add a
+  `users` LEFT JOIN in the member-list handlers so the FE doesn't have
+  to chase per-row hydrate calls.
+- Same change for the audit activity feed (`actor_username`,
+  `actor_display_name`) and any other list endpoint that today returns
+  raw `user_id` (admin tenants `created_by`, role-assignment lists).
+- Optional: small batch endpoint `GET /api/v1/users/by-id?ids=...` that
+  the FE can call to hydrate stray UUIDs the list endpoints don't cover.
+
+Backend (services/auth):
+- `POST /api/v1/users` validates `display_name` is non-empty (1-64
+  chars, allowlist). Same `validateUserName` regex as `username`.
+- Update `userResponse` to include `display_name` on every shape.
+
+Frontend:
+- New primitive `<UserCell user_id={id} username={u} display_name={n}>`
+  that renders `<display_name> (@<username>)` with the UUID in a tooltip
+  for power-users. Falls back to `<username>` if no display_name, to
+  `<short-uuid>` if neither.
+- Replace UUID renders across the dashboard: `/orgs/{org}/members`,
+  `/repositories/{org}/{repo}/members`, `/activity`, audit-event rows,
+  tenant detail "created by", granted-by columns.
+- User-create form requires non-empty `display_name`. Existing form
+  has the field; make zod validation enforce.
+
+**Affects:** `services/management`, `services/auth`, `frontend/`.
+
+**Effort:** ~1-2 days.
+
+### FUT-011 — Production new-user onboarding smoke test
+
+**Surfaced:** 2026-06-24 (same testing session as REM-017 above).
+Walked through the FE/API path: admin creates user via
+`POST /api/v1/users`, grants writer via
+`POST /api/v1/orgs/dev/members`, newcomer logs in + pushes. The
+backend half works (verified via curl + SQL); the FE flow was
+deferred ("we need to test this later").
+
+**Scope:** drive the same flow end-to-end via the FE only. Validate:
+
+1. Admin can create a new user from the dashboard (find or build the
+   right surface — `/members`? a future `/admin/users` page?).
+2. Admin grants the new user a role on `dev` from `/orgs/dev/members`.
+3. New user logs in to the FE and sees the workspace surfaces a
+   `writer` should see (no `/admin/*`, no Service-accounts admin).
+4. New user creates an API key from `/profile` or `/api-keys`.
+5. `docker login` with the API key + `docker push` to `dev/<repo>` —
+   verify the push succeeds AND the manifest is attributed to the
+   newcomer in the audit log + on the repo activity tab.
+6. Document the flow in `docs/SELF-HOSTING.md` or a new `docs/ONBOARDING.md`.
+
+Pairs with **DEPLOY-001** tenant-persona doc work. Once both are
+done, self-hosters following the docs should be able to bootstrap a
+real multi-user setup without SQL.
 
 ### QA-002 follow-ups (small)
 
