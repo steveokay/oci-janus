@@ -38,6 +38,8 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| FUT-016 | Click-through `/workspace/proxy-cache/{id}` detail page — new `GetCachedManifest` RPC + BFF `GET /api/v1/proxy/cache/{id}` parsing manifest body server-side into typed `layers[]` / `manifests[]` + `kind` discriminator; FE route with Layers/Platforms + Manifest tabs; 6 vitest + Go handler tests | PR #83 | 2026-06-24 | DONE |
+| FUT-015 | `/workspace/proxy-cache` row expander + `docker pull` copy command (tag + digest forms); media type + absolute timestamps; mirrors DSGN-021 pattern; 12 new vitest cases | PR #82 | 2026-06-24 | DONE |
 | FUT-014 doc-expand | Expanded FUT-014 from "bump pull_count column" to "proxy publishes pull.image events" — collapses cache-counter undercount + dashboard 24h card missing cache traffic into one design | PR #80 | 2026-06-24 | DONE (docs) |
 | FUT-015/016/017 filed | Three proxy-cache follow-ups filed in futures.md: row expander, click-through detail page, scan + sign on cached images | PR #79 | 2026-06-24 | DONE (docs) |
 | proxy-mtls-server | services/proxy gRPC server now wraps mTLS server credentials when MTLS_* env vars are set; PROXY_GRPC_ADDR wired in docker-compose | PR #76 | 2026-06-24 | DONE |
