@@ -12,7 +12,15 @@ import { RepoScanPolicySection } from "@/components/repositories/repo-scan-polic
 import { RepoImmutabilitySection } from "@/components/repositories/repo-immutability-section";
 import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
 import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
+import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Tabs,
   TabsContent,
@@ -117,31 +125,73 @@ function RepositoryDetail(): React.ReactElement {
           <RetentionPanel org={org} repo={repo} />
         </TabsContent>
 
-        <TabsContent value="settings" className="space-y-4">
-          {/* Futures.md Tier 1 #2 — tag immutability toggle. Lives    */}
-          {/* above the scan-policy section because the security       */}
-          {/* posture (rejecting tag re-pushes) is a foundational       */}
-          {/* repo-shape decision the operator makes before tuning      */}
-          {/* policies.                                                 */}
-          <RepoImmutabilitySection org={org} repo={repo} />
-          {/* Futures.md Tier 1 #3 — signed-image admission toggle.     */}
-          {/* Sits next to immutability because both are security flags  */}
-          {/* with the same shape; they compose independently (signed +  */}
-          {/* immutable, signed + mutable, etc.) so neither belongs      */}
-          {/* "inside" the other.                                        */}
-          <RepoSignaturePolicySection org={org} repo={repo} />
-          {/* Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key      */}
-          {/* allowlist. Sits directly under the policy toggle because */}
-          {/* the two compose: the toggle gates pulls on signature     */}
-          {/* presence; the allowlist narrows "any signature" down to  */}
-          {/* an approved set. Empty allowlist = Phase 1 fallback so   */}
-          {/* the cards stay independently useful.                     */}
-          <RepoTrustedKeysSection org={org} repo={repo} />
-          {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
-          {/* Other settings (quota override, description edit, etc.) */}
-          {/* land here in future sprints alongside their backend     */}
-          {/* surfaces.                                                */}
-          <RepoScanPolicySection org={org} repo={repo} />
+        <TabsContent value="settings">
+          {/* DSGN-006 — Settings tab was a vertical wall of 5 flat   */}
+          {/* cards. We now group by intent: Security (immutability + */}
+          {/* signature + trusted keys), Quality (scan policy), and   */}
+          {/* General (rename/transfer/description/quota — a          */}
+          {/* placeholder slot that future surfaces drop into).       */}
+          {/*                                                          */}
+          {/* Layout: single column up through lg, then a two-column   */}
+          {/* split at xl with a sticky right-side ToC. Card internals */}
+          {/* are unchanged; this is layout-only.                      */}
+          <div className="grid gap-8 xl:grid-cols-[1fr_12rem]">
+            <div className="space-y-10">
+              <SettingsSection
+                id="security"
+                eyebrow="Security"
+                description="Repo-wide posture flags. These compose: enabling immutability locks tag movement; requiring signatures gates pulls; the trusted-key allowlist narrows which signatures count."
+              >
+                {/* Futures.md Tier 1 #2 — tag immutability toggle. Lives    */}
+                {/* first because the security posture (rejecting tag       */}
+                {/* re-pushes) is a foundational repo-shape decision the    */}
+                {/* operator makes before tuning policies.                  */}
+                <RepoImmutabilitySection org={org} repo={repo} />
+                {/* Futures.md Tier 1 #3 — signed-image admission toggle.   */}
+                {/* Sits next to immutability because both are security     */}
+                {/* flags with the same shape; they compose independently   */}
+                {/* (signed + immutable, signed + mutable, etc.).           */}
+                <RepoSignaturePolicySection org={org} repo={repo} />
+                {/* Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key    */}
+                {/* allowlist. Sits directly under the policy toggle       */}
+                {/* because the two compose: the toggle gates pulls on     */}
+                {/* signature presence; the allowlist narrows "any         */}
+                {/* signature" down to an approved set. Empty allowlist =  */}
+                {/* Phase 1 fallback so the cards stay independently       */}
+                {/* useful.                                                */}
+                <RepoTrustedKeysSection org={org} repo={repo} />
+              </SettingsSection>
+
+              <SettingsSection
+                id="quality"
+                eyebrow="Quality"
+                description="Vulnerability-scan policy for this repository. Overrides the org / tenant default. Remove the override to inherit again."
+              >
+                {/* FE-API-049 + 050 polish — per-repo scan policy editor. */}
+                <RepoScanPolicySection org={org} repo={repo} />
+              </SettingsSection>
+
+              <SettingsSection
+                id="general"
+                eyebrow="General"
+                description="Repository metadata — name, owner, description, quota. Editors for these surfaces land in a later sprint alongside their backend RPCs."
+              >
+                <RepoGeneralPlaceholder />
+              </SettingsSection>
+            </div>
+
+            {/* Optional sticky ToC, xl+ only. The component itself     */}
+            {/* hides at <xl, so this column collapses cleanly on       */}
+            {/* narrower viewports without an empty grid track because  */}
+            {/* xl:grid-cols only applies at xl and above.              */}
+            <RepoSettingsToc
+              items={[
+                { id: "security", label: "Security" },
+                { id: "quality", label: "Quality" },
+                { id: "general", label: "General" },
+              ]}
+            />
+          </div>
         </TabsContent>
       </Tabs>
 
@@ -153,5 +203,74 @@ function RepositoryDetail(): React.ReactElement {
         />
       ) : null}
     </div>
+  );
+}
+
+interface SettingsSectionProps {
+  id: string;
+  eyebrow: string;
+  description: string;
+  children: React.ReactNode;
+}
+
+// SettingsSection — eyebrow + one-line description wrapper that
+// matches the small-caps tracking-[0.18em] pattern used by the rest
+// of the dashboard's section headers (audit-export, domains, orgs
+// settings). Stacks contained cards with space-y-4 — same rhythm
+// the old flat layout had, just nested under a heading now.
+//
+// The `id` becomes the in-page anchor target for RepoSettingsToc.
+// scroll-mt-24 nudges the section down when the user clicks a ToC
+// link so the eyebrow isn't tucked under the topbar.
+function SettingsSection({
+  id,
+  eyebrow,
+  description,
+  children,
+}: SettingsSectionProps): React.ReactElement {
+  return (
+    <section id={id} className="scroll-mt-24 space-y-4">
+      <div className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+          {eyebrow}
+        </p>
+        <p className="text-sm text-[var(--color-fg-muted)]">{description}</p>
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
+
+// RepoGeneralPlaceholder — slot card for the eventual rename /
+// transfer / description / quota CRUD surfaces. Rendering it now
+// (rather than leaving "General" empty) makes the three-section
+// structure visible on every repo, including freshly-created ones,
+// and gives operators a single place to look for "edit metadata"
+// affordances once they ship.
+function RepoGeneralPlaceholder(): React.ReactElement {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Repository metadata</CardTitle>
+        <CardDescription>
+          Rename, transfer, description, and quota editors land here in a
+          later sprint alongside their backend RPCs.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-1 text-sm text-[var(--color-fg-muted)]">
+          <li>Rename — change the repo's slug under the same org.</li>
+          <li>
+            Transfer — move the repo to another org you belong to.
+          </li>
+          <li>
+            Description — long-form README rendered on the repo overview.
+          </li>
+          <li>
+            Quota override — per-repo cap on storage / pull bandwidth.
+          </li>
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
