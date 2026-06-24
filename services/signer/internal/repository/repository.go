@@ -27,19 +27,21 @@ func New(pool *pgxpool.Pool) *Repository {
 }
 
 // Store upserts a signature record.
-// On conflict for (manifest_digest, signer_id) the row is updated so that a
-// re-sign with a new key produces a fresh record rather than a duplicate-key error.
+// On conflict for (tenant_id, manifest_digest, signer_id) the row is updated
+// so that a re-sign with a new key produces a fresh record rather than a
+// duplicate-key error.
 // Note: SigB64 (raw base64 DER bytes) is intentionally NOT stored — SEC-015.
 func (r *Repository) Store(ctx context.Context, rec *sigstore.Record) error {
 	const q = `
-INSERT INTO signatures (manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (manifest_digest, signer_id) DO UPDATE
+INSERT INTO signatures (tenant_id, manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (tenant_id, manifest_digest, signer_id) DO UPDATE
     SET key_id           = EXCLUDED.key_id,
         signature_digest = EXCLUDED.signature_digest,
         signed_at        = EXCLUDED.signed_at`
 
 	_, err := r.pool.Exec(ctx, q,
+		rec.TenantID,
 		rec.ManifestDigest,
 		rec.RepositoryName,
 		rec.SignerID,
@@ -53,16 +55,18 @@ ON CONFLICT (manifest_digest, signer_id) DO UPDATE
 	return nil
 }
 
-// List returns all signature records for the given manifest digest, ordered by
-// signed_at ascending. Returns an empty slice (not nil) when no rows are found.
-func (r *Repository) List(ctx context.Context, manifestDigest string) ([]*sigstore.Record, error) {
+// List returns all signature records for the given tenant + manifest digest,
+// ordered by signed_at ascending. Returns an empty slice (not nil) when no
+// rows are found.
+func (r *Repository) List(ctx context.Context, tenantID, manifestDigest string) ([]*sigstore.Record, error) {
 	const q = `
-SELECT manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at
+SELECT tenant_id, manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at
 FROM   signatures
-WHERE  manifest_digest = $1
+WHERE  tenant_id       = $1
+AND    manifest_digest = $2
 ORDER  BY signed_at ASC`
 
-	rows, err := r.pool.Query(ctx, q, manifestDigest)
+	rows, err := r.pool.Query(ctx, q, tenantID, manifestDigest)
 	if err != nil {
 		return nil, fmt.Errorf("list signatures: %w", err)
 	}
@@ -85,16 +89,18 @@ ORDER  BY signed_at ASC`
 	return out, nil
 }
 
-// FindRec returns the single record matching (manifestDigest, signerID), or
-// (nil, nil) when no row exists. Returns an error only on unexpected DB failures.
-func (r *Repository) FindRec(ctx context.Context, manifestDigest, signerID string) (*sigstore.Record, error) {
+// FindRec returns the single record matching (tenantID, manifestDigest,
+// signerID), or (nil, nil) when no row exists. Returns an error only on
+// unexpected DB failures.
+func (r *Repository) FindRec(ctx context.Context, tenantID, manifestDigest, signerID string) (*sigstore.Record, error) {
 	const q = `
-SELECT manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at
+SELECT tenant_id, manifest_digest, repository_name, signer_id, key_id, signature_digest, signed_at
 FROM   signatures
-WHERE  manifest_digest = $1
-AND    signer_id       = $2`
+WHERE  tenant_id       = $1
+AND    manifest_digest = $2
+AND    signer_id       = $3`
 
-	rows, err := r.pool.Query(ctx, q, manifestDigest, signerID)
+	rows, err := r.pool.Query(ctx, q, tenantID, manifestDigest, signerID)
 	if err != nil {
 		return nil, fmt.Errorf("find signature: %w", err)
 	}
@@ -119,6 +125,7 @@ AND    signer_id       = $2`
 // SigB64 is left as the zero-value (empty string) because it is never stored.
 func scanRecord(rows pgx.Rows) (*sigstore.Record, error) {
 	var (
+		tenantID        string
 		manifestDigest  string
 		repositoryName  string
 		signerID        string
@@ -127,6 +134,7 @@ func scanRecord(rows pgx.Rows) (*sigstore.Record, error) {
 		signedAt        time.Time
 	)
 	if err := rows.Scan(
+		&tenantID,
 		&manifestDigest,
 		&repositoryName,
 		&signerID,
@@ -140,6 +148,7 @@ func scanRecord(rows pgx.Rows) (*sigstore.Record, error) {
 		return nil, err
 	}
 	return &sigstore.Record{
+		TenantID:        tenantID,
 		ManifestDigest:  manifestDigest,
 		RepositoryName:  repositoryName,
 		SignerID:        signerID,

@@ -19,7 +19,13 @@ import (
 // verification. It is populated on sign and kept only in the in-process cache —
 // it is NEVER written to the database (SEC-015: do not persist SigB64 in
 // cleartext).
+//
+// TenantID scopes the record (QA-001). The in-memory map keys on
+// (TenantID, ManifestDigest) and every persistence + lookup operation
+// includes the tenant id so two tenants pushing the same public-image
+// digest don't share signature rows.
 type Record struct {
+	TenantID        string
 	SignerID        string
 	ManifestDigest  string
 	RepositoryName  string
@@ -29,18 +35,29 @@ type Record struct {
 	SignedAt        time.Time
 }
 
+// recordKey is the composite key used by the in-memory cache so two tenants
+// with the same manifest digest don't share a bucket.
+type recordKey struct {
+	tenant         string
+	manifestDigest string
+}
+
 // sigstoreRepo is the persistence interface that the DB-backed repository
 // implements. Keeping it here (rather than in the repository package) avoids
 // an import cycle and allows unit tests to inject lightweight fakes without
 // pulling in pgx.
+//
+// Every method takes a tenantID — the persistence layer must scope reads +
+// writes so signatures belonging to one tenant are never visible to another
+// (QA-001).
 type sigstoreRepo interface {
 	// Store upserts a Record. Called after every successful sign operation.
 	Store(ctx context.Context, rec *Record) error
-	// List returns all records for the given manifest digest.
-	List(ctx context.Context, manifestDigest string) ([]*Record, error)
-	// FindRec returns the record for (manifestDigest, signerID), or (nil, nil)
-	// when no match exists.
-	FindRec(ctx context.Context, manifestDigest, signerID string) (*Record, error)
+	// List returns all records for the given tenant + manifest digest.
+	List(ctx context.Context, tenantID, manifestDigest string) ([]*Record, error)
+	// FindRec returns the record for (tenantID, manifestDigest, signerID),
+	// or (nil, nil) when no match exists.
+	FindRec(ctx context.Context, tenantID, manifestDigest, signerID string) (*Record, error)
 }
 
 // Store is a thread-safe signature index.
@@ -51,7 +68,7 @@ type sigstoreRepo interface {
 // replicas (or before a restart) are found.
 type Store struct {
 	mu   sync.RWMutex
-	data map[string][]*Record // key: manifest digest
+	data map[recordKey][]*Record // composite (tenant, manifest_digest) key
 
 	repo sigstoreRepo // nil when running without a database
 }
@@ -59,7 +76,7 @@ type Store struct {
 // New creates an in-memory-only Store. Suitable for unit tests and local
 // development. Signature records are lost on process restart.
 func New() *Store {
-	return &Store{data: make(map[string][]*Record)}
+	return &Store{data: make(map[recordKey][]*Record)}
 }
 
 // NewWithDB creates a Store backed by the provided repository for durable
@@ -67,7 +84,7 @@ func New() *Store {
 // so hot paths avoid a DB round-trip on every lookup.
 func NewWithDB(repo sigstoreRepo) *Store {
 	return &Store{
-		data: make(map[string][]*Record),
+		data: make(map[recordKey][]*Record),
 		repo: repo,
 	}
 }
@@ -88,8 +105,9 @@ func NewWithDB(repo sigstoreRepo) *Store {
 // cap with a 5-second deadline so a stalled DB cannot pile up unbounded
 // blocked goroutines under burst load.
 func (s *Store) Add(rec *Record) {
+	key := recordKey{tenant: rec.TenantID, manifestDigest: rec.ManifestDigest}
 	s.mu.Lock()
-	s.data[rec.ManifestDigest] = append(s.data[rec.ManifestDigest], rec)
+	s.data[key] = append(s.data[key], rec)
 	s.mu.Unlock()
 
 	if s.repo != nil {
@@ -97,6 +115,7 @@ func (s *Store) Add(rec *Record) {
 		defer cancel()
 		if err := s.repo.Store(ctx, rec); err != nil {
 			slog.ErrorContext(ctx, "failed to persist signature record to database",
+				"tenant_id", rec.TenantID,
 				"manifest_digest", rec.ManifestDigest,
 				"signer_id", rec.SignerID,
 				"error", err,
@@ -105,7 +124,7 @@ func (s *Store) Add(rec *Record) {
 	}
 }
 
-// List returns all signature records for the given manifest digest.
+// List returns all signature records for the given tenant + manifest digest.
 //
 // The in-memory cache is checked first. On a miss the DB is queried (when
 // configured) so that records from other replicas or previous process
@@ -113,9 +132,10 @@ func (s *Store) Add(rec *Record) {
 //
 // PENTEST-022: takes the caller's ctx so a cancelled gRPC request stops
 // waiting on the DB rather than pinning a connection until the query returns.
-func (s *Store) List(ctx context.Context, manifestDigest string) []*Record {
+func (s *Store) List(ctx context.Context, tenantID, manifestDigest string) []*Record {
+	key := recordKey{tenant: tenantID, manifestDigest: manifestDigest}
 	s.mu.RLock()
-	cached := s.data[manifestDigest]
+	cached := s.data[key]
 	s.mu.RUnlock()
 
 	// Return a copy of the cached slice so callers cannot mutate internal state.
@@ -130,9 +150,10 @@ func (s *Store) List(ctx context.Context, manifestDigest string) []*Record {
 	}
 
 	// Cache miss — query DB and warm the local cache.
-	recs, err := s.repo.List(ctx, manifestDigest)
+	recs, err := s.repo.List(ctx, tenantID, manifestDigest)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to list signatures from database",
+			"tenant_id", tenantID,
 			"manifest_digest", manifestDigest,
 			"error", err,
 		)
@@ -142,8 +163,8 @@ func (s *Store) List(ctx context.Context, manifestDigest string) []*Record {
 	if len(recs) > 0 {
 		s.mu.Lock()
 		// Only populate cache if it is still empty to avoid stomping a concurrent Add.
-		if len(s.data[manifestDigest]) == 0 {
-			s.data[manifestDigest] = recs
+		if len(s.data[key]) == 0 {
+			s.data[key] = recs
 		}
 		s.mu.Unlock()
 	}
@@ -158,9 +179,10 @@ func (s *Store) List(ctx context.Context, manifestDigest string) []*Record {
 //
 // PENTEST-022: takes the caller's ctx so a cancelled gRPC request releases
 // the DB connection promptly.
-func (s *Store) FindRec(ctx context.Context, manifestDigest, signerID string) *Record {
+func (s *Store) FindRec(ctx context.Context, tenantID, manifestDigest, signerID string) *Record {
+	key := recordKey{tenant: tenantID, manifestDigest: manifestDigest}
 	s.mu.RLock()
-	for _, r := range s.data[manifestDigest] {
+	for _, r := range s.data[key] {
 		if r.SignerID == signerID {
 			s.mu.RUnlock()
 			return r
@@ -173,9 +195,10 @@ func (s *Store) FindRec(ctx context.Context, manifestDigest, signerID string) *R
 	}
 
 	// Cache miss — consult the database.
-	rec, err := s.repo.FindRec(ctx, manifestDigest, signerID)
+	rec, err := s.repo.FindRec(ctx, tenantID, manifestDigest, signerID)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to find signature in database",
+			"tenant_id", tenantID,
 			"manifest_digest", manifestDigest,
 			"signer_id", signerID,
 			"error", err,
@@ -186,7 +209,7 @@ func (s *Store) FindRec(ctx context.Context, manifestDigest, signerID string) *R
 	if rec != nil {
 		// Warm the in-memory cache with the DB result.
 		s.mu.Lock()
-		s.data[manifestDigest] = append(s.data[manifestDigest], rec)
+		s.data[key] = append(s.data[key], rec)
 		s.mu.Unlock()
 	}
 	return rec

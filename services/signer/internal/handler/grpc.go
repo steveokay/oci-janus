@@ -49,6 +49,7 @@ func (h *GRPCHandler) SignManifest(ctx context.Context, req *signerv1.SignManife
 	}
 
 	rec := &sigstore.Record{
+		TenantID:        req.TenantId,
 		SignerID:        signerID,
 		ManifestDigest:  req.ManifestDigest,
 		RepositoryName:  req.RepositoryName,
@@ -81,12 +82,12 @@ func (h *GRPCHandler) VerifyManifest(ctx context.Context, req *signerv1.VerifyMa
 		signerID = h.signer.KeyID()
 	}
 
-	rec := h.store.FindRec(ctx, req.ManifestDigest, signerID)
+	rec := h.store.FindRec(ctx, req.TenantId, req.ManifestDigest, signerID)
 	if rec == nil {
 		return &signerv1.VerifyManifestResponse{Verified: false, FailureReason: "no signature found"}, nil
 	}
 
-	ok, err := h.signer.VerifyPayload(rec.RepositoryName, req.ManifestDigest, rec.SigB64)
+	ok, err := h.signer.VerifyPayload(req.TenantId, rec.RepositoryName, req.ManifestDigest, rec.SigB64)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "verify: %v", err)
 	}
@@ -106,13 +107,18 @@ func (h *GRPCHandler) VerifyManifest(ctx context.Context, req *signerv1.VerifyMa
 	}, nil
 }
 
-// ListSignatures returns all known signatures for a manifest digest.
+// ListSignatures returns all known signatures for a tenant + manifest digest.
+//
+// QA-001: tenant_id is required so signature visibility is correctly scoped.
+// Without this, two tenants pushing the same public-image digest would see
+// each other's signature records — and worse, signed-image admission could
+// admit images using a signature produced by another tenant.
 func (h *GRPCHandler) ListSignatures(ctx context.Context, req *signerv1.ListSignaturesRequest) (*signerv1.ListSignaturesResponse, error) {
-	if req.ManifestDigest == "" {
-		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
+	if req.TenantId == "" || req.ManifestDigest == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and manifest_digest are required")
 	}
 
-	recs := h.store.List(ctx, req.ManifestDigest)
+	recs := h.store.List(ctx, req.TenantId, req.ManifestDigest)
 	out := make([]*signerv1.Signature, 0, len(recs))
 	for _, r := range recs {
 		out = append(out, &signerv1.Signature{

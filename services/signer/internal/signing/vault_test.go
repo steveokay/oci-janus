@@ -57,7 +57,7 @@ func TestVault_SignAndVerify_roundtrip(t *testing.T) {
 		t.Fatalf("SignPayload returned vault prefix; should have been stripped: %q", sig)
 	}
 
-	ok, err := s.VerifyPayload("acme/api", "sha256:deadbeef", sig)
+	ok, err := s.VerifyPayload("tenant-1", "acme/api", "sha256:deadbeef", sig)
 	if err != nil {
 		t.Fatalf("VerifyPayload: %v", err)
 	}
