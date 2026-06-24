@@ -518,20 +518,25 @@ prioritised for backlog uptake.
   CLAUDE.md §7 says "reject empty cert paths when `OTEL_ENVIRONMENT=production`" —
   no service does this. Apache 2.0 release means anyone can stand this up; silent
   insecure defaults are a footgun. **Effort:** S.
-- **QA-001** — Add `tenant_id` to `signatures` table + propagate through
-  `services/signer`. Global `(manifest_digest, signer_id)` key lets one tenant
-  see another's signature for the same public-image digest. **Effort:** M.
+- ~~**QA-001**~~ — DONE 2026-06-24 (PR #64). Migration `000002` adds
+  `tenant_id` + composite UNIQUE `(tenant_id, manifest_digest, signer_id)`;
+  `services/signer` propagates `tenant_id` through store / repo / handler;
+  Cosign payload's `optional.tenant` field cryptographically binds each
+  signature to its tenant so cross-tenant replay fails verification.
+  External callers (`services/core`, `services/management`) already
+  passed `TenantId` in `ListSignaturesRequest` — the field was on the
+  proto but the server ignored it. **QA-015** subsumed (tenant_id is
+  now in the Cosign payload, no longer "unused parameter").
 - ~~**QA-002**~~ — DONE 2026-06-23 (PR #46 main fix + PR #47 deterministic
   regression tests). `libs/rabbitmq/publisher.Publish` now serialises the
   publish-then-read-confirmation sequence with `sync.Mutex` + synchronously
   drains stale confirmations on ctx-cancel/timeout. Two follow-up nits
   (Close() lock + configurable timeout) tracked at the bottom of this
   batch. See [`status.md`](status.md) for the full resolution note.
-- **QA-003** — Fix `services/webhook.PollDueDeliveries` lock semantics.
-  `FOR UPDATE SKIP LOCKED` on a pooled `Query` (no explicit tx) releases locks
-  on `rows.Close()`; overlapping ticks dispatch the same delivery twice. Wrap
-  in `BeginTx`, UPDATE-to-`in_flight` in the same tx, COMMIT before dispatch.
-  **Effort:** S.
+- ~~**QA-003**~~ — DONE 2026-06-24 (PR #62). `PollDueDeliveries` now
+  wraps SELECT in `pool.Begin` + leases picked rows by pushing
+  `next_attempt_at` 5 min into the future, then COMMIT before
+  returning. No new status column needed.
 - **ARCH-016** — Ship `make bootstrap` / `tools/bootstrap` for self-hosters.
   `SELF-HOSTING.md` §3 is 9 manual openssl+base64 steps before first push;
   the "10 min to first push" claim is aspirational without this. **Effort:** S.
@@ -551,17 +556,23 @@ prioritised for backlog uptake.
   **Effort:** M.
 - **DSGN-023** — Mobile / narrow-viewport sidebar fallback. Below 1024px the
   sidebar vanishes and Topbar has no nav control. **Effort:** M.
-- **QA-004** — Fix JWT cache key in `services/core` + `services/proxy`. Today
-  keyed on raw token; CLAUDE.md §7 specifies `<jti>`. **Effort:** S.
-- **QA-005** — GC the `services/scanner.Store` — unbounded map of scan records
-  leaks forever in long-running workers. **Effort:** S.
-- **QA-007** — Close webhook SSRF TOCTOU. Dialer validates resolved IPs then
-  dials by hostname, triggering fresh DNS lookup — rebinding attack vector.
-  Pass the resolved IP literally to `DialContext`. **Effort:** S.
+- ~~**QA-004**~~ — DONE 2026-06-24 (PR #59). JWT cache key in
+  `services/core` + `services/proxy` now uses `jti` (extracted via a
+  small inline `parseJTI` helper) instead of the raw token. Malformed
+  tokens skip the cache and fall through to `grpc.ValidateToken`.
+- ~~**QA-005**~~ — DONE 2026-06-24 (PR #59). `services/scanner.Store`
+  gained `Sweep(maxAge)` + `StartSweeper(ctx, interval, maxAge)`;
+  server.go runs `go scanStore.StartSweeper(ctx, time.Hour, 24*time.Hour)`
+  so terminal-status rows older than 24h are dropped each hour.
+- ~~**QA-007**~~ — DONE 2026-06-24 (PR #62). Webhook SSRF dialer now
+  picks the first validated resolved IP and dials by IP literal so the
+  underlying dialer doesn't re-resolve the hostname. HTTPS SNI
+  unaffected (`http.Transport` derives SNI from the request URL).
 - **QA-013** — Add `tenant_id` to upload Redis keys + constant-time tenant
   check in `services/core` upload handler. **Effort:** S.
-- **QA-015** — Either drop the unused `tenant_id` from `Signer.SignPayload` or
-  include it in the Cosign critical claims. Coupled with QA-001. **Effort:** S-M.
+- ~~**QA-015**~~ — SUBSUMED by QA-001 (PR #64). `tenant_id` is now baked
+  into the Cosign payload's `optional.tenant` field; no longer an
+  "unused parameter".
 - **QA-019** — Top-level React `ErrorBoundary` in `__root.tsx`. Render-time
   exceptions currently show a blank page with no diagnostic. **Effort:** S.
 - **QA-020** — Frontend test coverage pass: 3 test files for ~140 components.
@@ -602,7 +613,10 @@ Lower priority — pick when picking up neighbouring work in the same file:
 - ~~DSGN-007 / -011 / -012 / -013 / -014 / -015 / -016 / -019 / -020 / -022~~ —
   all DONE (PR #50 shipped 007/012/013/014/017/022 + folded 012 into 003;
   PR #57 shipped 011/015/016/019/020).
-- **QA-006 / -008 / -009 / -010 / -011 / -012 / -014 / -016 / -017 / -018 /
+- ~~**QA-006**~~ DONE PR #59 (auth `init()` no longer reads
+  `TRUSTED_PROXY_CIDRS` from `os.Getenv`; env access moved to config
+  layer + `SetTrustedProxies` setter called from `server.go`).
+- **QA-008 / -009 / -010 / -011 / -012 / -014 / -016 / -017 / -018 /
   -019 / -021 / -022 / -023 / -025 / -026 / -027 / -028** — config-loader
   hygiene, bounded webhook dispatch, retry-interceptor cleanup, ctx-aware DNS,
   stream-interceptor request_id, scanner queue-full surfacing, gateway stub
