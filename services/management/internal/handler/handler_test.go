@@ -883,6 +883,21 @@ func (e *testEnv) post(t *testing.T, path, token, body string) *http.Response {
 	return resp
 }
 
+// put sends a PUT with a JSON body. Used by FUT-017 + retention save paths.
+func (e *testEnv) put(t *testing.T, path, token, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, e.srv.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", path, err)
+	}
+	return resp
+}
+
 // del sends a DELETE request.
 func (e *testEnv) del(t *testing.T, path, token string) *http.Response {
 	t.Helper()
