@@ -37,49 +37,35 @@
 
 ---
 
-### REM-019 — Scanner trivy adapter exits with code 1 (empty stderr)
+### REM-019 — Scanner trivy adapter exits with code 1 (Phase 2: underlying failure)
 
-**Surfaced:** 2026-06-24 during scan smoke testing. Triggered scans on
-`dev/rabbitmq:3.13-management-alpine` queue correctly + the scanner
-service receives the event, but every plugin invocation fails with:
-
-```
-ERROR plugin process failed   path=/usr/local/bin/scanner-trivy-adapter
-       stderr=""   error=exit status 1
-ERROR scan job failed         error=plugin process exited with error
-```
-
-The downstream "scan stuck at pending" symptom that masked this was
-fixed in PR #59 (scanner `persistScanStatus` now defaults `findings`
-to `[]` so the failure status flips correctly). The underlying trivy
-adapter exit-1 is still open.
-
-**Affected:** `services/scanner` (calls `scanner-trivy-adapter` via
-JSON-RPC stdio per `services/scanner/internal/plugin/process.go`).
-
-**Likely candidates** (none confirmed yet):
-- Adapter fails to read staged blobs because they're raw gzipped layer
-  blobs not assembled into an OCI layout (Trivy expects an OCI image
-  bundle with `index.json` + `manifest.json`).
-- Trivy DB path / scratch dir permission issue inside the distroless
-  scanner container.
-- The Grype DB pre-warm at boot uses Grype, but the production adapter
-  is `scanner-trivy-adapter` (different binary) — possible that the
-  Trivy DB was never populated in the cache volume.
-- Adapter swallowing its own stderr (would mask the real cause).
-
-**Scope of fix:**
-- Add stderr capture + an explicit error log inside the trivy adapter
-  before any exit-1 path so we stop debugging blind.
-- Verify the blob-staging step produces an OCI layout Trivy can consume.
-- Confirm the cache-volume DB pre-warm matches the active adapter.
+**Surfaced:** 2026-06-24 during scan smoke testing.
+**Phase 1 (DONE, PR #70):** all four adapters now mirror their RPC
+error to stderr before exit; orchestrator parses stdout RPC error
+even on non-zero exit. This was the "stop debugging blind" half.
+**Phase 2 (OPEN):** the underlying trivy invocation still fails.
+The next smoke test against
+`dev/rabbitmq:3.13-management-alpine` should now print the real
+error in either the `stderr` or `stdout_error` field of the
+orchestrator log. Once that error string lands, file the targeted
+fix (likely candidates: missing Trivy DB in the cache volume —
+boot pre-warm uses Grype not Trivy; raw gzipped layer vs OCI
+layout; distroless scratch-dir / tmpdir perms).
 
 **Workaround for users right now:** in `/admin/scanner`, swap the
-active adapter to the dev stub (it returns synthesised findings so the
-scan flow can be exercised end-to-end without Trivy). REM-011 P2's
-in-memory swap means no container restart is needed.
+active adapter to the dev stub. REM-011 P2's in-memory swap means
+no container restart is needed.
 
-**Estimated:** ~half day to diagnose + ~1-2 hours to fix.
+### FUT-013 — Pull-through cache visibility (Phase A: backend)
+
+**Status:** Phase A on branch `feat/fut-013-a-proxy-cache-backend`
+(in flight, this session). Adds migration `00003`, the
+`last_pulled_at` / `pull_count` / `size_bytes` columns on
+`proxy_manifests`, and three new RPCs (`ListCachedManifests`,
+`GetCacheStats`, `DeleteCachedManifest`) on `services/proxy`.
+Phase B (BFF) + Phase C (FE route + sidebar entry) are queued —
+see futures.md FUT-013 for the full design + workspace-admin
+gating decision.
 
 ---
 
@@ -166,9 +152,7 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **Tier 1 #1** — MFA (TOTP step-up) — ~2 weeks
 - **Tier 1 #5** — SCIM v2 provisioning — ~1.5 weeks
 - **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
-- **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap, surfaced 2026-06-24) — ~1 day
 - **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
-- **FUT-013** — Pull-through cache visibility (filed 2026-06-24): new sidebar menu item + `/proxy/cache` page backed by 3 new `services/proxy` RPCs (`ListCachedManifests`, `GetCacheStats`, `DeleteCachedManifest`) + `last_pulled_at` / `pull_count` columns on `proxy_manifests`. Surfaced by an operator noticing pulls through `:8084/cache/...` never appeared in the dashboard — ~1 sprint
 - **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `'tenant'` RBAC scope + `ListTenantUsers` / `InviteUser` / `SetUserDisabled` RPCs + `/tenant/users` route shared between tenant-admin and platform-admin. Strictly precedes Tier 1 #5 SCIM. Pairs with REM-018 — ~1 sprint
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
