@@ -379,6 +379,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// FUT-013: pull-through cache visibility. Routes return 404 when
 	// h.proxy is nil (PROXY_GRPC_ADDR unset). Workspace-admin gated.
 	h.RegisterProxyCache(mux, authMW)
+	// FUT-017: per-upstream scan + sign policies for cached images.
+	// Scan routes 404 when h.scanner is nil; sign routes 404 when
+	// h.signer is nil. Workspace-admin gated.
+	h.RegisterProxyCachePolicies(mux, authMW)
 
 	// Per-repo retention policy CRUD (FE-API-037). All routes require at
 	// least reader on the repo (GET) or repo admin (PUT/DELETE). The
