@@ -383,6 +383,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Scan routes 404 when h.scanner is nil; sign routes 404 when
 	// h.signer is nil. Workspace-admin gated.
 	h.RegisterProxyCachePolicies(mux, authMW)
+	// FUT-018: digest-keyed scan + signature routes. Same opt-in
+	// shape as the FUT-017 policy routes (scan routes 404 when
+	// scanner unwired; sig routes 404 when signer unwired). GET is
+	// tenant-read; POST is workspace-writer.
+	h.RegisterDigestKeyedScanAndSignatures(mux, authMW)
 
 	// Per-repo retention policy CRUD (FE-API-037). All routes require at
 	// least reader on the repo (GET) or repo admin (PUT/DELETE). The
