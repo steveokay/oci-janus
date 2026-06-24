@@ -40,7 +40,7 @@ func (f *fakeSigner) SignPayload(_, _, _ string) (string, error) {
 	return f.sigB64, f.signErr
 }
 
-func (f *fakeSigner) VerifyPayload(_, _, _ string) (bool, error) {
+func (f *fakeSigner) VerifyPayload(_, _, _, _ string) (bool, error) {
 	return f.verifyOK, f.verifyErr
 }
 
@@ -49,7 +49,7 @@ func (f *fakeSigner) KeyID() string { return f.keyID }
 // signerIface is the minimal interface the handler actually uses so we can inject fakes.
 type signerIface interface {
 	SignPayload(tenantID, repositoryName, manifestDigest string) (string, error)
-	VerifyPayload(repositoryName, manifestDigest, sigB64 string) (bool, error)
+	VerifyPayload(tenantID, repositoryName, manifestDigest, sigB64 string) (bool, error)
 	KeyID() string
 }
 
@@ -88,6 +88,7 @@ func (h *testableSignerHandler) SignManifest(ctx context.Context, req *signerv1.
 	}
 
 	rec := &sigstore.Record{
+		TenantID:        req.TenantId,
 		SignerID:        signerID,
 		ManifestDigest:  req.ManifestDigest,
 		RepositoryName:  req.RepositoryName,
@@ -119,12 +120,12 @@ func (h *testableSignerHandler) VerifyManifest(ctx context.Context, req *signerv
 		signerID = h.signer.KeyID()
 	}
 
-	rec := h.store.FindRec(ctx, req.ManifestDigest, signerID)
+	rec := h.store.FindRec(ctx, req.TenantId, req.ManifestDigest, signerID)
 	if rec == nil {
 		return &signerv1.VerifyManifestResponse{Verified: false, FailureReason: "no signature found"}, nil
 	}
 
-	ok, err := h.signer.VerifyPayload(rec.RepositoryName, req.ManifestDigest, rec.SigB64)
+	ok, err := h.signer.VerifyPayload(req.TenantId, rec.RepositoryName, req.ManifestDigest, rec.SigB64)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "verify: %v", err)
 	}
@@ -145,11 +146,11 @@ func (h *testableSignerHandler) VerifyManifest(ctx context.Context, req *signerv
 
 // ListSignatures mirrors the production handler logic exactly.
 func (h *testableSignerHandler) ListSignatures(ctx context.Context, req *signerv1.ListSignaturesRequest) (*signerv1.ListSignaturesResponse, error) {
-	if req.ManifestDigest == "" {
-		return nil, status.Error(codes.InvalidArgument, "manifest_digest is required")
+	if req.TenantId == "" || req.ManifestDigest == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and manifest_digest are required")
 	}
 
-	recs := h.store.List(ctx, req.ManifestDigest)
+	recs := h.store.List(ctx, req.TenantId, req.ManifestDigest)
 	out := make([]*signerv1.Signature, 0, len(recs))
 	for _, r := range recs {
 		out = append(out, &signerv1.Signature{
@@ -309,7 +310,7 @@ func TestSignManifest_StoresRecordInStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	recs := store.List(context.Background(), testDigest)
+	recs := store.List(context.Background(), testTenantID, testDigest)
 	if len(recs) != 1 {
 		t.Errorf("store.List returned %d records, want 1", len(recs))
 	}
@@ -321,6 +322,7 @@ func TestVerifyManifest_ValidSignature_ReturnsVerifiedTrue(t *testing.T) {
 	f := &fakeSigner{keyID: testSignerKey, sigB64: validSigB64, verifyOK: true}
 	store := sigstore.New()
 	store.Add(&sigstore.Record{
+		TenantID:        testTenantID,
 		SignerID:        testSignerKey,
 		ManifestDigest:  testDigest,
 		RepositoryName:  testRepoName,
@@ -366,6 +368,7 @@ func TestVerifyManifest_InvalidSignature_ReturnsVerifiedFalse(t *testing.T) {
 	f := &fakeSigner{keyID: testSignerKey, verifyOK: false}
 	store := sigstore.New()
 	store.Add(&sigstore.Record{
+		TenantID:       testTenantID,
 		SignerID:       testSignerKey,
 		ManifestDigest: testDigest,
 		RepositoryName: testRepoName,
@@ -413,6 +416,7 @@ func TestVerifyManifest_VerifyError_ReturnsInternal(t *testing.T) {
 	f := &fakeSigner{keyID: testSignerKey, verifyErr: errVerifyFailed}
 	store := sigstore.New()
 	store.Add(&sigstore.Record{
+		TenantID:       testTenantID,
 		SignerID:       testSignerKey,
 		ManifestDigest: testDigest,
 		RepositoryName: testRepoName,
@@ -436,6 +440,7 @@ func TestVerifyManifest_VerifyError_ReturnsInternal(t *testing.T) {
 func TestListSignatures_NoSignatures_ReturnsEmptyList(t *testing.T) {
 	h := newHandler(&fakeSigner{keyID: testSignerKey})
 	resp, err := h.ListSignatures(context.Background(), &signerv1.ListSignaturesRequest{
+		TenantId:       testTenantID,
 		ManifestDigest: testDigest,
 	})
 	if err != nil {
@@ -450,6 +455,7 @@ func TestListSignatures_MultipleSignatures_ReturnsAll(t *testing.T) {
 	store := sigstore.New()
 	for range 3 {
 		store.Add(&sigstore.Record{
+			TenantID:       testTenantID,
 			SignerID:       testSignerKey,
 			ManifestDigest: testDigest,
 			RepositoryName: testRepoName,
@@ -459,6 +465,7 @@ func TestListSignatures_MultipleSignatures_ReturnsAll(t *testing.T) {
 	h := newHandlerWithStore(&fakeSigner{keyID: testSignerKey}, store)
 
 	resp, err := h.ListSignatures(context.Background(), &signerv1.ListSignaturesRequest{
+		TenantId:       testTenantID,
 		ManifestDigest: testDigest,
 	})
 	if err != nil {
@@ -480,6 +487,7 @@ func TestListSignatures_EmptyDigest_ReturnsInvalidArgument(t *testing.T) {
 func TestListSignatures_DifferentDigest_DoesNotCrossContaminate(t *testing.T) {
 	store := sigstore.New()
 	store.Add(&sigstore.Record{
+		TenantID:       testTenantID,
 		SignerID:       testSignerKey,
 		ManifestDigest: testDigest,
 		RepositoryName: testRepoName,
@@ -489,6 +497,7 @@ func TestListSignatures_DifferentDigest_DoesNotCrossContaminate(t *testing.T) {
 
 	otherDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000001"
 	resp, err := h.ListSignatures(context.Background(), &signerv1.ListSignaturesRequest{
+		TenantId:       testTenantID,
 		ManifestDigest: otherDigest,
 	})
 	if err != nil {

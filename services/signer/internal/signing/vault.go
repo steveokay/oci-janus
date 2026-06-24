@@ -95,7 +95,7 @@ func (s *vaultSigner) KeyID() string { return s.keyID }
 // sign the prehashed digest. Only the digest leaves the service — never the
 // payload bytes — so Vault audit logs do not include image metadata.
 func (s *vaultSigner) SignPayload(tenantID, repositoryName, manifestDigest string) (string, error) {
-	payload, err := buildSigningPayload(repositoryName, manifestDigest)
+	payload, err := buildSigningPayload(tenantID, repositoryName, manifestDigest)
 	if err != nil {
 		return "", fmt.Errorf("build payload: %w", err)
 	}
@@ -156,12 +156,12 @@ func (s *vaultSigner) SignPayload(tenantID, repositoryName, manifestDigest strin
 // Round-tripping verification through Vault works but doubles the latency
 // of a pull-with-verify flow; the public key is not secret so local
 // verification is the canonical pattern.
-func (s *vaultSigner) VerifyPayload(repositoryName, manifestDigest, sigB64 string) (bool, error) {
+func (s *vaultSigner) VerifyPayload(tenantID, repositoryName, manifestDigest, sigB64 string) (bool, error) {
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
 		return false, fmt.Errorf("decode signature: %w", err)
 	}
-	payload, err := buildSigningPayload(repositoryName, manifestDigest)
+	payload, err := buildSigningPayload(tenantID, repositoryName, manifestDigest)
 	if err != nil {
 		return false, fmt.Errorf("build payload: %w", err)
 	}
