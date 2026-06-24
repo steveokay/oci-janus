@@ -18,6 +18,9 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useCreateRepository } from "@/lib/api/repositories";
+import { useClaimOrg } from "@/lib/api/admin-orgs";
+import { useAuthStore } from "@/lib/auth/store";
+import { isPlatformAdmin } from "@/lib/auth/jwt";
 
 // Repository naming mirrors backend rules in CLAUDE.md §7.
 // Org: `^[a-z0-9-]{2,64}$`. Repo: `^[a-z0-9]+([._-][a-z0-9]+)*$`, max 128.
@@ -54,6 +57,15 @@ export function CreateRepositoryDialog({
 }: CreateRepositoryDialogProps): React.ReactElement {
   const navigate = useNavigate();
   const create = useCreateRepository();
+  const claim = useClaimOrg();
+  const claims = useAuthStore((s) => s.claims);
+  const canClaim = isPlatformAdmin(claims);
+
+  // When the create call returns 403 we stash the typed-in org so the
+  // "Claim this org" inline affordance knows what to claim. Platform admins
+  // can hit this; everyone else falls back to the existing error toast.
+  const [claimableOrg, setClaimableOrg] = React.useState<string | null>(null);
+
   const {
     register,
     handleSubmit,
@@ -68,23 +80,37 @@ export function CreateRepositoryDialog({
 
   const isPublic = watch("is_public");
 
+  async function doCreate(values: FormValues): Promise<void> {
+    const created = await create.mutateAsync({
+      ...values,
+      description: values.description?.trim() || undefined,
+    });
+    toast.success(`Created ${created.org}/${created.name}.`);
+    setClaimableOrg(null);
+    reset();
+    onOpenChange(false);
+    void navigate({
+      to: "/repositories/$org/$repo",
+      params: { org: created.org, repo: created.name },
+    });
+  }
+
   async function onSubmit(values: FormValues): Promise<void> {
+    // Any new submit clears a stale "claim this org" prompt — the user may
+    // have edited the org field since the last 403.
+    setClaimableOrg(null);
     try {
-      const created = await create.mutateAsync({
-        ...values,
-        // Trim trailing whitespace so the description-card render logic
-        // doesn't see ghost paragraphs.
-        description: values.description?.trim() || undefined,
-      });
-      toast.success(`Created ${created.org}/${created.name}.`);
-      reset();
-      onOpenChange(false);
-      void navigate({
-        to: "/repositories/$org/$repo",
-        params: { org: created.org, repo: created.name },
-      });
+      await doCreate(values);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 403 && canClaim) {
+        // Platform admin trying to bootstrap a fresh org — surface the
+        // inline claim affordance instead of the generic permission toast.
+        // Trim because the API client + backend both accept the raw value
+        // and we want the affordance to refer to exactly what the user typed.
+        setClaimableOrg(values.org.trim());
+        return;
+      }
       const message =
         status === 409
           ? "A repository with that name already exists."
@@ -95,11 +121,42 @@ export function CreateRepositoryDialog({
     }
   }
 
+  async function onClaimAndRetry(): Promise<void> {
+    if (!claimableOrg) return;
+    const values = {
+      org: watch("org"),
+      name: watch("name"),
+      is_public: watch("is_public"),
+      description: watch("description"),
+    } as FormValues;
+    try {
+      await claim.mutateAsync(claimableOrg);
+      toast.success(`Claimed ${claimableOrg} — you now have admin rights here.`);
+      setClaimableOrg(null);
+      // Transparent retry of the original submission. The grant the BFF just
+      // wrote shows up on the next GetUserPermissions call (uncached for the
+      // claim path) so hasScopedRole now passes.
+      await doCreate(values);
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        status === 403
+          ? "Claim refused — only platform admins can bootstrap new orgs."
+          : "Failed to claim org. Check the backend logs.",
+      );
+    }
+  }
+
+  const busy = isSubmitting || claim.isPending || create.isPending;
+
   return (
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (!o) reset();
+        if (!o) {
+          reset();
+          setClaimableOrg(null);
+        }
         onOpenChange(o);
       }}
     >
@@ -144,6 +201,29 @@ export function CreateRepositoryDialog({
             </p>
           ) : null}
 
+          {claimableOrg ? (
+            <div className="rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] px-4 py-3">
+              <p className="text-sm font-medium">
+                You don't have admin on <code>{claimableOrg}</code> yet.
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-fg-muted)]">
+                As a platform admin you can claim it — we'll grant you the
+                admin role on this org and retry creating the repository.
+              </p>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  loading={claim.isPending}
+                  disabled={busy}
+                  onClick={onClaimAndRetry}
+                >
+                  Claim {claimableOrg} and create
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="space-y-1.5">
             <Label htmlFor="description">Description (optional)</Label>
             <textarea
@@ -183,11 +263,11 @@ export function CreateRepositoryDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={isSubmitting}
+              disabled={busy}
             >
               Cancel
             </Button>
-            <Button type="submit" loading={isSubmitting} disabled={isSubmitting}>
+            <Button type="submit" loading={isSubmitting} disabled={busy}>
               {isSubmitting ? "Creating" : "Create repository"}
             </Button>
           </DialogFooter>

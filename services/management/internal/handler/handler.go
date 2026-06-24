@@ -427,6 +427,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// when SCANNER_GRPC_ADDR is unset and 403 when the caller lacks
 	// the platform-admin marker grant. See admin_scanners.go.
 	h.RegisterAdminScanners(mux, authMW)
+
+	// Platform-admin "claim a new org" route. Closes the chicken-and-
+	// egg where a platform admin can't bootstrap a new org from the FE
+	// because the per-org admin check (handleCreateRepository) rejects
+	// the (admin, org, *) marker. The new route grants the caller
+	// admin on the specified org so the existing /repositories flow
+	// takes over from there. Gated on the platform-admin marker — see
+	// admin_orgs.go.
+	mux.Handle("POST /api/v1/admin/orgs/{org}/claim", authMW(http.HandlerFunc(h.handleAdminClaimOrg)))
 }
 
 // ---------------------------------------------------------------------------
