@@ -31,6 +31,8 @@ import {
   useCachedManifest,
   type CachedManifestDetail,
 } from "@/lib/api/proxy-cache";
+import { ScansTab } from "@/components/workspace/proxy-cache/scans-tab";
+import { SigningTab } from "@/components/workspace/proxy-cache/signing-tab";
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 
 // /workspace/proxy-cache/$id — FUT-016.
@@ -263,11 +265,19 @@ function MetaCell({
 // "Platforms" instead of an empty Layers table.
 function DetailTabs({ detail }: { detail: CachedManifestDetail }): React.ReactElement {
   const firstTabLabel = detail.kind === "index" ? "Platforms" : "Layers";
+  // FUT-018 — Scans + Signing tabs hang off the same TabsList. The
+  // sub-tab components own their own loading / empty / error states so
+  // mounting them is cheap; we don't need to gate on a probe at the
+  // parent level. When the BFF route is unwired, the Scans tab shows
+  // its own "no scan yet" CTA (and the Trigger button will surface a
+  // 404 toast) and the Signing tab renders the SIGNING_DISABLED card.
   return (
     <Tabs defaultValue="layers">
       <TabsList>
         <TabsTrigger value="layers">{firstTabLabel}</TabsTrigger>
         <TabsTrigger value="manifest">Manifest</TabsTrigger>
+        <TabsTrigger value="scans">Scans</TabsTrigger>
+        <TabsTrigger value="signing">Signing</TabsTrigger>
       </TabsList>
 
       <TabsContent value="layers" className="mt-4">
@@ -280,6 +290,14 @@ function DetailTabs({ detail }: { detail: CachedManifestDetail }): React.ReactEl
 
       <TabsContent value="manifest" className="mt-4">
         <ManifestTab detail={detail} />
+      </TabsContent>
+
+      <TabsContent value="scans" className="mt-4">
+        <ScansTab digest={detail.digest} />
+      </TabsContent>
+
+      <TabsContent value="signing" className="mt-4">
+        <SigningTab digest={detail.digest} />
       </TabsContent>
     </Tabs>
   );
