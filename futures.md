@@ -177,6 +177,9 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     `tenant=acme, role=admin`).
   - Workspace admin UI: SCIM token issuance + mapping editor.
 - **Affects:** `services/auth`, `services/management`, `frontend`.
+- **Depends on:** `FUT-012` (tenant-user lifecycle management) — SCIM
+  is the automated source-of-truth layered on top of the same
+  invite / disable / list machinery. Build the manual surface first.
 
 ---
 
@@ -725,6 +728,115 @@ deferred ("we need to test this later").
 Pairs with **DEPLOY-001** tenant-persona doc work. Once both are
 done, self-hosters following the docs should be able to bootstrap a
 real multi-user setup without SQL.
+
+### FUT-012 — Tenant-user lifecycle management (invite / list / disable)
+
+**Surfaced:** 2026-06-24 during the design discussion that followed
+REM-017. The chicken-egg fix gave platform admins a way to claim a
+new org, but there is still no first-class surface for managing the
+people *inside* a tenant. Today the only routes are
+`/orgs/{org}/members` (per-org workspace permissions, can grant /
+revoke a role on one org) and `/admin/tenants` (platform-admin only,
+tenant CRUD). The in-between layer — "tenant admin manages the
+users in their tenant" — does not exist.
+
+**Why this matters:** the current model leaves tenant admins
+without a way to invite a new colleague, see the full member list
+across all orgs, or deactivate a departing employee. The only
+working paths are (a) `POST /api/v1/users` (creates a user, but no
+list view to see who exists; no invite email; no role assigned),
+and (b) raw SQL — exactly the surface SELF-HOSTING.md tells operators
+they should never need. Real customers will expect a "Users" page
+the same shape they have in GitHub / GitLab / AWS IAM.
+
+**Recommended design** (locked after the REM-017 discussion):
+
+1. **New RBAC scope: `'tenant'`** alongside `'org'` and `'repo'` in
+   `role_assignments.scope_type`. A tenant-admin is
+   `(role=admin, scope_type=tenant, scope_value=<tenant_id>)`.
+   `services/auth.CheckAccess` already does scoped-role lookup, so
+   this generalises cleanly. The platform-admin marker
+   (`(admin, org, '*')`) remains a separate, higher-privilege scope
+   and trumps tenant-admin.
+   - **Open question** (resolve before building): does tenant-admin
+     implicitly get `admin` on every org in the tenant, or stay
+     strictly user-lifecycle? Lean toward strict (tighter blast
+     radius, mirrors AWS root-vs-IAM-admin). Alternative is
+     friendlier for small tenants — needs a call.
+
+2. **Three new gRPC RPCs on `services/auth`** (gated on
+   tenant-admin OR platform-admin):
+   - `ListTenantUsers(tenant_id, page_token)` — paginated. Returns
+     `user_id`, `username`, `display_name`, `email`, `kind` (human
+     or service_account), `disabled`, `last_login_at`, and a
+     role-summary chip (count of org-admin / writer / reader rows).
+     Pairs with REM-018 — the same shape feeds the username-cell
+     primitive.
+   - `InviteUser(tenant_id, email, display_name, initial_org_role?)`
+     — creates a `users` row in `invited` state. Generates a
+     single-use invite token; emits an invite event for the email
+     transport (Phase 1: log + copy-link affordance; Phase 2:
+     real SMTP).
+   - `SetUserDisabled(user_id, disabled bool)` — flips
+     `users.disabled`. On disable, revoke every active JWT JTI in
+     Redis + mark all API keys disabled (don't delete — preserves
+     audit + reversibility).
+
+3. **Single FE route `/tenant/users`** visible to both audiences:
+   - Tenant-admin → scoped to their own tenant automatically (JWT
+     carries `tenant_id`).
+   - Platform-admin → same route with a tenant selector at the top.
+     Reachable from `TenantDetailDrawer` via a "View users →" link
+     (good attach point that drawer already has empty space for).
+   - Table columns: User (uses REM-018's `<UserCell>`), kind chip
+     (human / service_account), role summary across orgs, status
+     (active / disabled / invited), last login, actions menu.
+   - Actions: Invite user (modal — email + display_name + optional
+     initial role), Deactivate / Reactivate, Resend invite (for
+     pending state).
+
+4. **Migrations:**
+   - `services/auth/migrations/NNNNNNNN_add_tenant_scope.sql` —
+     widen the `scope_type` CHECK constraint to include `'tenant'`,
+     no data backfill (no existing tenant-scope rows).
+   - `services/auth/migrations/NNNNNNNN_add_users_invite.sql` —
+     `users.status` enum (`active` | `invited` | `disabled`) +
+     `invite_token_hash` + `invite_expires_at`. Migrate
+     `disabled BOOLEAN` → `status` (`disabled=true → status='disabled'`;
+     `false → 'active'`).
+
+**Why this shape:**
+
+- Reuses `role_assignments` for tenant-admin instead of inventing a
+  parallel `tenant_admins` table — same migration shape as adding
+  `'org'` originally. Decision log entry slot: parallels #22
+  (service-account principal pattern) in the "extend existing model"
+  philosophy.
+- One UI route serves both audiences (cuts maintenance + matches
+  how `/admin/tenants` already gates behaviour on platform-admin
+  detection).
+- Disable rather than delete — preserves audit trail; deactivation
+  is reversible. Hard-delete stays a platform-admin operation via
+  the existing tenant DB cleanup path.
+
+**Affects:** `services/auth` (migrations + 3 new RPCs + scope
+generalisation), `services/management` (3 new REST routes wrapping
+the RPCs), `frontend/` (new route + components + nav entry).
+
+**Dependencies:**
+- Pairs with REM-018 — the same `username` / `display_name`
+  hydration this needs is what REM-018 builds. Ship REM-018 first
+  (or fold its scope into this work).
+- Strictly weaker than Tier 1 #5 (SCIM provisioning) — but SCIM
+  needs the manual surface to exist first (it's the same data
+  model + endpoints with an automated source-of-truth on top).
+  Build this, then layer SCIM on the same `users.status` + invite
+  machinery.
+
+**Effort:** ~1 sprint. Backend ~2-3 days (migrations + 3 RPCs +
+auth-scope generalisation + tests); BFF ~half day (route wrappers);
+FE ~2-3 days (route + table + 3 dialogs + nav surface + RBAC
+guards); docs ~half day.
 
 ### QA-002 follow-ups (small)
 
