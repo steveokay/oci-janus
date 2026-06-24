@@ -36,12 +36,6 @@ interface FirstStepsStripProps {
   // True when total_repos has flipped > 0 mid-session. Indicator
   // transitions to a green check; the route handles navigation.
   firstRepoSeen: boolean;
-  // True when the tenant already has at least one repository. The
-  // strip's polling indicator + "Three commands to your first push"
-  // tagline are suppressed in that mode — the docker commands stay
-  // visible as a reference but the first-time-onboarding affordances
-  // step aside.
-  hasRepos?: boolean;
 }
 
 const DOCS_URL =
@@ -50,7 +44,6 @@ const DOCS_URL =
 export function FirstStepsStrip({
   workspace,
   firstRepoSeen,
-  hasRepos = false,
 }: FirstStepsStripProps): React.ReactElement {
   // Same fallback PullCommandCard uses — keeps the copy-pasteable
   // commands sensible when /workspace/me is unwired (TENANT_GRPC_ADDR
@@ -118,11 +111,9 @@ export function FirstStepsStrip({
               <ExternalLink className="size-3" aria-hidden />
               Read the docs
             </a>
-            {!hasRepos ? (
-              <span className="text-[11px] text-[var(--color-fg-subtle)]">
-                Three commands to your first push.
-              </span>
-            ) : null}
+            <span className="text-[11px] text-[var(--color-fg-subtle)]">
+              Three commands to your first push.
+            </span>
           </div>
         </div>
       </CardHeader>
@@ -148,10 +139,9 @@ export function FirstStepsStrip({
         </div>
 
         {/* Hint + status row — same horizontal density as the header so
-            the strip reads as a single compact unit. When the tenant
-            already has repos (hasRepos=true) the polling indicator is
-            suppressed because there's no "first image" to wait for;
-            the hint stays so the placeholder reminder remains visible. */}
+            the strip reads as a single compact unit. The hint stays
+            visible while polling; once firstRepoSeen flips, the
+            indicator takes over the row. */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="inline-flex items-center gap-1.5 text-[var(--color-fg-muted)]">
             <Lightbulb className="size-3 text-[var(--color-fg-subtle)]" aria-hidden />
@@ -163,7 +153,6 @@ export function FirstStepsStrip({
               with your real org and image name.
             </span>
           </div>
-          {hasRepos ? null : (
           <div className="inline-flex items-center gap-2">
             {firstRepoSeen ? (
               <>
@@ -193,7 +182,6 @@ export function FirstStepsStrip({
               </>
             )}
           </div>
-          )}
         </div>
       </CardContent>
     </Card>
