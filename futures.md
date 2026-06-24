@@ -975,65 +975,70 @@ auth-scope generalisation + tests); BFF ~half day (route wrappers);
 FE ~2-3 days (route + table + 3 dialogs + nav surface + RBAC
 guards); docs ~half day.
 
-### FUT-014 — Pull-through cache `pull_count` undercount
+### FUT-014 — Proxy publishes `pull.image` events on every cache pull
 
-**Surfaced:** 2026-06-24 smoke testing FUT-013 Phase A. After a
-clean `docker rmi` + `docker pull` cycle the `proxy_manifests`
-row's `pull_count` stayed at 0 (or 1, after a direct
-`curl /v2/.../manifests/<tag>` test). Direct GET-manifest via
-curl bumps correctly; `docker pull` does not.
+**Surfaced:** 2026-06-24 smoke testing FUT-013 Phase A. Two
+distinct symptoms, one underlying gap:
 
-**Root cause (traced via curl + DB observation):**
+1. `proxy_manifests.pull_count` stayed at 0 after `docker rmi`
+   + `docker pull` (HEAD-only flow when the digest matches).
+2. The dashboard's 24h pulls card on `/` doesn't count proxy
+   traffic at all — it reads from `audit_events`, which is
+   only populated by `services/core` via the existing FE-API-042
+   `push.image`/`pull.image` event pipeline. The proxy publishes
+   `store.queued` (retry-only) but never publishes `pull.image`.
 
-The OCI client → registry-proxy traffic for `docker pull
-localhost:8084/cache/dockerhub/library/alpine:3.20` is:
+**Root cause:** the proxy was wired for "tell me a thing got
+cached" only. Operator-facing analytics + the per-row counter
+both want "tell me an image got SERVED to a client" — that's
+a different event and the proxy doesn't emit it.
 
-1. `HEAD /v2/.../manifests/3.20` — proxy serves cached digest
-   header.
-2. Docker reads `Docker-Content-Digest`, decides whether to
-   re-fetch the manifest body. **When the digest already matches
-   any layer Docker has locally cached, Docker skips the GET
-   manifest body request entirely** and goes straight to blob
-   fetches.
-3. `GET /v2/.../blobs/sha256:…` — for each layer (different
-   code path; doesn't touch proxy_manifests).
+**Locked design (revised 2026-06-24 after the operator request):**
 
-The current Phase A wiring only bumps `pull_count` from
-`handleGetManifest`'s cache-hit fast path. HEAD-only flows and
-blob-only flows leave the counter untouched.
+Instead of a local-only fix in `proxy_manifests.pull_count`,
+make `services/proxy` a first-class publisher in the existing
+audit pipeline:
 
-So the dashboard's "Pulls served" number undercounts real Docker
-pull traffic in most common cases (re-pull of a known tag).
-Direct curl + manifest-by-digest pulls bump correctly, but those
-aren't the dominant traffic shape on a production proxy.
+- New event `pull.image` emitted by the proxy on every
+  successful client-served manifest response, regardless of
+  cache hit/miss/HEAD. Same routing key, same payload shape
+  as `services/core`'s existing `pull.image` event so the
+  audit consumer doesn't branch on origin.
+- HEAD requests count as pulls. Docker's HEAD-then-skip-GET is
+  the dominant traffic shape against cached refs; pretending
+  it isn't a pull means undercounting >50% of real traffic.
+  Payload includes `via: "proxy"` so analytics CAN distinguish
+  cache vs owned-push pulls if a future card wants to.
+- The existing `proxy_manifests.pull_count` column can either:
+  - (a) stay as a fast-path counter, updated alongside the
+    event publish — keeps the cache page fast without a join
+    against `audit_events`; OR
+  - (b) be derived from `audit_events` at read time and
+    drop the column entirely (one source of truth).
+  - Recommend (a) — keeps the cache page snappy at scale.
 
-**Options for the fix** (no decision yet):
+**Why this matters:**
 
-| Option | What | Trade-offs |
-|---|---|---|
-| **A. Bump on HEAD too** | `handleHeadManifest` cache-hit path mirrors the same `go h.bumpPullCount(...)` call | Slight violation of "OCI HEAD is metadata-only" purism (the proxy doesn't bump pulls on HEAD elsewhere). But operators care about "this image got pulled," not OCI semantics — and HEAD-then-skip-GET is how Docker actually pulls cached refs. Lowest-risk fix. |
-| **B. Bump on cache-miss path too** | Wire RecordPull into `cacheManifest` after a successful UpsertManifest so the first pull of a new ref also counts as 1 | Covers the cache-miss → upstream-fetch → cache-write path. Has a small race window: a second pull arriving during the background `cacheManifest` goroutine might fire RecordPull before the row exists (UPDATE affects 0 rows, no counter change). For accurate first-pull accounting Option A is still needed. |
-| **C. Both** | Combine A + B | Covers every real-world pull path. Recommended. |
+- Cache page's "Pulls" column starts showing real numbers.
+- Dashboard 24h pulls card automatically includes cache pulls
+  the moment this lands — no new dashboard wiring required,
+  because the `audit_events` table is what `GetAnalytics` reads
+  from. (The user's "change dashboard pulls/24h card" request
+  becomes a zero-line FE change.)
+- `services/audit`'s per-tenant activity feed picks up proxy
+  pulls. `webhook` subscribers on `pull.image` start firing
+  on cache pulls.
 
-**Recommended approach:** Option C (both A + B). The HEAD bump is
-the load-bearing piece; the cache-miss bump catches the "first
-pull of a new ref" case so the dashboard doesn't briefly show
-pull_count=0 for hot-off-the-press cache entries.
+**Affects:** `services/proxy` (event publish on serve path),
+`services/audit` (no change — eventconsumer already handles
+`pull.image`), `services/webhook` (no change — already
+allowlisted). No FE change.
 
-**Why this matters for FUT-013:** the operator-facing pitch of
-the new `/workspace/proxy-cache` page is "see what's been pulled
-through your proxy." If the pull counter undercounts, the table
-is misleading. The dashboard still works (size, fetched-at,
-last-pulled-at, evict are all fine) but the counter column reads
-"0 pulls" on rows that were demonstrably pulled.
-
-**Affects:** `services/proxy/internal/handler/http.go` only.
-Repo + RPC contract unchanged. No migration. No FE change.
-
-**Effort:** ~half day. Add `bumpPullCount` to `handleHeadManifest`
-cache-hit path; extend `cacheManifest` to call RecordPull after a
-successful upsert. Add two regression tests (HEAD bumps; cache-
-miss + first pull bumps once).
+**Effort:** ~1 day. Wire publisher into `handleGetManifest` +
+`handleHeadManifest` cache-hit + cache-miss paths. Plumb
+RABBITMQ_URL in proxy (currently optional — warns when unset).
+Two regression tests + smoke verification against the
+dashboard 24h card.
 
 ### FUT-015 — Pull-command + tag/digest row expander on `/workspace/proxy-cache`
 
