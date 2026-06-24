@@ -117,6 +117,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		w.WriteHeader(http.StatusOK)
 	})
 	devTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
+	// QA-006: env-driven proxy CIDRs are parsed in main flow + handed to
+	// the handler package, not in an init() that read os.Getenv directly.
+	handler.SetTrustedProxies(handler.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs))
 	httpH := handler.NewHTTPHandler(svc, devTenantID)
 
 	// ── 5a. Service-account service (FE-API-048 T13) ─────────────────────

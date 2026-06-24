@@ -168,6 +168,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	defer scanQueuedCons.Close()
 
 	scanStore := store.New()
+	// QA-005: in-memory scan records are useful for live status reads but
+	// the metadata service is the system of record. Sweep terminal-status
+	// entries hourly so a long-running worker doesn't leak a row per scan.
+	go scanStore.StartSweeper(ctx, time.Hour, 24*time.Hour)
+
 	pool := worker.NewPool(
 		scannerPlugin,
 		metaConn,

@@ -70,6 +70,16 @@ type Config struct {
 	// In production all three cert paths must be set; in local dev the
 	// dial falls back to plaintext with a slog.Warn.
 	AuditGRPCAddr string `mapstructure:"AUDIT_GRPC_ADDR"`
+
+	// TrustedProxyCIDRs is a comma-separated CIDR list of trusted reverse
+	// proxies (SEC-009). When the TCP peer falls within one of these
+	// ranges, the leftmost non-private IP in X-Forwarded-For is used as
+	// the client IP for rate limiting. Empty (default) ⇒ XFF is ignored
+	// and RemoteAddr is always used. Malformed entries are logged and
+	// skipped at startup.
+	//
+	// QA-006: env reads moved here from an init() in the handler package.
+	TrustedProxyCIDRs string `mapstructure:"TRUSTED_PROXY_CIDRS"`
 }
 
 // Load binds environment variables into Config and validates required fields.

@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -93,4 +94,50 @@ func (s *Store) Get(id string) (ScanRecord, bool) {
 	}
 	cp := *r
 	return cp, true
+}
+
+// Sweep removes terminal-status records (complete / failed) whose CompletedAt
+// is older than maxAge. Returns the number of records dropped (QA-005).
+//
+// The metadata service is the system of record for scan results — this
+// in-memory map is purely a process-lifetime convenience for live status
+// reads. Long-running workers accumulate completed entries forever without
+// a sweep; one entry per scan, growing without bound. 24h is a reasonable
+// default retention: the dashboard polls scan status every few seconds
+// while a scan is active, and once a scan completes the FE switches to
+// fetching from metadata so the in-memory row is only useful briefly.
+func (s *Store) Sweep(maxAge time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	dropped := 0
+	for id, r := range s.m {
+		if r.CompletedAt == nil {
+			continue
+		}
+		if r.Status != StatusComplete && r.Status != StatusFailed {
+			continue
+		}
+		if r.CompletedAt.Before(cutoff) {
+			delete(s.m, id)
+			dropped++
+		}
+	}
+	return dropped
+}
+
+// StartSweeper runs Sweep on the given interval until ctx is cancelled.
+// Intended to be invoked once at service startup as `go store.StartSweeper(
+// ctx, time.Hour, 24*time.Hour)`. Returns when ctx is done.
+func (s *Store) StartSweeper(ctx context.Context, interval, maxAge time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Sweep(maxAge)
+		}
+	}
 }

@@ -557,6 +557,14 @@ func (p *Pool) persistScanStatus(ctx context.Context, job scanJob, status string
 		}
 	}
 
+	// scan_results.findings is NOT NULL. On a failed scan we have no
+	// findings to attach, but we still need the status row to flip from
+	// "pending" → "failed" so the UI doesn't show the job as stuck. Pass
+	// an empty JSON array as the canonical "no findings" payload.
+	if findingsJSON == nil {
+		findingsJSON = []byte("[]")
+	}
+
 	_, err := p.metaClient.UpdateScanStatus(ctx, &metadatav1.UpdateScanStatusRequest{
 		ScanId:         job.scanID,
 		TenantId:       job.tenantID,

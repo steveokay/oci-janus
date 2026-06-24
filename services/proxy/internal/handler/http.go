@@ -562,11 +562,19 @@ func newAuthClient(conn *grpc.ClientConn, rdb *redis.Client) *authClient {
 }
 
 func (a *authClient) validateBearer(ctx context.Context, token string) (*tokenClaims, error) {
-	cacheKey := "jwt:valid:" + token
-	if cached, err := a.redis.Get(ctx, cacheKey).Result(); err == nil {
-		parts := strings.SplitN(cached, ":", 2)
-		if len(parts) == 2 {
-			return &tokenClaims{userID: parts[0], tenantID: parts[1]}, nil
+	// QA-004: cache key uses the JTI claim, not the raw token, so the
+	// bearer credential never lands in Redis keyspace. parseJWTJTI returns
+	// empty string on parse failure; in that case we skip the cache and
+	// let grpc.ValidateToken reject the malformed token.
+	jti := parseJWTJTI(token)
+	var cacheKey string
+	if jti != "" {
+		cacheKey = "jwt:valid:" + jti
+		if cached, err := a.redis.Get(ctx, cacheKey).Result(); err == nil {
+			parts := strings.SplitN(cached, ":", 2)
+			if len(parts) == 2 {
+				return &tokenClaims{userID: parts[0], tenantID: parts[1]}, nil
+			}
 		}
 	}
 
@@ -589,13 +597,37 @@ func (a *authClient) validateBearer(ctx context.Context, token string) (*tokenCl
 		tenantID: resp.GetTenantId(),
 	}
 
-	if exp := resp.GetExpiresAt(); exp != nil {
-		ttl := time.Until(exp.AsTime())
-		if ttl > 0 {
-			_ = a.redis.Set(ctx, cacheKey, claims.userID+":"+claims.tenantID, ttl).Err()
+	if cacheKey != "" {
+		if exp := resp.GetExpiresAt(); exp != nil {
+			ttl := time.Until(exp.AsTime())
+			if ttl > 0 {
+				_ = a.redis.Set(ctx, cacheKey, claims.userID+":"+claims.tenantID, ttl).Err()
+			}
 		}
 	}
 	return claims, nil
+}
+
+// parseJWTJTI extracts the JTI claim from a JWT payload without verifying
+// the signature. Returns empty string on any parse failure. Safe to use for
+// cache keying because full validation still happens via grpc.ValidateToken
+// on cache miss.
+func parseJWTJTI(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		JTI string `json:"jti"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.JTI
 }
 
 func (a *authClient) validateAPIKey(ctx context.Context, keyID, secret string) (*tokenClaims, error) {
