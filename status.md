@@ -38,6 +38,11 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| FUT-014 doc-expand | Expanded FUT-014 from "bump pull_count column" to "proxy publishes pull.image events" — collapses cache-counter undercount + dashboard 24h card missing cache traffic into one design | PR #80 | 2026-06-24 | DONE (docs) |
+| FUT-015/016/017 filed | Three proxy-cache follow-ups filed in futures.md: row expander, click-through detail page, scan + sign on cached images | PR #79 | 2026-06-24 | DONE (docs) |
+| proxy-mtls-server | services/proxy gRPC server now wraps mTLS server credentials when MTLS_* env vars are set; PROXY_GRPC_ADDR wired in docker-compose | PR #76 | 2026-06-24 | DONE |
+| sidebar-proxy-cache-placement | Moved Pull-through cache nav item from Integrations → Operate (between Repositories and Helm charts) per operator feedback | PR #78 | 2026-06-24 | DONE |
+| FUT-013 Phase C | Frontend /workspace/proxy-cache route + sidebar entry under Operate; useCacheStats null-on-403/404 probe-and-hide; type-to-confirm evict dialog; 4 new vitest cases | PR #75 | 2026-06-24 | DONE (Phase C) |
 | FUT-013 Phase B | services/management BFF — `GET /api/v1/proxy/cache`, `/stats`, `DELETE /{id}`; workspace-admin gated; 404 when PROXY_GRPC_ADDR unset (FE probe-and-hide) | PR #74 | 2026-06-24 | DONE (Phase B) |
 | FUT-013 Phase A | services/proxy backend for cache visibility — migration 00003 (`last_pulled_at` / `pull_count` / `size_bytes`) + 3 new RPCs (`ListCachedManifests` / `GetCacheStats` / `DeleteCachedManifest`) + async pull-bump on cache hit | PR #73 | 2026-06-24 | DONE (Phase A) |
 | status-md-cleanup | Collapsed `status.md` from 851 → 208 lines into a single completed-work table | PR #72 | 2026-06-24 | DONE |
