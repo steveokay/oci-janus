@@ -44,6 +44,18 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
       { to: "/repositories", label: "Repositories", icon: Boxes },
+      // FUT-013: pull-through cache visibility. Operator-facing
+      // signal alongside Repositories — operators think of the
+      // cache as "another set of images we serve," not as an
+      // integration. probeKey gates visibility on a successful
+      // /proxy/cache/stats probe so deployments without the proxy
+      // (403/404) don't show a dead link.
+      {
+        to: "/workspace/proxy-cache",
+        label: "Pull-through cache",
+        icon: Repeat,
+        probeKey: "proxy-cache",
+      },
       // S-MAINT-1 Batch 5 F4 follow-up — dedicated landing for Helm chart
       // users (platform engineers running `helm install`). MVP renders
       // the same repos table as /repositories with chart-focused copy;
@@ -69,16 +81,6 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       // Integrations alongside Webhooks because both are outbound
       // delivery channels — same admin posture, similar mental model.
       { to: "/workspace/audit-export", label: "Audit streaming", icon: Radio },
-      // FUT-013: pull-through cache visibility. probeKey gates the
-      // item on a successful /proxy/cache/stats probe — 403 (non-
-      // workspace-admin) or 404 (PROXY_GRPC_ADDR unset) hide it so
-      // a deployment without the proxy doesn't show a dead link.
-      {
-        to: "/workspace/proxy-cache",
-        label: "Pull-through cache",
-        icon: Repeat,
-        probeKey: "proxy-cache",
-      },
     ],
   },
   {
