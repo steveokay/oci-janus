@@ -18,6 +18,7 @@ import (
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
@@ -134,6 +135,21 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		gcClient = gcv1.NewGCServiceClient(gcConn)
 	}
 
+	// FUT-013 proxy gRPC client. Optional — wired only when
+	// PROXY_GRPC_ADDR is set. Nil leaves the `/api/v1/proxy/cache*`
+	// routes returning 404 "route disabled" so a management deployment
+	// without registry-proxy still serves every other surface. The
+	// frontend probes and hides the sidebar entry when 404 lands.
+	var proxyClient proxyv1.ProxyServiceClient
+	if cfg.ProxyGRPCAddr != "" {
+		proxyConn, err := grpc.NewClient(cfg.ProxyGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		if err != nil {
+			return fmt.Errorf("dial proxy grpc: %w", err)
+		}
+		defer proxyConn.Close()
+		proxyClient = proxyv1.NewProxyServiceClient(proxyConn)
+	}
+
 	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
@@ -144,6 +160,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	h = h.WithSignerClient(signerClient)
 	h = h.WithScannerClient(scannerClient)
 	h = h.WithGCClient(gcClient)
+	h = h.WithProxyClient(proxyClient)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
 	// interactive dashboard while blocking a runaway script.
 	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))

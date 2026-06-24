@@ -56,16 +56,16 @@ layout; distroless scratch-dir / tmpdir perms).
 active adapter to the dev stub. REM-011 P2's in-memory swap means
 no container restart is needed.
 
-### FUT-013 — Pull-through cache visibility (Phase A: backend)
+### FUT-013 — Pull-through cache visibility (Phase B: BFF)
 
-**Status:** Phase A on branch `feat/fut-013-a-proxy-cache-backend`
-(in flight, this session). Adds migration `00003`, the
-`last_pulled_at` / `pull_count` / `size_bytes` columns on
-`proxy_manifests`, and three new RPCs (`ListCachedManifests`,
-`GetCacheStats`, `DeleteCachedManifest`) on `services/proxy`.
-Phase B (BFF) + Phase C (FE route + sidebar entry) are queued —
-see futures.md FUT-013 for the full design + workspace-admin
-gating decision.
+**Status:** Phase A shipped via PR #73 (proto + migration + 3 RPCs
+on `services/proxy`). Phase B on branch
+`feat/fut-013-b-proxy-cache-bff` (in flight). Adds three REST
+routes on `services/management` (`GET /api/v1/proxy/cache`,
+`GET /api/v1/proxy/cache/stats`, `DELETE /api/v1/proxy/cache/{id}`)
+gated on workspace-admin; nil proxy client → 404 so the FE can
+probe + hide the sidebar entry. Phase C (FE route + sidebar
+entry) is next.
 
 ---
 
