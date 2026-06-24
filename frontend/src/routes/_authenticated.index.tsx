@@ -163,16 +163,16 @@ function DashboardHome(): React.ReactElement {
             <HealthCard pct={data?.system_health_pct} loading={isLoading} />
           </div>
 
-          {/* DSGN-005 v2 — compact "Get started" strip slots below the
-              stat row when the tenant has no repos yet. Once
-              total_repos > 0, the strip vanishes; the rest of the
-              dashboard is unchanged. */}
-          {isEmptyTenant ? (
-            <FirstStepsStrip
-              workspace={workspace}
-              firstRepoSeen={firstRepoSeen}
-            />
-          ) : null}
+          {/* DSGN-005 v3 — compact "Get started" strip stays visible
+              always so operators can look up the docker login / push
+              commands without hunting through docs. When the tenant
+              already has repos, the polling indicator + auto-navigate
+              are suppressed (those only make sense pre-first-push). */}
+          <FirstStepsStrip
+            workspace={workspace}
+            firstRepoSeen={firstRepoSeen}
+            hasRepos={!isEmptyTenant && !isLoading}
+          />
         </>
       )}
 
