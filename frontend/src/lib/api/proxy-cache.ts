@@ -381,3 +381,221 @@ export function useUpdateProxyCacheSignPolicy(upstreamName: string) {
     },
   });
 }
+
+// ─── FUT-018 — digest-keyed scan + signature hooks ──────────────────
+//
+// Cached manifests don't sit in a repo / tag — they're keyed on
+// (tenant_id, upstream, image, reference, digest) by the proxy. The
+// per-tag /scan + /signature routes can't reach them. The BFF added
+// four digest-keyed routes (PR #93); these hooks wrap them.
+//
+// Wire shapes mirror the per-tag routes:
+//   • ScanByDigestResponse is the same ScanResponse JSON the per-tag
+//     route serializes (handler.go:1038).
+//   • SignaturesByDigestResponse is the same SignatureResponse shape
+//     (signature.go:51). Unsigned manifests return 200 with
+//     `signed=false, signatures=[]` rather than 404 — separates
+//     "nothing has signed" from "route disabled".
+//
+// 403/404 mapping:
+//   • GET scan: 404 → null when no scan recorded yet. 403/route-
+//     disabled also collapse to null so non-admin or unwired BFFs
+//     skip the panel (mirrors useCacheStats + useScan).
+//   • GET signatures: 200 even for unsigned; 404 only when route is
+//     disabled (signer unwired) — SIGNING_DISABLED sentinel.
+//   • POST sign + POST trigger: the mutations throw the AxiosError
+//     up so callers can branch on status code (403 writer-required,
+//     404 disabled, 400 bad signer_id) the same way SignManifestDialog
+//     branches on the per-tag mutation.
+
+// Reuse the ScanResult shape from the existing `types` module so the
+// SeverityBar + SeverityLegend + parseFindings helpers used by the
+// per-tag ScanPanel can be reused 1:1 in the digest-keyed tab.
+import type { ScanResult } from "./types";
+import { SIGNING_DISABLED, type SignatureStatus } from "./signature";
+
+export type ScanByDigestResponse = ScanResult;
+export type SignaturesByDigestResponse = SignatureStatus;
+
+// PENDING_STATUSES — kept inline (rather than imported from scan.ts) so
+// this module doesn't reach into the per-tag hook's polling helpers.
+// Same wire values though; drift here would manifest as a stuck pill in
+// the Scans tab.
+const PENDING_STATUSES: ReadonlyArray<ScanResult["status"]> = ["pending", "running"];
+const POLL_INTERVAL_MS = 4_000;
+const NULL_POLL_WINDOW_MS = 30_000;
+
+// Extend the query key tree with the digest-keyed namespaces. Both hang
+// off the proxy-cache root so a tenant-wide invalidate (rare) still
+// catches them.
+export const proxyCacheDigestKeys = {
+  scanByDigest: (digest: string) =>
+    [...proxyCacheKeys.all, "scanByDigest", digest] as const,
+  signaturesByDigest: (digest: string) =>
+    [...proxyCacheKeys.all, "signaturesByDigest", digest] as const,
+};
+
+// useScanByDigest — mirror of useScan but keyed on the manifest digest.
+// 404 → null so the Scans tab can render the "no scan yet" CTA; the
+// per-tag hook uses the same convention. Polling fires every 4s while
+// the result is pending/running OR while the result is null + recent
+// (so an auto-scan that lands a few hundred ms after mount surfaces
+// without a manual refresh).
+export function useScanByDigest(digest: string | undefined) {
+  return useQuery({
+    queryKey: digest
+      ? proxyCacheDigestKeys.scanByDigest(digest)
+      : ["proxy-cache", "scanByDigest", "_disabled"],
+    enabled: Boolean(digest),
+    queryFn: async (): Promise<ScanByDigestResponse | null> => {
+      if (!digest) throw new Error("digest is required");
+      try {
+        const { data } = await apiClient.get<ScanByDigestResponse>(
+          `/scan-by-digest/${encodeURIComponent(digest)}`,
+        );
+        return data;
+      } catch (e) {
+        // 404 covers two cases the BFF distinguishes by message but the
+        // FE treats identically: (a) no scan recorded for this digest,
+        // (b) the scanner route is disabled because SCANNER_GRPC_ADDR
+        // is unset. Both render the "trigger a scan" CTA. 403 means the
+        // caller can read the cache list but isn't a writer; we don't
+        // hide the tab in that case (the read GET is open to any
+        // tenant member) so 403 collapses to the "no scan" path too.
+        if (e instanceof AxiosError) {
+          const s = e.response?.status;
+          if (s === 404 || s === 403) return null;
+        }
+        throw e;
+      }
+    },
+    refetchInterval: (q) => {
+      const status = q.state.data?.status;
+      if (status && PENDING_STATUSES.includes(status)) {
+        return POLL_INTERVAL_MS;
+      }
+      // Brief null-poll window so a background scan (auto-scan-on-cache
+      // from FUT-017, or a trigger fired in another tab) surfaces here
+      // without a manual refresh.
+      if (q.state.data === null) {
+        const sinceMount = Date.now() - q.state.dataUpdatedAt;
+        if (sinceMount < NULL_POLL_WINDOW_MS) {
+          return POLL_INTERVAL_MS;
+        }
+      }
+      return false;
+    },
+    // Match useScan's posture — the list-table columns also fire this
+    // hook; a 30s stale window keeps the per-row request quiet but
+    // still surfaces a freshly-completed scan within a list refresh.
+    staleTime: 30_000,
+  });
+}
+
+// useTriggerScanByDigest — POST /scan-by-digest/{digest}. Writes an
+// optimistic `pending` stub into the cache for the read hook so the
+// "Trigger scan" → "Scanning…" transition is instant; the 4s poll
+// then catches the real result row when the scanner writes it.
+export function useTriggerScanByDigest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (digest: string) => {
+      const { data } = await apiClient.post<{
+        scan_id: string;
+        manifest_digest: string;
+        status: string;
+      }>(`/scan-by-digest/${encodeURIComponent(digest)}`, {});
+      return data;
+    },
+    onSuccess: (resp, digest) => {
+      const key = proxyCacheDigestKeys.scanByDigest(digest);
+      const existing = qc.getQueryData<ScanByDigestResponse | null>(key);
+      // Same optimistic-stub shape as useTriggerScan — preserves prior
+      // scanner_name/version so a "Rescan" doesn't blank the card.
+      const stub: ScanByDigestResponse = {
+        scan_id: resp.scan_id || existing?.scan_id || "pending",
+        status: "pending",
+        scanner_name: existing?.scanner_name ?? "",
+        scanner_version: existing?.scanner_version ?? "",
+        severity_counts: existing?.severity_counts ?? {},
+        findings_json: existing?.findings_json,
+        started_at: new Date().toISOString(),
+        completed_at: undefined,
+      };
+      qc.setQueryData(key, stub);
+      void qc.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+// useSignaturesByDigest — mirror of useSignature (per-tag) but keyed on
+// the manifest digest. The BFF returns 200 with `signed=false,
+// signatures=[]` when nothing has signed — that's a valid state, not
+// a 404. The only 404 case is "route disabled" (signer unwired), which
+// we surface via the same SIGNING_DISABLED sentinel useSignature uses
+// so callers can branch on it identically.
+export function useSignaturesByDigest(digest: string | undefined) {
+  return useQuery({
+    queryKey: digest
+      ? proxyCacheDigestKeys.signaturesByDigest(digest)
+      : ["proxy-cache", "signaturesByDigest", "_disabled"],
+    enabled: Boolean(digest),
+    queryFn: async (): Promise<
+      SignaturesByDigestResponse | typeof SIGNING_DISABLED
+    > => {
+      if (!digest) throw new Error("digest is required");
+      try {
+        const { data } = await apiClient.get<SignaturesByDigestResponse>(
+          `/signatures-by-digest/${encodeURIComponent(digest)}`,
+        );
+        return data;
+      } catch (e) {
+        if (e instanceof AxiosError && e.response?.status === 404) {
+          return SIGNING_DISABLED;
+        }
+        throw e;
+      }
+    },
+    staleTime: 30_000,
+  });
+}
+
+// useSignByDigest — POST /sign-by-digest/{digest}. Optional signer_id
+// payload (empty → workspace default). On success invalidates the
+// read query so the new row appears next render.
+//
+// The mutationFn signature is `(digest, signer_id?)`; we model that
+// as one args object to keep call-sites readable and to leave room
+// for adding `key_id` later if the signer ever exposes a picker.
+export interface SignByDigestArgs {
+  digest: string;
+  signer_id?: string;
+}
+
+export function useSignByDigest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ digest, signer_id }: SignByDigestArgs) => {
+      const body: Record<string, string> = {};
+      if (signer_id && signer_id.length > 0) body.signer_id = signer_id;
+      const { data } = await apiClient.post<{
+        manifest_digest: string;
+        signer_id: string;
+        key_id: string;
+        signature_digest: string;
+        signed_at: string;
+      }>(`/sign-by-digest/${encodeURIComponent(digest)}`, body);
+      return data;
+    },
+    onSuccess: (_resp, { digest }) => {
+      void qc.invalidateQueries({
+        queryKey: proxyCacheDigestKeys.signaturesByDigest(digest),
+      });
+    },
+  });
+}
+
+// Re-export shared signature primitives so consumers of the digest
+// hooks don't need a second import from `./signature`.
+export { SIGNING_DISABLED };
+export type { SignatureRecord, SignatureStatus } from "./signature";

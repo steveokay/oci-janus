@@ -6,6 +6,21 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // the router module with a stub that renders a plain anchor. Keeps the
 // row-expander tests focused on the FUT-015 contract — toggle, copy,
 // timestamps — without dragging in the routing layer.
+// FUT-018 — the row now embeds <SeverityCell> + <SignedCell>, both of
+// which call useScanByDigest / useSignaturesByDigest. We mock those
+// hooks to return a stable "no data" shape so the FUT-015 row-expander
+// assertions stay focused on chevron + copy commands.
+vi.mock("@/lib/api/proxy-cache", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/api/proxy-cache")
+  >("@/lib/api/proxy-cache");
+  return {
+    ...actual,
+    useScanByDigest: () => ({ data: null, isLoading: false }),
+    useSignaturesByDigest: () => ({ data: undefined, isLoading: false }),
+  };
+});
+
 vi.mock("@tanstack/react-router", async () => {
   const actual = await vi.importActual<Record<string, unknown>>(
     "@tanstack/react-router",
@@ -39,6 +54,7 @@ vi.mock("@tanstack/react-router", async () => {
 });
 
 import * as React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   CachedManifestRow,
   resolvePullHost,
@@ -97,25 +113,32 @@ const tagRowNoDigest: CachedManifest = {
 
 // Helper — CachedManifestRow renders a <tr>, so we have to wrap it in a
 // <table><tbody> to keep the DOM valid (and to keep jsdom from warning
-// about orphaned table rows).
+// about orphaned table rows). Each render also gets its own
+// QueryClientProvider because the row now embeds <SeverityCell> +
+// <SignedCell> (FUT-018), both of which use useQuery and need a client.
 function renderRow(props: {
   m: CachedManifest;
   pullHost?: string;
   expanded: boolean;
   onToggleExpand?: () => void;
 }) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <Table>
-      <TableBody>
-        <CachedManifestRow
-          m={props.m}
-          pullHost={props.pullHost ?? "registry.example.com"}
-          expanded={props.expanded}
-          onToggleExpand={props.onToggleExpand ?? (() => {})}
-          onEvict={() => {}}
-        />
-      </TableBody>
-    </Table>,
+    <QueryClientProvider client={client}>
+      <Table>
+        <TableBody>
+          <CachedManifestRow
+            m={props.m}
+            pullHost={props.pullHost ?? "registry.example.com"}
+            expanded={props.expanded}
+            onToggleExpand={props.onToggleExpand ?? (() => {})}
+            onEvict={() => {}}
+          />
+        </TableBody>
+      </Table>
+    </QueryClientProvider>,
   );
 }
 

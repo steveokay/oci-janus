@@ -4,6 +4,7 @@ import { AxiosError } from "axios";
 import { toast } from "sonner";
 import {
   Boxes,
+  Check,
   ChevronDown,
   ChevronRight,
   Database,
@@ -37,6 +38,9 @@ import {
   useCacheStats,
   useCachedManifests,
   useEvictCachedManifest,
+  useScanByDigest,
+  useSignaturesByDigest,
+  SIGNING_DISABLED,
   type CachedManifest,
 } from "@/lib/api/proxy-cache";
 import { UpstreamPoliciesCard } from "@/components/workspace/proxy-cache/upstream-policies-card";
@@ -258,6 +262,14 @@ function ProxyCachePage(): React.ReactElement {
                   <TableHead>Cached</TableHead>
                   <TableHead>Last pulled</TableHead>
                   <TableHead className="text-right">Pulls</TableHead>
+                  {/* FUT-018 — Severity + Signed status per row. The
+                      cells fire useScanByDigest / useSignaturesByDigest
+                      independently and TanStack Query dedupes identical
+                      digest keys so a row that appears twice in the
+                      list (rare; same digest, different reference) only
+                      hits the BFF once. */}
+                  <TableHead>Severity</TableHead>
+                  <TableHead>Signed</TableHead>
                   <TableHead aria-label="Actions" className="w-12" />
                 </TableRow>
               </TableHeader>
@@ -465,6 +477,15 @@ export function CachedManifestRow({
         <TableCell className="text-right tabular-nums">
           {Intl.NumberFormat().format(m.pull_count)}
         </TableCell>
+        {/* FUT-018 — Severity + Signed pill cells. Each cell owns its
+            own query so a slow scanner doesn't block the signature
+            badge from rendering, and vice versa. */}
+        <TableCell>
+          <SeverityCell digest={m.digest} />
+        </TableCell>
+        <TableCell>
+          <SignedCell digest={m.digest} />
+        </TableCell>
         <TableCell>
           <Button
             variant="ghost"
@@ -478,7 +499,7 @@ export function CachedManifestRow({
       </TableRow>
       {expanded ? (
         <TableRow className="bg-[var(--color-surface-sunken)] hover:bg-[var(--color-surface-sunken)]">
-          <TableCell colSpan={9} className="px-4 py-4">
+          <TableCell colSpan={11} className="px-4 py-4">
             <div className="space-y-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
               <PullCommandField label="docker pull (by tag)" value={tagPull} />
               {hasDigest ? (
@@ -623,6 +644,136 @@ export function dockerPullCommand(
   const sep = "reference" in ref ? ":" : "@";
   const value = "reference" in ref ? ref.reference : ref.digest;
   return `docker pull ${host}/cache/${upstream}/${image}${sep}${value}`;
+}
+
+// FUT-018 — Severity + Signed cell components.
+//
+// Each cell fires its own `useScanByDigest` / `useSignaturesByDigest`
+// query. TanStack Query's deduplication keys on the queryKey: two
+// rows with the same digest share the same in-flight request (rare
+// in the cache list — same digest under two references — but free
+// to handle). The hooks set `staleTime: 30_000` so scrolling through
+// a 100-row table doesn't refetch every cell on every minor
+// interaction.
+//
+// SeverityCell renders the worst-severity badge (CRITICAL > HIGH >
+// MEDIUM > LOW > none). For pending/running we render "Scanning…",
+// and for unscanned/disabled rows we render an em-dash with neutral
+// tone so the visual posture of the column stays calm.
+//
+// SignedCell renders a check icon when ≥1 signature exists, em-dash
+// for unsigned/disabled, and a skeleton while the query is in
+// flight. The signing-disabled sentinel collapses to em-dash —
+// individual rows don't need to surface "signer unwired" copy
+// (the Signing tab on the detail page already does).
+
+interface DigestCellProps {
+  digest: string;
+}
+
+const SEVERITY_PRIORITY: readonly ("CRITICAL" | "HIGH" | "MEDIUM" | "LOW")[] = [
+  "CRITICAL",
+  "HIGH",
+  "MEDIUM",
+  "LOW",
+] as const;
+
+export function SeverityCell({ digest }: DigestCellProps): React.ReactElement {
+  const { data, isLoading } = useScanByDigest(digest);
+
+  if (isLoading) {
+    return <Skeleton className="h-4 w-16" />;
+  }
+
+  // No digest → never going to have a scan; render an em-dash with
+  // neutral tone so the column stays visually quiet.
+  if (!digest || data === null || data === undefined) {
+    return (
+      <Badge tone="neutral" data-testid="severity-cell-none">
+        —
+      </Badge>
+    );
+  }
+
+  if (data.status === "pending" || data.status === "running") {
+    return (
+      <Badge tone="warning" dot pulse data-testid="severity-cell-scanning">
+        Scanning…
+      </Badge>
+    );
+  }
+
+  if (data.status === "failed") {
+    return (
+      <Badge tone="danger" data-testid="severity-cell-failed">
+        Failed
+      </Badge>
+    );
+  }
+
+  // Pick the worst severity present. Severity-zero scans render
+  // "Clean" so the operator sees a positive signal rather than an
+  // empty cell.
+  const counts = data.severity_counts ?? {};
+  for (const sev of SEVERITY_PRIORITY) {
+    const n = counts[sev] ?? 0;
+    if (n > 0) {
+      // Map severity → badge tone (matches FindingsTable rows).
+      const tone = sev.toLowerCase() as "critical" | "high" | "medium" | "low";
+      return (
+        <Badge tone={tone} data-testid={`severity-cell-${tone}`}>
+          {sev[0] + sev.slice(1).toLowerCase()} ({n})
+        </Badge>
+      );
+    }
+  }
+  return (
+    <Badge tone="success" data-testid="severity-cell-clean">
+      Clean
+    </Badge>
+  );
+}
+
+export function SignedCell({ digest }: DigestCellProps): React.ReactElement {
+  const { data, isLoading } = useSignaturesByDigest(digest);
+
+  if (isLoading) {
+    return <Skeleton className="h-4 w-10" />;
+  }
+
+  // SIGNING_DISABLED (signer unwired) and no digest both collapse to
+  // em-dash here. The Signing tab on the detail page surfaces the
+  // "signer not wired" explainer; the list cell stays terse.
+  if (!digest || data === SIGNING_DISABLED || !data || !data.signed) {
+    return (
+      <span
+        className="text-[var(--color-fg-subtle)]"
+        aria-label="No signatures recorded"
+        data-testid="signed-cell-none"
+      >
+        —
+      </span>
+    );
+  }
+
+  // At least one signature recorded. Counts of 1 are the common case;
+  // higher counts get a small "+N" affordance so the operator can
+  // tell a re-sign happened without clicking through.
+  const n = data.signatures.length;
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[var(--color-success)]"
+      title={
+        n === 1
+          ? "Signed"
+          : `Signed (${n} signatures)`
+      }
+      data-testid="signed-cell-signed"
+    >
+      <Check className="size-4" aria-hidden />
+      {n > 1 ? <span className="text-xs font-medium">+{n - 1}</span> : null}
+    </span>
+  );
 }
 
 // Tiny debounce so the filter input doesn't fire a list refetch on
