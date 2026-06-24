@@ -743,129 +743,6 @@ Pairs with **DEPLOY-001** tenant-persona doc work. Once both are
 done, self-hosters following the docs should be able to bootstrap a
 real multi-user setup without SQL.
 
-### FUT-013 — Pull-through cache visibility (sidebar menu + `/proxy/cache` page)
-
-**Surfaced:** 2026-06-24 by an operator pulling
-`localhost:8084/cache/dockerhub/library/alpine:3.20` through
-`services/proxy` and noticing it never appeared anywhere in the
-dashboard. The blob and manifest are persisted — blob at
-`blobs/<tenant>/sha256/<hex>` in the shared storage backend, manifest
-row in `proxy_manifests` (services/proxy's own schema, migration
-`00001_initial_schema.sql`) — but the proxy never publishes
-`push.image` nor calls `metadata.UpsertManifest`, so the
-`services/metadata` source-of-truth has no row and `/repositories`
-can't render it.
-
-**Why this matters:** today the only way to confirm a proxy pull
-worked is to `docker pull` the same ref again and observe that
-the second pull is faster, or to shell into Postgres and `SELECT
-* FROM proxy_manifests`. Operators expect "I pulled through the
-cache; show me what's in it" to be a one-click UI surface — and
-without that surface, GC eviction policies (when they ship) will
-delete entries the operator was never able to inspect.
-
-**Decision (locked):** option A from the design picklist —
-**dedicated `/proxy/cache` page + new sidebar menu item**. Keeps
-the dashboard's "your repos" semantics clean (cached images are
-not first-class repos — they have no scan / sign / RBAC / retention
-surfaces) while still giving the operator a real "what's in my
-cache" view. Rejected alternatives: option B (mix cached entries
-into `/repositories` with a "Cached" pill) added an "n/a for
-cached repos" guard to every per-repo surface; option C (a single
-"Cache: N images, M GB" counter on the dashboard) was too thin —
-no per-image visibility means no eviction story.
-
-**Scope:**
-
-Backend (`services/proxy`):
-- New gRPC RPC `ListCachedManifests(tenant_id, upstream_filter,
-  page_token, page_size)` on `ProxyService` — returns
-  `(upstream_name, image, reference, manifest_digest,
-  media_type, size_bytes, cached_at, last_pulled_at, pull_count)`.
-  Server-streaming follows the existing `ListUpstreams` pattern in
-  `proto/proxy/v1/proxy.proto`.
-- `last_pulled_at TIMESTAMPTZ` + `pull_count BIGINT DEFAULT 0`
-  columns added to `proxy_manifests` (migration `00003`). Debounced
-  update path on every successful manifest serve — same two-track
-  shape FE-API-042 used for `manifests.last_pulled_at` (debounce
-  10s; the analytics layer doesn't care about hit-level fidelity).
-- New `DeleteCachedManifest(manifest_digest)` RPC for the
-  operator-driven "Evict" action. Deletes the `proxy_manifests`
-  row + queues a `gc.cached_blob` event so the orphaned blob
-  is cleaned up on the next GC sweep (don't delete the blob
-  inline — multiple cached manifests can share a layer blob,
-  and the existing GC mark-sweep already handles refcounting).
-- Aggregation RPC `GetCacheStats(tenant_id)` — returns
-  `(total_manifests, total_bytes, hit_rate_last_24h,
-  unique_upstreams)` for the page header card.
-
-BFF (`services/management`):
-- `GET /api/v1/proxy/cache` — list (paginated).
-- `GET /api/v1/proxy/cache/stats` — aggregation card data.
-- `DELETE /api/v1/proxy/cache/{manifest_digest}` — evict action.
-- All three gated on the existing `requireWorkspaceAdmin` helper
-  (cache is a workspace-level concern; not exposing it to writers
-  / readers keeps the blast radius small).
-
-Frontend (`frontend/src/routes`):
-- New route `/proxy/cache` (TanStack Router file:
-  `_authenticated.proxy.cache.tsx`).
-- Sidebar nav entry "Pull-through cache" with a `Layers` or
-  `Repeat` icon, placed under the existing Workspace cluster
-  (next to `/workspace/domains`). Hidden on the sidebar when
-  `PROXY_GRPC_ADDR` is unset on the BFF side (same degrade-gracefully
-  shape the signer + scanner sidebar entries use).
-- Page layout: header stats card (`<StatCard>` x 4 — total
-  manifests, total bytes, 24h hit rate, unique upstreams) over a
-  filterable table (upstream dropdown + image search) with columns
-  Upstream / Image / Reference / Digest / Size / Cached / Last
-  pulled / Pulls / Actions (evict button). Evict opens a
-  type-to-confirm dialog (same pattern as the admin GC `Run now`
-  affordance — operators should not be able to one-click-purge
-  the cache).
-
-**Why this shape:**
-
-- Storage layout already exists (`proxy_manifests` + shared blob
-  bucket) — this PR is purely a read-side surface + an evict
-  action; no schema rework.
-- The "Cached" entries don't belong in `/repositories` because
-  they're not OWNED by the tenant; they're a transparent caching
-  layer in front of upstream. Mixing them would muddy attribution
-  for scans / signing / retention — and creates a "n/a for cached
-  repos" empty-state requirement on every per-repo surface.
-- Hit rate + last-pulled-at + pull_count give operators the
-  signals they need to size the cache (when to bump GC eviction
-  thresholds, which upstreams to add) without exposing the
-  underlying GC plumbing as a first-class concept.
-
-**Dependencies:**
-
-- None blocking. Proxy already persists everything we need; this
-  is read-side surfacing + an evict action.
-- Pairs naturally with a future "Cached blob GC" expansion of
-  `services/gc` (today's GC handles metadata-backed blobs; the
-  cached-blob set has different lifecycle semantics — LRU
-  eviction not orphan sweep). Filed as a known follow-up below.
-
-**Open question (worth confirming before build):** should evict
-require platform-admin or workspace-admin? Recommend
-workspace-admin — same scope as `domains` / `audit-export` /
-quota — but if the cache is treated as shared infrastructure
-across tenants on a single-instance deploy, platform-admin is
-the safer default. Lean workspace-admin for parity with the
-other workspace-scoped routes.
-
-**Affects:** `services/proxy` (3 new RPCs + migration),
-`services/management` (3 new REST routes + sidebar visibility
-gate), `frontend/` (new route + nav entry + page + evict dialog).
-
-**Effort:** ~1 sprint. Backend ~2-3 days (migration + 3 RPCs +
-debounced pull counter + tests); BFF ~half day (route wrappers);
-FE ~2 days (route + stats card + filterable table + evict dialog
-+ nav entry); docs ~half day. Open follow-up: cached-blob LRU
-eviction in `services/gc` — separate item, this PR is the
-visibility prerequisite.
 ### FUT-012 — Tenant-user lifecycle management (invite / list / disable)
 
 **Surfaced:** 2026-06-24 during the design discussion that followed
@@ -1104,63 +981,99 @@ Layers + manifest are the v1 detail surfaces.
 **Effort:** ~1-2 days. Layer parsing is the bulk; OCI v1 +
 Docker v2 manifest list shapes are well-defined.
 
-### FUT-017 — Scan-on-cached-images for the proxy cache
+### FUT-017 — Scan + sign on cached images for the proxy cache
 
 **Surfaced:** same testing session. The operator question:
 "can I see CVEs in `library/alpine:3.20` even though I didn't
-push it?" Today scan policies are per-repo / per-org on
-`services/metadata` and only fire on `push.completed` events
-from `services/core`. Cached manifests never publish that
-event.
+push it? And can I sign it locally so my admission policy
+gates pulls of it the same way it gates pulls of my own pushes?"
 
-**The product question first:** should cached images get
-scanned? Yes — the value-add of a private proxy IS the
-"private supply chain" angle. CVEs in upstream public images
-matter as much as CVEs in your own pushes. (Decision recorded;
-revisit if the scanner cost story changes.)
+**Decisions (locked 2026-06-24, both Answer A):**
+
+1. **Cached images SHOULD scan.** The value-add of a private
+   proxy IS the "private supply chain" angle. CVEs in upstream
+   public images matter as much as CVEs in your own pushes.
+2. **Cached images SHOULD participate in signing.** If you
+   want to sign upstream content locally (so your existing
+   `require_signature` admission policy gates cache pulls
+   too), the cache should expose the same signing surface as
+   `/repositories/$org/$repo/tags/$tag`. Upstream-signed
+   images surface the upstream signature read-only;
+   locally-signed cached images surface a "signed by us"
+   badge.
+
+These two were originally split between FUT-017 (scan) and a
+follow-up. Bundled here because they share the detail-page
+tab plumbing from FUT-016 + the same per-upstream policy
+shape — splitting them would create twice the migrations and
+two near-identical FE Policy editors.
 
 **Scope:**
 
-Backend:
+Backend (scan path):
 - `services/proxy` publishes a new `cache.populated` event
-  after a successful `cacheManifest` upsert (or repurpose the
-  existing `store.queued` event family — new routing key
-  `cache.populated`).
+  after a successful `cacheManifest` upsert.
 - `services/scanner.eventconsumer` subscribes to the new key
   and treats cached manifests as a fourth scannable surface
   (alongside repos, tags, manifests). The scan operates on
   the layer blobs in `services/storage` exactly the same way
   it does for owned pushes — the staging dir doesn't care
   whether the blobs came from upstream.
-- New scan-policy scope: `(scope_type='proxy_cache', scope_value=<upstream_name>)`
-  or `(scope_type='proxy_cache_image', scope_value=<upstream>/<image>)`.
-  Decision on granularity needs an opinion call (~per-upstream
-  is sane; per-image is finer-grained and matches how operators
-  think about their dependencies).
-- Findings stored in the existing `scan_results` shape, joined
-  on `(tenant_id, manifest_digest)` — proxy cache + owned repo
-  scans land in the same table.
+- New scan-policy scope: `(scope_type='proxy_cache',
+  scope_value=<upstream_name>)`. Per-upstream granularity is
+  the v1; per-image refinement can land later if asked.
+- Findings stored in the existing `scan_results` shape,
+  joined on `(tenant_id, manifest_digest)` — proxy cache +
+  owned repo scans land in the same table.
 
-Frontend:
-- New "Scans" tab on FUT-016's detail page — same component
-  shape as the per-repo tag-detail ScanPanel. Reuses
-  `useScanByDigest()`.
-- Policy editor on the `/workspace/proxy-cache` page header —
-  "Auto-scan cached images: yes / no" + severity threshold
-  selector. Workspace-admin gated.
-- Severity column on the cache table row (badge with critical/
-  high count) once a scan has landed.
+Backend (signing path):
+- `services/signer.ListSignatures(manifest_digest)` already
+  works for any digest — no signer schema change. Cache
+  pulls land on the signed-image admission path through
+  `services/core` when `require_signature` is on.
+- Per-upstream "auto-sign on cache" policy: when set, the
+  proxy emits a `sign.requested` event after `cacheManifest`
+  upsert; signer consumes + signs with the workspace's
+  default key. Same pattern services/core uses for push-time
+  auto-sign.
+- Phase 2: read-surface upstream signatures (e.g. Sigstore
+  on Docker Hub) on the detail page as read-only. Optional
+  follow-up — phase 1 ships local-sign + verify against the
+  existing trusted-key allowlist.
 
-**Signing tab is out of scope.** Cached images aren't yours to
-sign; if you want to sign you tag them into a real repo first.
+Frontend (FUT-016 detail page extension):
+- **Scans tab** — same component shape as the per-repo
+  tag-detail ScanPanel. Reuses `useScanByDigest()`.
+- **Signing tab** — same component shape as the existing
+  `RepoTrustedKeysSection` + `Sign with key` dialog. Reuses
+  the existing `useSignManifest()` + `useListSignatures()`
+  hooks.
+- **Cache page header** — per-upstream policy editor card
+  with two toggles + severity selector:
+  - `auto-scan cached images: yes / no` + severity threshold
+  - `auto-sign cached images: yes / no` + key selector
+- **Severity column** on the cache table row (badge with
+  critical/high count) once a scan has landed.
+- **Signed badge** on the cache table row when at least
+  one signature exists.
 
-**Affects:** `proto/proxy/v1` + `proto/scanner/v1`,
-`services/proxy` (publish event), `services/scanner` (subscribe
-+ scan + persist), `services/management` (policy CRUD + scan
-read), `frontend/` (scans tab + policy editor + table column).
+**Affects:** `proto/proxy/v1` + `proto/scanner/v1` +
+`proto/signer/v1`, `services/proxy` (publish events),
+`services/scanner` (subscribe + scan + persist),
+`services/signer` (subscribe + auto-sign when policy set),
+`services/management` (policy CRUD + scan read + signature
+read), `frontend/` (2 tabs on detail page + 2 toggles on
+header + 2 columns on table).
 
-**Effort:** ~1 sprint. The scanner pipeline already accepts
-arbitrary manifest digests; the wiring is the work.
+**Effort:** ~1 sprint. The scanner + signer pipelines both
+already accept arbitrary manifest digests; the wiring is
+the work. Phase 1 (scan + local-sign + verify) is the bulk;
+phase 2 (read-surface upstream signatures) is a follow-up.
+
+**Dependencies:** FUT-016 must land first — the Scans tab +
+Signing tab + Severity/Signed columns all live on the
+detail page route + table that FUT-016 introduces. Queued
+until FUT-016 ships.
 
 ### QA-002 follow-ups (small)
 
