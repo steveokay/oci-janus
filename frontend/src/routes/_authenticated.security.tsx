@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ShieldAlert, ShieldCheck, ArrowRight } from "lucide-react";
+import { ShieldAlert, ShieldCheck } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -16,7 +16,6 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/ui/error-state";
-import { Badge } from "@/components/ui/badge";
 import { useStats } from "@/lib/api/stats";
 import {
   SeverityBar,
@@ -128,64 +127,17 @@ function SecurityPage(): React.ReactElement {
             </CardContent>
           </Card>
 
-          {/* What each tab covers — a directory rather than a chart we can't draw yet */}
-          <Card className="md:col-span-2">
-            <CardHeader className="pb-2">
-              <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-                What you can do here
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ul className="space-y-2">
-                {/* S9.5 — every surface here is now live. We retain the
-                    directory so the operator sees the breadth of the page
-                    without scrolling, but the "deferred" tone is gone. */}
-                {[
-                  {
-                    label: "Inspect every open CVE across the workspace",
-                    tone: "live" as const,
-                    hint: "Vulnerabilities tab",
-                  },
-                  {
-                    label: "Audit recent scan runs and triggers",
-                    tone: "live" as const,
-                    hint: "Scans tab",
-                  },
-                  {
-                    label: "Find remediation paths grouped by upgrade",
-                    tone: "live" as const,
-                    hint: "Remediation tab",
-                  },
-                  {
-                    label: "Configure block-on-severity scan policies",
-                    tone: "live" as const,
-                    hint: "Policies tab",
-                  },
-                  {
-                    label: "Generate downloadable compliance reports",
-                    tone: "live" as const,
-                    hint: "Reports tab",
-                  },
-                ].map((row) => (
-                  <li
-                    key={row.label}
-                    className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2"
-                  >
-                    <ArrowRight className="size-3.5 text-[var(--color-accent)]" />
-                    <span className="flex-1 text-sm text-[var(--color-fg)]">
-                      {row.label}
-                    </span>
-                    {/* Tone is uniformly "live" now that S9.5 fulfilled
-                        every formerly-deferred row — kept the field around
-                        in case a future surface ships in two stages. */}
-                    <Badge tone={row.tone === "live" ? "success" : "accent"}>
-                      {row.hint}
-                    </Badge>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          {/* DSGN-015 — the "What you can do here" directory was scaffolding
+              (every row was badged "live" and duplicated the tab labels
+              immediately below it). Promote CoverageCard into the top-row
+              slot so the dashboard reads "open findings · coverage ·
+              freshness" — three independent signals instead of two
+              signals + a static directory. CoverageCard handles its own
+              query (useSecurityOverview) so we don't add a second
+              consumer of useStats here. */}
+          <div className="md:col-span-2">
+            <CoverageCard />
+          </div>
         </div>
       )}
 
@@ -202,6 +154,10 @@ function SecurityPage(): React.ReactElement {
         </TabsList>
 
         <TabsContent value="overview">
+          {/* DSGN-015 — CoverageCard moved up to the top-row slot, so the
+              Overview tab now focuses on a single severity-breakdown
+              card. The grid wrapper is retained so a future overview
+              surface drops in without re-jigging the layout. */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Real severity legend — FE-API-016 now ships these counts. */}
             <Card accentBar={headlineTone}>
@@ -225,9 +181,6 @@ function SecurityPage(): React.ReactElement {
                 </p>
               </CardContent>
             </Card>
-
-            {/* FE-API-020 — coverage + freshness snapshot. */}
-            <CoverageCard />
           </div>
         </TabsContent>
 

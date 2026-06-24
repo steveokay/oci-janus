@@ -51,6 +51,13 @@ interface ScanPanelProps {
   triggering?: boolean;
   onTrigger: () => void;
   onRetry: () => void;
+  // DSGN-019 — when the empty-state ("No vulnerability scan yet") is the
+  // initial surface for a tag, give the user a way out to the sibling
+  // tabs (Layers / Signing / Push history) without bouncing. The parent
+  // route passes a single callback that switches the controlled Tabs
+  // value; when omitted (other call sites) the inline affordance simply
+  // doesn't render.
+  onSwitchTab?: (value: "history" | "layers" | "signing") => void;
 }
 
 // Beacon — ScanPanel. Renders the four real states a scan can be in
@@ -65,6 +72,7 @@ export function ScanPanel({
   triggering,
   onTrigger,
   onRetry,
+  onSwitchTab,
 }: ScanPanelProps): React.ReactElement {
   if (isError) {
     return (
@@ -96,7 +104,36 @@ export function ScanPanel({
       <EmptyState
         icon={<ShieldCheck className="size-5" />}
         title="No vulnerability scan yet"
-        description="Trigger a scan and we'll surface findings here. Scans typically complete within a minute for small images."
+        description={
+          // DSGN-019 — the Security tab is the default landing for tag
+          // detail. Without an explicit way out, an unscanned tag dead-
+          // ends here and the operator misses Layers / Signing / Push
+          // history entirely. The inline sibling-tab affordance only
+          // renders when the parent route wires `onSwitchTab` (the tag
+          // detail does; other consumers don't).
+          <>
+            <span>
+              Trigger a scan and we'll surface findings here. Scans typically
+              complete within a minute for small images.
+            </span>
+            {onSwitchTab ? (
+              <span className="mt-3 block text-xs text-[var(--color-fg-subtle)]">
+                Other views:{" "}
+                <SwitchTabLink onClick={() => onSwitchTab("layers")}>
+                  Layers
+                </SwitchTabLink>{" "}
+                ·{" "}
+                <SwitchTabLink onClick={() => onSwitchTab("signing")}>
+                  Signing
+                </SwitchTabLink>{" "}
+                ·{" "}
+                <SwitchTabLink onClick={() => onSwitchTab("history")}>
+                  Push history
+                </SwitchTabLink>
+              </span>
+            ) : null}
+          </>
+        }
         action={
           <Button onClick={onTrigger} loading={triggering} disabled={triggering}>
             <Play className="size-4" />
@@ -121,6 +158,28 @@ export function ScanPanel({
       onTrigger={onTrigger}
       triggering={triggering}
     />
+  );
+}
+
+// SwitchTabLink — tiny inline button that looks like a text link. Used by
+// the "Other views: Layers · Signing · Push history" affordance in the
+// empty-scan EmptyState (DSGN-019). Stays a real <button> for keyboard
+// + assistive-tech semantics; styled to read as a link.
+function SwitchTabLink({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="font-medium text-[var(--color-accent)] hover:underline"
+    >
+      {children}
+    </button>
   );
 }
 

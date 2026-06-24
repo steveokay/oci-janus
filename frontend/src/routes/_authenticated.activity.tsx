@@ -44,6 +44,31 @@ import {
 } from "@/components/ui/page-size-selector";
 import { cn } from "@/lib/utils";
 
+// Lookup-set version of NOTIFICATION_EVENT_TYPES for O(1) membership checks
+// when hydrating the chip selection from the URL. Tuple → Set conversion
+// at module load is cheap and avoids re-allocating on every render.
+const NOTIFICATION_EVENT_TYPE_SET: ReadonlySet<NotificationEventType> = new Set(
+  NOTIFICATION_EVENT_TYPES,
+);
+
+// parseEventTypesParam — decode the comma-separated `event_types` URL
+// search param into a Set of valid event types. Unknown values are
+// dropped silently so a stale link from an older deploy doesn't blow
+// up the page; we trust the chip row to remain the authoritative list.
+function parseEventTypesParam(
+  raw: string | undefined,
+): Set<NotificationEventType> {
+  if (!raw) return new Set();
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const out = new Set<NotificationEventType>();
+  for (const p of parts) {
+    if (NOTIFICATION_EVENT_TYPE_SET.has(p as NotificationEventType)) {
+      out.add(p as NotificationEventType);
+    }
+  }
+  return out;
+}
+
 export const Route = createFileRoute("/_authenticated/activity")({
   component: ActivityPage,
 });
@@ -127,8 +152,21 @@ function ActivityPage(): React.ReactElement {
   // memo landed.
   const since = React.useMemo(() => rangeToSince(range), [range]);
 
+  // DSGN-016 — chip selection hydrates from the URL `event_types` search
+  // param so deep-links from the notifications-bell footer ("Failures
+  // only") land with the right chips already pressed. We only consume
+  // the param at mount time; subsequent chip toggles drive local state
+  // only (we keep the URL clean to match the existing range-chip pattern
+  // which similarly omits the default state from the URL).
+  const initialEventTypes = React.useMemo(
+    () => parseEventTypesParam(search.event_types),
+    // Hydrate once on first render; later URL changes from the bell
+    // shouldn't clobber an in-progress filter edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   const [selected, setSelected] = React.useState<Set<NotificationEventType>>(
-    new Set(),
+    initialEventTypes,
   );
   const eventTypes = selected.size > 0 ? Array.from(selected) : undefined;
   // S-MAINT-1 P5: persisted page size, "notifications" key.

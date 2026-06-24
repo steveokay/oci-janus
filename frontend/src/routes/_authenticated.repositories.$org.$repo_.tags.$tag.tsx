@@ -27,9 +27,19 @@ export const Route = createFileRoute(
   component: TagDetail,
 });
 
+// Tab values for the tag-detail page. The default landing tab is "security"
+// — it's the most informative surface when a scan exists, and the empty
+// state for an unscanned tag offers an inline "Other views" affordance
+// (DSGN-019) so the operator can hop to a sibling tab without bouncing.
+type TagDetailTab = "security" | "history" | "layers" | "signing";
+
 function TagDetail(): React.ReactElement {
   const { org, repo, tag } = Route.useParams();
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Controlled Tabs value so the empty-state sibling-tab links (DSGN-019)
+  // can switch tabs without route navigation.
+  const [activeTab, setActiveTab] =
+    React.useState<TagDetailTab>("security");
 
   // No per-tag GET endpoint exists yet; we read from the tag list and pick
   // the row by name. This is fine for the page sizes we expect and the list
@@ -107,7 +117,10 @@ function TagDetail(): React.ReactElement {
 
       <PullCommandCard org={org} repo={repo} tag={tag} />
 
-      <Tabs defaultValue="security">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as TagDetailTab)}
+      >
         <TabsList>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="history">Push history</TabsTrigger>
@@ -127,6 +140,8 @@ function TagDetail(): React.ReactElement {
             triggering={triggerScan.isPending}
             onTrigger={() => void handleRescan()}
             onRetry={() => void refetchScan()}
+            // DSGN-019 — empty-state offers inline links to sibling tabs.
+            onSwitchTab={(value) => setActiveTab(value)}
           />
         </TabsContent>
 

@@ -8,6 +8,8 @@ import {
   PauseCircle,
   CheckCircle2,
   Globe,
+  Pause,
+  Play,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +27,11 @@ import { TestDispatchPanel } from "@/components/webhooks/test-dispatch-panel";
 import { EditWebhookDialog } from "@/components/webhooks/edit-webhook-dialog";
 import { DeleteWebhookDialog } from "@/components/webhooks/delete-webhook-dialog";
 import { SecretRevealDialog } from "@/components/webhooks/secret-reveal-dialog";
-import { useWebhook, useRotateSecret } from "@/lib/api/webhooks";
+import {
+  useWebhook,
+  useRotateSecret,
+  useUpdateWebhook,
+} from "@/lib/api/webhooks";
 import { formatAbsoluteDate } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/webhooks/$id")({
@@ -40,6 +46,10 @@ function WebhookDetailPage(): React.ReactElement {
   const [revealSecret, setRevealSecret] = React.useState<string | null>(null);
 
   const rotate = useRotateSecret();
+  // DSGN-020 — quick Pause/Resume from the detail header. Reuses the same
+  // PATCH mutation as Edit, so cache invalidation (list + detail) already
+  // wires through `useUpdateWebhook.onSuccess`.
+  const updateWebhook = useUpdateWebhook();
 
   async function handleRotate(): Promise<void> {
     try {
@@ -47,6 +57,21 @@ function WebhookDetailPage(): React.ReactElement {
       setRevealSecret(result.secret);
     } catch {
       toast.error("Couldn't rotate secret. Try again, or check the BFF logs.");
+    }
+  }
+
+  async function handleTogglePause(): Promise<void> {
+    if (!webhook) return;
+    const nextActive = !webhook.active;
+    try {
+      await updateWebhook.mutateAsync({ id, active: nextActive });
+      toast.success(nextActive ? "Webhook resumed." : "Webhook paused.");
+    } catch {
+      toast.error(
+        nextActive
+          ? "Couldn't resume webhook. Try again, or check the BFF logs."
+          : "Couldn't pause webhook. Try again, or check the BFF logs.",
+      );
     }
   }
 
@@ -131,6 +156,32 @@ function WebhookDetailPage(): React.ReactElement {
             <Pencil className="size-3.5" />
             Edit
           </Button>
+          {/* DSGN-020 — quick pause/resume so an operator can take a misbehaving
+              webhook out of rotation during an incident without going
+              through the Edit dialog. Sits between Edit and the
+              destructive actions, matching the "least → most disruptive"
+              ordering. */}
+          {webhook ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleTogglePause()}
+              loading={updateWebhook.isPending}
+              disabled={isLoading || updateWebhook.isPending}
+            >
+              {webhook.active ? (
+                <>
+                  <Pause className="size-3.5" />
+                  Pause
+                </>
+              ) : (
+                <>
+                  <Play className="size-3.5" />
+                  Resume
+                </>
+              )}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"

@@ -133,14 +133,40 @@ export function NotificationsBell(): React.ReactElement {
             )}
           </div>
 
-          {/* Footer */}
-          <Link
-            to="/activity"
-            className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]"
-          >
-            View all activity
-            <ArrowRight className="size-3" />
-          </Link>
+          {/* Footer — two affordances side by side. "See all activity" is
+              the no-filter jump; "Failures only" pre-filters /activity to
+              the three failure-class event types. The /activity route
+              hydrates its chip state from the `event_types` search param
+              (comma-separated routing keys) so the page lands with those
+              chips pressed. Both items close the dropdown on click — the
+              wrapping DropdownMenu.Item is the close trigger; we leave
+              dismiss to Radix. */}
+          <div className="grid grid-cols-2 border-t border-[var(--color-border)]">
+            <DropdownMenu.Item asChild>
+              <Link
+                to="/activity"
+                className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
+              >
+                See all activity
+                <ArrowRight className="size-3" />
+              </Link>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item asChild>
+              <Link
+                to="/activity"
+                search={
+                  {
+                    event_types:
+                      "push.failed,scan.policy_blocked,webhook.delivery_failed",
+                  } as Record<string, string>
+                }
+                className="flex items-center justify-center gap-1.5 border-l border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
+              >
+                Failures only
+                <ArrowRight className="size-3" />
+              </Link>
+            </DropdownMenu.Item>
+          </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

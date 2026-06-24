@@ -4,7 +4,12 @@ import { cn } from "@/lib/utils";
 interface EmptyStateProps {
   icon?: React.ReactNode;
   title: string;
-  description?: string;
+  // description accepts a string (the common case) or a ReactNode so
+  // callers can inline secondary affordances inside the body without
+  // duplicating the EmptyState surface (DSGN-019). When a ReactNode is
+  // passed we still wrap it in the same <p> element so the surrounding
+  // type ramp + colour stays consistent.
+  description?: React.ReactNode;
   action?: React.ReactNode;
   // secondaryAction renders next to the primary action — typically a
   // "Read the docs" link for the surface so a first-time visitor can
@@ -45,7 +50,13 @@ export function EmptyState({
           {title}
         </h3>
         {description ? (
-          <p className="text-sm text-[var(--color-fg-muted)]">{description}</p>
+          // Wrapper is a <div> rather than a <p> so callers passing a
+          // ReactNode with nested block elements (DSGN-019 sibling-tab
+          // links sit inside a flex/block child) don't produce invalid
+          // HTML. Strings still render with the same type ramp.
+          <div className="text-sm text-[var(--color-fg-muted)]">
+            {description}
+          </div>
         ) : null}
       </div>
       {action || secondaryAction ? (
