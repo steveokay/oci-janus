@@ -5,11 +5,12 @@
 // RequireAuth middleware; authorization requires admin/owner on any org-scoped
 // grant in the active tenant (mirrors requireWebhookAdmin from webhooks.go).
 //
-// The verification token is never echoed to the API caller — only the
-// instruction text + the TXT record name + the per-domain verification
-// metadata (verified flag, last poll, notification counters). The gRPC layer
-// includes the token because internal callers (gateway) need it, but the BFF
-// strips it before the JSON encoder runs.
+// The verification token rides along on the JSON responses (registration AND
+// list) so the dashboard can re-display the TXT challenge after the register
+// dialog has been dismissed — see DSGN-021 in the design review. Disclosure
+// is bounded by the admin/owner gate; any caller who can read the list can
+// already mint a fresh token by re-registering, so re-surfacing the existing
+// one adds no privilege.
 //
 // Verify-now strategy: option (a) — synchronous DNS check via
 // TenantService.VerifyDomainNow. The worker continues to poll on its own
@@ -77,19 +78,25 @@ func (e *domainErr) Error() string { return e.msg }
 // WorkspaceDomainResponse is the FE-API-027 JSON shape — a wider DomainEntry
 // that includes scheduling + notification state.
 //
-// `verification_token` is intentionally absent — the BFF strips it before
-// serialising so a low-privilege list call can't disclose the secret needed
-// to spoof a TXT record. Only the registration response sees the token, and
-// even then it's wrapped as the full TXT body the user pastes into DNS.
+// `verification_token` + `txt_record_name` are surfaced on unverified rows so
+// the dashboard can re-display the TXT challenge after the register dialog has
+// been closed (DSGN-021). Disclosure is bounded by the same admin/owner gate
+// that protects the register route — any caller who can read this list can
+// already re-register and mint a fresh token, so re-surfacing the current one
+// adds no new privilege escalation surface. Once `verified` flips to true the
+// token loses operational meaning; we keep returning it for symmetry rather
+// than carving a verified-only branch in the marshaller.
 type WorkspaceDomainResponse struct {
-	Domain        string     `json:"domain"`
-	Verified      bool       `json:"verified"`
-	IsPrimary     bool       `json:"is_primary"`
-	RegisteredAt  time.Time  `json:"registered_at"`
-	VerifiedAt    *time.Time `json:"verified_at"`
-	NextPollAfter *time.Time `json:"next_poll_after"`
-	Notified24h   bool       `json:"notified_24h"`
-	Notified48h   bool       `json:"notified_48h"`
+	Domain            string     `json:"domain"`
+	Verified          bool       `json:"verified"`
+	IsPrimary         bool       `json:"is_primary"`
+	RegisteredAt      time.Time  `json:"registered_at"`
+	VerifiedAt        *time.Time `json:"verified_at"`
+	NextPollAfter     *time.Time `json:"next_poll_after"`
+	Notified24h       bool       `json:"notified_24h"`
+	Notified48h       bool       `json:"notified_48h"`
+	VerificationToken string     `json:"verification_token,omitempty"`
+	TXTRecordName     string     `json:"txt_record_name,omitempty"`
 }
 
 // registerDomainResponse is the POST /workspace/me/domains body. It expands
@@ -351,15 +358,20 @@ func (h *Handler) handleDeleteWorkspaceDomain(w http.ResponseWriter, r *http.Req
 // ---------------------------------------------------------------------------
 
 // domainEntryToResponse converts the gRPC DomainEntry to the public REST
-// shape. Crucially this is where the verification_token is dropped — the
-// proto carries it for internal callers, but we never surface it to the API.
+// shape. The verification_token + derived TXT record name are surfaced so the
+// dashboard can re-display the challenge after the register dialog has been
+// dismissed (DSGN-021). Auth is the same admin/owner gate that protects
+// registration — anyone who can read this list can already mint a fresh
+// token, so re-surfacing the existing one adds no privilege.
 func domainEntryToResponse(d *tenantv1.DomainEntry) WorkspaceDomainResponse {
 	out := WorkspaceDomainResponse{
-		Domain:      d.GetDomain(),
-		Verified:    d.GetVerified(),
-		IsPrimary:   d.GetIsPrimary(),
-		Notified24h: d.GetNotified_24H(),
-		Notified48h: d.GetNotified_48H(),
+		Domain:            d.GetDomain(),
+		Verified:          d.GetVerified(),
+		IsPrimary:         d.GetIsPrimary(),
+		Notified24h:       d.GetNotified_24H(),
+		Notified48h:       d.GetNotified_48H(),
+		VerificationToken: d.GetVerificationToken(),
+		TXTRecordName:     "_registry-verify." + d.GetDomain(),
 	}
 	if ts := d.GetRegisteredAt(); ts != nil {
 		out.RegisteredAt = ts.AsTime()

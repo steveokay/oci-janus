@@ -771,7 +771,7 @@ Migrations:
 New gRPC RPCs:
 - `ListTenants(page_size, page_token)` — base64url(`created_at|id`) cursor for stable ordering.
 - `UpdateTenant(id, name?, plan?)` — FE-API-029; rename cascade recomputes slug **atomically inside the same tx** so no observable state has new-name with old-slug. Validation: name regex `^[a-z0-9][a-z0-9-]{1,63}$`, plan ∈ `{free, pro, enterprise}`. Per-field events `tenant.renamed` + `tenant.plan_changed` (patching both fires two events).
-- `ListTenantDomains(tenant_id)` — `verification_token` stripped from FE responses (PII).
+- `ListTenantDomains(tenant_id)` — `verification_token` + derived `txt_record_name` surfaced on the admin-gated FE response so the dashboard can re-display the TXT challenge after the register dialog closes (DSGN-021). Same gate as `RegisterDomain`, so disclosure adds no new privilege.
 - `VerifyDomainNow(tenant_id, domain)` — synchronous re-check via swappable `txtLookup` package var.
 - `SetPrimaryDomain(tenant_id, domain)` — atomic SELECT verified → demote-all → promote-target RETURNING.
 - `DeleteDomain(tenant_id, domain)` — returns `X-Janus-Warning: primary-domain-removed` when removing the primary (warning lives on the management response).
@@ -840,7 +840,7 @@ POST   /api/v1/webhooks/:id/rotate-secret              # New HMAC secret — ret
 
 # Workspace (FE-API-009, 027)
 GET    /api/v1/workspace/me                            # Tenant identity (slug, host, host_is_custom, domains[])
-GET    /api/v1/workspace/me/domains                    # Custom domain list (verification_token stripped)
+GET    /api/v1/workspace/me/domains                    # Custom domain list (admin-only; includes verification_token + txt_record_name per DSGN-021)
 POST   /api/v1/workspace/me/domains                    # Register — returns DNS TXT challenge
 POST   /api/v1/workspace/me/domains/:domain/verify     # Re-run DNS TXT check synchronously
 PATCH  /api/v1/workspace/me/domains/:domain            # Set is_primary=true (false → 400)

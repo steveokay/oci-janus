@@ -57,6 +57,33 @@ export function formatShortRelativeDate(iso: string | undefined | null): string 
   }
 }
 
+// formatCountdown renders a future ISO timestamp as "Xm Ys" (or "Xh Ym" past
+// an hour). Negative / past timestamps return "now" since the surface using
+// this is "worker will re-check in <countdown>" — once the cursor passes
+// there's no useful number to show. Used by the custom-domain row expander
+// to display the `next_poll_after` cursor without re-rendering on every
+// tick (callers can pull this once per second via setInterval if they need
+// a live counter; the helper itself is stateless).
+export function formatCountdown(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  try {
+    const then = parseISO(iso).getTime();
+    const diffSec = Math.floor((then - Date.now()) / 1000);
+    if (!Number.isFinite(diffSec) || diffSec <= 0) return "now";
+    if (diffSec < 60) return `${diffSec}s`;
+    if (diffSec < 3600) {
+      const m = Math.floor(diffSec / 60);
+      const s = diffSec % 60;
+      return s === 0 ? `${m}m` : `${m}m ${s}s`;
+    }
+    const h = Math.floor(diffSec / 3600);
+    const m = Math.floor((diffSec % 3600) / 60);
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  } catch {
+    return "—";
+  }
+}
+
 // shortenKey collapses a long key_id / SHA256 string to "aaaaaaaa…bbbb"
 // so it fits one line in tight layouts (dropdown rows, alert prompts).
 // Returns the input unchanged when it's already short enough to fit.
