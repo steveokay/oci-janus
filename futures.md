@@ -845,13 +845,15 @@ Frontend (`frontend/src/routes`):
   cached-blob set has different lifecycle semantics — LRU
   eviction not orphan sweep). Filed as a known follow-up below.
 
-**Open question (worth confirming before build):** should evict
-require platform-admin or workspace-admin? Recommend
-workspace-admin — same scope as `domains` / `audit-export` /
-quota — but if the cache is treated as shared infrastructure
-across tenants on a single-instance deploy, platform-admin is
-the safer default. Lean workspace-admin for parity with the
-other workspace-scoped routes.
+**Auth (locked 2026-06-24):** all three routes — list, stats,
+evict — gated on **workspace-admin**, matching the pattern set
+by `domains` / `audit-export` / `quota`. Platform-admin retains
+implicit access via the `(admin, org, '*')` marker (it trumps
+workspace-admin everywhere). Rationale: the cache is a
+workspace-level concern (sized + shaped by the workspace's
+pull patterns), not shared infrastructure; treating evict as
+a workspace-admin operation keeps the surface consistent with
+every other workspace-owned write route.
 
 **Affects:** `services/proxy` (3 new RPCs + migration),
 `services/management` (3 new REST routes + sidebar visibility
