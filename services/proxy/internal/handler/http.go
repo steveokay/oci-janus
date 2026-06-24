@@ -209,7 +209,7 @@ func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, 
 	_, _ = w.Write(result.Body)
 
 	// Cache in background — do not block client.
-	go h.cacheManifest(tenantID, up.UpstreamID, image, reference, result)
+	go h.cacheManifest(tenantID, up.UpstreamID, up.Name, image, reference, result)
 }
 
 // bumpPullCount runs RecordPull on a fresh background context. Detached
@@ -252,7 +252,7 @@ func (h *HTTPHandler) handleHeadManifest(w http.ResponseWriter, r *http.Request,
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(result.Body)))
 	w.WriteHeader(http.StatusOK)
 
-	go h.cacheManifest(tenantID, up.UpstreamID, image, reference, result)
+	go h.cacheManifest(tenantID, up.UpstreamID, up.Name, image, reference, result)
 }
 
 // handleGetBlob streams a blob from cache storage or fetches from upstream.
@@ -460,16 +460,65 @@ func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, co
 	return nil
 }
 
-// cacheManifest stores a fetched manifest in the DB cache (background).
-// SEC-028: context.Background() is used intentionally here — the caller has already
-// written the HTTP response and its request context may be cancelled. The 30-second
-// timeout prevents this goroutine from leaking if the database is slow.
-func (h *HTTPHandler) cacheManifest(tenantID, upstreamID uuid.UUID, image, reference string, result *upstream.ManifestResult) {
+// cacheManifest stores a fetched manifest in the DB cache (background) and
+// publishes `cache.populated` so services/scanner + services/signer can act
+// on the new content (FUT-017).
+//
+// SEC-028: context.Background() is used intentionally here — the caller has
+// already written the HTTP response and its request context may be cancelled.
+// The 30-second timeout prevents this goroutine from leaking if the database
+// is slow.
+//
+// Publish runs only on successful upsert; a failed upsert is a no-op publish
+// because there's nothing in the cache yet for downstream consumers to scan
+// or sign.
+func (h *HTTPHandler) cacheManifest(
+	tenantID, upstreamID uuid.UUID,
+	upstreamName, image, reference string,
+	result *upstream.ManifestResult,
+) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := h.repo.UpsertManifest(ctx, tenantID, upstreamID, image, reference,
 		result.Digest, result.MediaType, result.Body); err != nil {
 		slog.Error("cache manifest upsert failed", "err", err)
+		return
+	}
+	h.publishCachePopulated(ctx, tenantID, upstreamID, upstreamName, image, reference, result)
+}
+
+// publishCachePopulated emits the FUT-017 event downstream services
+// (scanner, signer) subscribe to. No-op when the publisher is not
+// configured — same opt-in shape as publishStoreQueued.
+func (h *HTTPHandler) publishCachePopulated(
+	ctx context.Context,
+	tenantID, upstreamID uuid.UUID,
+	upstreamName, image, reference string,
+	result *upstream.ManifestResult,
+) {
+	if h.pub == nil {
+		return
+	}
+	payload, _ := json.Marshal(events.CachePopulatedPayload{
+		TenantID:       tenantID.String(),
+		UpstreamID:     upstreamID.String(),
+		UpstreamName:   upstreamName,
+		Image:          image,
+		Reference:      reference,
+		ManifestDigest: result.Digest,
+		MediaType:      result.MediaType,
+		SizeBytes:      int64(len(result.Body)),
+	})
+	if err := h.pub.Publish(ctx, events.RoutingCachePopulated, events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingCachePopulated,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}); err != nil {
+		slog.ErrorContext(ctx, "publish cache.populated failed",
+			"error", err, "manifest_digest", result.Digest, "image", image)
 	}
 }
 
