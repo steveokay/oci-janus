@@ -1040,6 +1040,128 @@ RABBITMQ_URL in proxy (currently optional — warns when unset).
 Two regression tests + smoke verification against the
 dashboard 24h card.
 
+### FUT-015 — Pull-command + tag/digest row expander on `/workspace/proxy-cache`
+
+**Surfaced:** 2026-06-24 by the operator testing FUT-013 Phase C.
+Each table row shows the cached image but doesn't tell the
+operator HOW to pull it. They have to construct the
+`localhost:8084/cache/<upstream>/<image>:<tag>` URI by hand.
+
+**Scope:** add a chevron-expand to each row (same pattern
+DSGN-021 used for custom-domain TXT records). When expanded:
+
+- Copy-button on the full `docker pull` command, using the
+  workspace's actual host (from `useWorkspace()` if a custom
+  domain is set, else `localhost:8084` in dev). Example:
+  `docker pull registry.acme.com/cache/dockerhub/library/alpine:3.20`
+- The digest (so an operator can pin via
+  `docker pull <host>/cache/.../<image>@sha256:...`).
+- The MediaType (helpful for "is this OCI v1 or Docker v2?").
+- "Last pulled" + "Cached at" absolute timestamps (the row
+  shows relative; the expander shows the full ISO).
+
+**Affects:** `frontend/src/routes/_authenticated.workspace.proxy-cache.tsx`
+only. No backend change. Reuses `CopyButton`. No new vitest
+coverage required (the data is already in the row payload).
+
+**Effort:** ~half day.
+
+### FUT-016 — Click-through detail page: layers + manifest tab for cached images
+
+**Surfaced:** same testing session as FUT-015. Operator wants
+the same "click image → see layers" flow that `/repositories`
+provides for cached entries — but the proxy stores manifests in
+its own schema, untouched by `services/metadata`. So the layers
+tab can't reuse the per-repo tag detail.
+
+**Scope:**
+
+- New route `/workspace/proxy-cache/{id}` showing:
+  - Summary header (upstream / image / reference / digest /
+    size / cached / last pulled / pulls).
+  - Layers tab — parse the manifest body (already in
+    `proxy_manifests.body BYTEA`) into a layer table with
+    digest + size + media type. For manifest indexes (multi-
+    arch), show the platform list with click-through to the
+    per-arch manifest.
+  - Manifest tab — raw JSON viewer (`<CodeBlock>` already
+    exists). Operator can confirm exactly what bytes the proxy
+    is serving without leaving the dashboard.
+- New BFF route `GET /api/v1/proxy/cache/{id}` (or extend the
+  existing list response with a `body_base64` field on the
+  single-row read path — cleaner as a separate route since the
+  list call deliberately omits body for size). Calls a new
+  `services/proxy.GetCachedManifest(tenant_id, id)` RPC that
+  returns the full row including body bytes.
+
+**Out of scope** (defer to FUT-017): scans + signing tabs.
+Layers + manifest are the v1 detail surfaces.
+
+**Affects:** `proto/proxy/v1/proxy.proto` (one new RPC),
+`services/proxy` (one new RPC + repo method), `services/management`
+(one new REST route), `frontend/` (new route + page + 2 tabs).
+
+**Effort:** ~1-2 days. Layer parsing is the bulk; OCI v1 +
+Docker v2 manifest list shapes are well-defined.
+
+### FUT-017 — Scan-on-cached-images for the proxy cache
+
+**Surfaced:** same testing session. The operator question:
+"can I see CVEs in `library/alpine:3.20` even though I didn't
+push it?" Today scan policies are per-repo / per-org on
+`services/metadata` and only fire on `push.completed` events
+from `services/core`. Cached manifests never publish that
+event.
+
+**The product question first:** should cached images get
+scanned? Yes — the value-add of a private proxy IS the
+"private supply chain" angle. CVEs in upstream public images
+matter as much as CVEs in your own pushes. (Decision recorded;
+revisit if the scanner cost story changes.)
+
+**Scope:**
+
+Backend:
+- `services/proxy` publishes a new `cache.populated` event
+  after a successful `cacheManifest` upsert (or repurpose the
+  existing `store.queued` event family — new routing key
+  `cache.populated`).
+- `services/scanner.eventconsumer` subscribes to the new key
+  and treats cached manifests as a fourth scannable surface
+  (alongside repos, tags, manifests). The scan operates on
+  the layer blobs in `services/storage` exactly the same way
+  it does for owned pushes — the staging dir doesn't care
+  whether the blobs came from upstream.
+- New scan-policy scope: `(scope_type='proxy_cache', scope_value=<upstream_name>)`
+  or `(scope_type='proxy_cache_image', scope_value=<upstream>/<image>)`.
+  Decision on granularity needs an opinion call (~per-upstream
+  is sane; per-image is finer-grained and matches how operators
+  think about their dependencies).
+- Findings stored in the existing `scan_results` shape, joined
+  on `(tenant_id, manifest_digest)` — proxy cache + owned repo
+  scans land in the same table.
+
+Frontend:
+- New "Scans" tab on FUT-016's detail page — same component
+  shape as the per-repo tag-detail ScanPanel. Reuses
+  `useScanByDigest()`.
+- Policy editor on the `/workspace/proxy-cache` page header —
+  "Auto-scan cached images: yes / no" + severity threshold
+  selector. Workspace-admin gated.
+- Severity column on the cache table row (badge with critical/
+  high count) once a scan has landed.
+
+**Signing tab is out of scope.** Cached images aren't yours to
+sign; if you want to sign you tag them into a real repo first.
+
+**Affects:** `proto/proxy/v1` + `proto/scanner/v1`,
+`services/proxy` (publish event), `services/scanner` (subscribe
++ scan + persist), `services/management` (policy CRUD + scan
+read), `frontend/` (scans tab + policy editor + table column).
+
+**Effort:** ~1 sprint. The scanner pipeline already accepts
+arbitrary manifest digests; the wiring is the work.
+
 ### QA-002 follow-ups (small)
 
 - **QA-002a** — `Publisher.Close()` doesn't take `p.mu`; concurrent shutdown
