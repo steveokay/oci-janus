@@ -708,6 +708,10 @@ services:
       # them at 404 "route disabled" and the dashboard's GC card shows
       # a friendly "GC visibility isn't wired" fallback.
       GC_GRPC_ADDR: registry-gc:50051
+      # PROXY_GRPC_ADDR enables FUT-013 /api/v1/proxy/cache routes
+      # (list + stats + evict). Empty leaves them at 404 "route disabled"
+      # and the sidebar entry stays hidden via the probe-and-hide hook.
+      PROXY_GRPC_ADDR: registry-proxy:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.
