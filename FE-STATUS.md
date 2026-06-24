@@ -190,7 +190,7 @@ Other open backlog items live alongside them in `futures.md`:
 - **REM-018** — UI user-ID → username + enforce display_name on user creation (filed 2026-06-24)
 - **FUT-013** — Pull-through cache visibility: Phase A + B shipped (PRs #73, #74); Phase C (FE) in flight on `feat/fut-013-c-proxy-cache-frontend` — `/workspace/proxy-cache` route + sidebar entry probe-and-hide
 - **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Pairs with REM-018 + precedes SCIM (Tier 1 #5)
-- **FUT-014** — Pull-through cache `pull_count` undercount (filed 2026-06-24): `docker pull` HEAD-only flow doesn't bump the counter; FE column shows 0 on rows that were demonstrably pulled. Pure backend fix (no FE change), but the visible artefact lives on `/workspace/proxy-cache`
+- **FUT-014** — Proxy publishes `pull.image` events (filed 2026-06-24, expanded same day): one design change covers both the cache page's `pull_count` column AND the dashboard 24h pulls card not including cache traffic. Pure backend — both FE surfaces start showing real numbers with zero FE wiring once it lands
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
 - **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001)
