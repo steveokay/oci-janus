@@ -154,6 +154,9 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
 - **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `'tenant'` RBAC scope + `ListTenantUsers` / `InviteUser` / `SetUserDisabled` RPCs + `/tenant/users` route shared between tenant-admin and platform-admin. Strictly precedes Tier 1 #5 SCIM. Pairs with REM-018 — ~1 sprint
 - **FUT-014** — Pull-through cache `pull_count` undercount (filed 2026-06-24): FUT-013's pull counter only bumps on cache-hit GET manifest; `docker pull` after `rmi` is HEAD-only when the digest matches and doesn't bump. Fix: mirror the bump to `handleHeadManifest` + chain it into `cacheManifest`'s upsert. ~half day
+- **FUT-015** — `/workspace/proxy-cache` row expander + `docker pull` copy command (filed 2026-06-24): chevron-expand each row to show full pull URI + digest + media type. FE-only; reuses CopyButton. ~half day
+- **FUT-016** — Click-through detail page on `/workspace/proxy-cache` (filed 2026-06-24): new `/workspace/proxy-cache/{id}` route with Layers + Manifest tabs. New `services/proxy.GetCachedManifest` RPC + BFF route + FE page. Defers scans/signing to FUT-017. ~1-2 days
+- **FUT-017** — Scan-on-cached-images (filed 2026-06-24): `services/proxy` publishes `cache.populated`; `services/scanner` consumes + scans cached manifests; new `scope_type='proxy_cache'` policy scope. Decision locked: cached images SHOULD scan (private supply chain is the proxy's value-add). Signing deliberately deferred. ~1 sprint
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
