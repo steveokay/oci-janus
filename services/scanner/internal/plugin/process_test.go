@@ -269,6 +269,48 @@ func TestScan_processFailsOnBadBinary(t *testing.T) {
 	}
 }
 
+// TestScan_recoversRPCErrorFromStdoutOnExitNonZero is the REM-019 regression.
+// Adapters follow the JSON-RPC convention: on a recoverable error they write
+// the error envelope to stdout AND exit non-zero. Before REM-019 the
+// orchestrator threw the stdout payload away and logged the failure as a
+// generic "exit status 1" with empty stderr — masking the real cause.
+//
+// This test simulates that exact shape: a script that prints a well-formed
+// RPC error envelope to stdout, then exits 1. We assert the returned error
+// surfaces the embedded error string ("disk full"), not just the exit code.
+func TestScan_recoversRPCErrorFromStdoutOnExitNonZero(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin not supported on Windows")
+	}
+
+	// Print a JSON-RPC error envelope to stdout then exit 1. The orchestrator
+	// must parse stdout even on non-zero exit and surface resp.Error.
+	script := []byte(`#!/bin/sh
+printf '{"id":"x","error":"disk full"}\n'
+exit 1
+`)
+	path := writeTempFile(t, script)
+	defer os.Remove(path)
+
+	if err := os.Chmod(path, 0755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	checksum := sha256OfBytes(script)
+	p, err := New(path, checksum)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, scanErr := p.Scan(context.Background(), pluginScanRequestWithNoLayers())
+	if scanErr == nil {
+		t.Fatal("expected error when plugin process exits non-zero")
+	}
+	if !strings.Contains(scanErr.Error(), "disk full") {
+		t.Errorf("error should surface the RPC error string from stdout, got: %v", scanErr)
+	}
+}
+
 // TestScan_invalidJSONResponse verifies that Scan() returns an error when the
 // plugin emits invalid JSON on stdout.
 func TestScan_invalidJSONResponse(t *testing.T) {

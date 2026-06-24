@@ -191,7 +191,12 @@ func countBySeverity(fs []finding) severities {
 // writeError emits a JSON-RPC error envelope to stdout. The orchestrator
 // surfaces resp.Error verbatim in slog so keep the message terse and
 // actionable.
+// writeError emits the JSON-RPC error envelope on stdout AND mirrors the human
+// message to stderr. REM-019: without the stderr mirror the orchestrator only
+// sees `exit status 1` with no payload (it parses stdout but logs stderr on
+// failure), making every adapter crash look identical.
 func writeError(id, msg string) {
+	fmt.Fprintln(os.Stderr, msg)
 	resp := rpcResponse{ID: id, Error: msg}
 	_ = json.NewEncoder(os.Stdout).Encode(resp)
 }
