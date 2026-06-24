@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
-import { isPlatformAdmin } from "@/lib/auth/jwt";
+import { isWorkspaceAdmin } from "@/lib/auth/jwt";
 
 // Shape for a single sub-nav entry. `preview` items are shown at lower
 // contrast with a "Preview" pill — they link to real routes that will carry
@@ -100,10 +100,7 @@ const SECTIONS: SubNavSection[] = [
 // highlighting; admin-gated sections are omitted entirely for non-admins.
 export function AccessSubNav(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
-  // Workspace-admin gating: reuse the existing `isPlatformAdmin` check
-  // (JWT `roles` includes "admin"). A dedicated `isWorkspaceAdmin` helper
-  // can replace this once the backend ships workspace-scoped admin roles.
-  const isAdmin = isPlatformAdmin(claims);
+  const isAdmin = isWorkspaceAdmin(claims);
 
   return (
     <nav

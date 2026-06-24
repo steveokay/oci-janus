@@ -35,27 +35,69 @@ vi.mock("@/lib/auth/store", () => ({
 // Fixtures
 // ---------------------------------------------------------------------------
 
-// Non-admin user — roles array does not include "admin".
-const nonAdminClaims: JanusJwtClaims = {
-  sub: "user-non-admin",
+// Workspace reader — roles array contains only "reader". Should not see any
+// workspace-admin surfaces.
+const readerClaims: JanusJwtClaims = {
+  sub: "user-reader",
   tenant_id: "tenant-1",
   username: "regular-user",
   exp: Math.floor(Date.now() / 1000) + 3600,
   iat: Math.floor(Date.now() / 1000),
-  jti: "jti-non-admin",
+  jti: "jti-reader",
   roles: ["reader"],
 };
 
-// Platform-admin user — `isPlatformAdmin` checks `roles.includes("admin")`.
-const adminClaims: JanusJwtClaims = {
-  sub: "user-admin",
+// Workspace writer — same outcome as reader for nav gating.
+const writerClaims: JanusJwtClaims = {
+  sub: "user-writer",
   tenant_id: "tenant-1",
-  username: "admin-user",
+  username: "writer-user",
   exp: Math.floor(Date.now() / 1000) + 3600,
   iat: Math.floor(Date.now() / 1000),
-  jti: "jti-admin",
+  jti: "jti-writer",
+  roles: ["writer"],
+};
+
+// Workspace admin — `admin` role on an org scope (no platform `*` marker).
+// `isWorkspaceAdmin` returns true; should see workspace surfaces.
+const workspaceAdminClaims: JanusJwtClaims = {
+  sub: "user-workspace-admin",
+  tenant_id: "tenant-1",
+  username: "workspace-admin-user",
+  exp: Math.floor(Date.now() / 1000) + 3600,
+  iat: Math.floor(Date.now() / 1000),
+  jti: "jti-workspace-admin",
   roles: ["admin"],
 };
+
+// Workspace owner — `owner` is a strict superset of admin. Should also see
+// workspace surfaces even when "admin" is not in the dedupe.
+const workspaceOwnerClaims: JanusJwtClaims = {
+  sub: "user-owner",
+  tenant_id: "tenant-1",
+  username: "owner-user",
+  exp: Math.floor(Date.now() / 1000) + 3600,
+  iat: Math.floor(Date.now() / 1000),
+  jti: "jti-owner",
+  roles: ["owner"],
+};
+
+// Platform admin — flat-roles JWT can't distinguish from workspace admin
+// (the scope info isn't in the JWT), but the surface contract must continue
+// to render workspace links for them. Kept as a regression fixture.
+const platformAdminClaims: JanusJwtClaims = {
+  sub: "user-platform-admin",
+  tenant_id: "tenant-1",
+  username: "platform-admin-user",
+  exp: Math.floor(Date.now() / 1000) + 3600,
+  iat: Math.floor(Date.now() / 1000),
+  jti: "jti-platform-admin",
+  roles: ["admin"],
+};
+
+// Back-compat aliases — older tests below reference these names.
+const nonAdminClaims = readerClaims;
+const adminClaims = workspaceAdminClaims;
 
 // ---------------------------------------------------------------------------
 // Router wrapper — AccessSubNav renders TanStack Router <Link> elements, so
@@ -155,5 +197,49 @@ describe("AccessSubNav", () => {
     expect(screen.getByText("Credential helpers")).toBeInTheDocument();
     expect(screen.getByText("Token policies")).toBeInTheDocument();
     expect(screen.getByText("Access review")).toBeInTheDocument();
+  });
+
+  // DSGN-001 — verify the workspace-admin gate (not platform-admin) drives
+  // visibility. A tenant admin without the platform marker must see Service
+  // accounts + Activity; workspace writers / readers must not.
+
+  test("workspace admin sees Service accounts and Activity", async () => {
+    mockClaims = workspaceAdminClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Service accounts")).toBeInTheDocument();
+    expect(screen.getByText("Activity")).toBeInTheDocument();
+  });
+
+  test("workspace owner sees Service accounts and Activity", async () => {
+    mockClaims = workspaceOwnerClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Service accounts")).toBeInTheDocument();
+    expect(screen.getByText("Activity")).toBeInTheDocument();
+  });
+
+  test("workspace writer does not see Service accounts or Activity", async () => {
+    mockClaims = writerClaims;
+    await renderSubNav();
+
+    expect(screen.queryByText("Service accounts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+  });
+
+  test("workspace reader does not see Service accounts or Activity", async () => {
+    mockClaims = readerClaims;
+    await renderSubNav();
+
+    expect(screen.queryByText("Service accounts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+  });
+
+  test("platform admin still sees Service accounts and Activity", async () => {
+    mockClaims = platformAdminClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Service accounts")).toBeInTheDocument();
+    expect(screen.getByText("Activity")).toBeInTheDocument();
   });
 });

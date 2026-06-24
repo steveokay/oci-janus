@@ -38,3 +38,16 @@ export function isPlatformAdmin(claims: JanusJwtClaims | null): boolean {
   if (!claims?.roles) return false;
   return claims.roles.includes("admin");
 }
+
+// isWorkspaceAdmin returns true when the principal can administer their own
+// workspace — i.e. holds the `admin` or `owner` role on any scope within the
+// tenant. Matches the backend's `requireDomainAdmin` posture (BFF
+// `services/management/internal/handler/workspace_domains.go`) which accepts
+// any admin/owner grant on any org in the tenant (platform admins also pass).
+// Use this for workspace-admin surfaces (Service accounts, Custom domains,
+// Audit streaming). Real platform-admin surfaces (`/admin/*`) keep using
+// `isPlatformAdmin`.
+export function isWorkspaceAdmin(claims: JanusJwtClaims | null): boolean {
+  if (!claims?.roles) return false;
+  return claims.roles.includes("admin") || claims.roles.includes("owner");
+}

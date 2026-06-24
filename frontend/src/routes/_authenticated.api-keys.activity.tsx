@@ -2,7 +2,7 @@ import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
-import { isPlatformAdmin } from "@/lib/auth/jwt";
+import { isWorkspaceAdmin } from "@/lib/auth/jwt";
 import { useMe } from "@/lib/api/me";
 import { useServiceAccounts } from "@/lib/api/service-accounts";
 import { ActivityTable } from "@/components/access/ActivityTable";
@@ -44,7 +44,7 @@ type TimeRangeLabel = (typeof TIME_RANGES)[number]["label"];
 // then the ActivityTable.
 function ActivityPage(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
-  const isAdmin = isPlatformAdmin(claims);
+  const isAdmin = isWorkspaceAdmin(claims);
 
   // Self identity — used as both the default principal selection and the
   // "Me (you)" label. `useMe` is already pre-fetched by AppShell so this
