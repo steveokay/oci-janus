@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspace } from "@/lib/api/workspace";
+import { useCacheStats } from "@/lib/api/proxy-cache";
 import {
   LayoutDashboard,
   Boxes,
@@ -15,6 +16,7 @@ import {
   ScanLine,
   Ship,
   Radio,
+  Repeat,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -25,6 +27,12 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   adminOnly?: boolean;
+  // probeKey opts the item into a probe-then-show contract: the
+  // sidebar runs the probe hook and hides the item when the probe
+  // returns undefined (403 or 404). Keeps the SECTIONS table
+  // declarative while still allowing dynamic visibility for routes
+  // that depend on optional backend wiring.
+  probeKey?: "proxy-cache";
 }
 
 // Section groupings mirror the persona: ops first, RBAC second, infra
@@ -61,6 +69,16 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       // Integrations alongside Webhooks because both are outbound
       // delivery channels — same admin posture, similar mental model.
       { to: "/workspace/audit-export", label: "Audit streaming", icon: Radio },
+      // FUT-013: pull-through cache visibility. probeKey gates the
+      // item on a successful /proxy/cache/stats probe — 403 (non-
+      // workspace-admin) or 404 (PROXY_GRPC_ADDR unset) hide it so
+      // a deployment without the proxy doesn't show a dead link.
+      {
+        to: "/workspace/proxy-cache",
+        label: "Pull-through cache",
+        icon: Repeat,
+        probeKey: "proxy-cache",
+      },
     ],
   },
   {
@@ -89,6 +107,14 @@ export function Sidebar(): React.ReactElement {
   const showAdmin = isPlatformAdmin(claims);
   const { location } = useRouterState();
   const { data: workspace } = useWorkspace();
+  // FUT-013 probe: null ⇒ caller is not workspace-admin OR the BFF
+  // has no PROXY_GRPC_ADDR wired (both surface as 403/404 → null in
+  // the hook). Either way the menu item stays hidden — the page
+  // itself would 403/404, no point advertising it. Undefined means
+  // "query still loading"; we treat that as not-yet-available so the
+  // sidebar doesn't flash the item between mount and first response.
+  const { data: proxyCacheStats } = useCacheStats();
+  const proxyCacheAvailable = proxyCacheStats != null;
 
   // FE-API-009 — sidebar header reflects the live workspace name once the
   // BFF responds. Falls back to "Janus / Registry control" on first paint
@@ -143,9 +169,11 @@ export function Sidebar(): React.ReactElement {
 
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
         {SECTIONS.map((section) => {
-          const visibleItems = section.items.filter(
-            (i) => !i.adminOnly || showAdmin,
-          );
+          const visibleItems = section.items.filter((i) => {
+            if (i.adminOnly && !showAdmin) return false;
+            if (i.probeKey === "proxy-cache" && !proxyCacheAvailable) return false;
+            return true;
+          });
           if (visibleItems.length === 0) return null;
           return (
             <div key={section.title} className="mt-6 first:mt-0">

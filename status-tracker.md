@@ -56,16 +56,15 @@ layout; distroless scratch-dir / tmpdir perms).
 active adapter to the dev stub. REM-011 P2's in-memory swap means
 no container restart is needed.
 
-### FUT-013 — Pull-through cache visibility (Phase B: BFF)
+### FUT-013 — Pull-through cache visibility (Phase C: frontend)
 
-**Status:** Phase A shipped via PR #73 (proto + migration + 3 RPCs
-on `services/proxy`). Phase B on branch
-`feat/fut-013-b-proxy-cache-bff` (in flight). Adds three REST
-routes on `services/management` (`GET /api/v1/proxy/cache`,
-`GET /api/v1/proxy/cache/stats`, `DELETE /api/v1/proxy/cache/{id}`)
-gated on workspace-admin; nil proxy client → 404 so the FE can
-probe + hide the sidebar entry. Phase C (FE route + sidebar
-entry) is next.
+**Status:** Phases A (PR #73) and B (PR #74) shipped. Phase C on
+branch `feat/fut-013-c-proxy-cache-frontend` (in flight). Adds
+`/workspace/proxy-cache` route + sidebar entry in the Integrations
+group + `useCacheStats` / `useCachedManifests` / `useEvictCachedManifest`
+hooks. Sidebar entry hidden when the BFF probe returns 403/404
+(`PROXY_GRPC_ADDR` unset or caller not workspace-admin); deeplink
+fallback renders an EmptyState explaining the gap.
 
 ---
 

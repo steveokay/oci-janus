@@ -38,6 +38,7 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| FUT-013 Phase B | services/management BFF — `GET /api/v1/proxy/cache`, `/stats`, `DELETE /{id}`; workspace-admin gated; 404 when PROXY_GRPC_ADDR unset (FE probe-and-hide) | PR #74 | 2026-06-24 | DONE (Phase B) |
 | FUT-013 Phase A | services/proxy backend for cache visibility — migration 00003 (`last_pulled_at` / `pull_count` / `size_bytes`) + 3 new RPCs (`ListCachedManifests` / `GetCacheStats` / `DeleteCachedManifest`) + async pull-bump on cache hit | PR #73 | 2026-06-24 | DONE (Phase A) |
 | status-md-cleanup | Collapsed `status.md` from 851 → 208 lines into a single completed-work table | PR #72 | 2026-06-24 | DONE |
 | REM-016 | `libs/errors/codes.MapDBError` now maps PG SQLSTATE 23503/23505/23514/23502 onto NotFound/AlreadyExists/InvalidArgument | PR #66 | 2026-06-24 | DONE |
