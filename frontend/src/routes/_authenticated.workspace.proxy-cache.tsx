@@ -39,6 +39,7 @@ import {
   useEvictCachedManifest,
   type CachedManifest,
 } from "@/lib/api/proxy-cache";
+import { UpstreamPoliciesCard } from "@/components/workspace/proxy-cache/upstream-policies-card";
 import { useWorkspace } from "@/lib/api/workspace";
 import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/format";
 
@@ -91,6 +92,24 @@ function ProxyCachePage(): React.ReactElement {
 
   const [evictTarget, setEvictTarget] = React.useState<CachedManifest | null>(null);
   const evict = useEvictCachedManifest();
+
+  // FUT-017 — derive the upstream-name set from the cached-manifest list.
+  // The PoliciesCard joins this with the server-side policy rows; sourcing
+  // from the manifest list keeps us off the upstreams list API (doesn't
+  // exist yet) and means the policy editor matches what the operator can
+  // actually see on this page.
+  //
+  // Hooks must run before any early return per rules-of-hooks; reading the
+  // (possibly undefined) listQuery.data here keeps the dependency stable.
+  const upstreamNames = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const page of listQuery.data?.pages ?? []) {
+      for (const m of page.manifests) {
+        if (m.upstream_name) seen.add(m.upstream_name);
+      }
+    }
+    return Array.from(seen);
+  }, [listQuery.data]);
 
   // Sidebar hides this page when the stats probe returns null, but a
   // deeplink can still land here. Render an EmptyState the operator
@@ -167,6 +186,12 @@ function ProxyCachePage(): React.ReactElement {
           }
         />
       </div>
+
+      {/* FUT-017 — per-upstream auto-scan + auto-sign policy editor.
+          The card hides itself when both the scanner + signer clients
+          are unwired on the BFF, so this slot is invisible by default
+          on minimal deployments. */}
+      <UpstreamPoliciesCard upstreamNames={upstreamNames} />
 
       {/* Filter + table */}
       <Card>
