@@ -213,6 +213,44 @@ func (h *GRPCHandler) GetCacheStats(ctx context.Context, req *proxyv1.GetCacheSt
 	}, nil
 }
 
+// GetCachedManifest returns the FUT-016 detail-page projection for a
+// single proxy_manifests row, body bytes included. The BFF parses the
+// body server-side; we keep this handler dumb (repo lookup + proto
+// mapping only).
+func (h *GRPCHandler) GetCachedManifest(ctx context.Context, req *proxyv1.GetCachedManifestRequest) (*proxyv1.CachedManifestDetail, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid tenant_id: %v", err)
+	}
+	id, err := uuid.Parse(req.GetId())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
+	}
+	row, err := h.repo.GetCachedManifestByID(ctx, tenantID, id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "cached manifest not found")
+		}
+		return nil, status.Errorf(codes.Internal, "get cached manifest: %v", err)
+	}
+	return &proxyv1.CachedManifestDetail{
+		Manifest: cachedManifestToProto(&repository.CachedManifestRow{
+			ID:           row.ID,
+			UpstreamID:   row.UpstreamID,
+			UpstreamName: row.UpstreamName,
+			Image:        row.Image,
+			Reference:    row.Reference,
+			Digest:       row.Digest,
+			MediaType:    row.MediaType,
+			SizeBytes:    row.SizeBytes,
+			FetchedAt:    row.FetchedAt,
+			LastPulledAt: row.LastPulledAt,
+			PullCount:    row.PullCount,
+		}),
+		Body: row.Body,
+	}, nil
+}
+
 // DeleteCachedManifest evicts a single cached manifest row by id.
 // The underlying layer blobs in services/storage are NOT removed here —
 // that's the existing GC mark-sweep's job. See the package doc on

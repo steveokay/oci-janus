@@ -15,6 +15,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -34,6 +35,11 @@ import (
 func (h *Handler) RegisterProxyCache(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
 	mux.Handle("GET /api/v1/proxy/cache", authMW(http.HandlerFunc(h.handleListProxyCache)))
 	mux.Handle("GET /api/v1/proxy/cache/stats", authMW(http.HandlerFunc(h.handleProxyCacheStats)))
+	// FUT-016 — click-through detail page. The {id} catch-all sits AFTER the
+	// /stats literal so net/http's pattern matcher routes /stats to the
+	// aggregate handler. ServeMux disambiguates static vs wildcard
+	// segments automatically; the ordering here is for the reader.
+	mux.Handle("GET /api/v1/proxy/cache/{id}", authMW(http.HandlerFunc(h.handleGetProxyCacheDetail)))
 	mux.Handle("DELETE /api/v1/proxy/cache/{id}", authMW(http.HandlerFunc(h.handleEvictProxyCache)))
 }
 
@@ -64,6 +70,82 @@ type proxyCacheStatsResponse struct {
 	TotalBytes      int64 `json:"total_bytes"`
 	UniqueUpstreams int64 `json:"unique_upstreams"`
 	TotalPulls      int64 `json:"total_pulls"`
+}
+
+// ─── FUT-016 detail-page response shapes ──────────────────────────────────────
+
+// proxyCacheLayer is one layer entry parsed out of an image manifest body.
+// Mirrors the per-tag manifest layers (services/management.../handler.go
+// `manifestLayer`) so the frontend can re-use its existing components.
+type proxyCacheLayer struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"media_type"`
+}
+
+// proxyCacheManifestRef is one per-platform child manifest of an index /
+// manifest-list. Same projection as the per-tag manifest handler's
+// `manifestEntry` — keeps the FE shape consistent so a future shared
+// layer component just works.
+type proxyCacheManifestRef struct {
+	Digest       string `json:"digest"`
+	Size         int64  `json:"size"`
+	MediaType    string `json:"media_type"`
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Variant      string `json:"variant,omitempty"`
+	OSVersion    string `json:"os_version,omitempty"`
+}
+
+// proxyCacheDetailResponse is the JSON shape returned by GET /api/v1/proxy/cache/{id}.
+// Embeds the list-row fields verbatim + adds:
+//
+//   - kind         — "image" (single-arch) or "index" (multi-platform). Lets
+//                    the FE branch on a single string instead of sniffing
+//                    media types client-side.
+//   - body_base64  — the manifest body bytes, base64-encoded, for the
+//                    "Manifest" tab raw-JSON viewer.
+//   - layers / manifests — parsed projection. One of the two is populated
+//                          based on `kind`; the other is an empty slice
+//                          (we never emit `null` — stable shape for the
+//                          FE means no `?.length` dance).
+type proxyCacheDetailResponse struct {
+	cachedManifestResponse
+	Kind       string                  `json:"kind"`
+	BodyBase64 string                  `json:"body_base64"`
+	Layers     []proxyCacheLayer       `json:"layers"`
+	Manifests  []proxyCacheManifestRef `json:"manifests"`
+}
+
+// rawProxyManifest is the subset of an OCI/Docker manifest JSON we need
+// to parse for the detail-page projection. Same shape as the per-tag
+// manifest handler's `rawManifest` — both contracts come from OCI spec
+// + Docker schema so divergence here would be a bug. Duplicated rather
+// than imported because cross-handler-file types in the same package
+// would couple two otherwise-independent routes; if a third caller
+// shows up we'll promote it to a shared helper.
+type rawProxyManifest struct {
+	Config struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+	} `json:"config"`
+	Layers []struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+	} `json:"layers"`
+	Manifests []struct {
+		Digest    string `json:"digest"`
+		Size      int64  `json:"size"`
+		MediaType string `json:"mediaType"`
+		Platform  struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+			Variant      string `json:"variant"`
+			OSVersion    string `json:"os.version"`
+		} `json:"platform"`
+	} `json:"manifests"`
 }
 
 // GET /api/v1/proxy/cache
@@ -153,6 +235,111 @@ func (h *Handler) handleProxyCacheStats(w http.ResponseWriter, r *http.Request) 
 		UniqueUpstreams: stats.GetUniqueUpstreams(),
 		TotalPulls:      stats.GetTotalPulls(),
 	})
+}
+
+// GET /api/v1/proxy/cache/{id} — FUT-016 click-through detail page.
+//
+// Returns the full cached row + parsed layer/per-platform projection so
+// the FE can render a Layers tab (image manifests) or Platforms tab
+// (image-index / manifest-list) without re-parsing the body in TS.
+// The raw body bytes are also surfaced base64-encoded for the
+// "Manifest" tab raw-JSON viewer.
+//
+// Auth: workspace-admin (same gate as the list/stats/delete siblings).
+// h.proxy nil ⇒ 404 to preserve the FE's "feature unavailable" probe.
+func (h *Handler) handleGetProxyCacheDetail(w http.ResponseWriter, r *http.Request) {
+	if h.proxy == nil {
+		writeError(w, http.StatusNotFound, "route disabled")
+		return
+	}
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if !h.requireDomainAdmin(r) {
+		writeError(w, http.StatusForbidden, "workspace admin role required")
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	detail, err := h.proxy.GetCachedManifest(r.Context(), &proxyv1.GetCachedManifestRequest{
+		TenantId: tenantID,
+		Id:       id,
+	})
+	if err != nil {
+		if s, ok := status.FromError(err); ok {
+			switch s.Code() {
+			case codes.NotFound:
+				writeError(w, http.StatusNotFound, "cached manifest not found")
+				return
+			case codes.InvalidArgument:
+				writeError(w, http.StatusBadRequest, s.Message())
+				return
+			case codes.PermissionDenied:
+				writeError(w, http.StatusForbidden, s.Message())
+				return
+			}
+		}
+		slog.Error("GetCachedManifest", "err", err, "tenant_id", tenantID, "id", id)
+		writeError(w, http.StatusInternalServerError, "failed to load cached manifest")
+		return
+	}
+
+	out := proxyCacheDetailResponse{
+		cachedManifestResponse: toCachedManifestResponse(detail.GetManifest()),
+		BodyBase64:             base64.StdEncoding.EncodeToString(detail.GetBody()),
+		// Pre-allocate empty slices so the JSON never emits `null` — keeps
+		// the FE's `.map()` and `.length` calls safe without ?? fallbacks.
+		Layers:    []proxyCacheLayer{},
+		Manifests: []proxyCacheManifestRef{},
+	}
+
+	// Parse the manifest body. If the body is missing or malformed we
+	// still return the row + an "image" kind with empty layers — the FE
+	// will show "No layers recorded" rather than an error page, which is
+	// the right behaviour for an artifact / attestation manifest that
+	// genuinely has no layers. A malformed body is rare enough that
+	// failing the whole request would be more confusing than helpful.
+	var parsed rawProxyManifest
+	if len(detail.GetBody()) > 0 {
+		if err := json.Unmarshal(detail.GetBody(), &parsed); err != nil {
+			slog.Warn("proxy cache detail: manifest body parse",
+				"err", err, "id", id, "digest", detail.GetManifest().GetDigest())
+		}
+	}
+
+	// Discriminator. An image index carries `manifests[]`; an image
+	// manifest carries `config` + `layers[]`. We pick on `manifests[]`
+	// presence (not media type) so both Docker (manifest.list) and OCI
+	// (image.index) shapes route the same way without a media-type
+	// switch.
+	if len(parsed.Manifests) > 0 {
+		out.Kind = "index"
+		for _, m := range parsed.Manifests {
+			out.Manifests = append(out.Manifests, proxyCacheManifestRef{
+				Digest:       m.Digest,
+				Size:         m.Size,
+				MediaType:    m.MediaType,
+				Architecture: m.Platform.Architecture,
+				OS:           m.Platform.OS,
+				Variant:      m.Platform.Variant,
+				OSVersion:    m.Platform.OSVersion,
+			})
+		}
+	} else {
+		out.Kind = "image"
+		for _, l := range parsed.Layers {
+			out.Layers = append(out.Layers, proxyCacheLayer{
+				Digest:    l.Digest,
+				Size:      l.Size,
+				MediaType: l.MediaType,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }
 
 // DELETE /api/v1/proxy/cache/{id} — evict a single cached manifest row.

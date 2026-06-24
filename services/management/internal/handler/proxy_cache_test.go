@@ -13,6 +13,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -55,6 +56,11 @@ type fakeProxyServer struct {
 
 	deleteErr    error
 	lastDeleteID string
+
+	// FUT-016 — GetCachedManifest fake state.
+	getReturn *proxyv1.CachedManifestDetail
+	getErr    error
+	lastGetID string
 }
 
 func (s *fakeProxyServer) ListCachedManifests(_ context.Context, req *proxyv1.ListCachedManifestsRequest) (*proxyv1.ListCachedManifestsResponse, error) {
@@ -80,6 +86,19 @@ func (s *fakeProxyServer) GetCacheStats(_ context.Context, _ *proxyv1.GetCacheSt
 		return s.statsReturn, nil
 	}
 	return &proxyv1.CacheStats{}, nil
+}
+
+func (s *fakeProxyServer) GetCachedManifest(_ context.Context, req *proxyv1.GetCachedManifestRequest) (*proxyv1.CachedManifestDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastGetID = req.GetId()
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.getReturn != nil {
+		return s.getReturn, nil
+	}
+	return &proxyv1.CachedManifestDetail{}, nil
 }
 
 func (s *fakeProxyServer) DeleteCachedManifest(_ context.Context, req *proxyv1.DeleteCachedManifestRequest) (*emptypb.Empty, error) {
@@ -168,6 +187,8 @@ func TestProxyCache_Disabled_returns404(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/proxy/cache",
 		"/api/v1/proxy/cache/stats",
+		// FUT-016 — detail route also 404s when proxy client is unwired.
+		"/api/v1/proxy/cache/00000000-0000-0000-0000-000000000001",
 	} {
 		resp := env.get(t, path, adminToken)
 		if resp.StatusCode != http.StatusNotFound {
@@ -189,6 +210,8 @@ func TestProxyCache_NonAdmin_returns403(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/proxy/cache",
 		"/api/v1/proxy/cache/stats",
+		// FUT-016 — detail route is workspace-admin gated too.
+		"/api/v1/proxy/cache/00000000-0000-0000-0000-000000000001",
 	} {
 		resp := env.get(t, path, readerToken)
 		if resp.StatusCode != http.StatusForbidden {
@@ -351,6 +374,192 @@ func TestProxyCacheList_GRPCInvalidArg(t *testing.T) {
 	}
 }
 
+// ─── FUT-016 detail-route tests ────────────────────────────────────────────
+
+// imageManifestBody is a minimal OCI image manifest used by the detail-route
+// happy-path test. Captures the projection the BFF must produce: one config
+// + two layers. Keeping this inline (vs a testdata file) makes the
+// expectation obvious next to the assertions.
+const imageManifestBody = `{
+	"schemaVersion": 2,
+	"mediaType": "application/vnd.oci.image.manifest.v1+json",
+	"config": {
+		"mediaType": "application/vnd.oci.image.config.v1+json",
+		"digest": "sha256:c0nf1g",
+		"size": 1234
+	},
+	"layers": [
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:1ayer0ne",
+			"size": 100
+		},
+		{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": "sha256:1ayertwo",
+			"size": 200
+		}
+	]
+}`
+
+// indexManifestBody is a minimal OCI image index used to confirm the
+// detail-route branches on `manifests[]` presence (not media type) and
+// emits `kind: "index"` + `manifests[]`.
+const indexManifestBody = `{
+	"schemaVersion": 2,
+	"mediaType": "application/vnd.oci.image.index.v1+json",
+	"manifests": [
+		{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest": "sha256:amd64manifest",
+			"size": 500,
+			"platform": {"architecture": "amd64", "os": "linux"}
+		},
+		{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest": "sha256:arm64manifest",
+			"size": 600,
+			"platform": {"architecture": "arm64", "os": "linux", "variant": "v8"}
+		}
+	]
+}`
+
+// TestProxyCacheDetail_ImageManifest_HappyPath — workspace-admin gets the
+// full detail row, kind=image, parsed layers, body base64-roundtrips.
+func TestProxyCacheDetail_ImageManifest_HappyPath(t *testing.T) {
+	env, fake := newProxyEnv(t)
+	fetched := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	target := "11111111-1111-4111-8111-111111111111"
+
+	fake.getReturn = &proxyv1.CachedManifestDetail{
+		Manifest: &proxyv1.CachedManifest{
+			Id:           target,
+			UpstreamId:   "22222222-2222-4222-8222-222222222222",
+			UpstreamName: "dockerhub",
+			Image:        "library/alpine",
+			Reference:    "3.20",
+			Digest:       "sha256:abcd",
+			MediaType:    "application/vnd.oci.image.manifest.v1+json",
+			SizeBytes:    int64(len(imageManifestBody)),
+			FetchedAt:    timestamppb.New(fetched),
+			PullCount:    3,
+		},
+		Body: []byte(imageManifestBody),
+	}
+
+	resp := env.get(t, "/api/v1/proxy/cache/"+target, adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		ID         string `json:"id"`
+		Kind       string `json:"kind"`
+		Image      string `json:"image"`
+		BodyBase64 string `json:"body_base64"`
+		Layers     []struct {
+			Digest    string `json:"digest"`
+			Size      int64  `json:"size"`
+			MediaType string `json:"media_type"`
+		} `json:"layers"`
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	decodeJSON(t, resp, &body)
+
+	if body.ID != target {
+		t.Errorf("id: got %q, want %q", body.ID, target)
+	}
+	if body.Kind != "image" {
+		t.Errorf("kind: got %q, want %q", body.Kind, "image")
+	}
+	if body.Image != "library/alpine" {
+		t.Errorf("image: got %q", body.Image)
+	}
+	if len(body.Layers) != 2 {
+		t.Fatalf("layers: got %d, want 2", len(body.Layers))
+	}
+	if body.Layers[0].Digest != "sha256:1ayer0ne" || body.Layers[0].Size != 100 {
+		t.Errorf("layer[0]: %+v", body.Layers[0])
+	}
+	if len(body.Manifests) != 0 {
+		t.Errorf("manifests should be empty for image kind, got %d", len(body.Manifests))
+	}
+	// body_base64 must round-trip back to the original bytes.
+	dec, err := base64.StdEncoding.DecodeString(body.BodyBase64)
+	if err != nil {
+		t.Fatalf("body_base64 decode: %v", err)
+	}
+	if string(dec) != imageManifestBody {
+		t.Errorf("body_base64 round-trip mismatch")
+	}
+	if fake.lastGetID != target {
+		t.Errorf("get id: got %q, want %q", fake.lastGetID, target)
+	}
+}
+
+// TestProxyCacheDetail_Index_HappyPath — manifest-list / image-index
+// branches to kind=index with per-platform projection populated and
+// layers empty.
+func TestProxyCacheDetail_Index_HappyPath(t *testing.T) {
+	env, fake := newProxyEnv(t)
+	target := "33333333-3333-4333-8333-333333333333"
+
+	fake.getReturn = &proxyv1.CachedManifestDetail{
+		Manifest: &proxyv1.CachedManifest{
+			Id:           target,
+			UpstreamId:   "22222222-2222-4222-8222-222222222222",
+			UpstreamName: "dockerhub",
+			Image:        "library/nginx",
+			Reference:    "stable",
+			Digest:       "sha256:idx",
+			MediaType:    "application/vnd.oci.image.index.v1+json",
+			SizeBytes:    int64(len(indexManifestBody)),
+			FetchedAt:    timestamppb.New(time.Now().UTC()),
+		},
+		Body: []byte(indexManifestBody),
+	}
+	resp := env.get(t, "/api/v1/proxy/cache/"+target, adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Kind      string `json:"kind"`
+		Layers    []any  `json:"layers"`
+		Manifests []struct {
+			Digest       string `json:"digest"`
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+			Variant      string `json:"variant,omitempty"`
+		} `json:"manifests"`
+	}
+	decodeJSON(t, resp, &body)
+
+	if body.Kind != "index" {
+		t.Errorf("kind: got %q, want %q", body.Kind, "index")
+	}
+	if len(body.Layers) != 0 {
+		t.Errorf("layers should be empty for index kind, got %d", len(body.Layers))
+	}
+	if len(body.Manifests) != 2 {
+		t.Fatalf("manifests: got %d, want 2", len(body.Manifests))
+	}
+	if body.Manifests[0].Architecture != "amd64" || body.Manifests[1].Variant != "v8" {
+		t.Errorf("platform projection wrong: %+v", body.Manifests)
+	}
+}
+
+// TestProxyCacheDetail_NotFound — gRPC NotFound → 404.
+func TestProxyCacheDetail_NotFound(t *testing.T) {
+	env, fake := newProxyEnv(t)
+	fake.getErr = status.Error(codes.NotFound, "cached manifest not found")
+	resp := env.get(t, "/api/v1/proxy/cache/55555555-5555-4555-8555-555555555555", adminToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
 // Silence unused-import nags when none of the helpers above happen to
 // reference json directly (decodeJSON is in handler_test.go).
 var _ = json.Marshal
+var _ = base64.StdEncoding

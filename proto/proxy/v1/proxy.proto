@@ -21,6 +21,18 @@ service ProxyService {
   rpc ListCachedManifests(ListCachedManifestsRequest) returns (ListCachedManifestsResponse);
   rpc GetCacheStats(GetCacheStatsRequest)             returns (CacheStats);
   rpc DeleteCachedManifest(DeleteCachedManifestRequest) returns (google.protobuf.Empty);
+
+  // FUT-016 — detail-page surface.
+  //
+  // Returns the full cached manifest row INCLUDING the body bytes. Used by
+  // the management BFF to render the click-through detail page on
+  // /workspace/proxy-cache, which parses the body server-side into a
+  // typed layer / per-platform projection so the frontend just renders.
+  //
+  // Separate RPC (not "extend ListCachedManifests with a single-row
+  // path") because the list-RPC's CachedManifest deliberately omits the
+  // body to keep the page payload skinny.
+  rpc GetCachedManifest(GetCachedManifestRequest) returns (CachedManifestDetail);
 }
 
 message Upstream {
@@ -103,4 +115,29 @@ message DeleteCachedManifestRequest {
   // same image cached via two different upstream aliases), and the
   // operator's "evict this row" intent shouldn't fan out to all copies.
   string id        = 2;
+}
+
+// FUT-016 — GetCachedManifest request / response.
+//
+// Tenant-scoped read. The id is the proxy_manifests row id, NOT a digest:
+// digest collisions across upstream aliases are intentional (see
+// DeleteCachedManifestRequest comment), and the FE table already hands
+// the operator the row id by clicking through.
+message GetCachedManifestRequest {
+  string tenant_id = 1;
+  string id        = 2;
+}
+
+// CachedManifestDetail wraps the list-page CachedManifest projection and
+// adds the manifest body bytes. Kept as a separate message (rather than
+// re-using CachedManifest with an empty body) so the list payload stays
+// explicitly skinny and so the API contract makes it obvious where the
+// body field belongs.
+message CachedManifestDetail {
+  CachedManifest manifest = 1;
+  // Raw manifest body, exactly as fetched from upstream. The BFF parses
+  // this server-side into the layer / per-platform projection the FE
+  // renders; the body is also surfaced as base64 to the FE so the
+  // "Manifest" tab can show the raw JSON.
+  bytes body = 2;
 }
