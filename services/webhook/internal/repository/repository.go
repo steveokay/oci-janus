@@ -148,9 +148,31 @@ func (r *Repository) CreateDelivery(ctx context.Context, endpointID, tenantID uu
 	return &rec, nil
 }
 
-// PollDueDeliveries returns up to limit pending deliveries whose next_attempt_at <= now().
+// PollDueDeliveries returns up to limit pending deliveries whose
+// next_attempt_at <= now() and leases each picked row by pushing its
+// next_attempt_at five minutes into the future (QA-003).
+//
+// Previously this used FOR UPDATE SKIP LOCKED on a pooled Query without a
+// surrounding transaction — the row locks released as soon as rows.Close()
+// fired, so overlapping ticks (or the same tick running in parallel
+// workers) would re-pick rows the previous tick had already handed to the
+// dispatcher. The leased next_attempt_at acts as a soft claim: a healthy
+// worker calls MarkDelivered or MarkFailed within seconds, both of which
+// overwrite next_attempt_at appropriately. A crashed worker's rows come
+// back into the poll after the lease window expires. Five minutes is
+// comfortably longer than the 35s HTTP timeout + retry backoff so this
+// doesn't introduce false-positive duplicate deliveries under normal load.
 func (r *Repository) PollDueDeliveries(ctx context.Context, limit int) ([]*DeliveryRecord, error) {
-	rows, err := r.pool.Query(ctx,
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("PollDueDeliveries begin: %w", err)
+	}
+	// Rollback is safe to call after Commit — pgx returns ErrTxClosed which
+	// we ignore. The defer guarantees the tx is cleaned up on any error
+	// path.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
 		`SELECT d.id, d.endpoint_id, d.tenant_id, d.event_type, d.payload, d.status,
 		        d.attempts, d.max_attempts, d.next_attempt_at, COALESCE(d.last_error,''), d.created_at
 		 FROM webhook_deliveries d
@@ -164,18 +186,44 @@ func (r *Repository) PollDueDeliveries(ctx context.Context, limit int) ([]*Deliv
 	if err != nil {
 		return nil, fmt.Errorf("PollDueDeliveries: %w", err)
 	}
-	defer rows.Close()
 
 	var out []*DeliveryRecord
 	for rows.Next() {
 		var rec DeliveryRecord
 		if err := rows.Scan(&rec.ID, &rec.EndpointID, &rec.TenantID, &rec.EventType, &rec.Payload,
 			&rec.Status, &rec.Attempts, &rec.MaxAttempts, &rec.NextAttemptAt, &rec.LastError, &rec.CreatedAt); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("PollDueDeliveries scan: %w", err)
 		}
 		out = append(out, &rec)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("PollDueDeliveries rows: %w", err)
+	}
+
+	// Lease the picked rows so concurrent ticks won't re-claim them. The
+	// row locks acquired by FOR UPDATE end when this tx commits — the
+	// lease via next_attempt_at is what protects post-commit.
+	if len(out) > 0 {
+		ids := make([]uuid.UUID, len(out))
+		for i, rec := range out {
+			ids[i] = rec.ID
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE webhook_deliveries
+			 SET next_attempt_at = now() + interval '5 minutes'
+			 WHERE id = ANY($1)`,
+			ids,
+		); err != nil {
+			return nil, fmt.Errorf("PollDueDeliveries lease: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("PollDueDeliveries commit: %w", err)
+	}
+	return out, nil
 }
 
 // MarkDelivered marks a delivery as successfully delivered.
