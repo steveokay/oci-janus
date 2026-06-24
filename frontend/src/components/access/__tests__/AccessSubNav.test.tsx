@@ -1,4 +1,4 @@
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import {
   createRouter,
@@ -142,7 +142,29 @@ describe("AccessSubNav", () => {
   beforeEach(() => {
     // Reset claims before each test so state from a previous test doesn't leak.
     mockClaims = null;
+    // DSGN-011 — the Preview section now collapses behind a flyout that
+    // persists in localStorage. Reset between tests so a previous test's
+    // "open" state doesn't leak; tests that need it open call
+    // openPreviewSection() explicitly.
+    try {
+      window.localStorage.removeItem("accessSubNav.previewOpen");
+    } catch {
+      // jsdom always has localStorage; the try/catch matches the
+      // component's defensive read so the test mirrors prod behaviour.
+    }
   });
+
+  // openPreviewSection — finds the collapsible "Preview" expander button by
+  // its aria-controls binding and clicks it. Used by tests that need the
+  // four FUT-001..FUT-004 preview links visible.
+  function openPreviewSection(): void {
+    const button = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    if (button instanceof HTMLElement) {
+      fireEvent.click(button);
+    }
+  }
 
   test("hides Workspace and Preview sections for non-admin users", async () => {
     mockClaims = nonAdminClaims;
@@ -164,14 +186,15 @@ describe("AccessSubNav", () => {
     expect(screen.getByText("Yours")).toBeInTheDocument();
     expect(screen.getByText("Workspace")).toBeInTheDocument();
 
-    // The "Preview" section heading is a plain div; the badge pills that also
-    // say "Preview" are <span> elements inside <a> tags. We confirm the section
-    // heading exists by filtering to div elements with no child elements.
-    const previewMatches = screen.getAllByText("Preview");
-    const previewSectionHeading = previewMatches.find(
-      (el) => el.tagName === "DIV" && el.children.length === 0,
+    // DSGN-011 — the Preview section heading is now a collapsible <button>
+    // with `aria-controls="access-subnav-preview-items"`. Presence of the
+    // expander is what "section exists" means now; the items themselves
+    // only mount when expanded.
+    const expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
     );
-    expect(previewSectionHeading).toBeInTheDocument();
+    expect(expander).toBeInTheDocument();
+    expect(expander).toHaveAttribute("aria-expanded", "false");
   });
 
   test("shows Personal keys link for all users", async () => {
@@ -189,14 +212,43 @@ describe("AccessSubNav", () => {
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
-  test("shows all preview links for admins", async () => {
+  test("shows all preview links for admins after expanding the flyout", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
+
+    // DSGN-011 — the Preview section is collapsed by default. Verify the
+    // links are hidden, then expand and verify they appear.
+    expect(screen.queryByText("Federated trust")).not.toBeInTheDocument();
+    openPreviewSection();
 
     expect(screen.getByText("Federated trust")).toBeInTheDocument();
     expect(screen.getByText("Credential helpers")).toBeInTheDocument();
     expect(screen.getByText("Token policies")).toBeInTheDocument();
     expect(screen.getByText("Access review")).toBeInTheDocument();
+  });
+
+  // DSGN-011 — collapsing the Preview section persists in localStorage so
+  // an admin who explicitly closes it doesn't have to re-close on every
+  // navigation back into /api-keys.
+  test("preview flyout state persists in localStorage", async () => {
+    mockClaims = adminClaims;
+    await renderSubNav();
+
+    // Start collapsed (beforeEach cleared the key).
+    let expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    expect(expander).toHaveAttribute("aria-expanded", "false");
+
+    // Open it, and verify localStorage is updated.
+    openPreviewSection();
+    expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    expect(expander).toHaveAttribute("aria-expanded", "true");
+    expect(window.localStorage.getItem("accessSubNav.previewOpen")).toBe(
+      "true",
+    );
   });
 
   // DSGN-001 — verify the workspace-admin gate (not platform-admin) drives

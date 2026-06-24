@@ -13,6 +13,11 @@ interface AdapterCardProps {
   busy?: boolean;
   // Disable the test-scan button while a test scan is running.
   testing?: boolean;
+  // Name of the currently-active adapter, used to build the replace-action
+  // copy on non-active cards ("Replace <name> with this"). Undefined when
+  // no adapter is currently active — then the button falls back to
+  // "Make active".
+  currentActiveName?: string;
   onMakeActive: () => void;
   onRunTestScan: () => void;
 }
@@ -23,14 +28,16 @@ interface AdapterCardProps {
 //   - `accentBar="success"` along the top edge
 //   - an "Active" Badge in the header
 //   - a primary "Run test scan" button in the footer
-// Non-active adapters get a ghost "Make active" button. Checksum is
-// truncated to 16 chars with the full digest in `title` (browser native
-// tooltip — Beacon doesn't yet have a Tooltip primitive and the brief
-// forbids new primitives).
+// Non-active adapters get a ghost "Replace <activeName> with this" button so
+// the operator sees what they'd be displacing without having to scan the
+// grid for the green pill. Checksum is truncated to 16 chars with the full
+// digest in `title` (browser native tooltip — Beacon doesn't yet have a
+// Tooltip primitive and the brief forbids new primitives).
 export function AdapterCard({
   adapter,
   busy,
   testing,
+  currentActiveName,
   onMakeActive,
   onRunTestScan,
 }: AdapterCardProps): React.ReactElement {
@@ -134,7 +141,17 @@ export function AdapterCard({
             onClick={onMakeActive}
             disabled={busy}
           >
-            Make active
+            {currentActiveName ? (
+              <>
+                Replace{" "}
+                <span className="font-medium text-[var(--color-fg)]">
+                  {currentActiveName}
+                </span>{" "}
+                with this
+              </>
+            ) : (
+              "Make active"
+            )}
           </Button>
         )}
       </div>

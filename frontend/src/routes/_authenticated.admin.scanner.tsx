@@ -44,6 +44,15 @@ function AdminScannerPage(): React.ReactElement {
 
   const adapters = adaptersQ.data?.adapters ?? [];
   const active = adapters.find((a) => a.active) ?? null;
+  // Active adapter renders first in the grid so the operator's eye lands on
+  // it without scanning for the green pill. Sort is stable so two non-active
+  // adapters keep their server-supplied ordering.
+  const sortedAdapters = React.useMemo(() => {
+    return [...adapters].sort((a, b) => {
+      if (a.active === b.active) return 0;
+      return a.active ? -1 : 1;
+    });
+  }, [adapters]);
 
   function handleRunTestScan(): void {
     setTestDismissed(false);
@@ -119,12 +128,13 @@ function AdminScannerPage(): React.ReactElement {
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {adapters.map((a) => (
+          {sortedAdapters.map((a) => (
             <AdapterCard
               key={a.path}
               adapter={a}
               busy={false}
               testing={a.active && testScan.isPending}
+              currentActiveName={active?.name}
               onMakeActive={() => setPendingActive(a)}
               onRunTestScan={handleRunTestScan}
             />
