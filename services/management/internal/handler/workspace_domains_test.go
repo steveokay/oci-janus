@@ -220,7 +220,7 @@ func TestListDomains_HappyPath_returnsList(t *testing.T) {
 		Domains: []*tenantv1.DomainEntry{
 			{
 				Domain: "registry.acme.com", Verified: true, IsPrimary: true,
-				VerificationToken: "tok-must-be-stripped",
+				VerificationToken: "tok-surface-to-admin",
 				RegisteredAt:      timestamppb.New(now.Add(-time.Hour)),
 				VerifiedAt:        timestamppb.New(verifiedAt),
 				NextPollAfter:     timestamppb.New(now.Add(time.Hour)),
@@ -251,10 +251,23 @@ func TestListDomains_HappyPath_returnsList(t *testing.T) {
 	if d.VerifiedAt == nil {
 		t.Errorf("verified_at: got nil, want populated")
 	}
-	// Verification token must never round-trip to the API caller.
+	// DSGN-021: verification token + TXT record name now ride along on the
+	// admin-only list so the dashboard can re-display the challenge after
+	// the register dialog closes. Reader-role callers still get a 403 (see
+	// TestListDomains_ReaderRole_returns403 below), so token disclosure is
+	// bounded by the same gate that already protects registration.
+	if d.VerificationToken != "tok-surface-to-admin" {
+		t.Errorf("verification_token: got %q, want surfaced", d.VerificationToken)
+	}
+	if d.TXTRecordName != "_registry-verify.registry.acme.com" {
+		t.Errorf("txt_record_name: got %q", d.TXTRecordName)
+	}
+	// Sanity: the strings.Contains-on-raw-JSON assertion that used to live
+	// here flipped meaning — it now confirms the token round-trips rather
+	// than that it stays absent.
 	raw, _ := json.Marshal(body)
-	if strings.Contains(string(raw), "tok-must-be-stripped") {
-		t.Errorf("verification token leaked into response: %s", raw)
+	if !strings.Contains(string(raw), "tok-surface-to-admin") {
+		t.Errorf("verification token missing from response: %s", raw)
 	}
 }
 

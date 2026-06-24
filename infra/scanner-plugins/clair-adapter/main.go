@@ -532,7 +532,12 @@ func normaliseSeverity(s string) string {
 
 // ─── helpers ────────────────────────────────────────────────────────
 
+// writeError emits the JSON-RPC error envelope on stdout AND mirrors the human
+// message to stderr. REM-019: without the stderr mirror the orchestrator only
+// sees `exit status 1` with no payload (it parses stdout but logs stderr on
+// failure), making every adapter crash look identical.
 func writeError(enc *json.Encoder, id string, err error) {
+	fmt.Fprintln(os.Stderr, err.Error())
 	_ = enc.Encode(rpcResponse{ID: id, Error: err.Error()})
 }
 

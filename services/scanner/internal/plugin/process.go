@@ -152,11 +152,28 @@ func (p *ProcessPlugin) Scan(ctx context.Context, req libplugin.ScanRequest) (*l
 	stdout, err := io.ReadAll(io.LimitReader(stdoutPipe, maxStdout))
 	waitErr := cmd.Wait()
 	if waitErr != nil {
+		// REM-019: adapters that follow the JSON-RPC convention write their
+		// error to stdout then exit non-zero. Without this branch the
+		// payload is discarded and every adapter crash logs as a generic
+		// `exit status 1` with empty stderr. Try to parse the stdout
+		// envelope first so we surface the actual error string; fall back
+		// to the raw exit error if stdout isn't parseable.
+		pluginErrMsg := ""
+		if len(stdout) > 0 {
+			var resp rpcResponse
+			if jerr := json.Unmarshal(stdout, &resp); jerr == nil && resp.Error != "" {
+				pluginErrMsg = resp.Error
+			}
+		}
 		slog.Error("plugin process failed",
 			"path", p.path,
 			"stderr", stderr.String(),
+			"stdout_error", pluginErrMsg,
 			"error", waitErr,
 		)
+		if pluginErrMsg != "" {
+			return nil, fmt.Errorf("plugin process exited with error: %s: %w", pluginErrMsg, waitErr)
+		}
 		return nil, fmt.Errorf("plugin process exited with error: %w", waitErr)
 	}
 	if err != nil {
