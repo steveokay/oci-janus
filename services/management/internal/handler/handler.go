@@ -28,6 +28,7 @@ import (
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
@@ -74,6 +75,12 @@ type Handler struct {
 	// disabled") so deployments running registry-gc in cron-only mode
 	// continue to serve every other surface.
 	gc gcv1.GCServiceClient
+	// proxy is optional — wired only when PROXY_GRPC_ADDR is set. nil
+	// disables the FUT-013 `/api/v1/proxy/cache*` routes (404 "route
+	// disabled") so deployments without the pull-through proxy still
+	// serve every other surface. The frontend probes the route and
+	// hides the sidebar entry when 404 lands.
+	proxy proxyv1.ProxyServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	// Typed as an interface so tests can substitute a fake without standing up
 	// a real RabbitMQ broker. *publisher.Publisher satisfies the interface.
@@ -190,6 +197,15 @@ func (h *Handler) WithGCClient(c gcv1.GCServiceClient) *Handler {
 // error.
 func (h *Handler) WithScannerClient(c scannerv1.ScannerServiceClient) *Handler {
 	h.scanner = c
+	return h
+}
+
+// WithProxyClient enables the FUT-013 `/api/v1/proxy/cache*` routes
+// (list, stats, evict). Nil leaves the routes returning 404 "route
+// disabled" so management can deploy without registry-proxy in
+// environments that don't run pull-through caching.
+func (h *Handler) WithProxyClient(c proxyv1.ProxyServiceClient) *Handler {
+	h.proxy = c
 	return h
 }
 
@@ -359,6 +375,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Mounted
 	// alongside the other workspace-scoped admin surfaces.
 	h.RegisterWorkspaceAuditExport(mux, authMW)
+
+	// FUT-013: pull-through cache visibility. Routes return 404 when
+	// h.proxy is nil (PROXY_GRPC_ADDR unset). Workspace-admin gated.
+	h.RegisterProxyCache(mux, authMW)
 
 	// Per-repo retention policy CRUD (FE-API-037). All routes require at
 	// least reader on the repo (GET) or repo admin (PUT/DELETE). The
