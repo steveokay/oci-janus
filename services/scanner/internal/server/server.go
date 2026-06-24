@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -167,6 +168,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer scanQueuedCons.Close()
 
+	// FUT-017: consumer for cache.populated events (auto-scan freshly
+	// proxied images per the per-upstream policy).
+	cachePopulatedCons, err := consumer.New(cfg.RabbitMQURL, worker.CachePopulatedConsumerConfig())
+	if err != nil {
+		return fmt.Errorf("rabbitmq cache.populated consumer: %w", err)
+	}
+	defer cachePopulatedCons.Close()
+
 	scanStore := store.New()
 	// QA-005: in-memory scan records are useful for live status reads but
 	// the metadata service is the system of record. Sweep terminal-status
@@ -223,6 +232,47 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}, nil
 	})
 
+	// FUT-017: per-upstream proxy-cache scan policy resolver. Looks up
+	// proxy_cache_scan_policies by (tenant_id, upstream_name). ErrNotFound
+	// surfaces as (false, false, nil) so the consumer treats "no row" as
+	// "operator never opted in" and ACKs the event without scanning.
+	// Genuine DB errors propagate so the consumer can NACK and fail
+	// closed — we'd rather have a few redeliveries than silently flip
+	// auto-scan on or off on the back of a transient blip.
+	pool.WithProxyCachePolicyResolver(func(ctx context.Context, tenantIDStr, upstreamName string) (worker.ProxyCachePolicy, bool, error) {
+		tenantID, err := uuid.Parse(tenantIDStr)
+		if err != nil {
+			return worker.ProxyCachePolicy{}, false, fmt.Errorf("invalid tenant_id: %w", err)
+		}
+		rec, err := repo.GetProxyCacheScanPolicy(ctx, tenantID, upstreamName)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return worker.ProxyCachePolicy{}, false, nil
+			}
+			return worker.ProxyCachePolicy{}, false, err
+		}
+		// Map the wire-level severity_threshold ("", "none", "low",
+		// "medium", "high", "critical") into the uppercase form the
+		// worker's hasPolicyViolation expects. "" and "none" both mean
+		// "never block", which is also the worker's empty-string
+		// convention.
+		threshold := ""
+		switch rec.SeverityThreshold {
+		case "low":
+			threshold = "LOW"
+		case "medium":
+			threshold = "MEDIUM"
+		case "high":
+			threshold = "HIGH"
+		case "critical":
+			threshold = "CRITICAL"
+		}
+		return worker.ProxyCachePolicy{
+			AutoScan:          rec.AutoScan,
+			SeverityThreshold: threshold,
+		}, true, nil
+	})
+
 	// Start worker pool goroutines — they block on the jobs channel until ctx is cancelled.
 	go pool.Start(ctx, cfg.WorkerCount)
 
@@ -248,6 +298,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("starting scan.queued consumer")
 		if err := scanQueuedCons.Consume(ctx, pool.HandleScanQueued); err != nil {
 			slog.Error("scan.queued consumer stopped", "error", err)
+		}
+	}()
+
+	// Consume cache.populated events for FUT-017 auto-scan-on-proxied-image.
+	go func() {
+		slog.Info("starting cache.populated consumer")
+		if err := cachePopulatedCons.Consume(ctx, pool.HandleCachePopulated); err != nil {
+			slog.Error("cache.populated consumer stopped", "error", err)
 		}
 	}()
 

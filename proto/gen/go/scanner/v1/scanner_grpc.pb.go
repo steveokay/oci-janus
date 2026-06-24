@@ -20,26 +20,29 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	ScannerService_TriggerScan_FullMethodName              = "/registry.scanner.v1.ScannerService/TriggerScan"
-	ScannerService_GetScanStatus_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanStatus"
-	ScannerService_GetScanPolicy_FullMethodName            = "/registry.scanner.v1.ScannerService/GetScanPolicy"
-	ScannerService_UpdateScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/UpdateScanPolicy"
-	ScannerService_GetOrgScanPolicy_FullMethodName         = "/registry.scanner.v1.ScannerService/GetOrgScanPolicy"
-	ScannerService_UpsertOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/UpsertOrgScanPolicy"
-	ScannerService_DeleteOrgScanPolicy_FullMethodName      = "/registry.scanner.v1.ScannerService/DeleteOrgScanPolicy"
-	ScannerService_GetRepoScanPolicy_FullMethodName        = "/registry.scanner.v1.ScannerService/GetRepoScanPolicy"
-	ScannerService_UpsertRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/UpsertRepoScanPolicy"
-	ScannerService_DeleteRepoScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/DeleteRepoScanPolicy"
-	ScannerService_GetEffectiveScanPolicy_FullMethodName   = "/registry.scanner.v1.ScannerService/GetEffectiveScanPolicy"
-	ScannerService_GenerateComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
-	ScannerService_GetComplianceReport_FullMethodName      = "/registry.scanner.v1.ScannerService/GetComplianceReport"
-	ScannerService_ListComplianceReports_FullMethodName    = "/registry.scanner.v1.ScannerService/ListComplianceReports"
-	ScannerService_DownloadComplianceReport_FullMethodName = "/registry.scanner.v1.ScannerService/DownloadComplianceReport"
-	ScannerService_ListInstalledAdapters_FullMethodName    = "/registry.scanner.v1.ScannerService/ListInstalledAdapters"
-	ScannerService_GetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/GetActiveAdapter"
-	ScannerService_SetActiveAdapter_FullMethodName         = "/registry.scanner.v1.ScannerService/SetActiveAdapter"
-	ScannerService_RunTestScan_FullMethodName              = "/registry.scanner.v1.ScannerService/RunTestScan"
-	ScannerService_GetScannerHealth_FullMethodName         = "/registry.scanner.v1.ScannerService/GetScannerHealth"
+	ScannerService_TriggerScan_FullMethodName                = "/registry.scanner.v1.ScannerService/TriggerScan"
+	ScannerService_GetScanStatus_FullMethodName              = "/registry.scanner.v1.ScannerService/GetScanStatus"
+	ScannerService_GetScanPolicy_FullMethodName              = "/registry.scanner.v1.ScannerService/GetScanPolicy"
+	ScannerService_UpdateScanPolicy_FullMethodName           = "/registry.scanner.v1.ScannerService/UpdateScanPolicy"
+	ScannerService_GetOrgScanPolicy_FullMethodName           = "/registry.scanner.v1.ScannerService/GetOrgScanPolicy"
+	ScannerService_UpsertOrgScanPolicy_FullMethodName        = "/registry.scanner.v1.ScannerService/UpsertOrgScanPolicy"
+	ScannerService_DeleteOrgScanPolicy_FullMethodName        = "/registry.scanner.v1.ScannerService/DeleteOrgScanPolicy"
+	ScannerService_GetRepoScanPolicy_FullMethodName          = "/registry.scanner.v1.ScannerService/GetRepoScanPolicy"
+	ScannerService_UpsertRepoScanPolicy_FullMethodName       = "/registry.scanner.v1.ScannerService/UpsertRepoScanPolicy"
+	ScannerService_DeleteRepoScanPolicy_FullMethodName       = "/registry.scanner.v1.ScannerService/DeleteRepoScanPolicy"
+	ScannerService_GetEffectiveScanPolicy_FullMethodName     = "/registry.scanner.v1.ScannerService/GetEffectiveScanPolicy"
+	ScannerService_GetProxyCacheScanPolicy_FullMethodName    = "/registry.scanner.v1.ScannerService/GetProxyCacheScanPolicy"
+	ScannerService_SetProxyCacheScanPolicy_FullMethodName    = "/registry.scanner.v1.ScannerService/SetProxyCacheScanPolicy"
+	ScannerService_ListProxyCacheScanPolicies_FullMethodName = "/registry.scanner.v1.ScannerService/ListProxyCacheScanPolicies"
+	ScannerService_GenerateComplianceReport_FullMethodName   = "/registry.scanner.v1.ScannerService/GenerateComplianceReport"
+	ScannerService_GetComplianceReport_FullMethodName        = "/registry.scanner.v1.ScannerService/GetComplianceReport"
+	ScannerService_ListComplianceReports_FullMethodName      = "/registry.scanner.v1.ScannerService/ListComplianceReports"
+	ScannerService_DownloadComplianceReport_FullMethodName   = "/registry.scanner.v1.ScannerService/DownloadComplianceReport"
+	ScannerService_ListInstalledAdapters_FullMethodName      = "/registry.scanner.v1.ScannerService/ListInstalledAdapters"
+	ScannerService_GetActiveAdapter_FullMethodName           = "/registry.scanner.v1.ScannerService/GetActiveAdapter"
+	ScannerService_SetActiveAdapter_FullMethodName           = "/registry.scanner.v1.ScannerService/SetActiveAdapter"
+	ScannerService_RunTestScan_FullMethodName                = "/registry.scanner.v1.ScannerService/RunTestScan"
+	ScannerService_GetScannerHealth_FullMethodName           = "/registry.scanner.v1.ScannerService/GetScannerHealth"
 )
 
 // ScannerServiceClient is the client API for ScannerService service.
@@ -89,6 +92,27 @@ type ScannerServiceClient interface {
 	// label without a second round-trip. Called by the scanner consumer
 	// on every push.completed event.
 	GetEffectiveScanPolicy(ctx context.Context, in *GetEffectiveScanPolicyRequest, opts ...grpc.CallOption) (*EffectiveScanPolicy, error)
+	// FUT-017 — per-upstream proxy-cache scan policy.
+	//
+	// services/proxy emits events.RoutingCachePopulated after every
+	// successful cache write. The scanner consumer
+	// (worker.HandleCachePopulated) looks up the policy keyed by
+	// (tenant_id, upstream_name); when auto_scan is true the manifest
+	// digest is queued for the same worker pool that handles pushed
+	// images.
+	//
+	// Get returns an empty/disabled policy when no row exists rather than
+	// NotFound so the dashboard can render the "never configured" state
+	// without a separate code path (mirrors GetScanPolicy's per-tenant
+	// synthesised default).
+	GetProxyCacheScanPolicy(ctx context.Context, in *GetProxyCacheScanPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheScanPolicy, error)
+	// Set upserts the (tenant_id, upstream_name) row; the BFF performs
+	// the RBAC check (org admin/owner) before forwarding.
+	SetProxyCacheScanPolicy(ctx context.Context, in *SetProxyCacheScanPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheScanPolicy, error)
+	// List streams every per-upstream row for a tenant. Server streams so
+	// the FE can render a long table incrementally; ordering is by
+	// upstream_name ASC so the rows are stable across calls.
+	ListProxyCacheScanPolicies(ctx context.Context, in *ListProxyCacheScanPoliciesRequest, opts ...grpc.CallOption) (ScannerService_ListProxyCacheScanPoliciesClient, error)
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -267,6 +291,59 @@ func (c *scannerServiceClient) GetEffectiveScanPolicy(ctx context.Context, in *G
 	return out, nil
 }
 
+func (c *scannerServiceClient) GetProxyCacheScanPolicy(ctx context.Context, in *GetProxyCacheScanPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProxyCacheScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_GetProxyCacheScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) SetProxyCacheScanPolicy(ctx context.Context, in *SetProxyCacheScanPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheScanPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProxyCacheScanPolicy)
+	err := c.cc.Invoke(ctx, ScannerService_SetProxyCacheScanPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *scannerServiceClient) ListProxyCacheScanPolicies(ctx context.Context, in *ListProxyCacheScanPoliciesRequest, opts ...grpc.CallOption) (ScannerService_ListProxyCacheScanPoliciesClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ScannerService_ServiceDesc.Streams[0], ScannerService_ListProxyCacheScanPolicies_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &scannerServiceListProxyCacheScanPoliciesClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type ScannerService_ListProxyCacheScanPoliciesClient interface {
+	Recv() (*ProxyCacheScanPolicy, error)
+	grpc.ClientStream
+}
+
+type scannerServiceListProxyCacheScanPoliciesClient struct {
+	grpc.ClientStream
+}
+
+func (x *scannerServiceListProxyCacheScanPoliciesClient) Recv() (*ProxyCacheScanPolicy, error) {
+	m := new(ProxyCacheScanPolicy)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *scannerServiceClient) GenerateComplianceReport(ctx context.Context, in *GenerateComplianceReportRequest, opts ...grpc.CallOption) (*GenerateComplianceReportResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GenerateComplianceReportResponse)
@@ -299,7 +376,7 @@ func (c *scannerServiceClient) ListComplianceReports(ctx context.Context, in *Li
 
 func (c *scannerServiceClient) DownloadComplianceReport(ctx context.Context, in *DownloadComplianceReportRequest, opts ...grpc.CallOption) (ScannerService_DownloadComplianceReportClient, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ScannerService_ServiceDesc.Streams[0], ScannerService_DownloadComplianceReport_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ScannerService_ServiceDesc.Streams[1], ScannerService_DownloadComplianceReport_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -427,6 +504,27 @@ type ScannerServiceServer interface {
 	// label without a second round-trip. Called by the scanner consumer
 	// on every push.completed event.
 	GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error)
+	// FUT-017 — per-upstream proxy-cache scan policy.
+	//
+	// services/proxy emits events.RoutingCachePopulated after every
+	// successful cache write. The scanner consumer
+	// (worker.HandleCachePopulated) looks up the policy keyed by
+	// (tenant_id, upstream_name); when auto_scan is true the manifest
+	// digest is queued for the same worker pool that handles pushed
+	// images.
+	//
+	// Get returns an empty/disabled policy when no row exists rather than
+	// NotFound so the dashboard can render the "never configured" state
+	// without a separate code path (mirrors GetScanPolicy's per-tenant
+	// synthesised default).
+	GetProxyCacheScanPolicy(context.Context, *GetProxyCacheScanPolicyRequest) (*ProxyCacheScanPolicy, error)
+	// Set upserts the (tenant_id, upstream_name) row; the BFF performs
+	// the RBAC check (org admin/owner) before forwarding.
+	SetProxyCacheScanPolicy(context.Context, *SetProxyCacheScanPolicyRequest) (*ProxyCacheScanPolicy, error)
+	// List streams every per-upstream row for a tenant. Server streams so
+	// the FE can render a long table incrementally; ordering is by
+	// upstream_name ASC so the rows are stable across calls.
+	ListProxyCacheScanPolicies(*ListProxyCacheScanPoliciesRequest, ScannerService_ListProxyCacheScanPoliciesServer) error
 	// FE-API-019 — compliance reports.
 	//
 	// GenerateComplianceReport kicks off an asynchronous report job and
@@ -523,6 +621,15 @@ func (UnimplementedScannerServiceServer) DeleteRepoScanPolicy(context.Context, *
 }
 func (UnimplementedScannerServiceServer) GetEffectiveScanPolicy(context.Context, *GetEffectiveScanPolicyRequest) (*EffectiveScanPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetEffectiveScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) GetProxyCacheScanPolicy(context.Context, *GetProxyCacheScanPolicyRequest) (*ProxyCacheScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetProxyCacheScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) SetProxyCacheScanPolicy(context.Context, *SetProxyCacheScanPolicyRequest) (*ProxyCacheScanPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetProxyCacheScanPolicy not implemented")
+}
+func (UnimplementedScannerServiceServer) ListProxyCacheScanPolicies(*ListProxyCacheScanPoliciesRequest, ScannerService_ListProxyCacheScanPoliciesServer) error {
+	return status.Errorf(codes.Unimplemented, "method ListProxyCacheScanPolicies not implemented")
 }
 func (UnimplementedScannerServiceServer) GenerateComplianceReport(context.Context, *GenerateComplianceReportRequest) (*GenerateComplianceReportResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GenerateComplianceReport not implemented")
@@ -761,6 +868,63 @@ func _ScannerService_GetEffectiveScanPolicy_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerService_GetProxyCacheScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProxyCacheScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).GetProxyCacheScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_GetProxyCacheScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).GetProxyCacheScanPolicy(ctx, req.(*GetProxyCacheScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_SetProxyCacheScanPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetProxyCacheScanPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerServiceServer).SetProxyCacheScanPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerService_SetProxyCacheScanPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerServiceServer).SetProxyCacheScanPolicy(ctx, req.(*SetProxyCacheScanPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ScannerService_ListProxyCacheScanPolicies_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListProxyCacheScanPoliciesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ScannerServiceServer).ListProxyCacheScanPolicies(m, &scannerServiceListProxyCacheScanPoliciesServer{ServerStream: stream})
+}
+
+type ScannerService_ListProxyCacheScanPoliciesServer interface {
+	Send(*ProxyCacheScanPolicy) error
+	grpc.ServerStream
+}
+
+type scannerServiceListProxyCacheScanPoliciesServer struct {
+	grpc.ServerStream
+}
+
+func (x *scannerServiceListProxyCacheScanPoliciesServer) Send(m *ProxyCacheScanPolicy) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 func _ScannerService_GenerateComplianceReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GenerateComplianceReportRequest)
 	if err := dec(in); err != nil {
@@ -978,6 +1142,14 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ScannerService_GetEffectiveScanPolicy_Handler,
 		},
 		{
+			MethodName: "GetProxyCacheScanPolicy",
+			Handler:    _ScannerService_GetProxyCacheScanPolicy_Handler,
+		},
+		{
+			MethodName: "SetProxyCacheScanPolicy",
+			Handler:    _ScannerService_SetProxyCacheScanPolicy_Handler,
+		},
+		{
 			MethodName: "GenerateComplianceReport",
 			Handler:    _ScannerService_GenerateComplianceReport_Handler,
 		},
@@ -1011,6 +1183,11 @@ var ScannerService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ListProxyCacheScanPolicies",
+			Handler:       _ScannerService_ListProxyCacheScanPolicies_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "DownloadComplianceReport",
 			Handler:       _ScannerService_DownloadComplianceReport_Handler,

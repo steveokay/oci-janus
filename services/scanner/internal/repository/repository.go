@@ -318,6 +318,114 @@ func (r *Repository) ResolveRepoOrgID(ctx context.Context, tenantID, repoID uuid
 }
 
 // ---------------------------------------------------------------------------
+// FUT-017 — proxy_cache_scan_policies
+//
+// Per-(tenant, upstream_name) gate for auto-scanning manifests freshly
+// cached by services/proxy. Schema lives in the 20260624 migration; row
+// shape mirrors the FE-API-018 scan_policies row minus exempt_cves /
+// scanner_plugin / scanner_version_pin since proxy-cached scans piggy-
+// back on the per-tenant policy's plugin selection.
+// ---------------------------------------------------------------------------
+
+// ProxyCacheScanPolicy mirrors one proxy_cache_scan_policies row. It is
+// also the input shape for UpsertProxyCacheScanPolicy — the gRPC handler
+// validates upstream_name + severity_threshold before reaching here.
+type ProxyCacheScanPolicy struct {
+	TenantID          uuid.UUID
+	UpstreamName      string
+	AutoScan          bool
+	SeverityThreshold string
+	UpdatedAt         time.Time
+	UpdatedBy         uuid.UUID
+}
+
+// GetProxyCacheScanPolicy returns the row for (tenantID, upstreamName)
+// or ErrNotFound. Callers (handler.GetProxyCacheScanPolicy) translate
+// the not-found into a default-disabled response — the gRPC surface
+// itself never raises NotFound for this lookup.
+func (r *Repository) GetProxyCacheScanPolicy(ctx context.Context, tenantID uuid.UUID, upstreamName string) (*ProxyCacheScanPolicy, error) {
+	var p ProxyCacheScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`SELECT tenant_id, upstream_name, auto_scan, severity_threshold,
+		        updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)
+		   FROM proxy_cache_scan_policies
+		  WHERE tenant_id = $1 AND upstream_name = $2`,
+		tenantID, upstreamName,
+	).Scan(&p.TenantID, &p.UpstreamName, &p.AutoScan, &p.SeverityThreshold,
+		&p.UpdatedAt, &p.UpdatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetProxyCacheScanPolicy: %w", err)
+	}
+	return &p, nil
+}
+
+// UpsertProxyCacheScanPolicy creates or replaces the row identified by
+// (tenant_id, upstream_name). The full row is overwritten on every call
+// — partial updates are out of scope (the BFF always sends the full
+// policy state, same posture as UpsertScanPolicy).
+func (r *Repository) UpsertProxyCacheScanPolicy(ctx context.Context, p *ProxyCacheScanPolicy) (*ProxyCacheScanPolicy, error) {
+	var updatedBy any
+	if p.UpdatedBy != uuid.Nil {
+		updatedBy = p.UpdatedBy
+	}
+	var out ProxyCacheScanPolicy
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO proxy_cache_scan_policies
+		   (tenant_id, upstream_name, auto_scan, severity_threshold,
+		    updated_at, updated_by)
+		 VALUES ($1, $2, $3, $4, NOW(), $5)
+		 ON CONFLICT (tenant_id, upstream_name) DO UPDATE SET
+		    auto_scan          = EXCLUDED.auto_scan,
+		    severity_threshold = EXCLUDED.severity_threshold,
+		    updated_at         = NOW(),
+		    updated_by         = EXCLUDED.updated_by
+		 RETURNING tenant_id, upstream_name, auto_scan, severity_threshold,
+		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
+		p.TenantID, p.UpstreamName, p.AutoScan, p.SeverityThreshold, updatedBy,
+	).Scan(&out.TenantID, &out.UpstreamName, &out.AutoScan, &out.SeverityThreshold,
+		&out.UpdatedAt, &out.UpdatedBy)
+	if err != nil {
+		return nil, fmt.Errorf("UpsertProxyCacheScanPolicy: %w", err)
+	}
+	return &out, nil
+}
+
+// ListProxyCacheScanPolicies returns every row for tenantID ordered by
+// upstream_name ASC so the FE can render a stable table without
+// client-side sorting. Returns a nil slice (not an error) when the
+// tenant has no rows yet.
+func (r *Repository) ListProxyCacheScanPolicies(ctx context.Context, tenantID uuid.UUID) ([]*ProxyCacheScanPolicy, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT tenant_id, upstream_name, auto_scan, severity_threshold,
+		        updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)
+		   FROM proxy_cache_scan_policies
+		  WHERE tenant_id = $1
+		  ORDER BY upstream_name ASC`,
+		tenantID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ListProxyCacheScanPolicies: %w", err)
+	}
+	defer rows.Close()
+	var out []*ProxyCacheScanPolicy
+	for rows.Next() {
+		var p ProxyCacheScanPolicy
+		if scanErr := rows.Scan(&p.TenantID, &p.UpstreamName, &p.AutoScan,
+			&p.SeverityThreshold, &p.UpdatedAt, &p.UpdatedBy); scanErr != nil {
+			return nil, fmt.Errorf("ListProxyCacheScanPolicies scan: %w", scanErr)
+		}
+		out = append(out, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
 // compliance_reports
 // ---------------------------------------------------------------------------
 

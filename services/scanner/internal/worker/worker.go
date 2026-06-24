@@ -84,6 +84,12 @@ type Pool struct {
 	// boot via WithPolicyResolver so the worker can honour per-repo,
 	// per-org and per-tenant policy without a self-gRPC call.
 	policyResolver PolicyResolver
+	// FUT-017: proxyCachePolicyResolver answers "should we auto-scan
+	// the manifest this proxy cache event delivered?" for the
+	// (tenant_id, upstream_name) pair. Nil disables proxy-cache auto-
+	// scan entirely (events become no-ops). server.go wires this when
+	// the scanner DB pool is available.
+	proxyCachePolicyResolver ProxyCachePolicyResolver
 
 	// inFlight is the number of scans currently executing on a worker
 	// goroutine. Incremented at runJob entry, decremented on exit.
@@ -142,6 +148,35 @@ type PolicyResolver func(ctx context.Context, tenantID, repoID string) (Resolved
 // preserving every existing test fixture.
 func (p *Pool) WithPolicyResolver(r PolicyResolver) *Pool {
 	p.policyResolver = r
+	return p
+}
+
+// ProxyCachePolicyResolver looks up the FUT-017 per-upstream auto-scan
+// policy. Returns (policy, true) when a row exists; (zero, false) when
+// the (tenant, upstream) pair has never been configured. An error is
+// reserved for genuine infra failures (DB down) — a missing row is the
+// common case and uses the (false, nil) branch.
+//
+// On error the consumer fails CLOSED: a transient DB blip should not
+// silently auto-scan everything passing through the pull-through cache.
+// That's the opposite stance to PolicyResolver (which fails OPEN for
+// pushed images) because cached pulls have no operator intent behind
+// each event — only the policy row signals consent.
+type ProxyCachePolicyResolver func(ctx context.Context, tenantID, upstreamName string) (ProxyCachePolicy, bool, error)
+
+// ProxyCachePolicy is the worker-visible slice of the persisted
+// proxy_cache_scan_policies row. Keeping the shape narrow means tests
+// can stub the resolver without depending on the repository.
+type ProxyCachePolicy struct {
+	AutoScan          bool
+	SeverityThreshold string
+}
+
+// WithProxyCachePolicyResolver wires the FUT-017 resolver. Tests that
+// don't exercise the proxy cache path can leave it unset; the consumer
+// then treats every event as "no policy → no scan".
+func (p *Pool) WithProxyCachePolicyResolver(r ProxyCachePolicyResolver) *Pool {
+	p.proxyCachePolicyResolver = r
 	return p
 }
 
@@ -758,6 +793,133 @@ func (p *Pool) HandleScanQueued(ctx context.Context, event events.Event) error {
 		"tag", payload.TagName,
 		"manifest_digest", payload.ManifestDigest,
 		"block_on_severity", resolved.BlockOnSeverity,
+	)
+	return nil
+}
+
+// CachePopulatedConsumerConfig returns the consumer.Config for the
+// cache.populated queue (FUT-017). One queue per service so the broker
+// can fan-out the same event to scanner + signer.
+func CachePopulatedConsumerConfig() consumer.Config {
+	return consumer.Config{
+		Queue:      "scanner.cache.populated",
+		RoutingKey: events.RoutingCachePopulated,
+		MaxRetries: 3,
+	}
+}
+
+// cachePopulatedDedupWindow is the recent-completion window for the
+// FUT-017 idempotency check. 30 minutes is a balance between "the same
+// digest gets pulled through the cache a hundred times an hour by a CI
+// fleet" (we don't want a hundred scans) and "an operator just rotated
+// a CVE feed and wants their pulls re-scanned" (we don't want to lock
+// out a re-scan for the whole day). The metadata service is still the
+// authoritative dedup layer; this is only the cheap first line.
+const cachePopulatedDedupWindow = 30 * time.Minute
+
+// HandleCachePopulated is the consumer.Handler for cache.populated
+// events (FUT-017). Flow:
+//
+//   1. Parse the payload (events.CachePopulatedPayload).
+//   2. Look up the (tenant_id, upstream_name) policy via the resolver.
+//      No policy → ACK + no-op. Resolver error → return the error so
+//      the broker NACKs (defence-in-depth: don't silently auto-scan
+//      every cached image when the DB is unreachable).
+//   3. auto_scan=false → ACK + no-op.
+//   4. Idempotency: if scanStore.HasRecentScan reports the same
+//      (tenant, digest) is in flight or completed within
+//      cachePopulatedDedupWindow, skip enqueue. We log this at info
+//      so the operator can see the dedup in action without it looking
+//      like an error.
+//   5. Enqueue a scanJob just like HandlePushCompleted does. The job
+//      goes through the same worker pool / plugin / persist /
+//      scan.completed publish path — proxy-cached images are first-
+//      class scan inputs.
+//
+// repoID is intentionally left empty on the enqueued job. cached
+// manifests are stored under the proxy schema and the scanner's GetManifest
+// flow against metadata works with the manifest digest as the reference
+// — the worker treats repoID=="" as "look me up by digest", which is
+// the same shape TriggerScan uses for ad-hoc scans.
+func (p *Pool) HandleCachePopulated(ctx context.Context, event events.Event) error {
+	var payload events.CachePopulatedPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal cache.populated payload: %w", err)
+	}
+
+	// Skip events that don't carry the bits we need. Defensive: a
+	// publisher bug that ships an event with no digest should be a
+	// no-op rather than a worker panic.
+	if payload.TenantID == "" || payload.ManifestDigest == "" || payload.UpstreamName == "" {
+		slog.WarnContext(ctx, "cache.populated payload missing required fields — skipping",
+			"tenant_id", payload.TenantID,
+			"manifest_digest", payload.ManifestDigest,
+			"upstream_name", payload.UpstreamName,
+		)
+		return nil
+	}
+
+	// No resolver wired → no proxy-cache auto-scan path. Treat the
+	// event as observed-and-acked. This is the path tests + dev
+	// environments that haven't opted into FUT-017 take.
+	if p.proxyCachePolicyResolver == nil {
+		return nil
+	}
+
+	policy, ok, err := p.proxyCachePolicyResolver(ctx, payload.TenantID, payload.UpstreamName)
+	if err != nil {
+		// Fail CLOSED — NACK + let the broker redeliver. Without a
+		// policy lookup we can't tell whether the operator wanted this
+		// scanned, and we'd rather waste a few redeliveries than
+		// silently turn auto-scan on or off.
+		return fmt.Errorf("resolve proxy cache scan policy: %w", err)
+	}
+	if !ok || !policy.AutoScan {
+		// No row, or row present but disabled. Either way: nothing
+		// for the scanner to do.
+		return nil
+	}
+
+	// Idempotency. Cheap in-memory check first — a popular image
+	// pulled hundreds of times an hour by a CI fleet would otherwise
+	// stack hundreds of identical scans. The metadata layer still
+	// dedups on scan_results uniqueness for cross-process safety.
+	if p.scanStore.HasRecentScan(payload.TenantID, payload.ManifestDigest, cachePopulatedDedupWindow) {
+		slog.InfoContext(ctx, "cache.populated: scan already in flight or recently completed — skipping",
+			"tenant_id", payload.TenantID,
+			"upstream_name", payload.UpstreamName,
+			"manifest_digest", payload.ManifestDigest,
+		)
+		return nil
+	}
+
+	// Enqueue. repositoryName uses the upstream image so log lines
+	// downstream tell the operator which image was pulled. policy is
+	// kept narrow — the scanner's existing block_on_severity flow
+	// handles the FUT-017 severity_threshold by mapping "critical" →
+	// "CRITICAL" etc. at the resolver boundary; here we forward the
+	// pre-mapped uppercase form.
+	scanID := uuid.New().String()
+	p.scanStore.Create(scanID, payload.TenantID, payload.ManifestDigest, payload.Image)
+	if err := p.Enqueue(scanJob{
+		tenantID:       payload.TenantID,
+		repoID:         "",
+		repositoryName: payload.Image,
+		manifestDigest: payload.ManifestDigest,
+		scanID:         scanID,
+		policy: ResolvedScanPolicy{
+			AutoScanOnPush:  true,
+			BlockOnSeverity: policy.SeverityThreshold,
+		},
+	}); err != nil {
+		return fmt.Errorf("enqueue proxy-cache scan job: %w", err)
+	}
+
+	slog.InfoContext(ctx, "cache.populated: scan job enqueued",
+		"scan_id", scanID,
+		"tenant_id", payload.TenantID,
+		"upstream_name", payload.UpstreamName,
+		"manifest_digest", payload.ManifestDigest,
 	)
 	return nil
 }

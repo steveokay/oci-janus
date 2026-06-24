@@ -500,6 +500,164 @@ func (h *GRPCHandler) GetEffectiveScanPolicy(ctx context.Context, req *scannerv1
 }
 
 // ---------------------------------------------------------------------------
+// FUT-017 — proxy-cache scan policies
+// ---------------------------------------------------------------------------
+
+// allowedSeverityThresholds is the wire-level enum for the FUT-017
+// proxy-cache severity_threshold field. Kept tight at the gRPC layer
+// so a hand-edited row that bypassed the table CHECK still surfaces a
+// clean InvalidArgument on write. Empty string maps to "never block",
+// matching the FE-API-018 convention.
+var allowedSeverityThresholds = map[string]struct{}{
+	"":         {},
+	"none":     {},
+	"low":      {},
+	"medium":   {},
+	"high":     {},
+	"critical": {},
+}
+
+// upstreamNamePattern is the relaxed allowlist for upstream handles.
+// The BFF performs the stricter user-facing validation; we keep this
+// loose enough to accept anything the proxy already accepts but tight
+// enough to reject SQL-poisoning attempts. Lower-case alnum, dashes,
+// dots, underscores; 2..128 chars.
+func isValidUpstreamName(s string) bool {
+	if len(s) < 2 || len(s) > 128 {
+		return false
+	}
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// proxyCachePolicyToProto serialises a repository row to its proto
+// shape. Zero UUID on UpdatedBy is rendered as an empty string so the
+// dashboard can render "(system)" without parsing a sentinel UUID.
+func proxyCachePolicyToProto(p *repository.ProxyCacheScanPolicy) *scannerv1.ProxyCacheScanPolicy {
+	out := &scannerv1.ProxyCacheScanPolicy{
+		TenantId:          p.TenantID.String(),
+		UpstreamName:      p.UpstreamName,
+		AutoScan:          p.AutoScan,
+		SeverityThreshold: p.SeverityThreshold,
+		UpdatedAt:         timestamppb.New(p.UpdatedAt),
+	}
+	if p.UpdatedBy != uuid.Nil {
+		out.UpdatedBy = p.UpdatedBy.String()
+	}
+	return out
+}
+
+// defaultProxyCachePolicy is the "never configured" empty state. We
+// return this from GetProxyCacheScanPolicy on a cache miss rather than
+// NotFound so the dashboard can render the default toggle without a
+// separate code path (mirrors GetScanPolicy's per-tenant default).
+func defaultProxyCachePolicy(tenantID, upstreamName string) *scannerv1.ProxyCacheScanPolicy {
+	return &scannerv1.ProxyCacheScanPolicy{
+		TenantId:          tenantID,
+		UpstreamName:      upstreamName,
+		AutoScan:          false,
+		SeverityThreshold: "",
+	}
+}
+
+// GetProxyCacheScanPolicy returns the per-upstream policy or the empty
+// default when no row exists. Never NotFound — the empty state is the
+// "fresh tenant" wire shape.
+func (h *GRPCHandler) GetProxyCacheScanPolicy(ctx context.Context, req *scannerv1.GetProxyCacheScanPolicyRequest) (*scannerv1.ProxyCacheScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	if !isValidUpstreamName(req.GetUpstreamName()) {
+		return nil, status.Error(codes.InvalidArgument, "upstream_name must match [a-z0-9._-]{2,128}")
+	}
+	rec, err := h.repo.GetProxyCacheScanPolicy(ctx, tenantID, req.GetUpstreamName())
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return defaultProxyCachePolicy(req.GetTenantId(), req.GetUpstreamName()), nil
+		}
+		return nil, status.Errorf(codes.Internal, "get proxy cache scan policy: %v", err)
+	}
+	return proxyCachePolicyToProto(rec), nil
+}
+
+// SetProxyCacheScanPolicy upserts the (tenant_id, upstream_name) row.
+// The BFF enforces the RBAC check upstream; this handler validates the
+// severity_threshold enum + upstream_name shape so an out-of-band call
+// (via grpcurl or a misbehaving CLI) can't bypass the wire contract.
+func (h *GRPCHandler) SetProxyCacheScanPolicy(ctx context.Context, req *scannerv1.SetProxyCacheScanPolicyRequest) (*scannerv1.ProxyCacheScanPolicy, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	if !isValidUpstreamName(req.GetUpstreamName()) {
+		return nil, status.Error(codes.InvalidArgument, "upstream_name must match [a-z0-9._-]{2,128}")
+	}
+	threshold := req.GetSeverityThreshold()
+	if _, ok := allowedSeverityThresholds[threshold]; !ok {
+		return nil, status.Error(codes.InvalidArgument, "severity_threshold must be one of '', none, low, medium, high, critical")
+	}
+	var updatedBy uuid.UUID
+	if s := req.GetUpdatedBy(); s != "" {
+		updatedBy, err = uuid.Parse(s)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "updated_by must be a UUID")
+		}
+	}
+	out, err := h.repo.UpsertProxyCacheScanPolicy(ctx, &repository.ProxyCacheScanPolicy{
+		TenantID:          tenantID,
+		UpstreamName:      req.GetUpstreamName(),
+		AutoScan:          req.GetAutoScan(),
+		SeverityThreshold: threshold,
+		UpdatedBy:         updatedBy,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "upsert proxy cache scan policy: %v", err)
+	}
+	return proxyCachePolicyToProto(out), nil
+}
+
+// ListProxyCacheScanPolicies streams every row for the tenant ordered
+// by upstream_name. We use a server-stream so the FE can render long
+// tables incrementally; chunking is one row per Send() since rows are
+// small (no findings blobs).
+func (h *GRPCHandler) ListProxyCacheScanPolicies(
+	req *scannerv1.ListProxyCacheScanPoliciesRequest,
+	stream scannerv1.ScannerService_ListProxyCacheScanPoliciesServer,
+) error {
+	if h.repo == nil {
+		return status.Error(codes.FailedPrecondition, "scanner repository not configured")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	rows, err := h.repo.ListProxyCacheScanPolicies(stream.Context(), tenantID)
+	if err != nil {
+		return status.Errorf(codes.Internal, "list proxy cache scan policies: %v", err)
+	}
+	for _, r := range rows {
+		if err := stream.Send(proxyCachePolicyToProto(r)); err != nil {
+			return status.Errorf(codes.Internal, "send proxy cache scan policy: %v", err)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // FE-API-019 — compliance reports
 // ---------------------------------------------------------------------------
 
