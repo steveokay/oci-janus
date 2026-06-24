@@ -38,6 +38,13 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| status-md-cleanup | Collapsed `status.md` from 851 → 208 lines into a single completed-work table | PR #72 | 2026-06-24 | DONE |
+| REM-016 | `libs/errors/codes.MapDBError` now maps PG SQLSTATE 23503/23505/23514/23502 onto NotFound/AlreadyExists/InvalidArgument | PR #66 | 2026-06-24 | DONE |
+| QA-002a | `Publisher.Close()` takes `p.mu` + sets `closed=true`; concurrent `Publish` returns `ErrPublisherClosed` sentinel | PR #66 | 2026-06-24 | DONE |
+| QA-002b | `publisher.New(url, exchange, WithPublishTimeout(d))` — 10s default; non-positive ignored | PR #66 | 2026-06-24 | DONE |
+| DSGN-021 | Custom-domain TXT row-expand with copy buttons + countdown to next backend re-check | PR #67 | 2026-06-24 | DONE |
+| REM-017 | Platform-admin `/admin/orgs/{org}/claim` route closes the chicken-egg for fresh-org repo creation | PR #68 | 2026-06-24 | DONE |
+| REM-019 P1 | Scanner adapter stderr-mirror + orchestrator parses RPC error from stdout on non-zero exit (diagnostics only — underlying scan failure still open) | PR #70 | 2026-06-24 | DONE (Phase 1) |
 | QA-001 | Signer `tenant_id` propagation — migration 000002 + composite UNIQUE + Cosign payload `optional.tenant` binds signature to tenant | PR #64 | 2026-06-24 | DONE |
 | QA-003 | Webhook `PollDueDeliveries` wrapped in tx + leases by pushing `next_attempt_at` 5 min forward; overlapping ticks can't re-dispatch | PR #62 | 2026-06-24 | DONE |
 | QA-004 | JWT cache key uses `jti` not raw token in `services/core` + `services/proxy`; new `parseJTI` helper | PR #59 | 2026-06-24 | DONE |

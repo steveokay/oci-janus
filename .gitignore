@@ -66,5 +66,8 @@ understand.md
 docs/PRICING-TIERS.md
 
 # Claude Code: keep .claude/agents/*.md tracked (team agent definitions),
-# but ignore the per-machine settings.local.json (Bash allowlist etc.).
+# but ignore the per-machine settings.local.json (Bash allowlist etc.)
+# and the throw-away subagent review notes that live in .claude/reviews/.
 .claude/settings.local.json
+.claude/reviews/
+.claude/worktrees/

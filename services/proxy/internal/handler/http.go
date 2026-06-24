@@ -178,6 +178,10 @@ func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(cached.Body)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(cached.Body)
+		// FUT-013: async pull-tracking bump. Detached from request ctx
+		// so a slow DB write can't extend the client's connection;
+		// errors logged at debug — a failed bump is purely cosmetic.
+		go h.bumpPullCount(tenantID, up.UpstreamID, image, reference)
 		return
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
@@ -206,6 +210,18 @@ func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, 
 
 	// Cache in background — do not block client.
 	go h.cacheManifest(tenantID, up.UpstreamID, image, reference, result)
+}
+
+// bumpPullCount runs RecordPull on a fresh background context. Detached
+// because the calling request might already be returning; a 200-then-
+// 500-on-bump should not become a visible client failure.
+func (h *HTTPHandler) bumpPullCount(tenantID, upstreamID uuid.UUID, image, reference string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.repo.RecordPull(ctx, tenantID, upstreamID, image, reference); err != nil {
+		slog.Debug("record pull failed", "err", err,
+			"tenant_id", tenantID, "image", image, "reference", reference)
+	}
 }
 
 // handleHeadManifest checks cache and falls through to upstream if stale.
