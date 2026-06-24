@@ -23,7 +23,9 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/services/signer/internal/config"
+	"github.com/steveokay/oci-janus/services/signer/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/signer/internal/handler"
 	signermigrations "github.com/steveokay/oci-janus/services/signer/migrations"
 	"github.com/steveokay/oci-janus/services/signer/internal/repository"
@@ -45,6 +47,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// The in-memory store loses all records on process restart — this is
 	// acceptable for local development but NOT for production (SEC-015).
 	var store *sigstore.Store
+	// repo is kept around past the var block so the FUT-017 wiring below
+	// can pass it to the handler + the cache.populated consumer. Stays nil
+	// when SIGNER_DB_DSN is unset — the handler then surfaces a clean
+	// FailedPrecondition rather than panicking on the policy RPCs.
+	var repo *repository.Repository
 	if cfg.DBDSN != "" {
 		if err := runMigrations(cfg.DBDSN); err != nil {
 			return fmt.Errorf("run signer migrations: %w", err)
@@ -56,7 +63,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		defer pool.Close()
 
-		repo := repository.New(pool)
+		repo = repository.New(pool)
 		store = sigstore.NewWithDB(repo)
 		slog.Info("signature store: PostgreSQL persistence enabled")
 	} else {
@@ -69,6 +76,38 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	grpcHdl := handler.New(s, store)
+	if repo != nil {
+		// FUT-017: only wire the proxy-cache policy RPCs when we have a
+		// real DB. In-memory mode leaves the RPCs returning
+		// FailedPrecondition so an operator who forgot to set
+		// SIGNER_DB_DSN gets a legible error rather than a nil-deref panic.
+		grpcHdl = grpcHdl.WithProxyCachePolicyRepo(repo)
+	}
+
+	// FUT-017: subscribe to cache.populated events when RabbitMQ is wired
+	// AND we have a DB to read the policy from. Either missing piece
+	// silently disables auto-signing rather than crashing — local dev
+	// without RabbitMQ/Postgres stays on the SignManifest-only path the
+	// way it always has.
+	if cfg.RabbitMQURL != "" && repo != nil {
+		cons, err := consumer.New(cfg.RabbitMQURL, eventconsumer.CachePopulatedConsumerConfig())
+		if err != nil {
+			return fmt.Errorf("rabbitmq cache.populated consumer: %w", err)
+		}
+		defer cons.Close()
+
+		evtHandler := eventconsumer.NewHandler(s, store, repo)
+		go func() {
+			slog.Info("starting cache.populated consumer (FUT-017 auto-sign-on-cache)")
+			if err := cons.Consume(ctx, evtHandler.Handle); err != nil {
+				slog.Error("cache.populated consumer stopped", "error", err)
+			}
+		}()
+	} else {
+		slog.Info("FUT-017 cache.populated consumer not started",
+			"have_rabbitmq", cfg.RabbitMQURL != "",
+			"have_db", repo != nil)
+	}
 
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {
