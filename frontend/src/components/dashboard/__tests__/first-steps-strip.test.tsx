@@ -11,8 +11,9 @@ import type { Workspace } from "@/lib/api/workspace";
 //
 // Tests verify:
 //   - Endpoint host + plan + custom-host badges render in the eyebrow.
-//   - "Read the docs" link points at the SELF-HOSTING doc on GitHub.
-//   - Both docker login + docker push commands surface verbatim.
+//   - "Create an API key" + "Read the docs" links surface.
+//   - All three commands (login / tag / push) render verbatim.
+//   - Replace-org-image hint renders.
 //   - Polling indicator flips to a success message on firstRepoSeen=true.
 //   - Falls back to registry.localhost when workspace is unwired.
 // ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ const localWorkspace: Workspace = {
 };
 
 describe("FirstStepsStrip", () => {
-  test("renders endpoint, plan + custom-host badges, docs link, and both commands", async () => {
+  test("renders endpoint, badges, action links, all three commands, hint", async () => {
     await act(async () => {
       render(
         <FirstStepsStrip
@@ -56,7 +57,9 @@ describe("FirstStepsStrip", () => {
     expect(screen.getByText("pro")).toBeInTheDocument();
     expect(screen.getByText("custom host")).toBeInTheDocument();
 
-    // Docs link — opens the SELF-HOSTING doc in a new tab.
+    // Action links.
+    const apiKey = screen.getByRole("link", { name: /create an api key/i });
+    expect(apiKey).toHaveAttribute("href", "/api-keys");
     const docs = screen.getByRole("link", { name: /read the docs/i });
     expect(docs).toHaveAttribute(
       "href",
@@ -64,13 +67,28 @@ describe("FirstStepsStrip", () => {
     );
     expect(docs).toHaveAttribute("target", "_blank");
 
-    // Both commands surface. Non-local host → no dev-stack comment.
+    // Tagline.
+    expect(
+      screen.getByText("Three commands to your first push."),
+    ).toBeInTheDocument();
+
+    // All three commands surface. Non-local host → no dev-stack comment.
     expect(
       screen.getByText("docker login registry.acme.com -u <user>"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("docker push registry.acme.com/your-org/image:tag"),
+      screen.getByText(
+        "docker tag local-image:latest registry.acme.com/your-org/your-image:1.0.0",
+      ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "docker push registry.acme.com/your-org/your-image:1.0.0",
+      ),
+    ).toBeInTheDocument();
+
+    // Hint about replacing the placeholder names.
+    expect(screen.getByText("your-org/your-image")).toBeInTheDocument();
 
     // Polling — waiting state by default.
     expect(
@@ -130,7 +148,9 @@ describe("FirstStepsStrip", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("docker push registry.localhost/your-org/image:tag"),
+      screen.getByText(
+        "docker push registry.localhost/your-org/your-image:1.0.0",
+      ),
     ).toBeInTheDocument();
   });
 });
