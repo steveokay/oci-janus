@@ -92,13 +92,33 @@ func NewDispatcher(timeoutSecs int) *Dispatcher {
 			if err != nil {
 				return nil, err
 			}
+			// QA-007: validate every resolved IP, then dial the first one
+			// by IP literal so the underlying dialer doesn't re-resolve
+			// the hostname. Previously we validated IPs then re-dialed
+			// via hostname, leaving a DNS-rebinding gap — a hostile
+			// resolver could return a public IP for the validation pass
+			// and a private IP (e.g. 169.254.169.254 / 127.0.0.1) for
+			// the dial pass.
+			//
+			// HTTPS SNI is unaffected: http.Transport derives SNI from
+			// the request URL host, not the address passed to DialContext.
+			var dialIP string
 			for _, ipStr := range ips {
 				ip := net.ParseIP(ipStr)
-				if ip != nil && isPrivateIP(ip) {
+				if ip == nil {
+					return nil, fmt.Errorf("SSRF protection: unparseable IP %q from resolver for %s", ipStr, host)
+				}
+				if isPrivateIP(ip) {
 					return nil, fmt.Errorf("SSRF protection: blocked connection to private IP %s", ipStr)
 				}
+				if dialIP == "" {
+					dialIP = ip.String()
+				}
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+			if dialIP == "" {
+				return nil, fmt.Errorf("SSRF protection: no IPs resolved for %s", host)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(dialIP, port))
 		},
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
