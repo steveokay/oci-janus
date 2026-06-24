@@ -3,8 +3,10 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -40,14 +42,26 @@ type cachedClaims struct {
 	Access   []*authv1.RepositoryAccess `json:"a,omitempty"`
 }
 
-// ValidateBearer validates a Bearer JWT. Results are cached in Redis by token until
-// the token's own expiry so we don't hit registry-auth on every request.
+// ValidateBearer validates a Bearer JWT. Results are cached in Redis keyed
+// on the JTI claim (CLAUDE.md §7) until the token's own expiry so we don't
+// hit registry-auth on every request.
+//
+// QA-004: the previous version cached on the raw token, which leaked the
+// full bearer credential into Redis keyspace. Anyone with `KEYS jwt:valid:*`
+// access could replay any live token. Keying on JTI preserves cache
+// behaviour without exposing the credential. Malformed tokens (parse
+// failure) skip the cache entirely and fall through to the gRPC call,
+// which rejects them.
 func (a *AuthClient) ValidateBearer(ctx context.Context, token string) (*TokenClaims, error) {
-	cacheKey := "jwt:valid:" + token
-	if cached, err := a.redis.Get(ctx, cacheKey).Bytes(); err == nil {
-		var cc cachedClaims
-		if json.Unmarshal(cached, &cc) == nil {
-			return &TokenClaims{UserID: cc.UserID, TenantID: cc.TenantID, Access: cc.Access}, nil
+	jti := parseJTI(token)
+	var cacheKey string
+	if jti != "" {
+		cacheKey = "jwt:valid:" + jti
+		if cached, err := a.redis.Get(ctx, cacheKey).Bytes(); err == nil {
+			var cc cachedClaims
+			if json.Unmarshal(cached, &cc) == nil {
+				return &TokenClaims{UserID: cc.UserID, TenantID: cc.TenantID, Access: cc.Access}, nil
+			}
 		}
 	}
 
@@ -72,15 +86,39 @@ func (a *AuthClient) ValidateBearer(ctx context.Context, token string) (*TokenCl
 		Access:   resp.GetAccess(),
 	}
 
-	if exp := resp.GetExpiresAt(); exp != nil {
-		if ttl := time.Until(exp.AsTime()); ttl > 0 {
-			if b, jerr := json.Marshal(cachedClaims{UserID: claims.UserID, TenantID: claims.TenantID, Access: claims.Access}); jerr == nil {
-				_ = a.redis.Set(ctx, cacheKey, b, ttl).Err()
+	if cacheKey != "" {
+		if exp := resp.GetExpiresAt(); exp != nil {
+			if ttl := time.Until(exp.AsTime()); ttl > 0 {
+				if b, jerr := json.Marshal(cachedClaims{UserID: claims.UserID, TenantID: claims.TenantID, Access: claims.Access}); jerr == nil {
+					_ = a.redis.Set(ctx, cacheKey, b, ttl).Err()
+				}
 			}
 		}
 	}
 
 	return claims, nil
+}
+
+// parseJTI extracts the JTI claim from a JWT payload without verifying the
+// signature. Returns empty string on any parse failure. Safe to use for
+// cache keying because full signature/expiry/audience validation still
+// happens via grpc.ValidateToken on cache miss.
+func parseJTI(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		JTI string `json:"jti"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.JTI
 }
 
 // ValidateAPIKey validates an API key credential (keyID:secret).

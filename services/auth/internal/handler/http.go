@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -29,37 +28,51 @@ type SSOEventPublisher interface {
 }
 
 // trustedProxyCIDRs holds the parsed CIDR ranges that are allowed to set
-// X-Forwarded-For. Populated from TRUSTED_PROXY_CIDRS at process startup.
-// An empty slice means no proxy is trusted and RemoteAddr is always used.
+// X-Forwarded-For. An empty slice means no proxy is trusted and RemoteAddr
+// is always used (CLAUDE.md §7 SEC-009). Server.go populates this once at
+// startup via SetTrustedProxies.
 var trustedProxyCIDRs []*net.IPNet
 
-// init parses TRUSTED_PROXY_CIDRS (comma-separated CIDR notation) once at
-// startup. Invalid CIDR entries are silently skipped so a misconfigured value
-// degrades gracefully (falls back to RemoteAddr) rather than panicking.
-func init() {
-	raw := os.Getenv("TRUSTED_PROXY_CIDRS")
+// ParseTrustedProxyCIDRs splits a comma-separated value (e.g. the env var
+// TRUSTED_PROXY_CIDRS) into a slice of *net.IPNet. Malformed CIDR entries
+// are logged and skipped so a misconfigured value degrades gracefully
+// rather than blocking startup.
+//
+// QA-006: env reads moved out of an init() in this handler package.
+// Config + env access belong in the loader layer; server.go calls this
+// with the validated config value and passes the result to
+// SetTrustedProxies. Package-level state remains so the existing
+// remoteIP-test save/restore pattern keeps working.
+func ParseTrustedProxyCIDRs(raw string) []*net.IPNet {
 	if raw == "" {
-		return
+		return nil
 	}
+	var out []*net.IPNet
 	for _, cidr := range strings.Split(raw, ",") {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
 			continue
 		}
 		_, network, err := net.ParseCIDR(cidr)
-		if err == nil {
-			trustedProxyCIDRs = append(trustedProxyCIDRs, network)
-		} else {
-			// A malformed CIDR is skipped so startup is not blocked, but the operator
-			// should know their TRUSTED_PROXY_CIDRS value has an invalid entry because
-			// the remaining valid entries may not provide the expected coverage.
+		if err != nil {
 			slog.Warn("TRUSTED_PROXY_CIDRS: invalid CIDR skipped", "entry", cidr, "error", err)
+			continue
 		}
+		out = append(out, network)
 	}
+	return out
 }
 
-// isTrustedProxy reports whether ip falls within one of the configured trusted
-// proxy CIDRs. Returns false when trustedProxyCIDRs is empty (no proxy trust).
+// SetTrustedProxies replaces the package-level trusted-proxy list. Intended
+// to be called once at server startup from server.go after the config is
+// loaded. Subsequent calls overwrite (useful in tests).
+func SetTrustedProxies(cidrs []*net.IPNet) {
+	trustedProxyCIDRs = cidrs
+}
+
+// isTrustedProxy reports whether ip falls within one of the configured
+// trusted proxy CIDRs. Returns false when trustedProxyCIDRs is empty
+// (no proxy trust).
 func isTrustedProxy(ip net.IP) bool {
 	for _, cidr := range trustedProxyCIDRs {
 		if cidr.Contains(ip) {
@@ -98,10 +111,13 @@ type HTTPHandler struct {
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
 // devDefaultTenantID may be uuid.Nil (production) or a fixed dev UUID.
 //
-// A warning is logged when TRUSTED_PROXY_CIDRS is not set because IP-based
-// rate limiting will then target the TCP peer (the proxy) rather than the
-// actual client, rendering per-client rate limits ineffective in deployed
-// environments where traffic arrives through a load balancer or ingress proxy.
+// A warning is logged when no trusted proxies are configured because
+// IP-based rate limiting will then target the TCP peer (the proxy)
+// rather than the actual client, rendering per-client rate limits
+// ineffective in deployed environments where traffic arrives through a
+// load balancer or ingress proxy. SetTrustedProxies must have been
+// called before this constructor for the warning to read the populated
+// value (server.go does this).
 func NewHTTPHandler(svc *service.Service, devDefaultTenantID uuid.UUID) *HTTPHandler {
 	if len(trustedProxyCIDRs) == 0 {
 		slog.Warn("TRUSTED_PROXY_CIDRS not set — IP rate limiting uses TCP peer address (degraded when behind a proxy)")

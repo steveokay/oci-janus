@@ -69,6 +69,21 @@ func (f *fakeAuditClient) GetAnalytics(_ context.Context, _ *auditv1.GetAnalytic
 func (f *fakeAuditClient) GetLastTenantPush(_ context.Context, _ *auditv1.GetLastTenantPushRequest, _ ...grpc.CallOption) (*auditv1.GetLastTenantPushResponse, error) {
 	return nil, nil
 }
+func (f *fakeAuditClient) GetAuditExportConfig(_ context.Context, _ *auditv1.GetAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.AuditExportConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) PutAuditExportConfig(_ context.Context, _ *auditv1.PutAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.AuditExportConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) DeleteAuditExportConfig(_ context.Context, _ *auditv1.DeleteAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.DeleteAuditExportConfigResponse, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) TestAuditExportConfig(_ context.Context, _ *auditv1.TestAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.TestAuditExportConfigResponse, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) DrainAuditExportDLX(_ context.Context, _ *auditv1.DrainAuditExportDLXRequest, _ ...grpc.CallOption) (*auditv1.DrainAuditExportDLXResponse, error) {
+	return nil, nil
+}
 
 // ── activityTestEnv ───────────────────────────────────────────────────────────
 
