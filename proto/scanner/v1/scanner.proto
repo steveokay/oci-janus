@@ -75,6 +75,28 @@ service ScannerService {
   // on every push.completed event.
   rpc GetEffectiveScanPolicy(GetEffectiveScanPolicyRequest) returns (EffectiveScanPolicy);
 
+  // FUT-017 — per-upstream proxy-cache scan policy.
+  //
+  // services/proxy emits events.RoutingCachePopulated after every
+  // successful cache write. The scanner consumer
+  // (worker.HandleCachePopulated) looks up the policy keyed by
+  // (tenant_id, upstream_name); when auto_scan is true the manifest
+  // digest is queued for the same worker pool that handles pushed
+  // images.
+  //
+  // Get returns an empty/disabled policy when no row exists rather than
+  // NotFound so the dashboard can render the "never configured" state
+  // without a separate code path (mirrors GetScanPolicy's per-tenant
+  // synthesised default).
+  rpc GetProxyCacheScanPolicy(GetProxyCacheScanPolicyRequest) returns (ProxyCacheScanPolicy);
+  // Set upserts the (tenant_id, upstream_name) row; the BFF performs
+  // the RBAC check (org admin/owner) before forwarding.
+  rpc SetProxyCacheScanPolicy(SetProxyCacheScanPolicyRequest) returns (ProxyCacheScanPolicy);
+  // List streams every per-upstream row for a tenant. Server streams so
+  // the FE can render a long table incrementally; ordering is by
+  // upstream_name ASC so the rows are stable across calls.
+  rpc ListProxyCacheScanPolicies(ListProxyCacheScanPoliciesRequest) returns (stream ProxyCacheScanPolicy);
+
   // FE-API-019 — compliance reports.
   //
   // GenerateComplianceReport kicks off an asynchronous report job and
@@ -464,6 +486,55 @@ message TestScanResponse {
   // error_message is populated when ok=false; safe to render verbatim
   // in the admin UI (the dev fixture is well-known).
   string error_message = 6;
+}
+
+// ----------------------------------------------------------------------------
+// FUT-017 — proxy-cache scan policies
+// ----------------------------------------------------------------------------
+
+// ProxyCacheScanPolicy is the per-(tenant, upstream) row that controls
+// whether services/scanner auto-queues a scan when services/proxy
+// emits a cache.populated event.
+//
+// Keyed by upstream_name (not upstream_id) so a policy survives an
+// upstream credential rotation that changes the row's UUID. The
+// services/proxy publisher fills upstream_name on every event payload.
+message ProxyCacheScanPolicy {
+  string tenant_id          = 1;
+  // upstream_name is the operator-chosen handle for the upstream
+  // (e.g. "dockerhub", "ghcr"). Lower-cased + validated by the BFF.
+  string upstream_name      = 2;
+  // auto_scan is the consumer's enqueue gate. False (the default)
+  // means cached pulls are stored without a scan.
+  bool   auto_scan          = 3;
+  // severity_threshold is the lowest severity that should trigger the
+  // same block-on-severity quarantine behaviour the per-tenant policy
+  // provides. One of: "", "none", "low", "medium", "high", "critical".
+  // Empty string and "none" both mean "never block".
+  string severity_threshold = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // updated_by is the user_id of the last actor; empty for the
+  // synthesised default returned on a cache miss.
+  string updated_by         = 6;
+}
+
+message GetProxyCacheScanPolicyRequest {
+  string tenant_id     = 1;
+  string upstream_name = 2;
+}
+
+message SetProxyCacheScanPolicyRequest {
+  string tenant_id          = 1;
+  string upstream_name      = 2;
+  bool   auto_scan          = 3;
+  string severity_threshold = 4;
+  // updated_by is the caller's user_id, threaded through so the audit
+  // record on the row reflects who made the change.
+  string updated_by         = 5;
+}
+
+message ListProxyCacheScanPoliciesRequest {
+  string tenant_id = 1;
 }
 
 message ScannerHealthResponse {

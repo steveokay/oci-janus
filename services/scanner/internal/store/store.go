@@ -84,6 +84,45 @@ func (s *Store) SetFailed(id string) {
 	}
 }
 
+// HasRecentScan reports whether a scan exists for (tenantID,
+// manifestDigest) that is either still in flight (pending|running) or
+// completed within recentWindow. The pull-through cache consumer
+// (worker.HandleCachePopulated) uses this to avoid stacking redundant
+// scans when a popular image is fetched repeatedly inside a short
+// window — the metadata service stores the authoritative scan result,
+// but in-memory dedup here keeps the worker pool from being flooded
+// before the broker even sees the next event.
+//
+// recentWindow is interpreted from the record's CompletedAt; an
+// in-flight scan (CompletedAt == nil) is always considered "recent"
+// regardless of the window. Pass a positive duration; zero or negative
+// disables the recent-completion check (in-flight matches still hit).
+//
+// FUT-017 — added so cache.populated → enqueue stays idempotent without
+// reaching for the metadata service on every event. Cross-process
+// deduplication still falls back to scan_results uniqueness in
+// metadata; this in-memory check is just the cheap first line.
+func (s *Store) HasRecentScan(tenantID, manifestDigest string, recentWindow time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cutoff := time.Now().Add(-recentWindow)
+	for _, r := range s.m {
+		if r.TenantID != tenantID || r.ManifestDigest != manifestDigest {
+			continue
+		}
+		// In-flight scan — always a match, regardless of window.
+		if r.Status == StatusPending || r.Status == StatusRunning {
+			return true
+		}
+		// Completed scan — only a match when CompletedAt is inside the
+		// caller's window. recentWindow <= 0 disables this branch.
+		if recentWindow > 0 && r.CompletedAt != nil && r.CompletedAt.After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
 // Get returns a shallow copy of the record, or false if not found.
 func (s *Store) Get(id string) (ScanRecord, bool) {
 	s.mu.RLock()
