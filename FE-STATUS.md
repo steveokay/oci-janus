@@ -174,18 +174,23 @@ proposed fixes) lives in [`.claude/reviews/`](.claude/reviews/); the curated
 Tier 1 / 2 / 3 backlog is in [`futures.md`](futures.md) under the
 "Review batch — 2026-06-23" section.
 
-**FE-facing slices** to pick from there:
+**Status as of 2026-06-24: 16 of 24 DSGN items DONE.** Sweep across PRs #49, #50, #52, #53, #55, #56, #57.
 
-| Tier | What | Source |
-|---|---|---|
-| **1 — P0** | `DSGN-001` workspace-admin helper · `DSGN-003` unified `ConfirmDestructive` primitive · `DSGN-004` `ErrorState` with HTTP code + detail | [design review](.claude/reviews/design-review-2026-06-23.md) |
-| **2 — P1** | `DSGN-005` first-run guidance · `DSGN-006` repo-Settings sub-sections · `DSGN-010` `/admin/scanner` active-adapter affordance · `DSGN-012` trusted-key remove Phase-1 warning · `DSGN-017` focus rings (WCAG 2.4.7) · `DSGN-021` custom-domain TXT row-expand · `DSGN-023` mobile sidebar drawer · `QA-019` top-level ErrorBoundary · `QA-020` FE test coverage pass · `FUT-007-FE` domain re-poll reset | [design review](.claude/reviews/design-review-2026-06-23.md) + [quality review](.claude/reviews/quality-review-2026-06-23.md) |
-| **3 — P2** | `DSGN-002 / -007 / -008 / -009 / -011 / -013 / -014 / -015 / -016 / -018 / -019 / -020 / -022 / -024` nav IA, primitive maturation, polish · `QA-021` axios exempt-path exact match · `FUT-008` Sign dialog "recent signer_ids" picker | [design review](.claude/reviews/design-review-2026-06-23.md) |
+**FE-facing slices** — what's still open:
+
+| Tier | Status |
+|---|---|
+| **1 — P0** | ~~DSGN-001~~ (#53) · ~~DSGN-003~~ (#50) · ~~DSGN-004~~ (#52) — **all done** |
+| **2 — P1** | ~~DSGN-005~~ (#54 / #56) · ~~DSGN-006~~ (#55) · ~~DSGN-010~~ (#57) · ~~DSGN-012~~ folded into #50 · ~~DSGN-017~~ (#50) — **5 done**; still open: **DSGN-021** (custom-domain TXT row-expand), **DSGN-023** (mobile sidebar), **QA-019** (top-level ErrorBoundary), **QA-020** (FE test coverage), **FUT-007-FE** (domain re-poll reset) |
+| **3 — P2** | ~~DSGN-007 / -011 / -013 / -014 / -015 / -016 / -019 / -020 / -022~~ all done (#50 + #57) · ~~QA-021~~ done (#50) — **10 done**; still open: **DSGN-002** (sidebar IA), **DSGN-008** (topbar breadcrumbs), **DSGN-009** (audit-export tiles redesign), **DSGN-018** (`<SecretInput>` primitive), **DSGN-024** (`<PageHeader>` primitive), **FUT-008** (Sign dialog recent signer_ids) |
 
 Other open backlog items live alongside them in `futures.md`:
 
-- **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
+- **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap surfaced 2026-06-24)
+- **REM-018** — UI user-ID → username + enforce display_name on user creation (filed 2026-06-24)
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
+- **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
+- **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001)
 
 ## Sprint 8 — Polish pass (remaining)
 

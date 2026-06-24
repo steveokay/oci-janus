@@ -120,10 +120,14 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **Tier 1 #1** — MFA (TOTP step-up) — ~2 weeks
 - **Tier 1 #5** — SCIM v2 provisioning — ~1.5 weeks
 - **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
+- **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap, surfaced 2026-06-24) — ~1 day
+- **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
+- **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
 - **DEPLOY-001** — SaaS vs self-hosted deployment docs + tenant-persona testing — ~half day
 - Smaller Tier 2 items: FUT-007-FE, FUT-008, etc.
+- Remaining DSGN: DSGN-002 / -008 / -009 / -018 / -021 / -023 / -024 (7 of 24 still open from the 2026-06-23 review batch)
 
 ---
 
