@@ -82,7 +82,7 @@ services:
       # added per Decision #18 (GC needs its own DB for status visibility
       # + async RunNow queue); without it registry-gc crash-loops with
       # `FATAL: database "registry_gc" does not exist`.
-      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner,registry_gc
+      POSTGRES_MULTIPLE_DATABASES: registry_metadata,registry_tenant,registry_proxy,registry_webhook,registry_audit,registry_scanner,registry_gc,registry_signer
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh:ro
@@ -498,6 +498,12 @@ services:
       SIGNER_KEY_BACKEND: env
       SIGNER_COSIGN_PRIVATE_KEY: ${SIGNER_COSIGN_PRIVATE_KEY}
       SIGNER_COSIGN_PUBLIC_KEY: ${SIGNER_COSIGN_PUBLIC_KEY}
+      # FUT-017: signer now owns its own DB for the per-upstream
+      # auto-sign policies + consumes cache.populated events. Without
+      # both env vars the consumer + policy CRUD silently stay off
+      # (existing SignManifest / ListSignatures keep working).
+      SIGNER_DB_DSN: postgres://registry:registry@postgres:5432/registry_signer?sslmode=prefer
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/signer.crt
       MTLS_KEY_PATH: /certs/signer.key
