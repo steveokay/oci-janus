@@ -84,6 +84,37 @@ export interface CachedManifestDetail extends CachedManifest {
   manifests: CachedManifestPlatformRef[];
 }
 
+// FUT-017 — per-upstream scan + sign policy shapes. JSON mirrors the
+// BFF's `proxyCacheScanPolicyResponse` / `proxyCacheSignPolicyResponse`
+// snake_case fields, so no field-rename is needed here.
+//
+// `severity_threshold`: "" and "none" are both "never block" — the BFF
+// accepts either, and we surface them as distinct values so the form can
+// model the empty-on-first-load case separately from an explicit "off".
+export type ProxyCacheSeverity =
+  | ""
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "critical";
+
+export interface ProxyCacheScanPolicy {
+  upstream_name: string;
+  auto_scan: boolean;
+  severity_threshold: ProxyCacheSeverity;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface ProxyCacheSignPolicy {
+  upstream_name: string;
+  auto_sign: boolean;
+  key_id?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 // ─── Query keys ─────────────────────────────────────────────────────
 
 export const proxyCacheKeys = {
@@ -94,6 +125,15 @@ export const proxyCacheKeys = {
   // FUT-016 — per-row detail key so invalidating on evict + invalidating
   // on detail-page navigation are independent.
   detail: (id: string) => [...proxyCacheKeys.all, "detail", id] as const,
+  // FUT-017 — per-upstream policy keys. Both the list + per-upstream
+  // single-row queries hang off the same `scanPolicy` / `signPolicy`
+  // namespace so a PUT can invalidate both with one prefix.
+  scanPolicies: () => [...proxyCacheKeys.all, "scanPolicy"] as const,
+  scanPolicy: (upstreamName: string) =>
+    [...proxyCacheKeys.all, "scanPolicy", upstreamName] as const,
+  signPolicies: () => [...proxyCacheKeys.all, "signPolicy"] as const,
+  signPolicy: (upstreamName: string) =>
+    [...proxyCacheKeys.all, "signPolicy", upstreamName] as const,
 };
 
 // ─── Hooks ──────────────────────────────────────────────────────────
@@ -195,6 +235,149 @@ export function useEvictCachedManifest() {
       // are cheap and the operator's mental model is "I clicked
       // evict; the row + the count drop now."
       void qc.invalidateQueries({ queryKey: proxyCacheKeys.all });
+    },
+  });
+}
+
+// ─── FUT-017 scan + sign policy hooks ───────────────────────────────
+//
+// Same probe-and-hide pattern as useCacheStats: 403 (caller is not a
+// workspace admin) and 404 (scanner / signer client unwired on the
+// management service) both resolve to `null`. The UpstreamPoliciesCard
+// hides itself when both list hooks return null, and gracefully shows
+// "scanner/signer not wired" inline when only one is unavailable.
+//
+// 5xx still throws — a real backend failure should surface as an error
+// rather than silently dropping the policy editor.
+
+// Internal helper. TanStack Query treats `undefined` as "no data yet"
+// (loading), so we return `null` to mean "request completed; the
+// feature is unavailable to me." Callers check `data === null`.
+function nullOn403or404<T>(fn: () => Promise<T>): () => Promise<T | null> {
+  return async () => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof AxiosError) {
+        const s = e.response?.status;
+        if (s === 403 || s === 404) return null;
+      }
+      throw e;
+    }
+  };
+}
+
+// useProxyCacheScanPolicy — fetch the scan policy for one upstream.
+// 200 returns the parsed body; 403/404 resolve to `null` so the
+// UpstreamPoliciesCard can hide its scan controls without erroring.
+export function useProxyCacheScanPolicy(upstreamName: string) {
+  return useQuery({
+    queryKey: proxyCacheKeys.scanPolicy(upstreamName),
+    enabled: Boolean(upstreamName),
+    queryFn: nullOn403or404<ProxyCacheScanPolicy>(async () => {
+      const { data } = await apiClient.get<ProxyCacheScanPolicy>(
+        `/proxy/upstreams/${encodeURIComponent(upstreamName)}/scan-policy`,
+      );
+      return data;
+    }),
+    staleTime: 30_000,
+  });
+}
+
+// useProxyCacheScanPolicies — list scan policies across every upstream
+// the tenant has touched. Returns `null` on 403/404 so the policy card
+// can hide cleanly. Used by UpstreamPoliciesCard to join with the
+// upstreams discovered from the cached-manifest list.
+export function useProxyCacheScanPolicies() {
+  return useQuery({
+    queryKey: proxyCacheKeys.scanPolicies(),
+    queryFn: nullOn403or404<ProxyCacheScanPolicy[]>(async () => {
+      const { data } = await apiClient.get<{
+        policies: ProxyCacheScanPolicy[];
+      }>(`/proxy/cache/scan-policies`);
+      // The BFF always returns `{ policies: [...] }`. Default to []
+      // defensively in case a future BFF version omits the field.
+      return data.policies ?? [];
+    }),
+    staleTime: 30_000,
+  });
+}
+
+// useUpdateProxyCacheScanPolicy — PUT one upstream's scan policy. On
+// success invalidates both the single-policy + list keys so the card
+// refetches both views.
+export function useUpdateProxyCacheScanPolicy(upstreamName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      auto_scan: boolean;
+      severity_threshold: ProxyCacheSeverity;
+    }): Promise<ProxyCacheScanPolicy> => {
+      const { data } = await apiClient.put<ProxyCacheScanPolicy>(
+        `/proxy/upstreams/${encodeURIComponent(upstreamName)}/scan-policy`,
+        body,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      // Invalidate by the broad `scanPolicy` prefix so the list query
+      // + the single-upstream query both refetch. Cheaper than picking
+      // two keys and matches the operator's mental model — "I saved;
+      // both the row I edited and the list should reflect it."
+      void qc.invalidateQueries({ queryKey: proxyCacheKeys.scanPolicies() });
+    },
+  });
+}
+
+// useProxyCacheSignPolicy — single-upstream sign policy mirror of
+// useProxyCacheScanPolicy. 403/404 → null.
+export function useProxyCacheSignPolicy(upstreamName: string) {
+  return useQuery({
+    queryKey: proxyCacheKeys.signPolicy(upstreamName),
+    enabled: Boolean(upstreamName),
+    queryFn: nullOn403or404<ProxyCacheSignPolicy>(async () => {
+      const { data } = await apiClient.get<ProxyCacheSignPolicy>(
+        `/proxy/upstreams/${encodeURIComponent(upstreamName)}/sign-policy`,
+      );
+      return data;
+    }),
+    staleTime: 30_000,
+  });
+}
+
+// useProxyCacheSignPolicies — list-mode for sign policies.
+export function useProxyCacheSignPolicies() {
+  return useQuery({
+    queryKey: proxyCacheKeys.signPolicies(),
+    queryFn: nullOn403or404<ProxyCacheSignPolicy[]>(async () => {
+      const { data } = await apiClient.get<{
+        policies: ProxyCacheSignPolicy[];
+      }>(`/proxy/cache/sign-policies`);
+      return data.policies ?? [];
+    }),
+    staleTime: 30_000,
+  });
+}
+
+// useUpdateProxyCacheSignPolicy — PUT sign policy. The BFF rejects
+// `auto_sign=true` with empty `key_id` as 400; callers must enforce
+// the same constraint client-side (the policy card disables Save
+// until the combo is valid).
+export function useUpdateProxyCacheSignPolicy(upstreamName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      auto_sign: boolean;
+      key_id: string;
+    }): Promise<ProxyCacheSignPolicy> => {
+      const { data } = await apiClient.put<ProxyCacheSignPolicy>(
+        `/proxy/upstreams/${encodeURIComponent(upstreamName)}/sign-policy`,
+        body,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: proxyCacheKeys.signPolicies() });
     },
   });
 }
