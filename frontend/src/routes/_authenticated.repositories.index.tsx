@@ -30,6 +30,7 @@ function RepositoriesPage(): React.ReactElement {
     data,
     isLoading,
     isError,
+    error,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -92,6 +93,7 @@ function RepositoriesPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load repositories"
           description="The management API didn't answer. Verify the BFF is reachable, then retry."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : !isLoading && filtered.length === 0 ? (

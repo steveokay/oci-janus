@@ -40,7 +40,7 @@ export const Route = createFileRoute("/_authenticated/admin/tenants")({
 });
 
 function AdminTenantsPage(): React.ReactElement {
-  const { data, isLoading, isError, refetch } = useAdminTenants();
+  const { data, isLoading, isError, error, refetch } = useAdminTenants();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [quotaTarget, setQuotaTarget] = React.useState<AdminTenant | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<AdminTenant | null>(
@@ -94,6 +94,7 @@ function AdminTenantsPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load tenants"
           description="The admin tenants endpoint didn't answer. Confirm TENANT_GRPC_ADDR is set on the management BFF, then retry."
+          error={error}
           onRetry={() => void refetch()}
         />
       ) : !isLoading && tenants.length === 0 ? (

@@ -170,6 +170,7 @@ function AuditExportPage(): React.ReactElement {
       <ErrorState
         title="Couldn't load audit export config"
         description="The management API didn't answer. Retry, or check the BFF logs."
+        error={cfg.error}
         onRetry={() => void cfg.refetch()}
       />
     );

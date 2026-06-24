@@ -66,6 +66,7 @@ function DomainsPage(): React.ReactElement {
         <ErrorState
           title="Couldn't load domains"
           description="The tenant service didn't answer. Retry, or check the BFF logs."
+          error={domains.error}
           onRetry={() => void domains.refetch()}
         />
       ) : domains.isLoading ? (
