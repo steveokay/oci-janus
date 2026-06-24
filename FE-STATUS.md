@@ -188,7 +188,7 @@ Other open backlog items live alongside them in `futures.md`:
 
 - **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap surfaced 2026-06-24)
 - **REM-018** — UI user-ID → username + enforce display_name on user creation (filed 2026-06-24)
-- **FUT-013** — Pull-through cache visibility (filed 2026-06-24): new sidebar menu item + `/proxy/cache` page reading from `services/proxy`. Operator-surfaced gap — pulls through `:8084/cache/...` persist but never appear in the dashboard
+- **FUT-013** — Pull-through cache visibility: Phase A + B shipped (PRs #73, #74); Phase C (FE) in flight on `feat/fut-013-c-proxy-cache-frontend` — `/workspace/proxy-cache` route + sidebar entry probe-and-hide
 - **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Pairs with REM-018 + precedes SCIM (Tier 1 #5)
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
 - **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
