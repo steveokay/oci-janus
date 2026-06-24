@@ -168,6 +168,7 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
 - **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap, surfaced 2026-06-24) — ~1 day
 - **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
+- **FUT-013** — Pull-through cache visibility (filed 2026-06-24): new sidebar menu item + `/proxy/cache` page backed by 3 new `services/proxy` RPCs (`ListCachedManifests`, `GetCacheStats`, `DeleteCachedManifest`) + `last_pulled_at` / `pull_count` columns on `proxy_manifests`. Surfaced by an operator noticing pulls through `:8084/cache/...` never appeared in the dashboard — ~1 sprint
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
