@@ -6,6 +6,7 @@ package publisher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,6 +15,31 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 )
+
+// ErrPublisherClosed is returned by Publish after Close has been called
+// (QA-002a). Callers can distinguish a graceful shutdown from a broker
+// outage so retry loops know to stop instead of hammering a dead channel.
+var ErrPublisherClosed = errors.New("publisher is closed")
+
+// defaultPublishTimeout is the per-Publish ceiling for broker
+// confirmation. Configurable via WithPublishTimeout (QA-002b).
+const defaultPublishTimeout = 10 * time.Second
+
+// Option configures a Publisher at construction time.
+type Option func(*Publisher)
+
+// WithPublishTimeout overrides the default 10s confirmation deadline.
+// Callers that batch many small messages in tight loops may want a
+// shorter timeout; a slow audit exporter behind syslog/CEF over TLS may
+// want a longer one. A non-positive value is rejected at New time so a
+// silent zero doesn't disable the safety net (QA-002b).
+func WithPublishTimeout(d time.Duration) Option {
+	return func(p *Publisher) {
+		if d > 0 {
+			p.publishTimeout = d
+		}
+	}
+}
 
 // amqpChannel is the subset of *amqp.Channel that Publisher uses. Extracted
 // to an interface so unit tests can substitute a fake that gives the test
@@ -35,17 +61,23 @@ type amqpChannel interface {
 // would race and read each other's ACK/NACK — silently breaking confirm
 // mode's durability guarantee (QA-002, 2026-06-23).
 type Publisher struct {
-	mu       sync.Mutex
-	conn     *amqp.Connection
-	ch       amqpChannel
-	confirms chan amqp.Confirmation
-	exchange string
+	mu             sync.Mutex
+	conn           *amqp.Connection
+	ch             amqpChannel
+	confirms       chan amqp.Confirmation
+	exchange       string
+	publishTimeout time.Duration
+	// closed flips to true after Close finishes. Guarded by mu so a
+	// concurrent Publish that's blocked on mu sees the post-Close state
+	// when it acquires the lock and returns ErrPublisherClosed instead
+	// of dialing into the now-closed channel (QA-002a).
+	closed bool
 }
 
 // New dials the broker, opens a channel, enables confirm mode, and declares
 // the exchange as durable topic. The exchange must already exist or be
 // declared here; passing an existing exchange is idempotent.
-func New(url, exchange string) (*Publisher, error) {
+func New(url, exchange string, opts ...Option) (*Publisher, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", url, err)
@@ -68,7 +100,17 @@ func New(url, exchange string) (*Publisher, error) {
 	// Buffer 1 so the channel never blocks between Publish and the select below
 	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
 
-	return &Publisher{conn: conn, ch: ch, confirms: confirms, exchange: exchange}, nil
+	p := &Publisher{
+		conn:           conn,
+		ch:             ch,
+		confirms:       confirms,
+		exchange:       exchange,
+		publishTimeout: defaultPublishTimeout,
+	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p, nil
 }
 
 // Publish marshals event to JSON and sends it to the exchange with the given
@@ -85,6 +127,15 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, event events
 	// other's ACK/NACK on the shared confirms channel. See type doc.
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// QA-002a: Close also acquires p.mu and sets closed=true. A concurrent
+	// Publish that was blocked on mu sees the post-Close state here and
+	// returns ErrPublisherClosed instead of dialing into a closed channel
+	// (which would surface as a confusing "channel/connection closed"
+	// error from amqp091 that callers can't reliably match on).
+	if p.closed {
+		return ErrPublisherClosed
+	}
 
 	err = p.ch.PublishWithContext(ctx, p.exchange, routingKey,
 		false, // mandatory — don't return if no queue bound (routing is the publisher's problem)
@@ -114,7 +165,14 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, event events
 	// out the channel state is suspect and the broker is unresponsive
 	// anyway, so callers see a sticky error until reconnection logic (ARCH-006)
 	// resets the channel.
-	timer := time.NewTimer(10 * time.Second)
+	timeout := p.publishTimeout
+	if timeout <= 0 {
+		// Defensive: a Publisher built via newWithChannel (test path) or
+		// somehow with a zero timeout falls back to the default rather
+		// than blocking forever.
+		timeout = defaultPublishTimeout
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case confirm, ok := <-p.confirms:
@@ -144,9 +202,27 @@ func drainStaleConfirm(ch <-chan amqp.Confirmation) {
 	}
 }
 
-// Close shuts down the channel and connection. Always call on process exit.
+// Close shuts down the channel and connection. Always call on process
+// exit. Safe to call concurrently with Publish (QA-002a): Close takes the
+// same mu the Publish path holds, so it waits for any in-flight Publish
+// to drain its confirmation before tearing down the channel. Subsequent
+// Publish calls return ErrPublisherClosed instead of dialing into a
+// closed channel.
+//
+// Close is idempotent — a second call is a no-op that returns nil.
 func (p *Publisher) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	if err := p.ch.Close(); err != nil {
+		// Still mark closed and try the conn close so we don't leak the
+		// underlying TCP connection on a partial-failure path.
+		if p.conn != nil {
+			_ = p.conn.Close()
+		}
 		return fmt.Errorf("close channel: %w", err)
 	}
 	if p.conn != nil {
@@ -160,5 +236,10 @@ func (p *Publisher) Close() error {
 // that gives them deterministic control over publish timing. Production code
 // must use New, which owns dialling the broker and enabling confirm mode.
 func newWithChannel(ch amqpChannel, confirms chan amqp.Confirmation, exchange string) *Publisher {
-	return &Publisher{ch: ch, confirms: confirms, exchange: exchange}
+	return &Publisher{
+		ch:             ch,
+		confirms:       confirms,
+		exchange:       exchange,
+		publishTimeout: defaultPublishTimeout,
+	}
 }

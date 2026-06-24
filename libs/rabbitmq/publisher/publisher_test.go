@@ -3,6 +3,7 @@ package publisher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +201,98 @@ func TestPublisher_DrainStaleConfirm(t *testing.T) {
 
 	if errB == nil || !strings.Contains(errB.Error(), "broker nacked") {
 		t.Errorf("B: got %v, want NACK error (drain did not consume A's stranded ACK)", errB)
+	}
+}
+
+// TestPublisher_CloseReturnsErrPublisherClosedToConcurrentPublish covers
+// QA-002a. Concurrent Publish + Close must:
+//   1. Allow the in-flight Publish to finish (Close waits on mu).
+//   2. Return ErrPublisherClosed to any subsequent Publish, instead of
+//      surfacing the underlying amqp091 "channel closed" error that
+//      callers can't reliably distinguish from a broker outage.
+func TestPublisher_CloseReturnsErrPublisherClosedToConcurrentPublish(t *testing.T) {
+	fake := newFakeChannel()
+	confirms := make(chan amqp.Confirmation, 4)
+	p := newWithChannel(fake, confirms, "test-exchange")
+
+	// Publish completes synchronously to set baseline.
+	go func() {
+		fake.publishReturn <- nil
+		confirms <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+	}()
+	if err := p.Publish(context.Background(), "k", makeEvent("A")); err != nil {
+		t.Fatalf("baseline Publish: %v", err)
+	}
+	<-fake.publishStarted // drain the started signal
+
+	// Close while no Publish is in flight — clean shutdown path.
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !fake.closed {
+		t.Error("Close did not close the underlying channel")
+	}
+
+	// Post-Close Publish returns ErrPublisherClosed without touching the
+	// (now-closed) channel.
+	err := p.Publish(context.Background(), "k", makeEvent("B"))
+	if !errors.Is(err, ErrPublisherClosed) {
+		t.Errorf("post-Close Publish err = %v, want ErrPublisherClosed", err)
+	}
+
+	// Close is idempotent.
+	if err := p.Close(); err != nil {
+		t.Errorf("second Close: %v, want nil", err)
+	}
+}
+
+// TestPublisher_WithPublishTimeout covers QA-002b. A Publisher built with
+// a short timeout returns the timeout error before the default 10s fires,
+// without needing a real broker.
+//
+// Note on the post-timeout confirm send: drainStaleConfirm waits up to 30s
+// for the broker's late ACK after the timer fires (so the stranded
+// confirmation doesn't poison the next caller). In production the broker
+// sends one; in this test we send one ourselves so drain returns quickly
+// instead of stretching the test out by 30s.
+func TestPublisher_WithPublishTimeout(t *testing.T) {
+	fake := newFakeChannel()
+	confirms := make(chan amqp.Confirmation, 1)
+	p := newWithChannel(fake, confirms, "test-exchange")
+	p.publishTimeout = 100 * time.Millisecond
+
+	// Release PublishWithContext, then after the timeout fires send a
+	// confirm so drainStaleConfirm completes immediately.
+	go func() {
+		fake.publishReturn <- nil
+		time.Sleep(150 * time.Millisecond)
+		confirms <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+	}()
+
+	start := time.Now()
+	err := p.Publish(context.Background(), "k", makeEvent("X"))
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "timeout waiting") {
+		t.Fatalf("got %v, want timeout error", err)
+	}
+	if elapsed >= time.Second {
+		t.Errorf("waited %v before timeout — configurable timeout not applied", elapsed)
+	}
+	<-fake.publishStarted // drain
+}
+
+// TestPublisher_WithPublishTimeout_RejectsZero confirms WithPublishTimeout
+// silently keeps the default when given a non-positive value.
+func TestPublisher_WithPublishTimeout_RejectsZero(t *testing.T) {
+	p := &Publisher{publishTimeout: defaultPublishTimeout}
+	WithPublishTimeout(0)(p)
+	WithPublishTimeout(-1)(p)
+	if p.publishTimeout != defaultPublishTimeout {
+		t.Errorf("zero/negative timeout overwrote default: got %v, want %v", p.publishTimeout, defaultPublishTimeout)
+	}
+	WithPublishTimeout(2 * time.Second)(p)
+	if p.publishTimeout != 2*time.Second {
+		t.Errorf("positive timeout not applied: got %v, want 2s", p.publishTimeout)
 	}
 }
 

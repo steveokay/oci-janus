@@ -7,18 +7,58 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// MapDBError maps a repository/database error to a gRPC status error.
-// context.DeadlineExceeded from pgxpool.Acquire (pool exhaustion) is mapped
-// to ResourceExhausted so callers back off rather than retrying immediately.
-// All other errors become Internal with the supplied fallback message.
+// PostgreSQL SQLSTATE codes (subset). See
+// https://www.postgresql.org/docs/current/errcodes-appendix.html
+const (
+	pgForeignKeyViolation = "23503"
+	pgUniqueViolation     = "23505"
+	pgCheckViolation      = "23514"
+	pgNotNullViolation    = "23502"
+)
+
+// MapDBError maps a repository/database error to a gRPC status error so
+// service handlers don't collapse every PG failure to codes.Internal
+// (REM-016).
+//
+// Recognised cases:
+//
+//   - context.DeadlineExceeded (pool exhaustion from pgxpool.Acquire) →
+//     ResourceExhausted so callers back off instead of retrying immediately.
+//   - PG 23503 foreign-key violation → NotFound, with the ConstraintName
+//     so the caller knows which parent row is missing.
+//   - PG 23505 unique violation → AlreadyExists, with the ConstraintName.
+//   - PG 23514 check violation → InvalidArgument, with the ConstraintName.
+//   - PG 23502 not-null violation → InvalidArgument, naming the column.
+//   - everything else → Internal with the supplied fallback message.
+//
+// The fallback message is preserved for the Internal path so existing
+// log-and-grep workflows keep working. Specific codes produce more
+// actionable messages because the constraint / column names are
+// non-secret and tell the caller what to fix.
 func MapDBError(err error, fallbackMsg string) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.ResourceExhausted, "database connection pool exhausted")
 	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case pgForeignKeyViolation:
+			return status.Errorf(codes.NotFound, "foreign key violation on constraint %q: parent row not found", pgErr.ConstraintName)
+		case pgUniqueViolation:
+			return status.Errorf(codes.AlreadyExists, "unique constraint %q violated", pgErr.ConstraintName)
+		case pgCheckViolation:
+			return status.Errorf(codes.InvalidArgument, "check constraint %q violated", pgErr.ConstraintName)
+		case pgNotNullViolation:
+			return status.Errorf(codes.InvalidArgument, "column %q is not nullable", pgErr.ColumnName)
+		}
+	}
+
 	return status.Error(codes.Internal, fallbackMsg)
 }
 
