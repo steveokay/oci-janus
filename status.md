@@ -38,6 +38,12 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| FUT-018 filed | Filed FUT-018 (digest-keyed scan + signature BFF routes + FE tabs/columns) — closes the FUT-017 Phase 2b loop deferred from PR #89 | PR #90 | 2026-06-24 | DONE (docs) |
+| FUT-017 Phase 2a | Frontend per-upstream policy editor card on `/workspace/proxy-cache` — auto-scan + auto-sign toggles per upstream, 2s debounced auto-save, key_id-required-with-auto-sign client-side gate, 24 vitest cases. Detail-page Scans + Signing tabs deferred to FUT-018 (digest-keyed routes don't exist yet) | PR #89 | 2026-06-24 | DONE (Phase 2a) |
+| FUT-017 Phase 1 BFF | services/management — 6 REST routes wrapping the new scanner + signer proxy-cache policy RPCs; workspace-admin gated; 10 new bufconn tests | PR #88 | 2026-06-24 | DONE (Phase 1) |
+| FUT-017 Phase 1 signer | services/signer — `cache.populated` subscriber + new `eventconsumer` package + per-upstream auto-sign policy table + 3 RPCs (Get/Set/List); fail-OPEN consumer (auto-sign is opportunistic) | PR #86 | 2026-06-24 | DONE (Phase 1) |
+| FUT-017 Phase 1 scanner | services/scanner — `cache.populated` consumer + scope_type=proxy_cache policy table + 3 RPCs + `Store.HasRecentScan` 30-min idempotency window; fail-CLOSED resolver (policy row is the only consent signal) | PR #87 | 2026-06-24 | DONE (Phase 1) |
+| FUT-017 foundation | `cache.populated` routing key + `CachePopulatedPayload` + services/proxy publishes after every successful cacheManifest upsert | PR #85 | 2026-06-24 | DONE (Phase 1) |
 | FUT-016 | Click-through `/workspace/proxy-cache/{id}` detail page — new `GetCachedManifest` RPC + BFF `GET /api/v1/proxy/cache/{id}` parsing manifest body server-side into typed `layers[]` / `manifests[]` + `kind` discriminator; FE route with Layers/Platforms + Manifest tabs; 6 vitest + Go handler tests | PR #83 | 2026-06-24 | DONE |
 | FUT-015 | `/workspace/proxy-cache` row expander + `docker pull` copy command (tag + digest forms); media type + absolute timestamps; mirrors DSGN-021 pattern; 12 new vitest cases | PR #82 | 2026-06-24 | DONE |
 | FUT-014 doc-expand | Expanded FUT-014 from "bump pull_count column" to "proxy publishes pull.image events" — collapses cache-counter undercount + dashboard 24h card missing cache traffic into one design | PR #80 | 2026-06-24 | DONE (docs) |
