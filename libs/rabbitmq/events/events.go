@@ -29,6 +29,16 @@ const (
 	RoutingTenantPlanChanged    = "tenant.plan_changed"  // FE-API-029
 	RoutingTenantDomainVerified = "tenant.domain.verified"
 	RoutingStoreQueued          = "store.queued" // proxy background store
+
+	// RoutingCachePopulated (FUT-017) — emitted by services/proxy after
+	// every successful cache write (cacheManifest upsert). Subscribed by
+	// services/scanner (queues a scan when the tenant's per-upstream
+	// proxy_cache scan policy says auto-scan) and services/signer (auto-
+	// signs with the workspace's default key when the per-upstream sign
+	// policy says auto-sign). The payload is intentionally rich enough
+	// that consumers don't need to call back into services/proxy for
+	// follow-up reads — the routing key is the only shared concept.
+	RoutingCachePopulated = "cache.populated"
 	// RBAC audit events — consumed by registry-audit to record membership changes.
 	RoutingRBACRoleGranted = "rbac.role_granted"
 	RoutingRBACRoleRevoked = "rbac.role_revoked"
@@ -115,6 +125,30 @@ type ScanCompletedPayload struct {
 	SeverityCounts  map[string]int `json:"severity_counts"`
 	PolicyViolation bool           `json:"policy_violation"`
 	Blocked         bool           `json:"blocked"`
+}
+
+// CachePopulatedPayload is the payload for cache.populated events.
+//
+// Emitted by services/proxy after a successful UpsertManifest on the
+// pull-through path. Subscribed by services/scanner (FUT-017 scan-on-
+// cached-images) and services/signer (FUT-017 auto-sign-on-cache).
+//
+// All consumers do their own policy lookup keyed on (tenant_id,
+// upstream_name) — the event itself doesn't carry policy state.
+//
+// ManifestDigest IS the per-arch manifest's digest (sha256:...). For
+// manifest indexes, the proxy publishes one event per platform-manifest
+// upsert; consumers therefore see CVE/sign results per arch even for
+// multi-arch images.
+type CachePopulatedPayload struct {
+	TenantID       string `json:"tenant_id"`
+	UpstreamID     string `json:"upstream_id"`
+	UpstreamName   string `json:"upstream_name"`
+	Image          string `json:"image"`
+	Reference      string `json:"reference"`
+	ManifestDigest string `json:"manifest_digest"`
+	MediaType      string `json:"media_type"`
+	SizeBytes      int64  `json:"size_bytes"`
 }
 
 // StoreQueuedPayload is the payload for store.queued events.
