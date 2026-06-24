@@ -1,5 +1,5 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 import {
@@ -413,7 +413,18 @@ export function CachedManifestRow({
         <TableCell>
           <Badge tone="neutral">{m.upstream_name}</Badge>
         </TableCell>
-        <TableCell className="font-medium">{m.image}</TableCell>
+        <TableCell className="font-medium">
+          {/* FUT-016: click-through to the detail page. Wraps only the
+              image cell (not the whole row) so the evict button + the
+              row-expand chevron keep their own click semantics. */}
+          <Link
+            to="/workspace/proxy-cache/$id"
+            params={{ id: m.id }}
+            className="hover:text-[var(--color-accent)] hover:underline"
+          >
+            {m.image}
+          </Link>
+        </TableCell>
         <TableCell>
           <code className="text-xs">{m.reference}</code>
         </TableCell>

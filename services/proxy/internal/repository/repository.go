@@ -59,6 +59,29 @@ type CachedManifestRow struct {
 	PullCount    int64
 }
 
+// CachedManifestRowFull is the FUT-016 detail-page projection — same
+// shape as CachedManifestRow plus the manifest body bytes. Returned by
+// GetCachedManifestByID so the BFF can parse the body into the layer /
+// per-platform projection the dashboard renders.
+//
+// Kept distinct from ManifestRecord (which the OCI pull path uses)
+// because this projection joins upstream_registries for the display
+// name + carries the pull-tracking columns the operator wants to see.
+type CachedManifestRowFull struct {
+	ID           uuid.UUID
+	UpstreamID   uuid.UUID
+	UpstreamName string
+	Image        string
+	Reference    string
+	Digest       string
+	MediaType    string
+	Body         []byte
+	SizeBytes    int64
+	FetchedAt    time.Time
+	LastPulledAt *time.Time
+	PullCount    int64
+}
+
 // CacheStatsRow is the aggregate GetCacheStats returns.
 type CacheStatsRow struct {
 	TotalManifests  int64
@@ -350,6 +373,35 @@ func (r *Repository) GetCacheStats(ctx context.Context, tenantID uuid.UUID) (*Ca
 		WHERE  tenant_id = $1`,
 		tenantID,
 	).Scan(&rec.TotalManifests, &rec.TotalBytes, &rec.UniqueUpstreams, &rec.TotalPulls)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// GetCachedManifestByID returns the FUT-016 detail-page projection
+// for a single proxy_manifests row. ErrNotFound on miss or when the
+// row belongs to a different tenant (we DO NOT leak existence across
+// tenants — same posture as DeleteCachedManifestByID).
+func (r *Repository) GetCachedManifestByID(ctx context.Context, tenantID, id uuid.UUID) (*CachedManifestRowFull, error) {
+	var rec CachedManifestRowFull
+	err := r.pool.QueryRow(ctx, `
+		SELECT pm.id, pm.upstream_id, ur.name, pm.image, pm.reference,
+		       pm.digest, pm.media_type, pm.body, pm.size_bytes, pm.fetched_at,
+		       pm.last_pulled_at, pm.pull_count
+		FROM   proxy_manifests pm
+		JOIN   upstream_registries ur ON ur.upstream_id = pm.upstream_id
+		WHERE  pm.id        = $1
+		  AND  pm.tenant_id = $2`,
+		id, tenantID,
+	).Scan(
+		&rec.ID, &rec.UpstreamID, &rec.UpstreamName, &rec.Image, &rec.Reference,
+		&rec.Digest, &rec.MediaType, &rec.Body, &rec.SizeBytes, &rec.FetchedAt,
+		&rec.LastPulledAt, &rec.PullCount,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}

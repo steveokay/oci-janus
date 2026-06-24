@@ -49,6 +49,41 @@ export interface CacheListFilters {
   page_size?: number;
 }
 
+// FUT-016 — detail-page types.
+//
+// kind discriminates image manifests (config + layers) from image
+// indexes / Docker manifest lists (per-platform `manifests[]`). The BFF
+// always populates both arrays (empty when not applicable) so callers
+// can `.map` without optional-chaining.
+export type CachedManifestKind = "image" | "index";
+
+export interface CachedManifestLayer {
+  digest: string;
+  size: number;
+  media_type: string;
+}
+
+export interface CachedManifestPlatformRef {
+  digest: string;
+  size: number;
+  media_type: string;
+  architecture: string;
+  os: string;
+  variant?: string;
+  os_version?: string;
+}
+
+export interface CachedManifestDetail extends CachedManifest {
+  kind: CachedManifestKind;
+  // Base64-encoded raw manifest body. The "Manifest" tab decodes + pretty-
+  // prints this as JSON. We send it base64-encoded because the body is
+  // arbitrary bytes from upstream; embedding the raw string in JSON would
+  // require server-side escaping that's fiddier than the round-trip.
+  body_base64: string;
+  layers: CachedManifestLayer[];
+  manifests: CachedManifestPlatformRef[];
+}
+
 // ─── Query keys ─────────────────────────────────────────────────────
 
 export const proxyCacheKeys = {
@@ -56,6 +91,9 @@ export const proxyCacheKeys = {
   stats: () => [...proxyCacheKeys.all, "stats"] as const,
   list: (filters: CacheListFilters) =>
     [...proxyCacheKeys.all, "list", filters] as const,
+  // FUT-016 — per-row detail key so invalidating on evict + invalidating
+  // on detail-page navigation are independent.
+  detail: (id: string) => [...proxyCacheKeys.all, "detail", id] as const,
 };
 
 // ─── Hooks ──────────────────────────────────────────────────────────
@@ -115,6 +153,32 @@ export function useCachedManifests(filters: CacheListFilters = {}) {
       return data;
     },
     getNextPageParam: (lastPage) => lastPage.next_page_token ?? undefined,
+  });
+}
+
+// useCachedManifest — FUT-016 detail-page hook. Returns the full row
+// + parsed layers / per-platform projection + raw body for the manifest
+// JSON tab. 404 / 403 surface as TanStack Query errors so the detail
+// page can branch on `isError` + status code (404 → "not found" empty
+// state, 403 → "workspace admin required" empty state).
+export function useCachedManifest(id: string | undefined) {
+  return useQuery({
+    queryKey: id ? proxyCacheKeys.detail(id) : ["proxy-cache", "detail", "_disabled"],
+    enabled: Boolean(id),
+    queryFn: async (): Promise<CachedManifestDetail> => {
+      // `enabled: false` keeps queryFn from running when id is undefined,
+      // but TypeScript still wants a code path — assert here.
+      if (!id) throw new Error("id is required");
+      const { data } = await apiClient.get<CachedManifestDetail>(
+        `/proxy/cache/${encodeURIComponent(id)}`,
+      );
+      return data;
+    },
+    // The body is immutable for the lifetime of a row (eviction is the
+    // only mutation) so we don't refetch on focus. 5 minutes is enough
+    // to keep tab-switching cheap without holding onto stale layer data
+    // after an eviction-then-re-cache cycle.
+    staleTime: 5 * 60 * 1000,
   });
 }
 

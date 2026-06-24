@@ -1,5 +1,44 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
+
+// FUT-016 added a TanStack-Router <Link> wrapping the image cell. Unit
+// tests render CachedManifestRow without a router context, so we replace
+// the router module with a stub that renders a plain anchor. Keeps the
+// row-expander tests focused on the FUT-015 contract — toggle, copy,
+// timestamps — without dragging in the routing layer.
+vi.mock("@tanstack/react-router", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    "@tanstack/react-router",
+  );
+  return {
+    ...actual,
+    Link: ({
+      to,
+      params,
+      children,
+      className,
+    }: {
+      to?: string;
+      params?: Record<string, unknown>;
+      children: React.ReactNode;
+      className?: string;
+    }) => {
+      const href = String(to ?? "").replace(/\$(\w+)/g, (_match, key: string) =>
+        String(params?.[key] ?? ""),
+      );
+      return (
+        <a href={href} className={className}>
+          {children}
+        </a>
+      );
+    },
+    createFileRoute: () => () => ({
+      useParams: () => ({}),
+    }),
+  };
+});
+
+import * as React from "react";
 import {
   CachedManifestRow,
   resolvePullHost,
