@@ -2,7 +2,15 @@ import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
-import { Boxes, Database, Layers, Repeat, Trash2 } from "lucide-react";
+import {
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  Layers,
+  Repeat,
+  Trash2,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -16,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { CopyButton } from "@/components/ui/copy-button";
 import {
   Table,
   TableBody,
@@ -30,7 +39,8 @@ import {
   useEvictCachedManifest,
   type CachedManifest,
 } from "@/lib/api/proxy-cache";
-import { formatBytes, formatRelativeDate } from "@/lib/format";
+import { useWorkspace } from "@/lib/api/workspace";
+import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/format";
 
 // /workspace/proxy-cache — FUT-013.
 //
@@ -67,6 +77,17 @@ function ProxyCachePage(): React.ReactElement {
     image_contains: debouncedImageFilter || undefined,
     page_size: 50,
   });
+
+  // FUT-015 — workspace host drives the `docker pull` commands in the
+  // row expander. We resolve once at the page level so every row shares
+  // the same value (and so jsdom tests can mock the hook in one place).
+  const workspace = useWorkspace();
+  const pullHost = resolvePullHost(workspace.data?.host);
+
+  // Row-expander state — one row at a time keeps the layout calm. A
+  // Set would let multiple rows stay open, but the operator usually
+  // wants to inspect a single row at a time before copying.
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
 
   const [evictTarget, setEvictTarget] = React.useState<CachedManifest | null>(null);
   const evict = useEvictCachedManifest();
@@ -202,6 +223,9 @@ function ProxyCachePage(): React.ReactElement {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[40px]">
+                    <span className="sr-only">Expand</span>
+                  </TableHead>
                   <TableHead>Upstream</TableHead>
                   <TableHead>Image</TableHead>
                   <TableHead>Reference</TableHead>
@@ -214,39 +238,16 @@ function ProxyCachePage(): React.ReactElement {
               </TableHeader>
               <TableBody>
                 {allManifests.map((m) => (
-                  <TableRow key={m.id}>
-                    <TableCell>
-                      <Badge tone="neutral">{m.upstream_name}</Badge>
-                    </TableCell>
-                    <TableCell className="font-medium">{m.image}</TableCell>
-                    <TableCell>
-                      <code className="text-xs">{m.reference}</code>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatBytes(m.size_bytes)}
-                    </TableCell>
-                    <TableCell className="text-[var(--color-fg-muted)]">
-                      {formatRelativeDate(m.fetched_at)}
-                    </TableCell>
-                    <TableCell className="text-[var(--color-fg-muted)]">
-                      {m.last_pulled_at
-                        ? formatRelativeDate(m.last_pulled_at)
-                        : "Never"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Intl.NumberFormat().format(m.pull_count)}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Evict ${m.image}:${m.reference}`}
-                        onClick={() => setEvictTarget(m)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                  <CachedManifestRow
+                    key={m.id}
+                    m={m}
+                    pullHost={pullHost}
+                    expanded={expandedId === m.id}
+                    onToggleExpand={() =>
+                      setExpandedId((prev) => (prev === m.id ? null : m.id))
+                    }
+                    onEvict={() => setEvictTarget(m)}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -355,6 +356,237 @@ function StatCard({ icon: Icon, label, value }: StatCardProps): React.ReactEleme
       </CardContent>
     </Card>
   );
+}
+
+// FUT-015 — single cached-manifest row + its expander panel.
+//
+// Mirrors DSGN-021's row-expander shape (chevron in column 0, expanded
+// content rendered as a full-width <tr> with colSpan=9). The expander
+// surfaces the operator-facing things the row itself doesn't have room
+// for: full `docker pull` commands (tag + digest forms) with CopyButton,
+// the media type, and absolute ISO timestamps for tickets/changelogs.
+interface CachedManifestRowProps {
+  m: CachedManifest;
+  pullHost: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onEvict: () => void;
+}
+
+export function CachedManifestRow({
+  m,
+  pullHost,
+  expanded,
+  onToggleExpand,
+  onEvict,
+}: CachedManifestRowProps): React.ReactElement {
+  // Compute both pull commands up-front so the panel can render them
+  // without re-doing work on every paint. The digest variant is only
+  // shown when the row carries a non-empty digest — older cache rows
+  // (pre-FUT-013) sometimes lack it.
+  const tagPull = dockerPullCommand(pullHost, m.upstream_name, m.image, {
+    reference: m.reference,
+  });
+  const hasDigest = m.digest.length > 0;
+  const digestPull = hasDigest
+    ? dockerPullCommand(pullHost, m.upstream_name, m.image, { digest: m.digest })
+    : "";
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="w-[40px] pr-0">
+          <button
+            type="button"
+            aria-label={expanded ? "Hide pull command" : "Show pull command"}
+            aria-expanded={expanded}
+            onClick={onToggleExpand}
+            className="inline-flex size-6 items-center justify-center rounded-md text-[var(--color-fg-subtle)] hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-1"
+          >
+            {expanded ? (
+              <ChevronDown className="size-4" />
+            ) : (
+              <ChevronRight className="size-4" />
+            )}
+          </button>
+        </TableCell>
+        <TableCell>
+          <Badge tone="neutral">{m.upstream_name}</Badge>
+        </TableCell>
+        <TableCell className="font-medium">{m.image}</TableCell>
+        <TableCell>
+          <code className="text-xs">{m.reference}</code>
+        </TableCell>
+        <TableCell className="text-right tabular-nums">
+          {formatBytes(m.size_bytes)}
+        </TableCell>
+        <TableCell className="text-[var(--color-fg-muted)]">
+          {formatRelativeDate(m.fetched_at)}
+        </TableCell>
+        <TableCell className="text-[var(--color-fg-muted)]">
+          {m.last_pulled_at ? formatRelativeDate(m.last_pulled_at) : "Never"}
+        </TableCell>
+        <TableCell className="text-right tabular-nums">
+          {Intl.NumberFormat().format(m.pull_count)}
+        </TableCell>
+        <TableCell>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Evict ${m.image}:${m.reference}`}
+            onClick={onEvict}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </TableCell>
+      </TableRow>
+      {expanded ? (
+        <TableRow className="bg-[var(--color-surface-sunken)] hover:bg-[var(--color-surface-sunken)]">
+          <TableCell colSpan={9} className="px-4 py-4">
+            <div className="space-y-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+              <PullCommandField label="docker pull (by tag)" value={tagPull} />
+              {hasDigest ? (
+                <PullCommandField
+                  label="docker pull (by digest)"
+                  value={digestPull}
+                  hint="Pinning to the digest survives upstream tag mutation."
+                />
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <MetaField
+                  label="Media type"
+                  value={m.media_type || "—"}
+                  mono
+                />
+                <MetaField label="Cached at" value={formatAbsoluteDate(m.fetched_at)} />
+                <MetaField
+                  label="Last pulled at"
+                  value={
+                    m.last_pulled_at ? formatAbsoluteDate(m.last_pulled_at) : "Never"
+                  }
+                />
+              </div>
+            </div>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
+}
+
+// PullCommandField — labelled `<code>` with an inline CopyButton. Mirrors
+// the ChallengeField in DomainsTable so the two row-expanders share a
+// visual vocabulary; the only difference is this one carries a longer
+// shell command instead of a TXT record fragment.
+function PullCommandField({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}): React.ReactElement {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
+        {label}
+      </div>
+      <div className="flex items-center gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] px-3 py-2">
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-fg)]">
+          {value}
+        </code>
+        <CopyButton value={value} iconOnly />
+      </div>
+      {hint ? (
+        <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// MetaField — small label/value pair for the bottom row of the expander
+// (media type + absolute timestamps). `mono` toggles a monospaced value
+// font for the OCI media-type string which is read more easily that way.
+function MetaField({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}): React.ReactElement {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
+        {label}
+      </div>
+      <div
+        className={
+          mono
+            ? "truncate font-mono text-xs text-[var(--color-fg)]"
+            : "truncate text-xs text-[var(--color-fg)]"
+        }
+        title={value}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// resolvePullHost picks the host string we splice into `docker pull`.
+//
+// Order of preference:
+//   1. The workspace's resolved host from FE-API-009 (`workspace.host`).
+//      When the operator has registered a custom domain + promoted it,
+//      this is the real registry hostname they want their teammates to
+//      use — surface it directly.
+//   2. window.location.host, EXCEPT when that's the local Vite dev
+//      server (`localhost:5173`). The Vite port is the FE bundle, not
+//      the registry — docker push/pull against it would 404 instantly.
+//      Substitute the dev gateway port `:8084` (local-setup.md §pull-
+//      through-cache) so a fresh dev environment shows a command that
+//      actually works copy-pasted into a terminal.
+//   3. Bare `localhost:8084` as a last-ditch fallback (covers SSR-like
+//      contexts where `window` isn't defined — unlikely here but free).
+export function resolvePullHost(workspaceHost: string | undefined): string {
+  if (workspaceHost && workspaceHost.length > 0) return workspaceHost;
+  if (typeof window === "undefined") return "localhost:8084";
+  const here = window.location.host;
+  if (here.includes(":5173")) {
+    // Replace the Vite port with the dev gateway port; preserve hostname
+    // so anyone running the dashboard against a non-localhost dev host
+    // (e.g. a VM, gitpod) still gets a sensible command.
+    return here.replace(/:5173$/, ":8084");
+  }
+  return here || "localhost:8084";
+}
+
+// dockerPullCommand renders the OCI-style pull URI the proxy exposes.
+//
+//   docker pull <host>/cache/<upstream>/<image>:<tag>      (tag form)
+//   docker pull <host>/cache/<upstream>/<image>@<digest>   (digest form)
+//
+// The `cache/` prefix is the proxy path (see services/proxy/internal/
+// handler/http.go — `/v2/cache/<upstream>/<image>/...`). docker strips
+// the leading `/v2/` segment when it constructs a pull URI, so what the
+// user types is `host/cache/...`.
+//
+// Exactly one of `reference` / `digest` must be set; the call site
+// owns the conditional and we don't try to be clever about both.
+export function dockerPullCommand(
+  host: string,
+  upstream: string,
+  image: string,
+  ref: { reference: string } | { digest: string },
+): string {
+  const sep = "reference" in ref ? ":" : "@";
+  const value = "reference" in ref ? ref.reference : ref.digest;
+  return `docker pull ${host}/cache/${upstream}/${image}${sep}${value}`;
 }
 
 // Tiny debounce so the filter input doesn't fire a list refetch on
