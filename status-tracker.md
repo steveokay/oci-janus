@@ -37,6 +37,52 @@
 
 ---
 
+### REM-019 — Scanner trivy adapter exits with code 1 (empty stderr)
+
+**Surfaced:** 2026-06-24 during scan smoke testing. Triggered scans on
+`dev/rabbitmq:3.13-management-alpine` queue correctly + the scanner
+service receives the event, but every plugin invocation fails with:
+
+```
+ERROR plugin process failed   path=/usr/local/bin/scanner-trivy-adapter
+       stderr=""   error=exit status 1
+ERROR scan job failed         error=plugin process exited with error
+```
+
+The downstream "scan stuck at pending" symptom that masked this was
+fixed in PR #59 (scanner `persistScanStatus` now defaults `findings`
+to `[]` so the failure status flips correctly). The underlying trivy
+adapter exit-1 is still open.
+
+**Affected:** `services/scanner` (calls `scanner-trivy-adapter` via
+JSON-RPC stdio per `services/scanner/internal/plugin/process.go`).
+
+**Likely candidates** (none confirmed yet):
+- Adapter fails to read staged blobs because they're raw gzipped layer
+  blobs not assembled into an OCI layout (Trivy expects an OCI image
+  bundle with `index.json` + `manifest.json`).
+- Trivy DB path / scratch dir permission issue inside the distroless
+  scanner container.
+- The Grype DB pre-warm at boot uses Grype, but the production adapter
+  is `scanner-trivy-adapter` (different binary) — possible that the
+  Trivy DB was never populated in the cache volume.
+- Adapter swallowing its own stderr (would mask the real cause).
+
+**Scope of fix:**
+- Add stderr capture + an explicit error log inside the trivy adapter
+  before any exit-1 path so we stop debugging blind.
+- Verify the blob-staging step produces an OCI layout Trivy can consume.
+- Confirm the cache-volume DB pre-warm matches the active adapter.
+
+**Workaround for users right now:** in `/admin/scanner`, swap the
+active adapter to the dev stub (it returns synthesised findings so the
+scan flow can be exercised end-to-end without Trivy). REM-011 P2's
+in-memory swap means no container restart is needed.
+
+**Estimated:** ~half day to diagnose + ~1-2 hours to fix.
+
+---
+
 ### REM-016 — `libs/errors/codes.MapDBError` doesn't recognise PostgreSQL error codes
 
 **Surfaced:** 2026-06-23 (PR #32 custom-domain triage).
