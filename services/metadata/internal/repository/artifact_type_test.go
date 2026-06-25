@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -111,4 +112,138 @@ func TestDeriveArtifactType(t *testing.T) {
 			}
 		})
 	}
+}
+
+// REM-021 — parseChildManifestDigests must extract the per-platform child
+// digests from an OCI image index / Docker manifest list, and return nil
+// for any other media type. The retention + size paths depend on the
+// non-index return being nil so they don't trip the manifest_children
+// upsert branch for single-arch images.
+func TestParseChildManifestDigests(t *testing.T) {
+	// Realistic OCI image index with two platforms — mirrors what
+	// services/core writes through PutManifest for a multi-arch push.
+	ociIndex := `{
+	  "schemaVersion": 2,
+	  "mediaType": "application/vnd.oci.image.index.v1+json",
+	  "manifests": [
+	    {"digest": "sha256:aaaa00000000000000000000000000000000000000000000000000000000aaaa", "size": 400, "platform": {"architecture": "amd64", "os": "linux"}},
+	    {"digest": "sha256:bbbb00000000000000000000000000000000000000000000000000000000bbbb", "size": 410, "platform": {"architecture": "arm64", "os": "linux"}}
+	  ]
+	}`
+	// Docker manifest list — same shape, different mediaType.
+	dockerList := `{
+	  "schemaVersion": 2,
+	  "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json",
+	  "manifests": [
+	    {"digest": "sha256:cccc00000000000000000000000000000000000000000000000000000000cccc", "size": 420}
+	  ]
+	}`
+
+	cases := []struct {
+		name      string
+		raw       string
+		mediaType string
+		want      []string
+	}{
+		{
+			name:      "oci image index — two children parsed in order",
+			raw:       ociIndex,
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			want: []string{
+				"sha256:aaaa00000000000000000000000000000000000000000000000000000000aaaa",
+				"sha256:bbbb00000000000000000000000000000000000000000000000000000000bbbb",
+			},
+		},
+		{
+			name:      "docker manifest list — single child parsed",
+			raw:       dockerList,
+			mediaType: "application/vnd.docker.distribution.manifest.list.v2+json",
+			want: []string{
+				"sha256:cccc00000000000000000000000000000000000000000000000000000000cccc",
+			},
+		},
+		{
+			name:      "non-index mediaType returns nil even with manifests[] present",
+			raw:       ociIndex, // body has manifests[] but mediaType says single image
+			mediaType: "application/vnd.oci.image.manifest.v1+json",
+			want:      nil,
+		},
+		{
+			name:      "empty json with index mediaType",
+			raw:       ``,
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			want:      nil,
+		},
+		{
+			name:      "malformed json with index mediaType",
+			raw:       `{not json`,
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			want:      nil,
+		},
+		{
+			name:      "index with empty manifests[]",
+			raw:       `{"manifests": []}`,
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			want:      []string{},
+		},
+		{
+			name:      "duplicate child digests deduped",
+			raw:       `{"manifests":[{"digest":"sha256:dddd00000000000000000000000000000000000000000000000000000000dddd"},{"digest":"sha256:dddd00000000000000000000000000000000000000000000000000000000dddd"}]}`,
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			want: []string{
+				"sha256:dddd00000000000000000000000000000000000000000000000000000000dddd",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseChildManifestDigests([]byte(tc.raw), tc.mediaType)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len: got %d (%v), want %d (%v)", len(got), got, len(tc.want), tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d]: got %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// REM-021 — bounded loop guard. A crafted index with thousands of
+// `manifests[]` entries must clip to maxManifestEntries so a single
+// PutManifest call can't drive an unbounded INSERT against
+// manifest_children.
+func TestParseChildManifestDigests_BoundedAtMaxEntries(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"manifests":[`)
+	const overflow = maxManifestEntries + 50
+	for i := 0; i < overflow; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		// Each child has a unique digest so the dedupe path doesn't hide
+		// the entry count we're checking.
+		b.WriteString(`{"digest":"sha256:` + padHex(i) + `"}`)
+	}
+	b.WriteString(`]}`)
+	got := parseChildManifestDigests([]byte(b.String()), "application/vnd.oci.image.index.v1+json")
+	if len(got) != maxManifestEntries {
+		t.Errorf("len(got) = %d, want %d (clipped to maxManifestEntries)", len(got), maxManifestEntries)
+	}
+}
+
+// padHex returns a 64-char hex string seeded by i so test inputs have
+// distinct digests without hand-typing each.
+func padHex(i int) string {
+	const hex = "0123456789abcdef"
+	// 64 chars total; encode i across the trailing 8 chars; pad with '0'.
+	out := make([]byte, 64)
+	for j := range out {
+		out[j] = '0'
+	}
+	for j := 0; j < 8; j++ {
+		out[63-j] = hex[(i>>(j*4))&0xf]
+	}
+	return string(out)
 }

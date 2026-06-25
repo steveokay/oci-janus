@@ -708,6 +708,24 @@ const manifestSelectCols = `id, repo_id, tenant_id, digest, media_type, raw_json
 // index, the sum of child manifest sizes) is parsed from rawJSON via
 // parseImageSize and stored in `image_size_bytes` so the tag-level size can
 // be returned in O(1) without re-parsing on every read.
+//
+// REM-021: when the manifest is an OCI image index / Docker manifest list,
+// the function additionally:
+//
+//   - parses `manifests[].digest` and inserts one row per child into
+//     `manifest_children` (idempotent on (tenant_id, parent_digest,
+//     child_digest)). This is the reachability link retention.eval uses
+//     so child platform manifests aren't classified as dangling.
+//   - recomputes image_size_bytes as the SUM of children's
+//     `manifests.image_size_bytes` from the DB, replacing the buggy
+//     parseImageSize fallback that summed child manifest *doc* sizes
+//     (~400 B each) instead of layer totals. Docker pushes children
+//     before the index so the children are normally present at this
+//     point; when a client pushes the index first the function gracefully
+//     stores 0 until a re-push lands.
+//
+// Single-arch images (no index → no child digests parsed) take the same
+// path as before — zero behavioural change.
 func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, mediaType string, rawJSON []byte, sizeBytes int64) (*metadatav1.Manifest, error) {
 	// S-MAINT-1 Batch 5: parse config.mediaType once at push time so the
 	// indexed column stays in sync with raw_json without a follow-up
@@ -715,7 +733,15 @@ func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, 
 	// path keeps the column accurate even if a manifest's contents are
 	// rewritten (uncommon but legal under OCI).
 	configMediaType := parseConfigMediaType(rawJSON)
-	const q = `
+	childDigests := parseChildManifestDigests(rawJSON, mediaType)
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin put-manifest tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const upsertQ = `
 		INSERT INTO manifests (repo_id, tenant_id, digest, media_type, raw_json, size_bytes, image_size_bytes, config_media_type)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''))
 		ON CONFLICT (repo_id, digest) DO UPDATE
@@ -723,9 +749,124 @@ func (r *Repository) PutManifest(ctx context.Context, tenantID, repoID, digest, 
 		      raw_json          = EXCLUDED.raw_json,
 		      size_bytes        = EXCLUDED.size_bytes,
 		      image_size_bytes  = EXCLUDED.image_size_bytes,
-		      config_media_type = EXCLUDED.config_media_type
-		RETURNING ` + manifestSelectCols
-	return r.scanOneManifest(ctx, q, repoID, tenantID, digest, mediaType, rawJSON, sizeBytes, parseImageSize(rawJSON), configMediaType)
+		      config_media_type = EXCLUDED.config_media_type`
+	if _, err := tx.Exec(ctx, upsertQ,
+		repoID, tenantID, digest, mediaType, rawJSON, sizeBytes,
+		parseImageSize(rawJSON), configMediaType,
+	); err != nil {
+		return nil, fmt.Errorf("upsert manifest: %w", err)
+	}
+
+	if len(childDigests) > 0 {
+		// REM-021: persist parent→child link. Idempotent on (tenant_id,
+		// parent_digest, child_digest) so re-pushing the same index is
+		// a no-op for the reachability graph.
+		const childUpsertQ = `
+			INSERT INTO manifest_children (repo_id, tenant_id, parent_digest, child_digest)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (tenant_id, parent_digest, child_digest) DO NOTHING`
+		for _, c := range childDigests {
+			if _, err := tx.Exec(ctx, childUpsertQ, repoID, tenantID, digest, c); err != nil {
+				return nil, fmt.Errorf("upsert manifest_children: %w", err)
+			}
+		}
+		// REM-021: replace the parseImageSize undercount with a real sum
+		// of children's image_size_bytes from the DB. Children that
+		// haven't landed yet (rare — docker push order is children
+		// first) contribute 0; a later re-push of the index will pick
+		// them up.
+		const recalcSizeQ = `
+			UPDATE manifests
+			SET    image_size_bytes = COALESCE(
+			           (SELECT SUM(image_size_bytes)
+			              FROM manifests
+			             WHERE tenant_id = $1
+			               AND digest    = ANY($2)),
+			           0)
+			WHERE  tenant_id = $1
+			  AND  repo_id   = $3
+			  AND  digest    = $4`
+		if _, err := tx.Exec(ctx, recalcSizeQ, tenantID, childDigests, repoID, digest); err != nil {
+			return nil, fmt.Errorf("recalc parent image_size_bytes: %w", err)
+		}
+	}
+
+	const selectQ = `SELECT ` + manifestSelectCols + `
+		FROM manifests
+		WHERE repo_id = $1 AND digest = $2 AND tenant_id = $3`
+	var m metadatav1.Manifest
+	var createdAt time.Time
+	var qReason, qBy string
+	var qAt *time.Time
+	var cmt string
+	if err := tx.QueryRow(ctx, selectQ, repoID, digest, tenantID).Scan(
+		&m.ManifestId, &m.RepoId, &m.TenantId, &m.Digest,
+		&m.MediaType, &m.RawJson, &m.SizeBytes, &createdAt,
+		&m.Quarantined, &qReason, &qAt, &qBy, &cmt,
+	); err != nil {
+		return nil, fmt.Errorf("select put manifest: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit put-manifest tx: %w", err)
+	}
+	m.CreatedAt = timestamppb.New(createdAt)
+	m.QuarantineReason = qReason
+	m.QuarantinedBy = qBy
+	if qAt != nil {
+		m.QuarantinedAt = timestamppb.New(*qAt)
+	}
+	m.ConfigMediaType = cmt
+	m.ArtifactType = deriveArtifactType(cmt, m.MediaType)
+	return &m, nil
+}
+
+// parseChildManifestDigests pulls the per-platform child digests out of
+// an OCI image index / Docker manifest list. Returns an empty slice for
+// any other media type so callers can skip the child-row upsert without
+// branching on mediaType themselves.
+//
+// REM-021. Bounded by maxManifestEntries so a crafted index can't drive
+// an unbounded loop / unbounded INSERT. Digest values are NOT validated
+// against the sha256 regex here — callers persist the strings verbatim
+// and downstream queries match on equality, so a malformed digest
+// simply won't join to any existing manifest row (the desired graceful
+// behaviour).
+func parseChildManifestDigests(rawJSON []byte, mediaType string) []string {
+	switch mediaType {
+	case "application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json":
+		// proceed
+	default:
+		return nil
+	}
+	if len(rawJSON) == 0 {
+		return nil
+	}
+	var doc struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		return nil
+	}
+	entries := doc.Manifests
+	if len(entries) > maxManifestEntries {
+		entries = entries[:maxManifestEntries]
+	}
+	out := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		if e.Digest == "" {
+			continue
+		}
+		if _, ok := seen[e.Digest]; ok {
+			continue
+		}
+		seen[e.Digest] = struct{}{}
+		out = append(out, e.Digest)
+	}
+	return out
 }
 
 // parseImageSize derives the total image size in bytes from an OCI manifest's
