@@ -357,6 +357,19 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 
+	// FUT-012 Phase B — tenant-user lifecycle endpoints. Gated on
+	// tenant-admin OR platform-admin marker inside each handler.
+	mux.Handle("GET /api/v1/tenant/users",
+		authMW(http.HandlerFunc(h.handleListTenantUsers)))
+	mux.Handle("POST /api/v1/tenant/users/invite",
+		authMW(http.HandlerFunc(h.handleInviteUser)))
+	mux.Handle("POST /api/v1/tenant/users/{user_id}/disable",
+		authMW(http.HandlerFunc(h.handleDisableTenantUser)))
+	mux.Handle("DELETE /api/v1/tenant/users/{user_id}/disable",
+		authMW(http.HandlerFunc(h.handleEnableTenantUser)))
+	mux.Handle("POST /api/v1/tenant/users/{user_id}/elevate/{org}",
+		authMW(http.HandlerFunc(h.handleElevateToOrgAdmin)))
+
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
 

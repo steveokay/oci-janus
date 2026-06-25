@@ -61,6 +61,9 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "reader-user"}, nil
 	case ownerToken:
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "owner-user"}, nil
+	// FUT-012 Phase B — tenant-admin caller for the new /tenant/users routes.
+	case "tenant-admin-token":
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "tenant-admin-user"}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -90,6 +93,15 @@ func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUs
 			Roles: []string{"owner"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "assign-owner", UserId: "owner-user", Role: "owner", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
+	case "tenant-admin-user":
+		// FUT-012 Phase B — tenant-admin grant matches the new gate
+		// hasScopedRole("tenant", testTenantID, "admin").
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"admin"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "tenant-admin-assign", UserId: "tenant-admin-user", Role: "admin", ScopeType: "tenant", ScopeValue: testTenantID},
 			},
 		}, nil
 	default:
