@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
@@ -31,16 +33,23 @@ import (
 // NotificationResponse is the JSON wire form of one notification. Fields
 // mirror auditv1.NotificationEvent but drop the proto wrappers so the
 // frontend doesn't need to know the gRPC shape. Deliberately narrow.
+//
+// REM-018-followup: ActorDisplayName is the BFF-only enrichment populated
+// from auth.LookupUsernames at response time. Audit's NotificationEvent
+// proto carries only actor_username (best-effort from event payload); the
+// authoritative display_name lives in the auth users table and is joined
+// in here so the FE can render `<UserCell>` without a follow-up call.
 type NotificationResponse struct {
-	EventID       string            `json:"event_id"`
-	EventType     string            `json:"event_type"`
-	OccurredAt    time.Time         `json:"occurred_at"`
-	ActorID       string            `json:"actor_id"`
-	ActorUsername string            `json:"actor_username"`
-	Title         string            `json:"title"`
-	Summary       string            `json:"summary"`
-	Link          string            `json:"link"`
-	Metadata      map[string]string `json:"metadata"`
+	EventID          string            `json:"event_id"`
+	EventType        string            `json:"event_type"`
+	OccurredAt       time.Time         `json:"occurred_at"`
+	ActorID          string            `json:"actor_id"`
+	ActorUsername    string            `json:"actor_username"`
+	ActorDisplayName string            `json:"actor_display_name"`
+	Title            string            `json:"title"`
+	Summary          string            `json:"summary"`
+	Link             string            `json:"link"`
+	Metadata         map[string]string `json:"metadata"`
 }
 
 // NotificationsResponse is the top-level JSON envelope.
@@ -171,23 +180,99 @@ func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// REM-018-followup: enrich actor display_name from auth before
+	// serialising. `actorLookup` collects unique UUID-shaped actor_ids
+	// from this page, calls auth.LookupUsernames once, and merges the
+	// result. Failures fall back to the existing actor_username from the
+	// audit payload — operators should never lose the notifications feed
+	// because the auth service hiccupped.
+	usernames := h.lookupNotificationActors(r.Context(), tenantID, resp.GetNotifications())
+
 	out := NotificationsResponse{
 		Notifications: make([]NotificationResponse, 0, len(resp.GetNotifications())),
 		NextPageToken: resp.GetNextPageToken(),
 		UnreadCount:   resp.GetUnreadCount(),
 	}
 	for _, n := range resp.GetNotifications() {
+		username := n.GetActorUsername()
+		displayName := ""
+		if u, ok := usernames[n.GetActorId()]; ok {
+			// DB is authoritative — override the best-effort payload value.
+			username = u.Username
+			displayName = u.DisplayName
+		}
 		out.Notifications = append(out.Notifications, NotificationResponse{
-			EventID:       n.GetEventId(),
-			EventType:     n.GetEventType(),
-			OccurredAt:    n.GetOccurredAt().AsTime(),
-			ActorID:       n.GetActorId(),
-			ActorUsername: n.GetActorUsername(),
-			Title:         n.GetTitle(),
-			Summary:       n.GetSummary(),
-			Link:          n.GetLink(),
-			Metadata:      n.GetMetadata(),
+			EventID:          n.GetEventId(),
+			EventType:        n.GetEventType(),
+			OccurredAt:       n.GetOccurredAt().AsTime(),
+			ActorID:          n.GetActorId(),
+			ActorUsername:    username,
+			ActorDisplayName: displayName,
+			Title:            n.GetTitle(),
+			Summary:          n.GetSummary(),
+			Link:             n.GetLink(),
+			Metadata:         n.GetMetadata(),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// lookupNotificationActors batch-resolves the actor_id set on this page
+// against the auth users table. Returns a map keyed by actor_id; absent
+// keys mean either a non-UUID sentinel (`system`, `anonymous`, empty),
+// an out-of-tenant id, or an auth-service hiccup — the caller falls
+// back to the audit payload's best-effort actor_username in any case.
+//
+// REM-018-followup. Bounded by `lookupUsernamesMaxBatch` on the auth
+// side (200) and clipped here too as a belt-and-braces guard.
+func (h *Handler) lookupNotificationActors(
+	ctx context.Context,
+	tenantID string,
+	notifs []*auditv1.NotificationEvent,
+) map[string]authv1.UserLookupResult {
+	if len(notifs) == 0 {
+		return nil
+	}
+	// Dedupe non-empty actor_ids and skip obvious sentinels.
+	seen := make(map[string]struct{}, len(notifs))
+	ids := make([]string, 0, len(notifs))
+	for _, n := range notifs {
+		a := n.GetActorId()
+		if a == "" || a == "system" || a == "anonymous" {
+			continue
+		}
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		ids = append(ids, a)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	// Cap belt-and-braces in case a future page-size flip outpaces auth.
+	if len(ids) > 200 {
+		ids = ids[:200]
+	}
+	resp, err := h.auth.LookupUsernames(ctx, &authv1.LookupUsernamesRequest{
+		TenantId: tenantID,
+		UserIds:  ids,
+	})
+	if err != nil {
+		// Fail-OPEN: notifications still render with the audit-side
+		// actor_username fallback. The bell + activity feed should never
+		// 500 just because auth is degraded.
+		slog.WarnContext(ctx, "LookupUsernames failed; falling back to payload actor_username",
+			"err", err, "tenant_id", tenantID)
+		return nil
+	}
+	out := make(map[string]authv1.UserLookupResult, len(resp.GetUsers()))
+	for _, u := range resp.GetUsers() {
+		out[u.GetUserId()] = authv1.UserLookupResult{
+			UserId:      u.GetUserId(),
+			Username:    u.GetUsername(),
+			DisplayName: u.GetDisplayName(),
+		}
+	}
+	return out
 }

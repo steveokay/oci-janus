@@ -160,6 +160,33 @@ func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) 
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
 	return int64(len(f.users)), nil
 }
+func (f *fakeUserRepo) LookupByIDs(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error) {
+	// REM-018-followup fake: filters in-memory users by (tenant_id, id) so
+	// LookupUsernames service tests can assert the lookup is tenant-scoped
+	// without standing up a real DB.
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := make([]repository.UserSummary, 0, len(ids))
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if _, ok := want[u.ID]; !ok {
+			continue
+		}
+		dn := ""
+		if u.DisplayName != nil {
+			dn = *u.DisplayName
+		}
+		if dn == "" {
+			dn = u.Username
+		}
+		out = append(out, repository.UserSummary{ID: u.ID, Username: u.Username, DisplayName: dn})
+	}
+	return out, nil
+}
 
 // SSO fake methods — FE-API-034. Note that the in-memory store is keyed by
 // username, so lookups by email/ID iterate the map.

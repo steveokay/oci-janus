@@ -27,6 +27,7 @@ const (
 	AuthService_RevokeRole_FullMethodName         = "/registry.auth.v1.AuthService/RevokeRole"
 	AuthService_ListMembers_FullMethodName        = "/registry.auth.v1.AuthService/ListMembers"
 	AuthService_CountTenantUsers_FullMethodName   = "/registry.auth.v1.AuthService/CountTenantUsers"
+	AuthService_LookupUsernames_FullMethodName    = "/registry.auth.v1.AuthService/LookupUsernames"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -47,6 +48,18 @@ type AuthServiceClient interface {
 	// count includes inactive users intentionally (operators want to see total
 	// headcount, not just currently-active sessions).
 	CountTenantUsers(ctx context.Context, in *CountTenantUsersRequest, opts ...grpc.CallOption) (*CountTenantUsersResponse, error)
+	// LookupUsernames (REM-018-followup) batch-resolves a set of user_ids to
+	// their username + best-available display_name within a tenant. Used by
+	// services/management to enrich `/api/v1/notifications` + activity-feed
+	// responses with operator-friendly labels without forcing the FE into a
+	// per-row hydrate fan-out.
+	//
+	// Bounded: the handler rejects calls with >200 ids so a misbehaving BFF
+	// can't fan out a 10k-id lookup. Unknown ids are silently dropped from
+	// the response — caller iterates by id, treats absence as "render the
+	// raw UUID / system label fallback". Anonymous / "system" sentinel
+	// strings should be filtered out by the caller before the RPC.
+	LookupUsernames(ctx context.Context, in *LookupUsernamesRequest, opts ...grpc.CallOption) (*LookupUsernamesResponse, error)
 }
 
 type authServiceClient struct {
@@ -127,6 +140,16 @@ func (c *authServiceClient) CountTenantUsers(ctx context.Context, in *CountTenan
 	return out, nil
 }
 
+func (c *authServiceClient) LookupUsernames(ctx context.Context, in *LookupUsernamesRequest, opts ...grpc.CallOption) (*LookupUsernamesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupUsernamesResponse)
+	err := c.cc.Invoke(ctx, AuthService_LookupUsernames_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -145,6 +168,18 @@ type AuthServiceServer interface {
 	// count includes inactive users intentionally (operators want to see total
 	// headcount, not just currently-active sessions).
 	CountTenantUsers(context.Context, *CountTenantUsersRequest) (*CountTenantUsersResponse, error)
+	// LookupUsernames (REM-018-followup) batch-resolves a set of user_ids to
+	// their username + best-available display_name within a tenant. Used by
+	// services/management to enrich `/api/v1/notifications` + activity-feed
+	// responses with operator-friendly labels without forcing the FE into a
+	// per-row hydrate fan-out.
+	//
+	// Bounded: the handler rejects calls with >200 ids so a misbehaving BFF
+	// can't fan out a 10k-id lookup. Unknown ids are silently dropped from
+	// the response — caller iterates by id, treats absence as "render the
+	// raw UUID / system label fallback". Anonymous / "system" sentinel
+	// strings should be filtered out by the caller before the RPC.
+	LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -171,6 +206,9 @@ func (UnimplementedAuthServiceServer) ListMembers(context.Context, *ListMembersR
 }
 func (UnimplementedAuthServiceServer) CountTenantUsers(context.Context, *CountTenantUsersRequest) (*CountTenantUsersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CountTenantUsers not implemented")
+}
+func (UnimplementedAuthServiceServer) LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LookupUsernames not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -310,6 +348,24 @@ func _AuthService_CountTenantUsers_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_LookupUsernames_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupUsernamesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).LookupUsernames(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_LookupUsernames_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).LookupUsernames(ctx, req.(*LookupUsernamesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -344,6 +400,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CountTenantUsers",
 			Handler:    _AuthService_CountTenantUsers_Handler,
+		},
+		{
+			MethodName: "LookupUsernames",
+			Handler:    _AuthService_LookupUsernames_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

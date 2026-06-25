@@ -53,6 +53,11 @@ export interface Notification {
   occurred_at: string;
   actor_id: string;
   actor_username: string;
+  // REM-018-followup: populated by the BFF after a batch
+  // auth.LookupUsernames join. Empty when the actor_id is a non-UUID
+  // sentinel ("system" / "anonymous" / "") or auth was unreachable.
+  // The UserCell consumer treats empty as "fall back to @username".
+  actor_display_name: string;
   title: string;
   summary: string;
   link: string;

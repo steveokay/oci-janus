@@ -36,6 +36,7 @@ import {
   type Notification,
   type NotificationEventType,
 } from "@/lib/api/notifications";
+import { UserCell } from "@/components/users/user-cell";
 import { useAuthStore } from "@/lib/auth/store";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 import {
@@ -424,12 +425,23 @@ function ActivityRow({ n, isUnread }: ActivityRowProps): React.ReactElement {
         <div className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
           {n.summary}
         </div>
-        <div className="mt-1 text-[11px] text-[var(--color-fg-subtle)]">
-          {n.actor_username || n.actor_id || "system"} ·{" "}
+        <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-[var(--color-fg-subtle)]">
+          {/* REM-018-followup: prefer auth-side display_name + @username
+              when present; UserCell falls back to @username only when the
+              BFF couldn't join, and to the System shield when actor_id is
+              the system/anonymous sentinel. */}
+          <UserCell
+            userId={n.actor_id}
+            username={n.actor_username}
+            displayName={n.actor_display_name}
+            variant="inline"
+          />
+          <span>·</span>
           <span title={formatAbsoluteDate(n.occurred_at)}>
             {formatRelativeDate(n.occurred_at)}
-          </span>{" "}
-          · <code className="font-mono">{n.event_type}</code>
+          </span>
+          <span>·</span>
+          <code className="font-mono">{n.event_type}</code>
         </div>
       </div>
     </div>

@@ -688,6 +688,14 @@ func (s *Service) CountTenantUsers(ctx context.Context, tenantID uuid.UUID) (int
 	return s.users.CountByTenant(ctx, tenantID)
 }
 
+// LookupUsernames batch-resolves user_ids within a tenant to (username,
+// display_name) tuples (REM-018-followup). Unknown ids are dropped from the
+// returned slice — callers iterate by input set and treat absence as
+// "render the UUID / system fallback".
+func (s *Service) LookupUsernames(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error) {
+	return s.users.LookupByIDs(ctx, tenantID, ids)
+}
+
 // GetUserRoles returns all role assignments for a user within a tenant.
 func (s *Service) GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
 	return s.users.GetUserRoles(ctx, userID, tenantID)
