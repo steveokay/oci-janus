@@ -258,10 +258,15 @@ function ProxyCachePage(): React.ReactElement {
                   <TableHead>Upstream</TableHead>
                   <TableHead>Image</TableHead>
                   <TableHead>Reference</TableHead>
-                  <TableHead className="text-right">Size</TableHead>
-                  <TableHead>Cached</TableHead>
-                  <TableHead>Last pulled</TableHead>
-                  <TableHead className="text-right">Pulls</TableHead>
+                  {/* Narrow numeric/date columns get fixed widths +
+                      whitespace-nowrap so a "1.5 MB" value never
+                      wraps the unit onto its own line. Sizes picked
+                      to fit the widest realistic value in each
+                      column without making the table too wide. */}
+                  <TableHead className="w-[88px] whitespace-nowrap text-right">Size</TableHead>
+                  <TableHead className="w-[120px] whitespace-nowrap">Cached</TableHead>
+                  <TableHead className="w-[120px] whitespace-nowrap">Last pulled</TableHead>
+                  <TableHead className="w-[64px] whitespace-nowrap text-right">Pulls</TableHead>
                   {/* FUT-018 — Severity + Signed status per row. The
                       cells fire useScanByDigest / useSignaturesByDigest
                       independently and TanStack Query dedupes identical
@@ -465,16 +470,16 @@ export function CachedManifestRow({
         <TableCell>
           <code className="text-xs">{m.reference}</code>
         </TableCell>
-        <TableCell className="text-right tabular-nums">
+        <TableCell className="whitespace-nowrap text-right tabular-nums">
           {formatBytes(m.size_bytes)}
         </TableCell>
-        <TableCell className="text-[var(--color-fg-muted)]">
+        <TableCell className="whitespace-nowrap text-[var(--color-fg-muted)]">
           {formatRelativeDate(m.fetched_at)}
         </TableCell>
-        <TableCell className="text-[var(--color-fg-muted)]">
+        <TableCell className="whitespace-nowrap text-[var(--color-fg-muted)]">
           {m.last_pulled_at ? formatRelativeDate(m.last_pulled_at) : "Never"}
         </TableCell>
-        <TableCell className="text-right tabular-nums">
+        <TableCell className="whitespace-nowrap text-right tabular-nums">
           {Intl.NumberFormat().format(m.pull_count)}
         </TableCell>
         {/* FUT-018 — Severity + Signed pill cells. Each cell owns its
