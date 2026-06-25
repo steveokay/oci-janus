@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { UserCell } from "@/components/users/user-cell";
 import { RoleBadge } from "./role-badge";
 import type { Member } from "@/lib/api/members";
 
@@ -37,9 +38,15 @@ export function RemoveMemberDialog({
   async function handleConfirm(): Promise<void> {
     if (!member) return;
     setSubmitting(true);
+    // REM-018 Phase B: prefer display_name → username → shortened UUID for
+    // the toast so operators see a recognisable label rather than a UUID
+    // prefix that they have to mentally map back to a person.
+    const label =
+      member.display_name ||
+      (member.username ? `@${member.username}` : `${member.user_id.slice(0, 8)}…`);
     try {
       await onRevoke(member.id);
-      toast.success(`Removed ${member.user_id.slice(0, 8)}…`);
+      toast.success(`Removed ${label}`);
       onOpenChange(false);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
@@ -76,9 +83,12 @@ export function RemoveMemberDialog({
         {member ? (
           <div className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2.5">
             <RoleBadge role={member.role} />
-            <span className="truncate font-mono text-xs text-[var(--color-fg-muted)]">
-              {member.user_id}
-            </span>
+            <UserCell
+              userId={member.user_id}
+              username={member.username}
+              displayName={member.display_name}
+              variant="inline"
+            />
           </div>
         ) : null}
 

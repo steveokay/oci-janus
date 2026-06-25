@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { CopyButton } from "@/components/ui/copy-button";
+import { UserCell } from "@/components/users/user-cell";
 import { RoleBadge } from "./role-badge";
 import type { Member } from "@/lib/api/members";
 
@@ -21,9 +21,9 @@ interface MembersTableProps {
 }
 
 // Beacon — MembersTable. Reusable across the org-members page and the
-// repo-detail Members tab. Shows user_id (a UUID — the only identifier the
-// backend exposes today), role badge, who granted it, and a single
-// per-row remove affordance.
+// repo-detail Members tab. REM-018 Phase B: principal + granted-by columns
+// now render via the shared <UserCell> primitive so usernames + display
+// names replace the raw UUIDs that used to sit here.
 export function MembersTable({
   members,
   loading,
@@ -49,24 +49,23 @@ export function MembersTable({
             members.map((m) => (
               <TableRow key={m.id}>
                 <TableCell>
-                  <div className="flex items-center gap-3">
-                    <Initial userId={m.user_id} />
-                    <div className="min-w-0">
-                      <div className="font-mono text-xs text-[var(--color-fg)]">
-                        {m.user_id}
-                      </div>
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-                        user · {m.id.slice(0, 8)}
-                      </div>
-                    </div>
-                    <CopyButton value={m.user_id} iconOnly />
-                  </div>
+                  <UserCell
+                    userId={m.user_id}
+                    username={m.username}
+                    displayName={m.display_name}
+                    withCopy
+                  />
                 </TableCell>
                 <TableCell>
                   <RoleBadge role={m.role} />
                 </TableCell>
-                <TableCell className="hidden font-mono text-xs text-[var(--color-fg-muted)] lg:table-cell">
-                  {m.granted_by || "—"}
+                <TableCell className="hidden lg:table-cell">
+                  <UserCell
+                    userId={m.granted_by}
+                    username={m.granted_by_username}
+                    displayName={m.granted_by_display_name}
+                    variant="inline"
+                  />
                 </TableCell>
                 <TableCell className="text-right">
                   <Button
@@ -85,20 +84,6 @@ export function MembersTable({
         </TableBody>
       </Table>
     </div>
-  );
-}
-
-// Initial — derive a single character from the UUID for the avatar tile.
-// Deterministic so the same user always renders the same letter.
-function Initial({ userId }: { userId: string }): React.ReactElement {
-  const ch = (userId.replace(/[^a-z0-9]/gi, "")[0] ?? "·").toUpperCase();
-  return (
-    <span
-      className="grid size-8 shrink-0 place-items-center rounded-md bg-[var(--color-accent-subtle)] font-display text-sm font-semibold text-[var(--color-accent)]"
-      aria-hidden
-    >
-      {ch}
-    </span>
   );
 }
 
