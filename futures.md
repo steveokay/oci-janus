@@ -669,53 +669,30 @@ following SELF-HOSTING.md.
 (GrantRole already exists, no change needed), `frontend` (Create
 Repository dialog + optional `/admin/orgs` route).
 
-### REM-018 — UI user-ID → username + enforce display_name on user creation
+### REM-018-followup — Activity feed + notifications display_name surfacing
 
-**Surfaced:** 2026-06-24 during onboarding smoke testing. The dashboard
-surfaces raw UUIDs in member lists, audit-event actor cells, grant-by
-columns, and tenant-detail "created by" — none of which are human-
-readable. Operators routinely need to cross-reference UUIDs against a
-mental table of "who is that?" which is exactly the cognitive load the
-dashboard should be removing.
+**Surfaced:** 2026-06-25 while shipping REM-018 Phase B (PR #102).
+Members tables + the remove-member dialog now render the principal's
+`display_name (@username)`, but two surfaces still fall back to
+`actor_username || actor_id`:
 
-Also: today `POST /api/v1/users` only requires `username` + `email` +
-`password` (and treats `display_name` as optional). Operators creating
-real accounts skip `display_name`, the surfaces above then show
-`username` as a fallback (better than UUID, still inconsistent). The
-right posture is to make a human-friendly `display_name` part of the
-contract.
+- `/activity` page (`_authenticated.activity.tsx:428`)
+- Topbar notifications bell (`notifications-bell.tsx:203`)
 
-**Scope:**
+Both read from `services/audit`'s `NotificationEvent` proto, which today
+carries `actor_username` (best-effort from the upstream event payload)
+but no `actor_display_name`. Surfacing display_name here requires
+audit-side enrichment — either a join against `services/auth` at read
+time (cross-service round-trip, fast but tightly coupled) or carrying
+display_name in the audit payload at write time (write-amplified, but
+keeps the read path local).
 
-Backend (services/management):
-- Extend `MemberResponse` shape with `username` + `display_name`. Add a
-  `users` LEFT JOIN in the member-list handlers so the FE doesn't have
-  to chase per-row hydrate calls.
-- Same change for the audit activity feed (`actor_username`,
-  `actor_display_name`) and any other list endpoint that today returns
-  raw `user_id` (admin tenants `created_by`, role-assignment lists).
-- Optional: small batch endpoint `GET /api/v1/users/by-id?ids=...` that
-  the FE can call to hydrate stray UUIDs the list endpoints don't cover.
+**Scope:** small. New `actor_display_name` field on
+`audit.v1.NotificationEvent`; consumer in `services/audit` resolves it
+via the join; both FE surfaces swap their text render for the existing
+`<UserCell variant="inline">` primitive shipped in PR #102.
 
-Backend (services/auth):
-- `POST /api/v1/users` validates `display_name` is non-empty (1-64
-  chars, allowlist). Same `validateUserName` regex as `username`.
-- Update `userResponse` to include `display_name` on every shape.
-
-Frontend:
-- New primitive `<UserCell user_id={id} username={u} display_name={n}>`
-  that renders `<display_name> (@<username>)` with the UUID in a tooltip
-  for power-users. Falls back to `<username>` if no display_name, to
-  `<short-uuid>` if neither.
-- Replace UUID renders across the dashboard: `/orgs/{org}/members`,
-  `/repositories/{org}/{repo}/members`, `/activity`, audit-event rows,
-  tenant detail "created by", granted-by columns.
-- User-create form requires non-empty `display_name`. Existing form
-  has the field; make zod validation enforce.
-
-**Affects:** `services/management`, `services/auth`, `frontend/`.
-
-**Effort:** ~1-2 days.
+**Effort:** ~half day.
 
 ### FUT-011 — Production new-user onboarding smoke test
 

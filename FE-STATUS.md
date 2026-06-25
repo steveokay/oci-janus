@@ -187,10 +187,10 @@ Tier 1 / 2 / 3 backlog is in [`futures.md`](futures.md) under the
 Other open backlog items live alongside them in `futures.md`:
 
 - **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap surfaced 2026-06-24)
-- **REM-018** — UI user-ID → username + enforce display_name on user creation (filed 2026-06-24)
+- ~~**REM-018**~~ BOTH PHASES SHIPPED (PRs #101 backend + #102 FE, 2026-06-25). Members tables + remove-member dialog now render display_name + @username via the shared `<UserCell>` primitive; `POST /api/v1/users` enforces non-empty display_name. Activity feed + notifications-bell display_name surfacing deferred to **REM-018-followup** (audit-side join needed)
 - ~~**FUT-013** — Pull-through cache visibility~~ ALL THREE PHASES SHIPPED (PRs #73 / #74 / #75; sidebar placement #78). See `status.md`
 - ~~**FUT-014** — Proxy publishes `pull.image` events~~ SHIPPED (PR #98, 2026-06-25). Dashboard 24h pulls card now includes cache-served traffic; `proxy_manifests.pull_count` no longer freezes on docker's HEAD-fast-path. Pure backend — zero FE wiring required, both surfaces start counting on the next pull
-- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Pairs with REM-018 + precedes SCIM (Tier 1 #5)
+- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Precedes SCIM (Tier 1 #5); REM-018 backend contract already satisfies the username/display_name shape this route needs
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
 - **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001)
