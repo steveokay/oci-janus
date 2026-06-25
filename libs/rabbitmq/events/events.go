@@ -29,6 +29,16 @@ const (
 	RoutingTenantPlanChanged    = "tenant.plan_changed"  // FE-API-029
 	RoutingTenantDomainVerified = "tenant.domain.verified"
 	RoutingStoreQueued          = "store.queued" // proxy background store
+
+	// RoutingCachePopulated (FUT-017) — emitted by services/proxy after
+	// every successful cache write (cacheManifest upsert). Subscribed by
+	// services/scanner (queues a scan when the tenant's per-upstream
+	// proxy_cache scan policy says auto-scan) and services/signer (auto-
+	// signs with the workspace's default key when the per-upstream sign
+	// policy says auto-sign). The payload is intentionally rich enough
+	// that consumers don't need to call back into services/proxy for
+	// follow-up reads — the routing key is the only shared concept.
+	RoutingCachePopulated = "cache.populated"
 	// RBAC audit events — consumed by registry-audit to record membership changes.
 	RoutingRBACRoleGranted = "rbac.role_granted"
 	RoutingRBACRoleRevoked = "rbac.role_revoked"
@@ -115,6 +125,30 @@ type ScanCompletedPayload struct {
 	SeverityCounts  map[string]int `json:"severity_counts"`
 	PolicyViolation bool           `json:"policy_violation"`
 	Blocked         bool           `json:"blocked"`
+}
+
+// CachePopulatedPayload is the payload for cache.populated events.
+//
+// Emitted by services/proxy after a successful UpsertManifest on the
+// pull-through path. Subscribed by services/scanner (FUT-017 scan-on-
+// cached-images) and services/signer (FUT-017 auto-sign-on-cache).
+//
+// All consumers do their own policy lookup keyed on (tenant_id,
+// upstream_name) — the event itself doesn't carry policy state.
+//
+// ManifestDigest IS the per-arch manifest's digest (sha256:...). For
+// manifest indexes, the proxy publishes one event per platform-manifest
+// upsert; consumers therefore see CVE/sign results per arch even for
+// multi-arch images.
+type CachePopulatedPayload struct {
+	TenantID       string `json:"tenant_id"`
+	UpstreamID     string `json:"upstream_id"`
+	UpstreamName   string `json:"upstream_name"`
+	Image          string `json:"image"`
+	Reference      string `json:"reference"`
+	ManifestDigest string `json:"manifest_digest"`
+	MediaType      string `json:"media_type"`
+	SizeBytes      int64  `json:"size_bytes"`
 }
 
 // StoreQueuedPayload is the payload for store.queued events.
@@ -238,14 +272,23 @@ type RetentionAppliedPayload struct {
 
 // PullImagePayload is the wire shape of pull.image (FE-API-042).
 //
-// Published by services/core after a successful manifest GET. Two consumers
-// land it today:
+// Published by two services today:
+//   - services/core after a successful manifest GET on an owned repository.
+//   - services/proxy after a successful manifest GET or HEAD on a cached
+//     upstream image (FUT-014). HEAD counts as a pull because the Docker
+//     client's HEAD-then-skip-GET path against a cached digest is the
+//     dominant traffic shape against the proxy.
+//
+// Two consumers land it today:
 //   - services/audit writes one audit_events row per pull (action=pull.image)
 //     so the FE-API-030 analytics `metric=pulls` query returns real bucket
 //     counts instead of zeros.
 //   - services/metadata debounce-updates manifests.last_pulled_at (at most
 //     one Postgres write per (manifest, 24h)) so the FE-API-043 max_idle_days
-//     retention rule has a column to evaluate.
+//     retention rule has a column to evaluate. The metadata consumer drops
+//     events with an empty RepositoryID — that path is how proxy-emitted
+//     pulls are silently ignored (proxy manifests don't live in
+//     metadata.manifests).
 //
 // ManifestID is the metadata service's internal UUID — services/core does not
 // always have it cached, so the field is optional. The consumer in
@@ -259,6 +302,12 @@ type RetentionAppliedPayload struct {
 // an anonymous public-pull path (the JWT carried no `sub`). Operators that
 // want IP / UA attribution should subscribe to the matching webhook delivery
 // — this payload deliberately avoids carrying request-level identifiers.
+//
+// Via identifies the publishing service so analytics that want to break out
+// owned-push pulls from pull-through-cache pulls can group by source.
+// Empty / absent means services/core (owned-pull). "proxy" means
+// services/proxy (cache-served pull). Consumers MUST treat unknown values
+// as opaque so a new publisher can be added without a payload migration.
 type PullImagePayload struct {
 	TenantID       string    `json:"tenant_id"`
 	RepositoryID   string    `json:"repository_id"`
@@ -268,6 +317,7 @@ type PullImagePayload struct {
 	Tag            string    `json:"tag,omitempty"`
 	ActorID        string    `json:"actor_id,omitempty"`
 	PulledAt       time.Time `json:"pulled_at"`
+	Via            string    `json:"via,omitempty"`
 }
 
 // RetentionGraceCompletedPayload is the wire shape of

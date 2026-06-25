@@ -52,6 +52,11 @@ type Config struct {
 	// this is acceptable for local development but MUST NOT be used in production.
 	// Connection string format: postgres://user:pass@host:5432/registry_signer?sslmode=require
 	DBDSN string `mapstructure:"SIGNER_DB_DSN"`
+
+	// RabbitMQURL is the broker the FUT-017 cache.populated consumer connects to.
+	// Empty disables inbound event consumption entirely (the signer still exposes
+	// the synchronous SignManifest RPC). Format: amqp://user:pass@host:5672/
+	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 }
 
 // Load reads configuration from environment variables and validates required fields.

@@ -10,6 +10,17 @@ service SignerService {
   rpc SignManifest(SignManifestRequest) returns (SignManifestResponse);
   rpc VerifyManifest(VerifyManifestRequest) returns (VerifyManifestResponse);
   rpc ListSignatures(ListSignaturesRequest) returns (ListSignaturesResponse);
+
+  // FUT-017: per-upstream auto-sign-on-cache policy CRUD. When auto_sign
+  // is true and key_id is non-empty, the signer service signs cached
+  // manifests with that key whenever it consumes a cache.populated event
+  // tagged with this (tenant_id, upstream_name).
+  rpc GetProxyCacheSignPolicy(GetProxyCacheSignPolicyRequest)
+      returns (ProxyCacheSignPolicy);
+  rpc SetProxyCacheSignPolicy(SetProxyCacheSignPolicyRequest)
+      returns (ProxyCacheSignPolicy);
+  rpc ListProxyCacheSignPolicies(ListProxyCacheSignPoliciesRequest)
+      returns (stream ProxyCacheSignPolicy);
 }
 
 message SignManifestRequest {
@@ -50,4 +61,38 @@ message Signature {
   string signature_digest = 3;
   string key_id           = 4;
   google.protobuf.Timestamp signed_at = 5;
+}
+
+// FUT-017 proxy-cache auto-sign policy ----------------------------------------
+
+// ProxyCacheSignPolicy is the per-upstream opt-in for signing cached
+// manifests. Get returns this zero-valued (auto_sign=false, key_id="")
+// when no row exists for the requested (tenant_id, upstream_name) — there
+// is no NOT_FOUND error, the absent-policy and disabled-policy states are
+// indistinguishable to consumers by design.
+message ProxyCacheSignPolicy {
+  string tenant_id     = 1;
+  string upstream_name = 2;
+  bool   auto_sign     = 3;
+  string key_id        = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message GetProxyCacheSignPolicyRequest {
+  string tenant_id     = 1;
+  string upstream_name = 2;
+}
+
+message SetProxyCacheSignPolicyRequest {
+  string tenant_id     = 1;
+  string upstream_name = 2;
+  // Inline shape — the response echoes a full ProxyCacheSignPolicy so the
+  // caller doesn't have to round-trip with a separate Get.
+  bool   auto_sign     = 3;
+  string key_id        = 4;
+}
+
+message ListProxyCacheSignPoliciesRequest {
+  string tenant_id = 1;
 }

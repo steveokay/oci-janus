@@ -49,6 +49,14 @@ type Config struct {
 	// running in the new persisted mode still serves every other surface.
 	GCGRPCAddr string `mapstructure:"GC_GRPC_ADDR"`
 
+	// ProxyGRPCAddr is optional — required only when the FUT-013
+	// `/api/v1/proxy/cache` routes are enabled. Empty leaves those
+	// routes returning 404 "route disabled" so deployments without
+	// the pull-through proxy continue to serve every other surface.
+	// The frontend probes the route and hides the sidebar entry when
+	// the 404 lands, so an unset addr degrades gracefully.
+	ProxyGRPCAddr string `mapstructure:"PROXY_GRPC_ADDR"`
+
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 

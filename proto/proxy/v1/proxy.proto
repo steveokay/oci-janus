@@ -5,11 +5,34 @@ package registry.proxy.v1;
 option go_package = "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1;proxyv1";
 
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
 service ProxyService {
   rpc RegisterUpstream(RegisterUpstreamRequest) returns (Upstream);
   rpc DeleteUpstream(DeleteUpstreamRequest) returns (google.protobuf.Empty);
   rpc ListUpstreams(ListUpstreamsRequest) returns (stream Upstream);
+
+  // FUT-013 — cache visibility surface.
+  //
+  // ListCachedManifests is unary-with-page-token instead of server-streaming
+  // (the pattern ListUpstreams uses) because the cached set is potentially
+  // 1000s of rows. Token-based pagination gives the FE clean
+  // page-by-page navigation without buffering the whole stream client-side.
+  rpc ListCachedManifests(ListCachedManifestsRequest) returns (ListCachedManifestsResponse);
+  rpc GetCacheStats(GetCacheStatsRequest)             returns (CacheStats);
+  rpc DeleteCachedManifest(DeleteCachedManifestRequest) returns (google.protobuf.Empty);
+
+  // FUT-016 — detail-page surface.
+  //
+  // Returns the full cached manifest row INCLUDING the body bytes. Used by
+  // the management BFF to render the click-through detail page on
+  // /workspace/proxy-cache, which parses the body server-side into a
+  // typed layer / per-platform projection so the frontend just renders.
+  //
+  // Separate RPC (not "extend ListCachedManifests with a single-row
+  // path") because the list-RPC's CachedManifest deliberately omits the
+  // body to keep the page payload skinny.
+  rpc GetCachedManifest(GetCachedManifestRequest) returns (CachedManifestDetail);
 }
 
 message Upstream {
@@ -33,3 +56,88 @@ message RegisterUpstreamRequest {
 }
 message DeleteUpstreamRequest { string upstream_id = 1; string tenant_id = 2; }
 message ListUpstreamsRequest  { string tenant_id = 1; }
+
+// CachedManifest is a single proxy_manifests row projected for the cache
+// visibility page. body bytes are deliberately NOT included — the page
+// only needs metadata, not the manifest content. (If a caller wants the
+// body, they can pull through the proxy by image+reference.)
+message CachedManifest {
+  string                    id              = 1;  // proxy_manifests.id
+  string                    upstream_id     = 2;
+  string                    upstream_name   = 3;  // joined from upstream_registries
+  string                    image           = 4;
+  string                    reference       = 5;  // tag or digest
+  string                    digest          = 6;
+  string                    media_type      = 7;
+  int64                     size_bytes      = 8;
+  google.protobuf.Timestamp fetched_at      = 9;
+  google.protobuf.Timestamp last_pulled_at  = 10; // unset = never pulled since FUT-013
+  int64                     pull_count      = 11;
+}
+
+message ListCachedManifestsRequest {
+  string tenant_id           = 1;
+  // Optional upstream filter — empty string returns all upstreams for the tenant.
+  string upstream_id         = 2;
+  // Optional substring match on image. Case-insensitive ILIKE.
+  string image_contains      = 3;
+  // Pagination — caller-opaque token returned by the previous response.
+  // Empty token = first page. Caller must NOT decode the token; format is
+  // intentionally not documented and may change.
+  string page_token          = 4;
+  // 1..100. Defaults to 50 if zero/negative.
+  int32  page_size           = 5;
+}
+
+message ListCachedManifestsResponse {
+  repeated CachedManifest manifests       = 1;
+  // Empty next_page_token means "this was the final page".
+  string                  next_page_token = 2;
+}
+
+message GetCacheStatsRequest { string tenant_id = 1; }
+
+message CacheStats {
+  int64 total_manifests  = 1;
+  int64 total_bytes      = 2;
+  int64 unique_upstreams = 3;
+  // Total pulls served from cache over the entire tenant lifetime.
+  // The FE renders this alongside total_manifests; a "hit rate" needs
+  // upstream-miss counts which proxy_manifests doesn't track yet —
+  // tracked as a follow-up.
+  int64 total_pulls      = 4;
+}
+
+message DeleteCachedManifestRequest {
+  string tenant_id = 1;
+  // The proxy_manifests.id (UUID) of the row to evict. We use the row id
+  // not the digest — multiple cached manifests can share a digest (e.g.
+  // same image cached via two different upstream aliases), and the
+  // operator's "evict this row" intent shouldn't fan out to all copies.
+  string id        = 2;
+}
+
+// FUT-016 — GetCachedManifest request / response.
+//
+// Tenant-scoped read. The id is the proxy_manifests row id, NOT a digest:
+// digest collisions across upstream aliases are intentional (see
+// DeleteCachedManifestRequest comment), and the FE table already hands
+// the operator the row id by clicking through.
+message GetCachedManifestRequest {
+  string tenant_id = 1;
+  string id        = 2;
+}
+
+// CachedManifestDetail wraps the list-page CachedManifest projection and
+// adds the manifest body bytes. Kept as a separate message (rather than
+// re-using CachedManifest with an empty body) so the list payload stays
+// explicitly skinny and so the API contract makes it obvious where the
+// body field belongs.
+message CachedManifestDetail {
+  CachedManifest manifest = 1;
+  // Raw manifest body, exactly as fetched from upstream. The BFF parses
+  // this server-side into the layer / per-platform projection the FE
+  // renders; the body is also surfaced as base64 to the FE so the
+  // "Manifest" tab can show the raw JSON.
+  bytes body = 2;
+}

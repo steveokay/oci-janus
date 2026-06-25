@@ -120,6 +120,138 @@ AND    signer_id       = $3`
 	return rec, nil
 }
 
+// ── FUT-017: proxy-cache auto-sign policy ────────────────────────────────────
+
+// ProxyCacheSignPolicy mirrors the proto message but lives in the
+// repository package so callers don't have to import the protobuf types
+// just to thread a row from SQL → handler.
+//
+// AutoSign + KeyID are the two operator-tunable knobs. CreatedAt /
+// UpdatedAt are server-managed for audit visibility.
+type ProxyCacheSignPolicy struct {
+	TenantID     string
+	UpstreamName string
+	AutoSign     bool
+	KeyID        string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// GetProxyCacheSignPolicy returns the policy row for (tenantID, upstreamName).
+// Returns (nil, nil) when no row exists — callers treat absence as a
+// disabled, no-key policy (FUT-017: the "no row" and "auto_sign=false"
+// states are equivalent on the consumer side).
+func (r *Repository) GetProxyCacheSignPolicy(ctx context.Context, tenantID, upstreamName string) (*ProxyCacheSignPolicy, error) {
+	const q = `
+SELECT tenant_id, upstream_name, auto_sign, key_id, created_at, updated_at
+FROM   proxy_cache_sign_policies
+WHERE  tenant_id     = $1
+AND    upstream_name = $2`
+
+	rows, err := r.pool.Query(ctx, q, tenantID, upstreamName)
+	if err != nil {
+		return nil, fmt.Errorf("get proxy cache sign policy: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("get proxy cache sign policy: %w", err)
+		}
+		return nil, nil
+	}
+	p, err := scanProxyCacheSignPolicy(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan proxy cache sign policy: %w", err)
+	}
+	return p, nil
+}
+
+// UpsertProxyCacheSignPolicy inserts or updates the policy row keyed on
+// (tenant_id, upstream_name). Returns the persisted row so the handler
+// can echo the canonical created_at / updated_at timestamps without a
+// second SELECT.
+func (r *Repository) UpsertProxyCacheSignPolicy(ctx context.Context, p *ProxyCacheSignPolicy) (*ProxyCacheSignPolicy, error) {
+	const q = `
+INSERT INTO proxy_cache_sign_policies (tenant_id, upstream_name, auto_sign, key_id, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (tenant_id, upstream_name) DO UPDATE
+    SET auto_sign  = EXCLUDED.auto_sign,
+        key_id     = EXCLUDED.key_id,
+        updated_at = now()
+RETURNING tenant_id, upstream_name, auto_sign, key_id, created_at, updated_at`
+
+	rows, err := r.pool.Query(ctx, q, p.TenantID, p.UpstreamName, p.AutoSign, p.KeyID)
+	if err != nil {
+		return nil, fmt.Errorf("upsert proxy cache sign policy: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("upsert proxy cache sign policy: %w", err)
+		}
+		return nil, fmt.Errorf("upsert proxy cache sign policy: no row returned")
+	}
+	out, err := scanProxyCacheSignPolicy(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan proxy cache sign policy: %w", err)
+	}
+	return out, nil
+}
+
+// ListProxyCacheSignPolicies returns every policy row for the given tenant,
+// ordered by upstream_name so the UI can render a stable list.
+func (r *Repository) ListProxyCacheSignPolicies(ctx context.Context, tenantID string) ([]*ProxyCacheSignPolicy, error) {
+	const q = `
+SELECT tenant_id, upstream_name, auto_sign, key_id, created_at, updated_at
+FROM   proxy_cache_sign_policies
+WHERE  tenant_id = $1
+ORDER  BY upstream_name ASC`
+
+	rows, err := r.pool.Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list proxy cache sign policies: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*ProxyCacheSignPolicy
+	for rows.Next() {
+		p, err := scanProxyCacheSignPolicy(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan proxy cache sign policy row: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate proxy cache sign policies: %w", err)
+	}
+	if out == nil {
+		out = []*ProxyCacheSignPolicy{}
+	}
+	return out, nil
+}
+
+// scanProxyCacheSignPolicy reads one row into a ProxyCacheSignPolicy.
+// Column order must match the SELECT list in every caller above.
+func scanProxyCacheSignPolicy(rows pgx.Rows) (*ProxyCacheSignPolicy, error) {
+	var p ProxyCacheSignPolicy
+	if err := rows.Scan(
+		&p.TenantID,
+		&p.UpstreamName,
+		&p.AutoSign,
+		&p.KeyID,
+		&p.CreatedAt,
+		&p.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
 // scanRecord reads the common column set into a *sigstore.Record.
 // Column order must match the SELECT lists in List and FindRec.
 // SigB64 is left as the zero-value (empty string) because it is never stored.

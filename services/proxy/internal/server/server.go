@@ -128,8 +128,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}()
 	}
 
-	// gRPC server
-	grpcSrv := grpc.NewServer()
+	// gRPC server — mTLS-aware when certs are configured, plaintext in dev.
+	// Mirrors the auth / signer / metadata pattern. FUT-013 surfaced the
+	// missing TLS wrap here: the management BFF dials with mTLS creds (and
+	// has done since day one), so a plaintext server here would fail every
+	// dial. The pre-FUT-013 stack happened to work only because nothing
+	// dialled the proxy gRPC server externally.
+	grpcOpts, err := buildGRPCServerOptions(cfg)
+	if err != nil {
+		return fmt.Errorf("build grpc opts: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
 	proxyv1.RegisterProxyServiceServer(grpcSrv, grpcHandler)
 
@@ -197,6 +206,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildGRPCServerOptions wires mTLS server credentials when MTLS_* paths are
+// configured. Mirrors the pattern in services/auth + services/signer.
+// Without this the proxy gRPC server runs plaintext while every other
+// service in the stack runs mTLS — caused FUT-013's "tls: first record does
+// not look like a TLS handshake" smoke-test failure.
+func buildGRPCServerOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+	var opts []grpc.ServerOption
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS server certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC server running without TLS (development mode only)")
+	}
+	return opts, nil
 }
 
 // clientCreds returns mTLS transport credentials when cert paths are set,

@@ -122,6 +122,13 @@ func (h *HTTPHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FUT-014: actor for pull.image attribution. Empty for unauthenticated
+	// callers (currently unreachable because authenticate() short-circuits
+	// to challengeAuth, but keep the empty-string contract so the publisher
+	// matches services/core's "anonymous → empty actor_id → audit records
+	// 'anonymous'" path.)
+	actorID := claims.userID
+
 	// Look up upstream registry config.
 	upstream, err := h.repo.GetUpstreamByName(r.Context(), tenantID, upstreamName)
 	if err != nil {
@@ -144,9 +151,9 @@ func (h *HTTPHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 		ref := rest[rn-1]
 		switch r.Method {
 		case http.MethodGet:
-			h.handleGetManifest(w, r, upstream, tenantID, image, ref)
+			h.handleGetManifest(w, r, upstream, tenantID, image, ref, actorID)
 		case http.MethodHead:
-			h.handleHeadManifest(w, r, upstream, tenantID, image, ref)
+			h.handleHeadManifest(w, r, upstream, tenantID, image, ref, actorID)
 		default:
 			ociErr(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 		}
@@ -169,7 +176,12 @@ func (h *HTTPHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetManifest serves a cached manifest or fetches it from upstream.
-func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, up *repository.UpstreamRecord, tenantID uuid.UUID, image, reference string) {
+//
+// actorID is the user_id from the JWT, propagated into pull.image events
+// (FUT-014) so audit_events and the dashboard activity feed attribute the
+// pull correctly. Empty actor strings are tolerated by services/audit (the
+// consumer rewrites them to "anonymous").
+func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, up *repository.UpstreamRecord, tenantID uuid.UUID, image, reference, actorID string) {
 	// Try cache first.
 	cached, err := h.repo.GetManifest(r.Context(), tenantID, up.UpstreamID, image, reference, up.TTLSeconds)
 	if err == nil {
@@ -178,6 +190,13 @@ func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(cached.Body)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(cached.Body)
+		// FUT-013: async pull-tracking bump. Detached from request ctx
+		// so a slow DB write can't extend the client's connection;
+		// errors logged at debug — a failed bump is purely cosmetic.
+		go h.bumpPullCount(tenantID, up.UpstreamID, image, reference)
+		// FUT-014: publish pull.image so audit + analytics + webhooks see
+		// proxy-served pulls. Detached for the same reason as bumpPullCount.
+		go h.publishPullImage(tenantID, up.Name, image, reference, cached.Digest, actorID)
 		return
 	}
 	if !errors.Is(err, repository.ErrNotFound) {
@@ -205,17 +224,46 @@ func (h *HTTPHandler) handleGetManifest(w http.ResponseWriter, r *http.Request, 
 	_, _ = w.Write(result.Body)
 
 	// Cache in background — do not block client.
-	go h.cacheManifest(tenantID, up.UpstreamID, image, reference, result)
+	go h.cacheManifest(tenantID, up.UpstreamID, up.Name, image, reference, result)
+	// FUT-014: publish pull.image for the cache-miss serve. Skipping the
+	// fast-path pull_count bump here would race against the background
+	// cacheManifest goroutine (the row may not exist yet); the audit
+	// pipeline still captures the pull via this event.
+	go h.publishPullImage(tenantID, up.Name, image, reference, result.Digest, actorID)
+}
+
+// bumpPullCount runs RecordPull on a fresh background context. Detached
+// because the calling request might already be returning; a 200-then-
+// 500-on-bump should not become a visible client failure.
+func (h *HTTPHandler) bumpPullCount(tenantID, upstreamID uuid.UUID, image, reference string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.repo.RecordPull(ctx, tenantID, upstreamID, image, reference); err != nil {
+		slog.Debug("record pull failed", "err", err,
+			"tenant_id", tenantID, "image", image, "reference", reference)
+	}
 }
 
 // handleHeadManifest checks cache and falls through to upstream if stale.
-func (h *HTTPHandler) handleHeadManifest(w http.ResponseWriter, r *http.Request, up *repository.UpstreamRecord, tenantID uuid.UUID, image, reference string) {
+//
+// HEAD requests count as pulls (FUT-014) because Docker's HEAD-then-skip-GET
+// path against a locally-cached digest is the dominant traffic shape against
+// the proxy. Treating HEADs as non-pulls undercounts >50% of real cache
+// traffic and breaks both the dashboard 24h pulls card and the per-row pull
+// counter on /workspace/proxy-cache.
+func (h *HTTPHandler) handleHeadManifest(w http.ResponseWriter, r *http.Request, up *repository.UpstreamRecord, tenantID uuid.UUID, image, reference, actorID string) {
 	cached, err := h.repo.GetManifest(r.Context(), tenantID, up.UpstreamID, image, reference, up.TTLSeconds)
 	if err == nil {
 		w.Header().Set("Content-Type", cached.MediaType)
 		w.Header().Set("Docker-Content-Digest", cached.Digest)
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(cached.Body)))
 		w.WriteHeader(http.StatusOK)
+		// FUT-014: HEAD on a cached entry bumps the per-row counter just
+		// like a GET hit. The cached row exists, so no race with
+		// cacheManifest, and the counter would otherwise stay frozen on
+		// docker pull's HEAD-fast-path.
+		go h.bumpPullCount(tenantID, up.UpstreamID, image, reference)
+		go h.publishPullImage(tenantID, up.Name, image, reference, cached.Digest, actorID)
 		return
 	}
 
@@ -236,7 +284,11 @@ func (h *HTTPHandler) handleHeadManifest(w http.ResponseWriter, r *http.Request,
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(result.Body)))
 	w.WriteHeader(http.StatusOK)
 
-	go h.cacheManifest(tenantID, up.UpstreamID, image, reference, result)
+	go h.cacheManifest(tenantID, up.UpstreamID, up.Name, image, reference, result)
+	// FUT-014: cache-miss HEAD path still counts as a pull. Same skip-the-
+	// fast-path-counter rationale as the GET miss path — cacheManifest is
+	// racing the bump.
+	go h.publishPullImage(tenantID, up.Name, image, reference, result.Digest, actorID)
 }
 
 // handleGetBlob streams a blob from cache storage or fetches from upstream.
@@ -444,16 +496,160 @@ func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, co
 	return nil
 }
 
-// cacheManifest stores a fetched manifest in the DB cache (background).
-// SEC-028: context.Background() is used intentionally here — the caller has already
-// written the HTTP response and its request context may be cancelled. The 30-second
-// timeout prevents this goroutine from leaking if the database is slow.
-func (h *HTTPHandler) cacheManifest(tenantID, upstreamID uuid.UUID, image, reference string, result *upstream.ManifestResult) {
+// cacheManifest stores a fetched manifest in the DB cache (background) and
+// publishes `cache.populated` so services/scanner + services/signer can act
+// on the new content (FUT-017).
+//
+// SEC-028: context.Background() is used intentionally here — the caller has
+// already written the HTTP response and its request context may be cancelled.
+// The 30-second timeout prevents this goroutine from leaking if the database
+// is slow.
+//
+// Publish runs only on successful upsert; a failed upsert is a no-op publish
+// because there's nothing in the cache yet for downstream consumers to scan
+// or sign.
+func (h *HTTPHandler) cacheManifest(
+	tenantID, upstreamID uuid.UUID,
+	upstreamName, image, reference string,
+	result *upstream.ManifestResult,
+) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := h.repo.UpsertManifest(ctx, tenantID, upstreamID, image, reference,
 		result.Digest, result.MediaType, result.Body); err != nil {
 		slog.Error("cache manifest upsert failed", "err", err)
+		return
+	}
+	h.publishCachePopulated(ctx, tenantID, upstreamID, upstreamName, image, reference, result)
+}
+
+// publishCachePopulated emits the FUT-017 event downstream services
+// (scanner, signer) subscribe to. No-op when the publisher is not
+// configured — same opt-in shape as publishStoreQueued.
+func (h *HTTPHandler) publishCachePopulated(
+	ctx context.Context,
+	tenantID, upstreamID uuid.UUID,
+	upstreamName, image, reference string,
+	result *upstream.ManifestResult,
+) {
+	if h.pub == nil {
+		return
+	}
+	payload, _ := json.Marshal(events.CachePopulatedPayload{
+		TenantID:       tenantID.String(),
+		UpstreamID:     upstreamID.String(),
+		UpstreamName:   upstreamName,
+		Image:          image,
+		Reference:      reference,
+		ManifestDigest: result.Digest,
+		MediaType:      result.MediaType,
+		SizeBytes:      int64(len(result.Body)),
+	})
+	if err := h.pub.Publish(ctx, events.RoutingCachePopulated, events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingCachePopulated,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}); err != nil {
+		slog.ErrorContext(ctx, "publish cache.populated failed",
+			"error", err, "manifest_digest", result.Digest, "image", image)
+	}
+}
+
+// publishPullImage emits the FUT-014 pull.image event so services/audit
+// records an audit_events row + the FE-API-030 analytics `metric=pulls`
+// query includes proxy-served traffic + webhook subscribers fire. Same
+// no-op-when-nil shape as publishCachePopulated.
+//
+// reference is what the Docker client supplied — when it starts with
+// "sha256:" the pull was digest-direct; otherwise it's a tag. manifestDigest
+// is the actual content digest the proxy served (cached.Digest or
+// result.Digest). Splitting them this way mirrors services/core's
+// PullImagePayload usage: audit's Resource builder uses Tag when present
+// and falls back to digest, so an empty Tag for a digest-direct pull is
+// correct, not a bug.
+//
+// RepositoryID is intentionally empty: proxy manifests live in
+// proxy_manifests, not metadata.manifests, so the metadata pull consumer
+// has nothing to update for them. The consumer's "drop event when
+// RepositoryID is empty" guard quietly does the right thing without
+// per-event branching there.
+//
+// SEC-028: context.Background() because the caller has already written
+// the HTTP response; a request-scoped ctx may be cancelled by then.
+func (h *HTTPHandler) publishPullImage(
+	tenantID uuid.UUID,
+	upstreamName, image, reference, manifestDigest, actorID string,
+) {
+	if h.pub == nil {
+		return
+	}
+	p := buildProxyPullPayload(tenantID, upstreamName, image, reference, manifestDigest, actorID, time.Now().UTC())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	payload, err := json.Marshal(p)
+	if err != nil {
+		// Marshalling a fixed struct should never realistically fail; log
+		// so a future schema change doesn't silently break analytics.
+		slog.WarnContext(ctx, "pull.image marshal failed (best-effort)", "error", err)
+		return
+	}
+
+	evt := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingPullImage,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := h.pub.Publish(ctx, events.RoutingPullImage, evt); err != nil {
+		// Best-effort: the manifest body has already been written to the
+		// client. WARN matches services/core's RecordPull behaviour so the
+		// two publishers have consistent operator-visible failure logs.
+		slog.WarnContext(ctx, "pull.image publish failed (best-effort)",
+			"error", err, "manifest_digest", manifestDigest,
+			"upstream", upstreamName, "image", image)
+	}
+}
+
+// buildProxyPullPayload constructs the wire-shape pull.image payload
+// for a proxy-served manifest serve. Extracted from publishPullImage so
+// the payload shape can be unit-tested without standing up a publisher.
+//
+// reference is what the Docker client supplied — when it starts with
+// "sha256:" the pull was digest-direct (Tag is left empty); otherwise
+// reference is a tag string and is copied into Tag verbatim.
+//
+// repository_name is built as "cache/<upstream>/<image>" so it matches
+// the user-facing pull path and groups with push.image events for the
+// same composite name in the per-tenant activity feed.
+//
+// RepositoryID is deliberately empty (proxy manifests don't live in
+// metadata.manifests). Via is fixed at "proxy" so analytics that want
+// to break out cache pulls from owned-push pulls can group on it.
+func buildProxyPullPayload(
+	tenantID uuid.UUID,
+	upstreamName, image, reference, manifestDigest, actorID string,
+	now time.Time,
+) events.PullImagePayload {
+	tag := reference
+	if strings.HasPrefix(reference, "sha256:") {
+		tag = ""
+	}
+	return events.PullImagePayload{
+		TenantID:       tenantID.String(),
+		RepositoryID:   "",
+		RepositoryName: "cache/" + upstreamName + "/" + image,
+		ManifestDigest: manifestDigest,
+		Tag:            tag,
+		ActorID:        actorID,
+		PulledAt:       now,
+		Via:            "proxy",
 	}
 }
 

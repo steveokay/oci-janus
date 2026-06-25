@@ -29,6 +29,12 @@ export interface DomainEntry {
   next_poll_after?: string | null;
   notified_24h: boolean;
   notified_48h: boolean;
+  // Surfaced by the BFF on the admin-only list so the dashboard can
+  // re-display the TXT challenge after the register dialog has been
+  // dismissed. May be absent on older BFFs that pre-date DSGN-021 —
+  // every consumer must handle the empty-string case as "value unknown".
+  verification_token?: string;
+  txt_record_name?: string;
 }
 
 export interface DomainsListResponse {

@@ -20,9 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	ProxyService_RegisterUpstream_FullMethodName = "/registry.proxy.v1.ProxyService/RegisterUpstream"
-	ProxyService_DeleteUpstream_FullMethodName   = "/registry.proxy.v1.ProxyService/DeleteUpstream"
-	ProxyService_ListUpstreams_FullMethodName    = "/registry.proxy.v1.ProxyService/ListUpstreams"
+	ProxyService_RegisterUpstream_FullMethodName     = "/registry.proxy.v1.ProxyService/RegisterUpstream"
+	ProxyService_DeleteUpstream_FullMethodName       = "/registry.proxy.v1.ProxyService/DeleteUpstream"
+	ProxyService_ListUpstreams_FullMethodName        = "/registry.proxy.v1.ProxyService/ListUpstreams"
+	ProxyService_ListCachedManifests_FullMethodName  = "/registry.proxy.v1.ProxyService/ListCachedManifests"
+	ProxyService_GetCacheStats_FullMethodName        = "/registry.proxy.v1.ProxyService/GetCacheStats"
+	ProxyService_DeleteCachedManifest_FullMethodName = "/registry.proxy.v1.ProxyService/DeleteCachedManifest"
+	ProxyService_GetCachedManifest_FullMethodName    = "/registry.proxy.v1.ProxyService/GetCachedManifest"
 )
 
 // ProxyServiceClient is the client API for ProxyService service.
@@ -32,6 +36,26 @@ type ProxyServiceClient interface {
 	RegisterUpstream(ctx context.Context, in *RegisterUpstreamRequest, opts ...grpc.CallOption) (*Upstream, error)
 	DeleteUpstream(ctx context.Context, in *DeleteUpstreamRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ListUpstreams(ctx context.Context, in *ListUpstreamsRequest, opts ...grpc.CallOption) (ProxyService_ListUpstreamsClient, error)
+	// FUT-013 — cache visibility surface.
+	//
+	// ListCachedManifests is unary-with-page-token instead of server-streaming
+	// (the pattern ListUpstreams uses) because the cached set is potentially
+	// 1000s of rows. Token-based pagination gives the FE clean
+	// page-by-page navigation without buffering the whole stream client-side.
+	ListCachedManifests(ctx context.Context, in *ListCachedManifestsRequest, opts ...grpc.CallOption) (*ListCachedManifestsResponse, error)
+	GetCacheStats(ctx context.Context, in *GetCacheStatsRequest, opts ...grpc.CallOption) (*CacheStats, error)
+	DeleteCachedManifest(ctx context.Context, in *DeleteCachedManifestRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// FUT-016 — detail-page surface.
+	//
+	// Returns the full cached manifest row INCLUDING the body bytes. Used by
+	// the management BFF to render the click-through detail page on
+	// /workspace/proxy-cache, which parses the body server-side into a
+	// typed layer / per-platform projection so the frontend just renders.
+	//
+	// Separate RPC (not "extend ListCachedManifests with a single-row
+	// path") because the list-RPC's CachedManifest deliberately omits the
+	// body to keep the page payload skinny.
+	GetCachedManifest(ctx context.Context, in *GetCachedManifestRequest, opts ...grpc.CallOption) (*CachedManifestDetail, error)
 }
 
 type proxyServiceClient struct {
@@ -95,6 +119,46 @@ func (x *proxyServiceListUpstreamsClient) Recv() (*Upstream, error) {
 	return m, nil
 }
 
+func (c *proxyServiceClient) ListCachedManifests(ctx context.Context, in *ListCachedManifestsRequest, opts ...grpc.CallOption) (*ListCachedManifestsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListCachedManifestsResponse)
+	err := c.cc.Invoke(ctx, ProxyService_ListCachedManifests_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyServiceClient) GetCacheStats(ctx context.Context, in *GetCacheStatsRequest, opts ...grpc.CallOption) (*CacheStats, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CacheStats)
+	err := c.cc.Invoke(ctx, ProxyService_GetCacheStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyServiceClient) DeleteCachedManifest(ctx context.Context, in *DeleteCachedManifestRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ProxyService_DeleteCachedManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyServiceClient) GetCachedManifest(ctx context.Context, in *GetCachedManifestRequest, opts ...grpc.CallOption) (*CachedManifestDetail, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CachedManifestDetail)
+	err := c.cc.Invoke(ctx, ProxyService_GetCachedManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProxyServiceServer is the server API for ProxyService service.
 // All implementations should embed UnimplementedProxyServiceServer
 // for forward compatibility
@@ -102,6 +166,26 @@ type ProxyServiceServer interface {
 	RegisterUpstream(context.Context, *RegisterUpstreamRequest) (*Upstream, error)
 	DeleteUpstream(context.Context, *DeleteUpstreamRequest) (*emptypb.Empty, error)
 	ListUpstreams(*ListUpstreamsRequest, ProxyService_ListUpstreamsServer) error
+	// FUT-013 — cache visibility surface.
+	//
+	// ListCachedManifests is unary-with-page-token instead of server-streaming
+	// (the pattern ListUpstreams uses) because the cached set is potentially
+	// 1000s of rows. Token-based pagination gives the FE clean
+	// page-by-page navigation without buffering the whole stream client-side.
+	ListCachedManifests(context.Context, *ListCachedManifestsRequest) (*ListCachedManifestsResponse, error)
+	GetCacheStats(context.Context, *GetCacheStatsRequest) (*CacheStats, error)
+	DeleteCachedManifest(context.Context, *DeleteCachedManifestRequest) (*emptypb.Empty, error)
+	// FUT-016 — detail-page surface.
+	//
+	// Returns the full cached manifest row INCLUDING the body bytes. Used by
+	// the management BFF to render the click-through detail page on
+	// /workspace/proxy-cache, which parses the body server-side into a
+	// typed layer / per-platform projection so the frontend just renders.
+	//
+	// Separate RPC (not "extend ListCachedManifests with a single-row
+	// path") because the list-RPC's CachedManifest deliberately omits the
+	// body to keep the page payload skinny.
+	GetCachedManifest(context.Context, *GetCachedManifestRequest) (*CachedManifestDetail, error)
 }
 
 // UnimplementedProxyServiceServer should be embedded to have forward compatible implementations.
@@ -116,6 +200,18 @@ func (UnimplementedProxyServiceServer) DeleteUpstream(context.Context, *DeleteUp
 }
 func (UnimplementedProxyServiceServer) ListUpstreams(*ListUpstreamsRequest, ProxyService_ListUpstreamsServer) error {
 	return status.Errorf(codes.Unimplemented, "method ListUpstreams not implemented")
+}
+func (UnimplementedProxyServiceServer) ListCachedManifests(context.Context, *ListCachedManifestsRequest) (*ListCachedManifestsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListCachedManifests not implemented")
+}
+func (UnimplementedProxyServiceServer) GetCacheStats(context.Context, *GetCacheStatsRequest) (*CacheStats, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCacheStats not implemented")
+}
+func (UnimplementedProxyServiceServer) DeleteCachedManifest(context.Context, *DeleteCachedManifestRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteCachedManifest not implemented")
+}
+func (UnimplementedProxyServiceServer) GetCachedManifest(context.Context, *GetCachedManifestRequest) (*CachedManifestDetail, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCachedManifest not implemented")
 }
 
 // UnsafeProxyServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -186,6 +282,78 @@ func (x *proxyServiceListUpstreamsServer) Send(m *Upstream) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _ProxyService_ListCachedManifests_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCachedManifestsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).ListCachedManifests(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_ListCachedManifests_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).ListCachedManifests(ctx, req.(*ListCachedManifestsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyService_GetCacheStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCacheStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).GetCacheStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_GetCacheStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).GetCacheStats(ctx, req.(*GetCacheStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyService_DeleteCachedManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteCachedManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).DeleteCachedManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_DeleteCachedManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).DeleteCachedManifest(ctx, req.(*DeleteCachedManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyService_GetCachedManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCachedManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).GetCachedManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_GetCachedManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).GetCachedManifest(ctx, req.(*GetCachedManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProxyService_ServiceDesc is the grpc.ServiceDesc for ProxyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +368,22 @@ var ProxyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteUpstream",
 			Handler:    _ProxyService_DeleteUpstream_Handler,
+		},
+		{
+			MethodName: "ListCachedManifests",
+			Handler:    _ProxyService_ListCachedManifests_Handler,
+		},
+		{
+			MethodName: "GetCacheStats",
+			Handler:    _ProxyService_GetCacheStats_Handler,
+		},
+		{
+			MethodName: "DeleteCachedManifest",
+			Handler:    _ProxyService_DeleteCachedManifest_Handler,
+		},
+		{
+			MethodName: "GetCachedManifest",
+			Handler:    _ProxyService_GetCachedManifest_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

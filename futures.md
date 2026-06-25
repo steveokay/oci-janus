@@ -177,6 +177,9 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
     `tenant=acme, role=admin`).
   - Workspace admin UI: SCIM token issuance + mapping editor.
 - **Affects:** `services/auth`, `services/management`, `frontend`.
+- **Depends on:** `FUT-012` (tenant-user lifecycle management) — SCIM
+  is the automated source-of-truth layered on top of the same
+  invite / disable / list machinery. Build the manual surface first.
 
 ---
 
@@ -740,103 +743,150 @@ Pairs with **DEPLOY-001** tenant-persona doc work. Once both are
 done, self-hosters following the docs should be able to bootstrap a
 real multi-user setup without SQL.
 
-### FUT-013 — Pull-through cache visibility (sidebar menu + `/proxy/cache` page)
+### FUT-012 — Tenant-user lifecycle management (invite / list / disable)
 
-**Surfaced:** 2026-06-24 by an operator pulling
-`localhost:8084/cache/dockerhub/library/alpine:3.20` through
-`services/proxy` and noticing it never appeared anywhere in the
-dashboard. The blob and manifest are persisted — blob at
-`blobs/<tenant>/sha256/<hex>` in the shared storage backend, manifest
-row in `proxy_manifests` (services/proxy's own schema, migration
-`00001_initial_schema.sql`) — but the proxy never publishes
-`push.image` nor calls `metadata.UpsertManifest`, so the
-`services/metadata` source-of-truth has no row and `/repositories`
-can't render it.
+**Surfaced:** 2026-06-24 during the design discussion that followed
+REM-017. The chicken-egg fix gave platform admins a way to claim a
+new org, but there is still no first-class surface for managing the
+people *inside* a tenant. Today the only routes are
+`/orgs/{org}/members` (per-org workspace permissions, can grant /
+revoke a role on one org) and `/admin/tenants` (platform-admin only,
+tenant CRUD). The in-between layer — "tenant admin manages the
+users in their tenant" — does not exist.
 
-**Why this matters:** today the only way to confirm a proxy pull
-worked is to `docker pull` the same ref again and observe that
-the second pull is faster, or to shell into Postgres and `SELECT
-* FROM proxy_manifests`. Operators expect "I pulled through the
-cache; show me what's in it" to be a one-click UI surface — and
-without that surface, GC eviction policies (when they ship) will
-delete entries the operator was never able to inspect.
+**Why this matters:** the current model leaves tenant admins
+without a way to invite a new colleague, see the full member list
+across all orgs, or deactivate a departing employee. The only
+working paths are (a) `POST /api/v1/users` (creates a user, but no
+list view to see who exists; no invite email; no role assigned),
+and (b) raw SQL — exactly the surface SELF-HOSTING.md tells operators
+they should never need. Real customers will expect a "Users" page
+the same shape they have in GitHub / GitLab / AWS IAM.
 
-**Decision (locked):** option A from the design picklist —
-**dedicated `/proxy/cache` page + new sidebar menu item**. Keeps
-the dashboard's "your repos" semantics clean (cached images are
-not first-class repos — they have no scan / sign / RBAC / retention
-surfaces) while still giving the operator a real "what's in my
-cache" view. Rejected alternatives: option B (mix cached entries
-into `/repositories` with a "Cached" pill) added an "n/a for
-cached repos" guard to every per-repo surface; option C (a single
-"Cache: N images, M GB" counter on the dashboard) was too thin —
-no per-image visibility means no eviction story.
+**Recommended design** (locked after the REM-017 discussion):
 
-**Scope:**
+1. **New RBAC scope: `'tenant'`** alongside `'org'` and `'repo'` in
+   `role_assignments.scope_type`. A tenant-admin is
+   `(role=admin, scope_type=tenant, scope_value=<tenant_id>)`.
+   `services/auth.CheckAccess` already does scoped-role lookup, so
+   this generalises cleanly. The platform-admin marker
+   (`(admin, org, '*')`) remains a separate, higher-privilege scope
+   and trumps tenant-admin.
+   - **Open question** (resolve before building): does tenant-admin
+     implicitly get `admin` on every org in the tenant, or stay
+     strictly user-lifecycle? Lean toward strict (tighter blast
+     radius, mirrors AWS root-vs-IAM-admin). Alternative is
+     friendlier for small tenants — needs a call.
 
-Backend (`services/proxy`):
-- New gRPC RPC `ListCachedManifests(tenant_id, upstream_filter,
-  page_token, page_size)` on `ProxyService` — returns
-  `(upstream_name, image, reference, manifest_digest,
-  media_type, size_bytes, cached_at, last_pulled_at, pull_count)`.
-  Server-streaming follows the existing `ListUpstreams` pattern in
-  `proto/proxy/v1/proxy.proto`.
-- `last_pulled_at TIMESTAMPTZ` + `pull_count BIGINT DEFAULT 0`
-  columns added to `proxy_manifests` (migration `00003`). Debounced
-  update path on every successful manifest serve — same two-track
-  shape FE-API-042 used for `manifests.last_pulled_at` (debounce
-  10s; the analytics layer doesn't care about hit-level fidelity).
-- New `DeleteCachedManifest(manifest_digest)` RPC for the
-  operator-driven "Evict" action. Deletes the `proxy_manifests`
-  row + queues a `gc.cached_blob` event so the orphaned blob
-  is cleaned up on the next GC sweep (don't delete the blob
-  inline — multiple cached manifests can share a layer blob,
-  and the existing GC mark-sweep already handles refcounting).
-- Aggregation RPC `GetCacheStats(tenant_id)` — returns
-  `(total_manifests, total_bytes, hit_rate_last_24h,
-  unique_upstreams)` for the page header card.
+2. **Three new gRPC RPCs on `services/auth`** (gated on
+   tenant-admin OR platform-admin):
+   - `ListTenantUsers(tenant_id, page_token)` — paginated. Returns
+     `user_id`, `username`, `display_name`, `email`, `kind` (human
+     or service_account), `disabled`, `last_login_at`, and a
+     role-summary chip (count of org-admin / writer / reader rows).
+     Pairs with REM-018 — the same shape feeds the username-cell
+     primitive.
+   - `InviteUser(tenant_id, email, display_name, initial_org_role?)`
+     — creates a `users` row in `invited` state. Generates a
+     single-use invite token; emits an invite event for the email
+     transport (Phase 1: log + copy-link affordance; Phase 2:
+     real SMTP).
+   - `SetUserDisabled(user_id, disabled bool)` — flips
+     `users.disabled`. On disable, revoke every active JWT JTI in
+     Redis + mark all API keys disabled (don't delete — preserves
+     audit + reversibility).
 
-BFF (`services/management`):
-- `GET /api/v1/proxy/cache` — list (paginated).
-- `GET /api/v1/proxy/cache/stats` — aggregation card data.
-- `DELETE /api/v1/proxy/cache/{manifest_digest}` — evict action.
-- All three gated on the existing `requireWorkspaceAdmin` helper
-  (cache is a workspace-level concern; not exposing it to writers
-  / readers keeps the blast radius small).
+3. **Single FE route `/tenant/users`** visible to both audiences:
+   - Tenant-admin → scoped to their own tenant automatically (JWT
+     carries `tenant_id`).
+   - Platform-admin → same route with a tenant selector at the top.
+     Reachable from `TenantDetailDrawer` via a "View users →" link
+     (good attach point that drawer already has empty space for).
+   - Table columns: User (uses REM-018's `<UserCell>`), kind chip
+     (human / service_account), role summary across orgs, status
+     (active / disabled / invited), last login, actions menu.
+   - Actions: Invite user (modal — email + display_name + optional
+     initial role), Deactivate / Reactivate, Resend invite (for
+     pending state).
 
-Frontend (`frontend/src/routes`):
-- New route `/proxy/cache` (TanStack Router file:
-  `_authenticated.proxy.cache.tsx`).
-- Sidebar nav entry "Pull-through cache" with a `Layers` or
-  `Repeat` icon, placed under the existing Workspace cluster
-  (next to `/workspace/domains`). Hidden on the sidebar when
-  `PROXY_GRPC_ADDR` is unset on the BFF side (same degrade-gracefully
-  shape the signer + scanner sidebar entries use).
-- Page layout: header stats card (`<StatCard>` x 4 — total
-  manifests, total bytes, 24h hit rate, unique upstreams) over a
-  filterable table (upstream dropdown + image search) with columns
-  Upstream / Image / Reference / Digest / Size / Cached / Last
-  pulled / Pulls / Actions (evict button). Evict opens a
-  type-to-confirm dialog (same pattern as the admin GC `Run now`
-  affordance — operators should not be able to one-click-purge
-  the cache).
+4. **Migrations:**
+   - `services/auth/migrations/NNNNNNNN_add_tenant_scope.sql` —
+     widen the `scope_type` CHECK constraint to include `'tenant'`,
+     no data backfill (no existing tenant-scope rows).
+   - `services/auth/migrations/NNNNNNNN_add_users_invite.sql` —
+     `users.status` enum (`active` | `invited` | `disabled`) +
+     `invite_token_hash` + `invite_expires_at`. Migrate
+     `disabled BOOLEAN` → `status` (`disabled=true → status='disabled'`;
+     `false → 'active'`).
 
 **Why this shape:**
 
-- Storage layout already exists (`proxy_manifests` + shared blob
-  bucket) — this PR is purely a read-side surface + an evict
-  action; no schema rework.
-- The "Cached" entries don't belong in `/repositories` because
-  they're not OWNED by the tenant; they're a transparent caching
-  layer in front of upstream. Mixing them would muddy attribution
-  for scans / signing / retention — and creates a "n/a for cached
-  repos" empty-state requirement on every per-repo surface.
-- Hit rate + last-pulled-at + pull_count give operators the
-  signals they need to size the cache (when to bump GC eviction
-  thresholds, which upstreams to add) without exposing the
-  underlying GC plumbing as a first-class concept.
+- Reuses `role_assignments` for tenant-admin instead of inventing a
+  parallel `tenant_admins` table — same migration shape as adding
+  `'org'` originally. Decision log entry slot: parallels #22
+  (service-account principal pattern) in the "extend existing model"
+  philosophy.
+- One UI route serves both audiences (cuts maintenance + matches
+  how `/admin/tenants` already gates behaviour on platform-admin
+  detection).
+- Disable rather than delete — preserves audit trail; deactivation
+  is reversible. Hard-delete stays a platform-admin operation via
+  the existing tenant DB cleanup path.
+
+**Affects:** `services/auth` (migrations + 3 new RPCs + scope
+generalisation), `services/management` (3 new REST routes wrapping
+the RPCs), `frontend/` (new route + components + nav entry).
 
 **Dependencies:**
+- Pairs with REM-018 — the same `username` / `display_name`
+  hydration this needs is what REM-018 builds. Ship REM-018 first
+  (or fold its scope into this work).
+- Strictly weaker than Tier 1 #5 (SCIM provisioning) — but SCIM
+  needs the manual surface to exist first (it's the same data
+  model + endpoints with an automated source-of-truth on top).
+  Build this, then layer SCIM on the same `users.status` + invite
+  machinery.
+
+**Effort:** ~1 sprint. Backend ~2-3 days (migrations + 3 RPCs +
+auth-scope generalisation + tests); BFF ~half day (route wrappers);
+FE ~2-3 days (route + table + 3 dialogs + nav surface + RBAC
+guards); docs ~half day.
+
+### FUT-015 — Pull-command + tag/digest row expander on `/workspace/proxy-cache`
+
+**Surfaced:** 2026-06-24 by the operator testing FUT-013 Phase C.
+Each table row shows the cached image but doesn't tell the
+operator HOW to pull it. They have to construct the
+`localhost:8084/cache/<upstream>/<image>:<tag>` URI by hand.
+
+**Scope:** add a chevron-expand to each row (same pattern
+DSGN-021 used for custom-domain TXT records). When expanded:
+
+- Copy-button on the full `docker pull` command, using the
+  workspace's actual host (from `useWorkspace()` if a custom
+  domain is set, else `localhost:8084` in dev). Example:
+  `docker pull registry.acme.com/cache/dockerhub/library/alpine:3.20`
+- The digest (so an operator can pin via
+  `docker pull <host>/cache/.../<image>@sha256:...`).
+- The MediaType (helpful for "is this OCI v1 or Docker v2?").
+- "Last pulled" + "Cached at" absolute timestamps (the row
+  shows relative; the expander shows the full ISO).
+
+**Affects:** `frontend/src/routes/_authenticated.workspace.proxy-cache.tsx`
+only. No backend change. Reuses `CopyButton`. No new vitest
+coverage required (the data is already in the row payload).
+
+**Effort:** ~half day.
+
+### FUT-016 — Click-through detail page: layers + manifest tab for cached images
+
+**Surfaced:** same testing session as FUT-015. Operator wants
+the same "click image → see layers" flow that `/repositories`
+provides for cached entries — but the proxy stores manifests in
+its own schema, untouched by `services/metadata`. So the layers
+tab can't reuse the per-repo tag detail.
+
+**Scope:**
 
 - None blocking. Proxy already persists everything we need; this
   is read-side surfacing + an evict action.
@@ -865,6 +915,33 @@ FE ~2 days (route + stats card + filterable table + evict dialog
 + nav entry); docs ~half day. Open follow-up: cached-blob LRU
 eviction in `services/gc` — separate item, this PR is the
 visibility prerequisite.
+- New route `/workspace/proxy-cache/{id}` showing:
+  - Summary header (upstream / image / reference / digest /
+    size / cached / last pulled / pulls).
+  - Layers tab — parse the manifest body (already in
+    `proxy_manifests.body BYTEA`) into a layer table with
+    digest + size + media type. For manifest indexes (multi-
+    arch), show the platform list with click-through to the
+    per-arch manifest.
+  - Manifest tab — raw JSON viewer (`<CodeBlock>` already
+    exists). Operator can confirm exactly what bytes the proxy
+    is serving without leaving the dashboard.
+- New BFF route `GET /api/v1/proxy/cache/{id}` (or extend the
+  existing list response with a `body_base64` field on the
+  single-row read path — cleaner as a separate route since the
+  list call deliberately omits body for size). Calls a new
+  `services/proxy.GetCachedManifest(tenant_id, id)` RPC that
+  returns the full row including body bytes.
+
+**Out of scope** (defer to FUT-017): scans + signing tabs.
+Layers + manifest are the v1 detail surfaces.
+
+**Affects:** `proto/proxy/v1/proxy.proto` (one new RPC),
+`services/proxy` (one new RPC + repo method), `services/management`
+(one new REST route), `frontend/` (new route + page + 2 tabs).
+
+**Effort:** ~1-2 days. Layer parsing is the bulk; OCI v1 +
+Docker v2 manifest list shapes are well-defined.
 
 ### QA-002 follow-ups (small)
 

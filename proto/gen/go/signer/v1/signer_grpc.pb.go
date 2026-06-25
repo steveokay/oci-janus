@@ -19,9 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	SignerService_SignManifest_FullMethodName   = "/registry.signer.v1.SignerService/SignManifest"
-	SignerService_VerifyManifest_FullMethodName = "/registry.signer.v1.SignerService/VerifyManifest"
-	SignerService_ListSignatures_FullMethodName = "/registry.signer.v1.SignerService/ListSignatures"
+	SignerService_SignManifest_FullMethodName               = "/registry.signer.v1.SignerService/SignManifest"
+	SignerService_VerifyManifest_FullMethodName             = "/registry.signer.v1.SignerService/VerifyManifest"
+	SignerService_ListSignatures_FullMethodName             = "/registry.signer.v1.SignerService/ListSignatures"
+	SignerService_GetProxyCacheSignPolicy_FullMethodName    = "/registry.signer.v1.SignerService/GetProxyCacheSignPolicy"
+	SignerService_SetProxyCacheSignPolicy_FullMethodName    = "/registry.signer.v1.SignerService/SetProxyCacheSignPolicy"
+	SignerService_ListProxyCacheSignPolicies_FullMethodName = "/registry.signer.v1.SignerService/ListProxyCacheSignPolicies"
 )
 
 // SignerServiceClient is the client API for SignerService service.
@@ -31,6 +34,13 @@ type SignerServiceClient interface {
 	SignManifest(ctx context.Context, in *SignManifestRequest, opts ...grpc.CallOption) (*SignManifestResponse, error)
 	VerifyManifest(ctx context.Context, in *VerifyManifestRequest, opts ...grpc.CallOption) (*VerifyManifestResponse, error)
 	ListSignatures(ctx context.Context, in *ListSignaturesRequest, opts ...grpc.CallOption) (*ListSignaturesResponse, error)
+	// FUT-017: per-upstream auto-sign-on-cache policy CRUD. When auto_sign
+	// is true and key_id is non-empty, the signer service signs cached
+	// manifests with that key whenever it consumes a cache.populated event
+	// tagged with this (tenant_id, upstream_name).
+	GetProxyCacheSignPolicy(ctx context.Context, in *GetProxyCacheSignPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheSignPolicy, error)
+	SetProxyCacheSignPolicy(ctx context.Context, in *SetProxyCacheSignPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheSignPolicy, error)
+	ListProxyCacheSignPolicies(ctx context.Context, in *ListProxyCacheSignPoliciesRequest, opts ...grpc.CallOption) (SignerService_ListProxyCacheSignPoliciesClient, error)
 }
 
 type signerServiceClient struct {
@@ -71,6 +81,59 @@ func (c *signerServiceClient) ListSignatures(ctx context.Context, in *ListSignat
 	return out, nil
 }
 
+func (c *signerServiceClient) GetProxyCacheSignPolicy(ctx context.Context, in *GetProxyCacheSignPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheSignPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProxyCacheSignPolicy)
+	err := c.cc.Invoke(ctx, SignerService_GetProxyCacheSignPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *signerServiceClient) SetProxyCacheSignPolicy(ctx context.Context, in *SetProxyCacheSignPolicyRequest, opts ...grpc.CallOption) (*ProxyCacheSignPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProxyCacheSignPolicy)
+	err := c.cc.Invoke(ctx, SignerService_SetProxyCacheSignPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *signerServiceClient) ListProxyCacheSignPolicies(ctx context.Context, in *ListProxyCacheSignPoliciesRequest, opts ...grpc.CallOption) (SignerService_ListProxyCacheSignPoliciesClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SignerService_ServiceDesc.Streams[0], SignerService_ListProxyCacheSignPolicies_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &signerServiceListProxyCacheSignPoliciesClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type SignerService_ListProxyCacheSignPoliciesClient interface {
+	Recv() (*ProxyCacheSignPolicy, error)
+	grpc.ClientStream
+}
+
+type signerServiceListProxyCacheSignPoliciesClient struct {
+	grpc.ClientStream
+}
+
+func (x *signerServiceListProxyCacheSignPoliciesClient) Recv() (*ProxyCacheSignPolicy, error) {
+	m := new(ProxyCacheSignPolicy)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // SignerServiceServer is the server API for SignerService service.
 // All implementations should embed UnimplementedSignerServiceServer
 // for forward compatibility
@@ -78,6 +141,13 @@ type SignerServiceServer interface {
 	SignManifest(context.Context, *SignManifestRequest) (*SignManifestResponse, error)
 	VerifyManifest(context.Context, *VerifyManifestRequest) (*VerifyManifestResponse, error)
 	ListSignatures(context.Context, *ListSignaturesRequest) (*ListSignaturesResponse, error)
+	// FUT-017: per-upstream auto-sign-on-cache policy CRUD. When auto_sign
+	// is true and key_id is non-empty, the signer service signs cached
+	// manifests with that key whenever it consumes a cache.populated event
+	// tagged with this (tenant_id, upstream_name).
+	GetProxyCacheSignPolicy(context.Context, *GetProxyCacheSignPolicyRequest) (*ProxyCacheSignPolicy, error)
+	SetProxyCacheSignPolicy(context.Context, *SetProxyCacheSignPolicyRequest) (*ProxyCacheSignPolicy, error)
+	ListProxyCacheSignPolicies(*ListProxyCacheSignPoliciesRequest, SignerService_ListProxyCacheSignPoliciesServer) error
 }
 
 // UnimplementedSignerServiceServer should be embedded to have forward compatible implementations.
@@ -92,6 +162,15 @@ func (UnimplementedSignerServiceServer) VerifyManifest(context.Context, *VerifyM
 }
 func (UnimplementedSignerServiceServer) ListSignatures(context.Context, *ListSignaturesRequest) (*ListSignaturesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSignatures not implemented")
+}
+func (UnimplementedSignerServiceServer) GetProxyCacheSignPolicy(context.Context, *GetProxyCacheSignPolicyRequest) (*ProxyCacheSignPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetProxyCacheSignPolicy not implemented")
+}
+func (UnimplementedSignerServiceServer) SetProxyCacheSignPolicy(context.Context, *SetProxyCacheSignPolicyRequest) (*ProxyCacheSignPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetProxyCacheSignPolicy not implemented")
+}
+func (UnimplementedSignerServiceServer) ListProxyCacheSignPolicies(*ListProxyCacheSignPoliciesRequest, SignerService_ListProxyCacheSignPoliciesServer) error {
+	return status.Errorf(codes.Unimplemented, "method ListProxyCacheSignPolicies not implemented")
 }
 
 // UnsafeSignerServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -159,6 +238,63 @@ func _SignerService_ListSignatures_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SignerService_GetProxyCacheSignPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetProxyCacheSignPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignerServiceServer).GetProxyCacheSignPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignerService_GetProxyCacheSignPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignerServiceServer).GetProxyCacheSignPolicy(ctx, req.(*GetProxyCacheSignPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SignerService_SetProxyCacheSignPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetProxyCacheSignPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignerServiceServer).SetProxyCacheSignPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignerService_SetProxyCacheSignPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignerServiceServer).SetProxyCacheSignPolicy(ctx, req.(*SetProxyCacheSignPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SignerService_ListProxyCacheSignPolicies_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListProxyCacheSignPoliciesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(SignerServiceServer).ListProxyCacheSignPolicies(m, &signerServiceListProxyCacheSignPoliciesServer{ServerStream: stream})
+}
+
+type SignerService_ListProxyCacheSignPoliciesServer interface {
+	Send(*ProxyCacheSignPolicy) error
+	grpc.ServerStream
+}
+
+type signerServiceListProxyCacheSignPoliciesServer struct {
+	grpc.ServerStream
+}
+
+func (x *signerServiceListProxyCacheSignPoliciesServer) Send(m *ProxyCacheSignPolicy) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // SignerService_ServiceDesc is the grpc.ServiceDesc for SignerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -178,7 +314,21 @@ var SignerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListSignatures",
 			Handler:    _SignerService_ListSignatures_Handler,
 		},
+		{
+			MethodName: "GetProxyCacheSignPolicy",
+			Handler:    _SignerService_GetProxyCacheSignPolicy_Handler,
+		},
+		{
+			MethodName: "SetProxyCacheSignPolicy",
+			Handler:    _SignerService_SetProxyCacheSignPolicy_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ListProxyCacheSignPolicies",
+			Handler:       _SignerService_ListProxyCacheSignPolicies_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "signer/v1/signer.proto",
 }

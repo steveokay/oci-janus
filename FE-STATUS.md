@@ -188,7 +188,9 @@ Other open backlog items live alongside them in `futures.md`:
 
 - **REM-017** — Platform-admin "claim a new org" route (chicken-egg gap surfaced 2026-06-24)
 - **REM-018** — UI user-ID → username + enforce display_name on user creation (filed 2026-06-24)
-- **FUT-013** — Pull-through cache visibility (filed 2026-06-24): new sidebar menu item + `/proxy/cache` page reading from `services/proxy`. Operator-surfaced gap — pulls through `:8084/cache/...` persist but never appear in the dashboard
+- ~~**FUT-013** — Pull-through cache visibility~~ ALL THREE PHASES SHIPPED (PRs #73 / #74 / #75; sidebar placement #78). See `status.md`
+- ~~**FUT-014** — Proxy publishes `pull.image` events~~ SHIPPED (PR #98, 2026-06-25). Dashboard 24h pulls card now includes cache-served traffic; `proxy_manifests.pull_count` no longer freezes on docker's HEAD-fast-path. Pure backend — zero FE wiring required, both surfaces start counting on the next pull
+- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Pairs with REM-018 + precedes SCIM (Tier 1 #5)
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
 - **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001)
@@ -548,6 +550,7 @@ remaining S8 sub-items are bundled here so nothing slips:
 - `FE-API-011..013` `/users/me` GET / PATCH / password change
 - `FE-API-014..020` security overview / vulnerability list / scan history / remediation / policies / reports / overview snapshot
 - **`FUT-013`** Pull-through cache visibility: `GET /api/v1/proxy/cache` (paginated list), `GET /api/v1/proxy/cache/stats`, `DELETE /api/v1/proxy/cache/{manifest_digest}` — backed by 3 new `services/proxy` RPCs (`ListCachedManifests`, `GetCacheStats`, `DeleteCachedManifest`) + `last_pulled_at` / `pull_count` migration on `proxy_manifests`. New sidebar entry + `/proxy/cache` page (see futures.md §FUT-013).
+- **`FUT-012`** Tenant-user lifecycle: `GET /api/v1/tenant/users` (paginated list), `POST /api/v1/tenant/users/invite`, `PATCH /api/v1/tenant/users/{id}/disabled` — backed by 3 new `services/auth` RPCs gated on the new `'tenant'` RBAC scope. Frontend route `/tenant/users` shared between tenant-admin and platform-admin (see futures.md §FUT-012).
 
 ---
 
