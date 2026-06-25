@@ -92,6 +92,23 @@ export function shortenKey(k: string): string {
   return `${k.slice(0, 8)}…${k.slice(-4)}`;
 }
 
+// shortenDigest collapses an OCI content digest ("sha256:<64-hex>") to
+// "sha256:abcdefghij…" so a digest reference fits a normal table cell
+// without the row stretching past the viewport. Same visual identity
+// the retention dry-run dialog uses, lifted into a shared helper so
+// repo / tag / proxy-cache tables agree.
+//
+// Non-digest strings pass through unchanged when ≤18 chars; longer
+// unprefixed values get a "<first 12>…" treatment as a generic
+// fallback. Always preserves the algorithm prefix so the reader still
+// sees what kind of digest they're looking at.
+export function shortenDigest(digest: string): string {
+  if (!digest || digest.length <= 18) return digest ?? "";
+  const colon = digest.indexOf(":");
+  if (colon === -1) return digest.slice(0, 12) + "…";
+  return digest.slice(0, colon + 1) + digest.slice(colon + 1, colon + 11) + "…";
+}
+
 // "Jun 19, 2026 14:23" — used in detail surfaces where the exact time matters.
 export function formatAbsoluteDate(iso: string | undefined | null): string {
   if (!iso) return "—";

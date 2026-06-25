@@ -64,7 +64,20 @@ func newWithDeps(repo workerRepo, dispatcher workerDispatcher, credentialKeyHex 
 
 // HandleEvent is the consumer.Handler for all subscribed event types.
 // It looks up matching endpoints and creates delivery records for each.
+//
+// Defence-in-depth: events with an empty tenant_id are ACKed and dropped
+// rather than NACK'd. The webhook subscription model is per-tenant — an
+// event without a tenant has nowhere to route. Returning an error here
+// would cause RabbitMQ to redeliver until the retry cap is hit. The
+// publisher should not emit such events (gc/retention.go fixed at source
+// 2026-06-25), but a defensive consumer keeps a future regression from
+// stalling the queue.
 func (w *Worker) HandleEvent(ctx context.Context, event events.Event) error {
+	if event.TenantID == "" {
+		slog.WarnContext(ctx, "webhook: dropping event with empty tenant_id (ACK)",
+			"event_id", event.ID, "event_type", event.Type)
+		return nil
+	}
 	tenantID, err := uuid.Parse(event.TenantID)
 	if err != nil {
 		return fmt.Errorf("invalid tenant_id in event %s: %w", event.ID, err)
