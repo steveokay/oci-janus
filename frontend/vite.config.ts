@@ -49,6 +49,12 @@ export default defineConfig({
       "/api/v1/logout":         { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/token":          { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/apikeys":         { target: "http://localhost:8080", changeOrigin: true },
+      // FUT-019 Phase 2 — /api/v1/users/me/notification-preferences
+      // lives on the BFF, not on auth. Has to land BEFORE the
+      // `/api/v1/users` catch-all below because Vite picks first
+      // matching key. Without this entry the call goes to auth (8080)
+      // which returns 404 and the FE renders ErrorState.
+      "/api/v1/users/me/notification-preferences": { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/users":           { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/service-accounts": { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/access":          { target: "http://localhost:8080", changeOrigin: true },
