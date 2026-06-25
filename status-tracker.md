@@ -56,27 +56,6 @@ layout; distroless scratch-dir / tmpdir perms).
 active adapter to the dev stub. REM-011 P2's in-memory swap means
 no container restart is needed.
 
-### REM-016 — `libs/errors/codes.MapDBError` doesn't recognise PostgreSQL error codes
-
-**Surfaced:** 2026-06-23 (PR #32 custom-domain triage).
-**Affects:** every service that catches a Postgres error and routes it through `errcodes.MapDBError` (i.e. all of them).
-**Status:** OPEN. Tracker filed in PR #33.
-
-**Why this matters:** `MapDBError` only special-cases `context.DeadlineExceeded` → `ResourceExhausted`. Everything else collapses to `codes.Internal` with the caller's fallback message. PgErr 23503 (foreign-key violation), 23505 (unique violation), 23514 (check constraint) all surface as generic 500s. Hides the actionable underlying error.
-
-**Proposed fix:**
-
-| PgErr code | Mapped gRPC code | Body hint |
-|---|---|---|
-| `23503` foreign_key_violation | `codes.NotFound` | Use `pgErr.ConstraintName` to point at the missing parent row |
-| `23505` unique_violation | `codes.AlreadyExists` | e.g. "domain already registered for this tenant" |
-| `23514` check_violation | `codes.InvalidArgument` | Catches `format CHECK (format IN (…))` etc. |
-| everything else | `codes.Internal` (unchanged) | Same fallback contract |
-
-**Estimated:** ~1-2h including unit tests + verification across services. No API change.
-
----
-
 ## Open security items
 
 The full audit log lives in [`security.md`](security.md). Only items that remain OPEN are tracked here for ongoing attention.
@@ -147,7 +126,7 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
 - **DEPLOY-001** — SaaS vs self-hosted deployment docs + tenant-persona testing — ~half day
 - Smaller Tier 2 items: FUT-007-FE, FUT-008, etc.
-- Remaining DSGN: DSGN-002 / -008 / -009 / -018 / -021 / -023 / -024 (7 of 24 still open from the 2026-06-23 review batch)
+- Remaining DSGN: DSGN-002 / -008 / -009 / -018 / -023 / -024 (6 of 24 still open from the 2026-06-23 review batch)
 
 ---
 
