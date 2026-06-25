@@ -441,6 +441,7 @@ func (r *Repository) UpdateTagImmutable(ctx context.Context, tenantID, repoID, n
 		       m.retention_pending_delete_at,
 		       COALESCE(m.quarantined, FALSE),
 		       COALESCE(m.config_media_type, ''),
+		       COALESCE(m.media_type, ''),
 		       t.immutable
 		FROM   updated t
 		LEFT   JOIN manifests m

@@ -35,6 +35,7 @@ import { BULK_DELETE_MAX } from "@/lib/api/tags";
 import { useBulkScanRepo } from "@/lib/api/scan";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Search } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -99,6 +100,11 @@ export function TagsPanel({
   const [artifactFilter, setArtifactFilter] = React.useState<ArtifactFilter>(
     initialFilter ?? "all",
   );
+  // Free-text tag-name filter. Composes with artifactFilter via two
+  // independent `useMemo` derivations below: artifact filter runs first
+  // (it's the chip-driven facet that also seeds the URL); search runs
+  // after on the artifact-filtered subset. Empty string means no filter.
+  const [search, setSearch] = React.useState("");
 
   // syncFilter wraps setArtifactFilter so the URL stays authoritative —
   // a chip click updates both the in-memory state AND the address bar.
@@ -134,7 +140,7 @@ export function TagsPanel({
   // Apply the artifact-type chip before exposing the array to the rest
   // of the panel — selection counts, "Select all" toggling, and empty-
   // state messages all need to see only the visible rows.
-  const tags = React.useMemo(() => {
+  const artifactFilteredTags = React.useMemo(() => {
     if (artifactFilter === "all") return allTags;
     if (artifactFilter === "") {
       // "unknown" path — match rows with empty artifact_type (legacy
@@ -144,6 +150,14 @@ export function TagsPanel({
     }
     return allTags.filter((t) => t.artifact_type === artifactFilter);
   }, [allTags, artifactFilter]);
+  // Then apply the free-text name filter on top. Case-insensitive
+  // substring so the operator can paste a partial digest-derived tag
+  // ("sha256-abcd") and find it without retyping the prefix exactly.
+  const tags = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (q === "") return artifactFilteredTags;
+    return artifactFilteredTags.filter((t) => t.name.toLowerCase().includes(q));
+  }, [artifactFilteredTags, search]);
   const visibleTagNames = React.useMemo(() => tags.map((t) => t.name), [tags]);
   // Cap selection at the server's hard limit so the toolbar can show a
   // friendlier "max 100" hint instead of letting the BFF 400 the request.
@@ -219,6 +233,29 @@ export function TagsPanel({
           org={org}
           repo={repo}
           tagCount={allTags.length}
+        />
+      </div>
+
+      {/* Free-text tag-name search. Sits on its own row so the chip row
+          above stays visually grouped with the bulk-scan button, and the
+          input gets the full available width on narrow viewports without
+          fighting the chips for space. */}
+      <div className="relative">
+        <Search
+          aria-hidden
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-fg-subtle)]"
+        />
+        <Label htmlFor="tag-search" className="sr-only">
+          Filter tags by name
+        </Label>
+        <Input
+          id="tag-search"
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Filter tags by name"
+          className="pl-9 font-mono"
+          autoComplete="off"
         />
       </div>
 

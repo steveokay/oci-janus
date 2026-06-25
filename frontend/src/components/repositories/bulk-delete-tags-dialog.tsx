@@ -28,8 +28,14 @@ interface BulkDeleteTagsDialogProps {
 
 // FE-API-036 — confirm + run a bulk tag delete.
 //
-// Type-to-confirm gate: the operator types the count as a string ("47").
-// Cheap insurance against an accidental swipe-select on a long list.
+// Type-to-confirm gate:
+//   - Multi-tag (N > 1): type the COUNT ("47"). Typing 47 names would be
+//     useless friction on a swipe-select, and the visible list above the
+//     input already lets the operator audit the set before they confirm.
+//   - Single-tag (N == 1): type the TAG NAME. "Type 1 to confirm" was a
+//     bad UX hand-off — the operator could blindly type "1" without
+//     reading what they're about to delete. Typing the tag name forces
+//     the eyes onto the actual identifier.
 // Once the mutation runs, the per-tag result list is surfaced in a toast
 // so the operator sees which tags failed (e.g. concurrent delete).
 export function BulkDeleteTagsDialog({
@@ -41,7 +47,10 @@ export function BulkDeleteTagsDialog({
   onCompleted,
 }: BulkDeleteTagsDialogProps): React.ReactElement {
   const del = useBulkDeleteTags();
-  const expected = String(tagNames.length);
+  // Single-tag delete swaps the gate from a count to the tag name itself
+  // — typing "1" to drop a single tag was friction without protection.
+  const isSingle = tagNames.length === 1;
+  const expected = isSingle ? (tagNames[0] ?? "") : String(tagNames.length);
   const [typed, setTyped] = React.useState("");
 
   // Reset the input when the dialog closes so a re-open starts clean.
@@ -104,7 +113,7 @@ export function BulkDeleteTagsDialog({
 
         <div>
           <Label htmlFor="bulk-confirm" className="mb-2 inline-block">
-            Type{" "}
+            {isSingle ? "Type the tag name" : "Type"}{" "}
             <code className="font-mono text-[var(--color-danger)]">
               {expected}
             </code>{" "}
@@ -117,7 +126,10 @@ export function BulkDeleteTagsDialog({
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             className="font-mono"
-            inputMode="numeric"
+            // Single-tag delete needs alphanumeric tag-name input; the
+            // bulk path stays numeric so the keypad on mobile pops
+            // straight to digits.
+            inputMode={isSingle ? "text" : "numeric"}
           />
         </div>
 
