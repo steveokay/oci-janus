@@ -118,8 +118,8 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **Tier 1 #1** — MFA (TOTP step-up) — ~2 weeks
 - **Tier 1 #5** — SCIM v2 provisioning — ~1.5 weeks
 - **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
-- **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
-- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `'tenant'` RBAC scope + `ListTenantUsers` / `InviteUser` / `SetUserDisabled` RPCs + `/tenant/users` route shared between tenant-admin and platform-admin. Strictly precedes Tier 1 #5 SCIM. Pairs with REM-018 — ~1 sprint
+- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `'tenant'` RBAC scope + `ListTenantUsers` / `InviteUser` / `SetUserDisabled` RPCs + `/tenant/users` route shared between tenant-admin and platform-admin. Strictly precedes Tier 1 #5 SCIM — ~1 sprint
+- **REM-018-followup** — `/activity` + notifications-bell still render `actor_username || actor_id`; needs `actor_display_name` on `audit.v1.NotificationEvent` + audit-side join so the existing `<UserCell variant="inline">` can replace the text render — ~half day
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
