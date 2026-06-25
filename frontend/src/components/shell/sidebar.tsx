@@ -17,6 +17,7 @@ import {
   Ship,
   Radio,
   Repeat,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth/store";
@@ -69,6 +70,12 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     title: "Access",
     items: [
       { to: "/members", label: "Members", icon: Users },
+      // FUT-012 Phase C — tenant-user lifecycle. Always rendered; the
+      // route itself surfaces a 403 ErrorState for non-tenant-admin
+      // callers, mirroring how /admin/scanner falls back to the
+      // BFF gate rather than duplicating the role check in the
+      // sidebar (which would require loading role assignments here).
+      { to: "/tenant/users", label: "Tenant users", icon: UsersRound },
       { to: "/api-keys", label: "API keys", icon: KeyRound },
       { to: "/workspace/domains", label: "Custom domains", icon: Globe },
     ],
