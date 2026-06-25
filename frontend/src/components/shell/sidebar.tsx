@@ -7,8 +7,8 @@ import {
   LayoutDashboard,
   Boxes,
   ShieldCheck,
-  Users,
   Webhook,
+  Building,
   Building2,
   Activity,
   KeyRound,
@@ -69,6 +69,14 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "Access",
     items: [
+      // /members is the org-list landing — each card represents one
+      // organization and links to the per-org member roster. "Members"
+      // didn't carry that meaning at a glance; "Organizations" matches
+      // what the page actually surfaces. URL stays /members so existing
+      // links + bookmarks don't break. Icon is `Building` (singular)
+      // to stay visually distinct from `Building2` already used by
+      // the Platform → Tenants entry.
+      { to: "/members", label: "Organizations", icon: Building },
       { to: "/members", label: "Members", icon: Users },
       // FUT-012 Phase C — tenant-user lifecycle. Always rendered; the
       // route itself surfaces a 403 ErrorState for non-tenant-admin
