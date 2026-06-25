@@ -272,14 +272,23 @@ type RetentionAppliedPayload struct {
 
 // PullImagePayload is the wire shape of pull.image (FE-API-042).
 //
-// Published by services/core after a successful manifest GET. Two consumers
-// land it today:
+// Published by two services today:
+//   - services/core after a successful manifest GET on an owned repository.
+//   - services/proxy after a successful manifest GET or HEAD on a cached
+//     upstream image (FUT-014). HEAD counts as a pull because the Docker
+//     client's HEAD-then-skip-GET path against a cached digest is the
+//     dominant traffic shape against the proxy.
+//
+// Two consumers land it today:
 //   - services/audit writes one audit_events row per pull (action=pull.image)
 //     so the FE-API-030 analytics `metric=pulls` query returns real bucket
 //     counts instead of zeros.
 //   - services/metadata debounce-updates manifests.last_pulled_at (at most
 //     one Postgres write per (manifest, 24h)) so the FE-API-043 max_idle_days
-//     retention rule has a column to evaluate.
+//     retention rule has a column to evaluate. The metadata consumer drops
+//     events with an empty RepositoryID — that path is how proxy-emitted
+//     pulls are silently ignored (proxy manifests don't live in
+//     metadata.manifests).
 //
 // ManifestID is the metadata service's internal UUID — services/core does not
 // always have it cached, so the field is optional. The consumer in
@@ -293,6 +302,12 @@ type RetentionAppliedPayload struct {
 // an anonymous public-pull path (the JWT carried no `sub`). Operators that
 // want IP / UA attribution should subscribe to the matching webhook delivery
 // — this payload deliberately avoids carrying request-level identifiers.
+//
+// Via identifies the publishing service so analytics that want to break out
+// owned-push pulls from pull-through-cache pulls can group by source.
+// Empty / absent means services/core (owned-pull). "proxy" means
+// services/proxy (cache-served pull). Consumers MUST treat unknown values
+// as opaque so a new publisher can be added without a payload migration.
 type PullImagePayload struct {
 	TenantID       string    `json:"tenant_id"`
 	RepositoryID   string    `json:"repository_id"`
@@ -302,6 +317,7 @@ type PullImagePayload struct {
 	Tag            string    `json:"tag,omitempty"`
 	ActorID        string    `json:"actor_id,omitempty"`
 	PulledAt       time.Time `json:"pulled_at"`
+	Via            string    `json:"via,omitempty"`
 }
 
 // RetentionGraceCompletedPayload is the wire shape of
