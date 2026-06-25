@@ -190,7 +190,7 @@ Other open backlog items live alongside them in `futures.md`:
 - ~~**REM-018**~~ BOTH PHASES SHIPPED (PRs #101 backend + #102 FE, 2026-06-25). Members tables + remove-member dialog now render display_name + @username via the shared `<UserCell>` primitive; `POST /api/v1/users` enforces non-empty display_name. Activity feed + notifications-bell display_name surfacing deferred to **REM-018-followup** (audit-side join needed)
 - ~~**FUT-013** — Pull-through cache visibility~~ ALL THREE PHASES SHIPPED (PRs #73 / #74 / #75; sidebar placement #78). See `status.md`
 - ~~**FUT-014** — Proxy publishes `pull.image` events~~ SHIPPED (PR #98, 2026-06-25). Dashboard 24h pulls card now includes cache-served traffic; `proxy_manifests.pull_count` no longer freezes on docker's HEAD-fast-path. Pure backend — zero FE wiring required, both surfaces start counting on the next pull
-- **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `/tenant/users` route shared between tenant-admin + platform-admin; invite / list / disable. Precedes SCIM (Tier 1 #5); REM-018 backend contract already satisfies the username/display_name shape this route needs
+- ~~**FUT-012**~~ ALL THREE PHASES SHIPPED (PRs #111 backend + #112 BFF + #113 FE, 2026-06-25). `/tenant/users` route is live with invite (one-time token reveal) / disable (type-the-username gate) / elevate-to-org-admin actions. Sidebar entry in Access section. Strict tenant-admin posture (explicit per-org elevation, not implicit inheritance) makes SCIM (Tier 1 #5) a straightforward next-step on the same machinery
 - **FUT-009** — service-account-as-signing-identity (~5h, supersedes `FUT-008`)
 - **FUT-010** — RBAC + FE-RBAC polish pass (~1 sprint, full audit; pairs with `DSGN-001`)
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001)
@@ -550,7 +550,7 @@ remaining S8 sub-items are bundled here so nothing slips:
 - `FE-API-011..013` `/users/me` GET / PATCH / password change
 - `FE-API-014..020` security overview / vulnerability list / scan history / remediation / policies / reports / overview snapshot
 - **`FUT-013`** Pull-through cache visibility: `GET /api/v1/proxy/cache` (paginated list), `GET /api/v1/proxy/cache/stats`, `DELETE /api/v1/proxy/cache/{manifest_digest}` — backed by 3 new `services/proxy` RPCs (`ListCachedManifests`, `GetCacheStats`, `DeleteCachedManifest`) + `last_pulled_at` / `pull_count` migration on `proxy_manifests`. New sidebar entry + `/proxy/cache` page (see futures.md §FUT-013).
-- **`FUT-012`** Tenant-user lifecycle: `GET /api/v1/tenant/users` (paginated list), `POST /api/v1/tenant/users/invite`, `PATCH /api/v1/tenant/users/{id}/disabled` — backed by 3 new `services/auth` RPCs gated on the new `'tenant'` RBAC scope. Frontend route `/tenant/users` shared between tenant-admin and platform-admin (see futures.md §FUT-012).
+- ~~**`FUT-012`**~~ Tenant-user lifecycle — SHIPPED 2026-06-25 (PRs #111/#112/#113). `GET /api/v1/tenant/users` (paginated), `POST /tenant/users/invite` (returns one-time token), `POST/DELETE /tenant/users/{id}/disable`, `POST /tenant/users/{id}/elevate/{org}`. Backed by 3 new `services/auth` RPCs gated on the new `'tenant'` RBAC scope. Frontend route `/tenant/users` in the Access sidebar section, BFF + page gates on tenant-admin OR platform-admin marker.
 
 ---
 
