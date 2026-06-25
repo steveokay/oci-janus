@@ -74,6 +74,9 @@ type auditRepo interface {
 	GetAuditExportConfig(ctx context.Context, tenantID uuid.UUID) (*repository.AuditExportConfig, error)
 	UpsertAuditExportConfig(ctx context.Context, cfg *repository.AuditExportConfig) (*repository.AuditExportConfig, error)
 	DeleteAuditExportConfig(ctx context.Context, tenantID uuid.UUID) error
+	// FUT-019 Phase 2 — per-user notification preferences.
+	GetUserPreferences(ctx context.Context, userID uuid.UUID) ([]*repository.NotificationPreference, error)
+	UpsertUserPreference(ctx context.Context, p repository.NotificationPreference) error
 }
 
 // AuditExportDLXProbe surfaces the live RabbitMQ DLX queue depth +

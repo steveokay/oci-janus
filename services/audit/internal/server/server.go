@@ -34,6 +34,7 @@ import (
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/audit/internal/export"
 	"github.com/steveokay/oci-janus/services/audit/internal/exportworker"
+	"github.com/steveokay/oci-janus/services/audit/internal/scheduler"
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
@@ -137,6 +138,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// Retention cleanup goroutine.
 	go runRetentionLoop(ctx, repo, cfg.RetentionDays)
+
+	// FUT-019 Phase 2 — scheduled-notifications scheduler + dispatcher.
+	// Both loops live behind a single Runner; the scheduler ticks
+	// hourly, the dispatcher every minute. Best-effort — failures log
+	// and continue, the loops never panic the process.
+	go func() {
+		slog.Info("FUT-019: starting scheduled-notifications runner")
+		runner := scheduler.New(repo, scheduler.Registry(), scheduler.RunnerConfig{})
+		runner.Start(ctx)
+		slog.Info("FUT-019: runner stopped")
+	}()
 
 	// HTTP server: liveness probe only.
 	//
