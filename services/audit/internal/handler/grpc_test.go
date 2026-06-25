@@ -206,6 +206,16 @@ func (f *fakeRepo) DeleteAuditExportConfig(_ context.Context, _ uuid.UUID) error
 	return nil
 }
 
+// FUT-019 Phase 2 — fake notification-preference methods. Tests that
+// exercise the new RPCs build dedicated fixtures; the existing repo
+// tests use these no-op stubs to satisfy the auditRepo interface.
+func (f *fakeRepo) GetUserPreferences(_ context.Context, _ uuid.UUID) ([]*repository.NotificationPreference, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpsertUserPreference(_ context.Context, _ repository.NotificationPreference) error {
+	return nil
+}
+
 func newHandler(repo auditRepo) *GRPCHandler {
 	return &GRPCHandler{repo: repo}
 }

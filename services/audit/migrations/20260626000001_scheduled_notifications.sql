@@ -85,7 +85,18 @@ CREATE TABLE user_notification_preferences (
 CREATE INDEX user_notification_preferences_tenant_idx
     ON user_notification_preferences (tenant_id, category);
 
+-- Grants for the low-privilege runtime role
+-- (registry_audit_app, created in migration 20240101000002). Mirrors
+-- the audit_export_configs grants from migration 20260623100000.
+-- INSERT for the scheduler, SELECT for the dispatcher claim path,
+-- UPDATE so the dispatcher can flip status fields.
+GRANT INSERT, SELECT, UPDATE ON scheduled_notifications      TO registry_audit_app;
+GRANT INSERT, SELECT, UPDATE ON user_notification_preferences TO registry_audit_app;
+
 -- +goose Down
+
+REVOKE INSERT, SELECT, UPDATE ON user_notification_preferences FROM registry_audit_app;
+REVOKE INSERT, SELECT, UPDATE ON scheduled_notifications      FROM registry_audit_app;
 
 DROP INDEX IF EXISTS user_notification_preferences_tenant_idx;
 DROP TABLE IF EXISTS user_notification_preferences;

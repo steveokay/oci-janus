@@ -68,6 +68,12 @@ var defaultNotificationEventTypes = []string{
 	"service_account.key_issued",
 	"service_account.key_revoked",
 	"service_account.scopes_updated",
+	// FUT-019 Phase 2 — scheduled notifications fan out under a single
+	// action key with the category in payload. The bell renderer
+	// (renderNotification below) reads the rendered title/summary/link
+	// directly from metadata.raw so a new category doesn't need a new
+	// allowlist entry.
+	"notification.scheduled",
 }
 
 // allowedNotificationEventTypes is the full set of action values the
@@ -94,6 +100,7 @@ var allowedNotificationEventTypes = map[string]struct{}{
 	"service_account.key_issued":     {},
 	"service_account.key_revoked":    {},
 	"service_account.scopes_updated": {},
+	"notification.scheduled":         {},
 }
 
 // GetNotifications returns operator-facing audit events for the calling
@@ -240,6 +247,14 @@ type rawNotificationPayload struct {
 	ManifestsConsidered int64  `json:"manifests_considered"`
 	ManifestsDeleted    int64  `json:"manifests_deleted"`
 	BytesFreed          int64  `json:"bytes_freed"`
+	// FUT-019 Phase 2 — scheduled notifications carry their pre-
+	// rendered fields in the payload itself so renderNotification can
+	// pass them through without a per-category switch. Category
+	// identifies which renderer built them.
+	Category string `json:"category"`
+	Title    string `json:"title"`
+	Summary  string `json:"summary"`
+	Link     string `json:"link"`
 }
 
 // notificationFromRow converts an audit row into a wire-shaped notification
@@ -301,6 +316,21 @@ func renderNotification(action, outcome string, p *rawNotificationPayload, org, 
 	}
 
 	switch action {
+	case "notification.scheduled":
+		// FUT-019 Phase 2 — scheduled notifications carry their
+		// rendered title/summary/link inside the payload itself.
+		// The dispatcher built them via Category.Render; we pass
+		// them through verbatim instead of re-rendering by
+		// category. Empty title falls back to a generic label so
+		// a corrupted row still renders.
+		if p.Title != "" {
+			title = p.Title
+		} else {
+			title = "Scheduled notification"
+		}
+		summary = p.Summary
+		link = p.Link
+		return
 	case "push.image":
 		title = "Push completed"
 		if tagPath != "" {

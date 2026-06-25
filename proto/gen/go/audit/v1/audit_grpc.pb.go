@@ -19,17 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	AuditService_GetBuildHistory_FullMethodName         = "/registry.audit.v1.AuditService/GetBuildHistory"
-	AuditService_GetDailyPullCount_FullMethodName       = "/registry.audit.v1.AuditService/GetDailyPullCount"
-	AuditService_GetRepoActivity_FullMethodName         = "/registry.audit.v1.AuditService/GetRepoActivity"
-	AuditService_GetNotifications_FullMethodName        = "/registry.audit.v1.AuditService/GetNotifications"
-	AuditService_GetAnalytics_FullMethodName            = "/registry.audit.v1.AuditService/GetAnalytics"
-	AuditService_GetLastTenantPush_FullMethodName       = "/registry.audit.v1.AuditService/GetLastTenantPush"
-	AuditService_GetAuditExportConfig_FullMethodName    = "/registry.audit.v1.AuditService/GetAuditExportConfig"
-	AuditService_PutAuditExportConfig_FullMethodName    = "/registry.audit.v1.AuditService/PutAuditExportConfig"
-	AuditService_DeleteAuditExportConfig_FullMethodName = "/registry.audit.v1.AuditService/DeleteAuditExportConfig"
-	AuditService_TestAuditExportConfig_FullMethodName   = "/registry.audit.v1.AuditService/TestAuditExportConfig"
-	AuditService_DrainAuditExportDLX_FullMethodName     = "/registry.audit.v1.AuditService/DrainAuditExportDLX"
+	AuditService_GetBuildHistory_FullMethodName                   = "/registry.audit.v1.AuditService/GetBuildHistory"
+	AuditService_GetDailyPullCount_FullMethodName                 = "/registry.audit.v1.AuditService/GetDailyPullCount"
+	AuditService_GetRepoActivity_FullMethodName                   = "/registry.audit.v1.AuditService/GetRepoActivity"
+	AuditService_GetNotifications_FullMethodName                  = "/registry.audit.v1.AuditService/GetNotifications"
+	AuditService_GetAnalytics_FullMethodName                      = "/registry.audit.v1.AuditService/GetAnalytics"
+	AuditService_GetLastTenantPush_FullMethodName                 = "/registry.audit.v1.AuditService/GetLastTenantPush"
+	AuditService_GetAuditExportConfig_FullMethodName              = "/registry.audit.v1.AuditService/GetAuditExportConfig"
+	AuditService_PutAuditExportConfig_FullMethodName              = "/registry.audit.v1.AuditService/PutAuditExportConfig"
+	AuditService_DeleteAuditExportConfig_FullMethodName           = "/registry.audit.v1.AuditService/DeleteAuditExportConfig"
+	AuditService_TestAuditExportConfig_FullMethodName             = "/registry.audit.v1.AuditService/TestAuditExportConfig"
+	AuditService_DrainAuditExportDLX_FullMethodName               = "/registry.audit.v1.AuditService/DrainAuditExportDLX"
+	AuditService_GetUserNotificationPreferences_FullMethodName    = "/registry.audit.v1.AuditService/GetUserNotificationPreferences"
+	AuditService_UpdateUserNotificationPreferences_FullMethodName = "/registry.audit.v1.AuditService/UpdateUserNotificationPreferences"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -104,6 +106,14 @@ type AuditServiceClient interface {
 	// operator triggering it on a catastrophically-full DLX doesn't
 	// hang the request — subsequent calls drain incrementally.
 	DrainAuditExportDLX(ctx context.Context, in *DrainAuditExportDLXRequest, opts ...grpc.CallOption) (*DrainAuditExportDLXResponse, error)
+	// FUT-019 Phase 2 — per-user notification preferences. Drives the
+	// /settings → Notifications opt-in matrix on the FE. Backed by the
+	// user_notification_preferences table; missing rows default to
+	// bell=on / email=off / webhook=off so a fresh user starts
+	// subscribed to every bell category with email/webhook off until
+	// they opt in.
+	GetUserNotificationPreferences(ctx context.Context, in *GetUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*GetUserNotificationPreferencesResponse, error)
+	UpdateUserNotificationPreferences(ctx context.Context, in *UpdateUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserNotificationPreferencesResponse, error)
 }
 
 type auditServiceClient struct {
@@ -224,6 +234,26 @@ func (c *auditServiceClient) DrainAuditExportDLX(ctx context.Context, in *DrainA
 	return out, nil
 }
 
+func (c *auditServiceClient) GetUserNotificationPreferences(ctx context.Context, in *GetUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*GetUserNotificationPreferencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUserNotificationPreferencesResponse)
+	err := c.cc.Invoke(ctx, AuditService_GetUserNotificationPreferences_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) UpdateUserNotificationPreferences(ctx context.Context, in *UpdateUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserNotificationPreferencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateUserNotificationPreferencesResponse)
+	err := c.cc.Invoke(ctx, AuditService_UpdateUserNotificationPreferences_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -296,6 +326,14 @@ type AuditServiceServer interface {
 	// operator triggering it on a catastrophically-full DLX doesn't
 	// hang the request — subsequent calls drain incrementally.
 	DrainAuditExportDLX(context.Context, *DrainAuditExportDLXRequest) (*DrainAuditExportDLXResponse, error)
+	// FUT-019 Phase 2 — per-user notification preferences. Drives the
+	// /settings → Notifications opt-in matrix on the FE. Backed by the
+	// user_notification_preferences table; missing rows default to
+	// bell=on / email=off / webhook=off so a fresh user starts
+	// subscribed to every bell category with email/webhook off until
+	// they opt in.
+	GetUserNotificationPreferences(context.Context, *GetUserNotificationPreferencesRequest) (*GetUserNotificationPreferencesResponse, error)
+	UpdateUserNotificationPreferences(context.Context, *UpdateUserNotificationPreferencesRequest) (*UpdateUserNotificationPreferencesResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -334,6 +372,12 @@ func (UnimplementedAuditServiceServer) TestAuditExportConfig(context.Context, *T
 }
 func (UnimplementedAuditServiceServer) DrainAuditExportDLX(context.Context, *DrainAuditExportDLXRequest) (*DrainAuditExportDLXResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DrainAuditExportDLX not implemented")
+}
+func (UnimplementedAuditServiceServer) GetUserNotificationPreferences(context.Context, *GetUserNotificationPreferencesRequest) (*GetUserNotificationPreferencesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUserNotificationPreferences not implemented")
+}
+func (UnimplementedAuditServiceServer) UpdateUserNotificationPreferences(context.Context, *UpdateUserNotificationPreferencesRequest) (*UpdateUserNotificationPreferencesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateUserNotificationPreferences not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -545,6 +589,42 @@ func _AuditService_DrainAuditExportDLX_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetUserNotificationPreferences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserNotificationPreferencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetUserNotificationPreferences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetUserNotificationPreferences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetUserNotificationPreferences(ctx, req.(*GetUserNotificationPreferencesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_UpdateUserNotificationPreferences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateUserNotificationPreferencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).UpdateUserNotificationPreferences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_UpdateUserNotificationPreferences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).UpdateUserNotificationPreferences(ctx, req.(*UpdateUserNotificationPreferencesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -595,6 +675,14 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DrainAuditExportDLX",
 			Handler:    _AuditService_DrainAuditExportDLX_Handler,
+		},
+		{
+			MethodName: "GetUserNotificationPreferences",
+			Handler:    _AuditService_GetUserNotificationPreferences_Handler,
+		},
+		{
+			MethodName: "UpdateUserNotificationPreferences",
+			Handler:    _AuditService_UpdateUserNotificationPreferences_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

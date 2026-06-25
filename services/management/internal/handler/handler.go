@@ -357,6 +357,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 
+	// FUT-019 Phase 2 — per-user notification preferences. Auth gated
+	// at the JWT layer (any logged-in user can manage their own
+	// preferences). Drives the /settings → Notifications opt-in matrix
+	// on the FE.
+	mux.Handle("GET /api/v1/users/me/notification-preferences",
+		authMW(http.HandlerFunc(h.handleGetNotificationPreferences)))
+	mux.Handle("PATCH /api/v1/users/me/notification-preferences",
+		authMW(http.HandlerFunc(h.handlePatchNotificationPreferences)))
+
 	// FUT-012 Phase B — tenant-user lifecycle endpoints. Gated on
 	// tenant-admin OR platform-admin marker inside each handler.
 	mux.Handle("GET /api/v1/tenant/users",

@@ -80,6 +80,15 @@ service AuditService {
   // operator triggering it on a catastrophically-full DLX doesn't
   // hang the request — subsequent calls drain incrementally.
   rpc DrainAuditExportDLX(DrainAuditExportDLXRequest) returns (DrainAuditExportDLXResponse);
+
+  // FUT-019 Phase 2 — per-user notification preferences. Drives the
+  // /settings → Notifications opt-in matrix on the FE. Backed by the
+  // user_notification_preferences table; missing rows default to
+  // bell=on / email=off / webhook=off so a fresh user starts
+  // subscribed to every bell category with email/webhook off until
+  // they opt in.
+  rpc GetUserNotificationPreferences(GetUserNotificationPreferencesRequest) returns (GetUserNotificationPreferencesResponse);
+  rpc UpdateUserNotificationPreferences(UpdateUserNotificationPreferencesRequest) returns (UpdateUserNotificationPreferencesResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -431,4 +440,36 @@ message DrainAuditExportDLXResponse {
   // server-side MaxDrain constant; the operator may need to call this
   // multiple times after a long outage.
   int32 republished = 1;
+}
+
+// FUT-019 Phase 2 messages ─────────────────────────────────────────────
+
+// NotificationPreference is one row of the (user_id, category) opt-in
+// matrix. Missing rows on the server default to bell=true / email=false
+// / webhook=false; the FE renders unset rows with the same defaults so
+// the matrix looks identical whether the row exists or not.
+message NotificationPreference {
+  string category         = 1; // e.g. "scanner_freshness"
+  bool   bell_enabled     = 2;
+  bool   email_enabled    = 3;
+  bool   webhook_enabled  = 4;
+}
+
+message GetUserNotificationPreferencesRequest {
+  string tenant_id = 1;
+  string user_id   = 2;
+}
+
+message GetUserNotificationPreferencesResponse {
+  repeated NotificationPreference preferences = 1;
+}
+
+message UpdateUserNotificationPreferencesRequest {
+  string tenant_id = 1;
+  string user_id   = 2;
+  repeated NotificationPreference preferences = 3;
+}
+
+message UpdateUserNotificationPreferencesResponse {
+  repeated NotificationPreference preferences = 1;
 }
