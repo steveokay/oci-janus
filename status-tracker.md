@@ -142,7 +142,6 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **REM-018** — UI user-ID → username (filed 2026-06-24): wire username + display_name into BFF list responses, replace UUID renders in members / activity / audit, enforce non-empty display_name on user creation — ~1-2 days
 - **FUT-012** — Tenant-user lifecycle management (filed 2026-06-24): new `'tenant'` RBAC scope + `ListTenantUsers` / `InviteUser` / `SetUserDisabled` RPCs + `/tenant/users` route shared between tenant-admin and platform-admin. Strictly precedes Tier 1 #5 SCIM. Pairs with REM-018 — ~1 sprint
 - **FUT-014** — Proxy publishes `pull.image` events (filed 2026-06-24, scope revised same day): `services/proxy` becomes a first-class publisher in the audit pipeline. Subsumes (a) the per-row `pull_count` undercount AND (b) the dashboard 24h pulls card not including cache traffic. Lands as one design change because both symptoms share the "proxy doesn't publish pull events" root cause. ~1 day
-- **FUT-018** — Digest-keyed scan + signature BFF routes (filed 2026-06-24): closes the FUT-017 Phase 2 loop — existing `useScan` / `useSignature` are tag-keyed; cached rows have only digest. Adds 2-3 BFF wrappers + new FE hooks + 2 detail-page tabs + 2 list columns. Backend RPCs already accept digests. ~1-2 days
 - **FUT-009** — service-account-as-signing-identity — ~5h
 - **FUT-010** — RBAC + FE-RBAC polish pass — ~1 sprint
 - **FUT-011** — New-user onboarding flow end-to-end via FE (paired with DEPLOY-001) — ~half day + docs
