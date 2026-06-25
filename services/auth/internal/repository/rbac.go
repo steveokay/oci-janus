@@ -22,6 +22,12 @@ type Member struct {
 	UserID uuid.UUID
 	// Kind is "human" or "service_account" (from users.kind).
 	Kind string
+	// Username is the literal users.username column (REM-018). Always
+	// non-empty because the auth service enforces a non-empty username at
+	// account creation. Surfaced separately from DisplayName so the FE
+	// UserCell can render "<display_name> (@<username>)" without the BFF
+	// having to parse the DisplayName fallback chain back apart.
+	Username string
 	// DisplayName is the human-friendly label for the principal.
 	// For humans: users.display_name if set, else users.username, else users.email.
 	// For service accounts: service_accounts.name.
@@ -34,6 +40,14 @@ type Member struct {
 	// GrantedBy is the user who created this assignment, or the zero UUID when
 	// the assignment was created by the system.
 	GrantedBy uuid.UUID
+	// GrantedByUsername + GrantedByDisplayName are the literal username +
+	// best-available label for the granted-by principal (REM-018). Both are
+	// empty when GrantedBy is the system zero-UUID — the LEFT JOIN finds no
+	// row and the COALESCE chain falls through to ''. The BFF emits a stable
+	// "system" placeholder when both are empty so the FE doesn't have to
+	// inspect the zero-UUID.
+	GrantedByUsername    string
+	GrantedByDisplayName string
 }
 
 // RoleAssignment is the database model for a user's role within a tenant scope.
@@ -145,18 +159,26 @@ func (r *UserRepository) RevokeRoleScoped(ctx context.Context, assignmentID, ten
 // users the COALESCE chain falls back through display_name → username → email
 // to guarantee a non-empty label.
 func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]Member, error) {
+	// REM-018: gb LEFT JOIN enriches the granted-by user with username +
+	// display_name in the same round-trip. COALESCE chains fall through to
+	// '' when granted_by is the system zero-UUID (no matching row) so the
+	// caller can render a "system" placeholder without inspecting the UUID.
 	const q = `
 		SELECT ra.id AS assignment_id,
 		       u.id,
 		       u.kind,
+		       u.username,
 		       COALESCE(sa.name, u.display_name, u.username, COALESCE(u.email, '')) AS display_name,
 		       sa.id AS sa_id,
 		       ro.name,
-		       COALESCE(ra.granted_by, '00000000-0000-0000-0000-000000000000'::uuid)
+		       COALESCE(ra.granted_by, '00000000-0000-0000-0000-000000000000'::uuid),
+		       COALESCE(gb.username, '') AS granted_by_username,
+		       COALESCE(gb.display_name, gb.username, '') AS granted_by_display_name
 		FROM   role_assignments ra
-		JOIN   roles ro               ON ro.id           = ra.role_id
-		JOIN   users u                ON u.id            = ra.user_id
+		JOIN   roles ro               ON ro.id              = ra.role_id
+		JOIN   users u                ON u.id               = ra.user_id
 		LEFT   JOIN service_accounts sa ON sa.shadow_user_id = u.id
+		LEFT   JOIN users gb           ON gb.id              = ra.granted_by
 		WHERE  ra.tenant_id  = $1
 		  AND  ra.scope_type  = $2
 		  AND  ra.scope_value = $3
@@ -174,7 +196,8 @@ func (r *UserRepository) ListMembers(ctx context.Context, tenantID uuid.UUID, sc
 		// sa_id is NULL for human users — scan into a pointer so pgx sets it to nil.
 		var saID *uuid.UUID
 		if err := rows.Scan(
-			&m.AssignmentID, &m.UserID, &m.Kind, &m.DisplayName, &saID, &m.Role, &m.GrantedBy,
+			&m.AssignmentID, &m.UserID, &m.Kind, &m.Username, &m.DisplayName, &saID, &m.Role, &m.GrantedBy,
+			&m.GrantedByUsername, &m.GrantedByDisplayName,
 		); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}

@@ -328,9 +328,20 @@ func (s *Service) loadRoleNames(ctx context.Context, userID, tenantID uuid.UUID)
 }
 
 // CreateUser hashes the password and persists the user record.
-func (s *Service) CreateUser(ctx context.Context, tenantID uuid.UUID, username, email, password string) (*repository.User, error) {
+//
+// REM-018: displayName is non-optional on the public POST /api/v1/users path
+// — the handler validates it before calling here. Internal callers that
+// don't have a display_name yet (test fixtures, legacy provisioning paths)
+// may pass empty string; validation is skipped in that case and the column
+// stores NULL via NULLIF inside repository.Create.
+func (s *Service) CreateUser(ctx context.Context, tenantID uuid.UUID, username, email, displayName, password string) (*repository.User, error) {
 	if err := ValidatePassword(password); err != nil {
 		return nil, err
+	}
+	if displayName != "" {
+		if err := validateDisplayName(displayName); err != nil {
+			return nil, err
+		}
 	}
 	hash, err := argon2pkg.Hash(password)
 	if err != nil {
@@ -340,6 +351,7 @@ func (s *Service) CreateUser(ctx context.Context, tenantID uuid.UUID, username, 
 		TenantID:     tenantID,
 		Username:     username,
 		Email:        email,
+		DisplayName:  displayName,
 		PasswordHash: hash,
 	})
 }

@@ -116,13 +116,28 @@ func (h *Handler) RegisterRBAC(mux *http.ServeMux, authMW func(http.Handler) htt
 // ---------------------------------------------------------------------------
 
 // MemberResponse is the JSON representation of a single role assignment.
+//
+// REM-018 enrichment: the FE used to render raw UUIDs in the members table
+// and the granted-by column. The auth service is the system of record for
+// the username/display_name join, so it surfaces both fields inline and the
+// BFF passes them through verbatim. The FE UserCell primitive prefers
+// DisplayName over Username, falling back to a shortened UUID only when
+// both are empty (which shouldn't happen for valid users).
+//
+// GrantedBy* fields are empty strings when the assignment was created by
+// the system (granted_by is the zero UUID). The FE renders a "system"
+// placeholder in that case rather than poking at the UUID.
 type MemberResponse struct {
-	ID         string `json:"id"`
-	UserID     string `json:"user_id"`
-	Role       string `json:"role"`
-	ScopeType  string `json:"scope_type"`
-	ScopeValue string `json:"scope_value"`
-	GrantedBy  string `json:"granted_by"`
+	ID                   string `json:"id"`
+	UserID               string `json:"user_id"`
+	Username             string `json:"username"`
+	DisplayName          string `json:"display_name"`
+	Role                 string `json:"role"`
+	ScopeType            string `json:"scope_type"`
+	ScopeValue           string `json:"scope_value"`
+	GrantedBy            string `json:"granted_by"`
+	GrantedByUsername    string `json:"granted_by_username"`
+	GrantedByDisplayName string `json:"granted_by_display_name"`
 }
 
 // handleListOrgMembers returns all role assignments for the given org scope.
@@ -376,12 +391,16 @@ func memberSlice(proto []*authv1.RoleAssignment) []MemberResponse {
 	out := make([]MemberResponse, len(proto))
 	for i, m := range proto {
 		out[i] = MemberResponse{
-			ID:         m.GetId(),
-			UserID:     m.GetUserId(),
-			Role:       m.GetRole(),
-			ScopeType:  m.GetScopeType(),
-			ScopeValue: m.GetScopeValue(),
-			GrantedBy:  m.GetGrantedBy(),
+			ID:                   m.GetId(),
+			UserID:               m.GetUserId(),
+			Username:             m.GetUsername(),
+			DisplayName:          m.GetDisplayName(),
+			Role:                 m.GetRole(),
+			ScopeType:            m.GetScopeType(),
+			ScopeValue:           m.GetScopeValue(),
+			GrantedBy:            m.GetGrantedBy(),
+			GrantedByUsername:    m.GetGrantedByUsername(),
+			GrantedByDisplayName: m.GetGrantedByDisplayName(),
 		}
 	}
 	return out

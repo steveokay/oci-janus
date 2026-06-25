@@ -67,6 +67,13 @@ func (f *handlerFakeUserRepo) Create(_ context.Context, req repository.CreateUse
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 	}
+	// REM-018: persist DisplayName through the fake so handler tests that
+	// round-trip the create response can assert the field. Empty stays nil
+	// to mirror the real SQL NULLIF behaviour.
+	if req.DisplayName != "" {
+		v := req.DisplayName
+		u.DisplayName = &v
+	}
 	f.users[req.Username] = u
 	return u, nil
 }
@@ -397,7 +404,9 @@ func issueTestToken(t *testing.T, svc *service.Service, userID, tenantID string,
 // registerTestUser creates a user via the service and returns their UUID.
 func registerTestUser(t *testing.T, svc *service.Service, tenantID uuid.UUID, username, password string) uuid.UUID {
 	t.Helper()
-	user, err := svc.CreateUser(context.Background(), tenantID, username, username+"@test.com", password)
+	// REM-018: tests don't care about display_name; empty string stores NULL
+	// in users.display_name via NULLIF and keeps these fixtures terse.
+	user, err := svc.CreateUser(context.Background(), tenantID, username, username+"@test.com", "", password)
 	if err != nil {
 		t.Fatalf("CreateUser %q: %v", username, err)
 	}
@@ -778,9 +787,10 @@ func TestCreateUser_weakPassword_returns400WithMessage(t *testing.T) {
 func TestCreateUser_validInput_returns201(t *testing.T) {
 	srv, tc := newTestServer(t)
 	body, _ := json.Marshal(map[string]string{
-		"username": "newuser",
-		"email":    "newuser@example.com",
-		"password": "Str0ng!Password123",
+		"username":     "newuser",
+		"email":        "newuser@example.com",
+		"display_name": "New User",
+		"password":     "Str0ng!Password123",
 	})
 	req, tenantID := newAdminAuthedRequest(t, srv, tc, body)
 
@@ -802,6 +812,34 @@ func TestCreateUser_validInput_returns201(t *testing.T) {
 	if result["tenant_id"] != tenantID {
 		t.Errorf("tenant_id: got %v, want %v (must match caller's tenant)", result["tenant_id"], tenantID)
 	}
+	// REM-018: display_name should round-trip through the create response so
+	// the FE can render the new row immediately without a follow-up GET.
+	if result["display_name"] != "New User" {
+		t.Errorf("display_name: got %v, want %q", result["display_name"], "New User")
+	}
+}
+
+// REM-018: TestCreateUser_missingDisplayName_returns400 pins the new
+// non-empty display_name contract on POST /api/v1/users. Empty display_name
+// must fail with 400 BADREQUEST — fail BEFORE we hit the password policy
+// check so the caller sees the most specific reason first.
+func TestCreateUser_missingDisplayName_returns400(t *testing.T) {
+	srv, tc := newTestServer(t)
+	body, _ := json.Marshal(map[string]string{
+		"username": "needsname",
+		"email":    "needsname@example.com",
+		"password": "Str0ng!Password123",
+		// display_name deliberately absent
+	})
+	req, _ := newAdminAuthedRequest(t, srv, tc, body)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400 (display_name is required)", resp.StatusCode)
+	}
 }
 
 // TestCreateUser_duplicateUsername verifies that creating a user with an
@@ -817,9 +855,10 @@ func TestCreateUser_duplicateUsername_returns409(t *testing.T) {
 	tok := issueTestToken(t, tc.svc, adminID.String(), tenantID.String(), nil)
 
 	body, _ := json.Marshal(map[string]string{
-		"username": "duplicate",
-		"email":    "dup@example.com",
-		"password": "Str0ng!Password123",
+		"username":     "duplicate",
+		"email":        "dup@example.com",
+		"display_name": "Duplicate One",
+		"password":     "Str0ng!Password123",
 	})
 	req1, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body))
 	req1.Header.Set("Authorization", "Bearer "+tok)
@@ -828,9 +867,10 @@ func TestCreateUser_duplicateUsername_returns409(t *testing.T) {
 	resp1.Body.Close()
 
 	body2, _ := json.Marshal(map[string]string{
-		"username": "duplicate",
-		"email":    "dup2@example.com",
-		"password": "Str0ng!Password123",
+		"username":     "duplicate",
+		"email":        "dup2@example.com",
+		"display_name": "Duplicate Two",
+		"password":     "Str0ng!Password123",
 	})
 	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users", bytes.NewReader(body2))
 	req2.Header.Set("Authorization", "Bearer "+tok)

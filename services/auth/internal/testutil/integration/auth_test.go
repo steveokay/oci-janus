@@ -95,7 +95,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		testUsername = "integration-test-user"
 		testPassword = "IntTest@Pass1234"
 	)
-	_, err = svc.CreateUser(ctx, tenantID, testUsername, "inttest@example.com", testPassword)
+	_, err = svc.CreateUser(ctx, tenantID, testUsername, "inttest@example.com", "", testPassword)
 	if err != nil {
 		t.Fatalf("create test user: %v", err)
 	}

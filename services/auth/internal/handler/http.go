@@ -306,10 +306,11 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		TenantID string `json:"tenant_id"` // optional; must match caller's tenant if supplied
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		TenantID    string `json:"tenant_id"` // optional; must match caller's tenant if supplied
+		Username    string `json:"username"`
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid request body")
@@ -350,7 +351,20 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.svc.CreateUser(r.Context(), tenantID, req.Username, req.Email, req.Password)
+	// REM-018: enforce non-empty display_name on the public POST /api/v1/users
+	// path. The dashboard's members table, audit-event actor column, and
+	// granted-by column all want a human label; allowing it to be empty here
+	// would propagate UUID-fallbacks downstream. This gate fires AFTER the
+	// security checks above (PENTEST-002 / PENTEST-003) so a non-admin or
+	// cross-tenant caller still sees 403, not 400. Length + content
+	// validation happens inside service.CreateUser via the shared
+	// validateDisplayName helper.
+	if req.DisplayName == "" {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "display_name is required")
+		return
+	}
+
+	user, err := h.svc.CreateUser(r.Context(), tenantID, req.Username, req.Email, req.DisplayName, req.Password)
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
 			writeError(w, http.StatusConflict, "CONFLICT", "username or email already in use")
@@ -364,18 +378,33 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
 			return
 		}
+		// REM-018: ErrInvalidDisplayName is safe to surface — the message
+		// echoes the same 1..128 char / no control char constraint the
+		// PATCH /users/me path already documents.
+		if errors.Is(err, service.ErrInvalidDisplayName) {
+			writeError(w, http.StatusBadRequest, "BADREQUEST", "display_name must be 1..128 characters and contain no control characters")
+			return
+		}
 		slog.ErrorContext(r.Context(), "create user failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "unable to create user")
 		return
 	}
 
+	// REM-018: surface DisplayName so the FE doesn't need a follow-up GET.
+	// User.DisplayName is *string (nullable) so dereference defensively —
+	// internal callers may still create users with an empty display_name.
+	displayName := ""
+	if user.DisplayName != nil {
+		displayName = *user.DisplayName
+	}
 	writeJSON(w, http.StatusCreated, userResponse{
-		ID:        user.ID.String(),
-		TenantID:  user.TenantID.String(),
-		Username:  user.Username,
-		Email:     user.Email,
-		IsActive:  user.IsActive,
-		CreatedAt: user.CreatedAt,
+		ID:          user.ID.String(),
+		TenantID:    user.TenantID.String(),
+		Username:    user.Username,
+		Email:       user.Email,
+		DisplayName: displayName,
+		IsActive:    user.IsActive,
+		CreatedAt:   user.CreatedAt,
 	})
 }
 
@@ -950,12 +979,13 @@ type tokenResponse struct {
 }
 
 type userResponse struct {
-	ID        string    `json:"id"`
-	TenantID  string    `json:"tenant_id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	IsActive  bool      `json:"is_active"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	Username    string    `json:"username"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"display_name"`
+	IsActive    bool      `json:"is_active"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type apiKeyResponse struct {

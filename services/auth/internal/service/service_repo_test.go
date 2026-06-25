@@ -375,7 +375,7 @@ func TestCreateUser_validInput_returnsUser(t *testing.T) {
 	defer cleanup()
 
 	tenantID := uuid.New()
-	user, err := svc.CreateUser(context.Background(), tenantID, "alice", "alice@example.com", "Str0ng!Password123")
+	user, err := svc.CreateUser(context.Background(), tenantID, "alice", "alice@example.com", "", "Str0ng!Password123")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestCreateUser_weakPassword_returnsError(t *testing.T) {
 	svc, _, _, cleanup := setupServiceWithRepos(t)
 	defer cleanup()
 
-	_, err := svc.CreateUser(context.Background(), uuid.New(), "bob", "bob@example.com", "weak")
+	_, err := svc.CreateUser(context.Background(), uuid.New(), "bob", "bob@example.com", "", "weak")
 	if err == nil {
 		t.Fatal("expected error for weak password, got nil")
 	}
@@ -412,11 +412,11 @@ func TestCreateUser_duplicateUsername_returnsAlreadyExists(t *testing.T) {
 	defer cleanup()
 
 	tenantID := uuid.New()
-	_, err := svc.CreateUser(context.Background(), tenantID, "alice", "alice@example.com", "Str0ng!Password123")
+	_, err := svc.CreateUser(context.Background(), tenantID, "alice", "alice@example.com", "", "Str0ng!Password123")
 	if err != nil {
 		t.Fatalf("first CreateUser: %v", err)
 	}
-	_, err = svc.CreateUser(context.Background(), tenantID, "alice", "alice2@example.com", "Str0ng!Password123")
+	_, err = svc.CreateUser(context.Background(), tenantID, "alice", "alice2@example.com", "", "Str0ng!Password123")
 	if !errors.Is(err, repository.ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -471,7 +471,7 @@ func authenticateSetup(t *testing.T) (*Service, uuid.UUID, string, string, func(
 		username = "testuser"
 		password = "Str0ng!Password123"
 	)
-	_, err := svc.CreateUser(context.Background(), tenantID, username, "test@example.com", password)
+	_, err := svc.CreateUser(context.Background(), tenantID, username, "test@example.com", "", password)
 	if err != nil {
 		cleanup()
 		t.Fatalf("create test user: %v", err)

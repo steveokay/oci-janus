@@ -367,12 +367,16 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 	out := make([]*authv1.RoleAssignment, len(members))
 	for i, m := range members {
 		out[i] = &authv1.RoleAssignment{
-			Id:         m.AssignmentID.String(),
-			UserId:     m.UserID.String(),
-			Role:       m.Role,
-			ScopeType:  req.GetScopeType(),
-			ScopeValue: req.GetScopeValue(),
-			GrantedBy:  m.GrantedBy.String(),
+			Id:                   m.AssignmentID.String(),
+			UserId:               m.UserID.String(),
+			Role:                 m.Role,
+			ScopeType:            req.GetScopeType(),
+			ScopeValue:           req.GetScopeValue(),
+			GrantedBy:            m.GrantedBy.String(),
+			Username:             m.Username,
+			DisplayName:          m.DisplayName,
+			GrantedByUsername:    m.GrantedByUsername,
+			GrantedByDisplayName: m.GrantedByDisplayName,
 		}
 	}
 	return &authv1.ListMembersResponse{Members: out}, nil

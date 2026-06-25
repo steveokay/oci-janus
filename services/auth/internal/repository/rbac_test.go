@@ -108,6 +108,21 @@ func TestRBAC_ListMembers_ProjectsKind(t *testing.T) {
 		require.NotEqual(t, [16]byte{}, m.AssignmentID,
 			"AssignmentID must be non-zero for Kind=%q", m.Kind)
 
+		// REM-018: every member row must carry the literal users.username so the
+		// FE UserCell primitive doesn't have to derive it back from the
+		// COALESCE-fallback DisplayName. Both the human admin and the SA shadow
+		// user have non-empty username columns by construction (the create
+		// helpers refuse empty usernames).
+		require.NotEmpty(t, m.Username,
+			"Username must be non-empty for Kind=%q", m.Kind)
+		// Both members were granted by the admin, so the granted-by enrichment
+		// fields must surface the admin's username + best-available label
+		// (LEFT JOIN users gb ON gb.id = ra.granted_by). System-created
+		// assignments (granted_by zero-UUID) would land both as empty — but
+		// these rows were granted by `admin`, never by the system.
+		require.NotEmpty(t, m.GrantedByUsername,
+			"GrantedByUsername must be non-empty when granted_by is a real user")
+
 		switch m.Kind {
 		case "human":
 			// The human member must reference the admin user id and carry no SA id.
