@@ -17,6 +17,7 @@ import {
   Ship,
   Radio,
   Repeat,
+  Settings as SettingsIcon,
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -234,6 +235,35 @@ export function Sidebar(): React.ReactElement {
           );
         })}
       </nav>
+
+      {/* FUT-019 Phase 1 — sticky-bottom Settings cog. Mirrors the GitHub
+          / Linear / Notion pattern where personal preferences live at
+          the bottom of the chrome and stay reachable regardless of
+          scroll. Always rendered — tab-level gates inside /settings
+          handle visibility of Notifications / Security per the
+          per-category opt-in matrix that lands in FUT-019 Phase 2+. */}
+      <div className="border-t border-[var(--color-border)] px-3 py-2">
+        <Link
+          to="/settings"
+          className={cn(
+            "group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm",
+            "transition-colors",
+            location.pathname.startsWith("/settings")
+              ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+              : "text-[var(--color-fg)] hover:bg-[var(--color-surface-sunken)]",
+          )}
+        >
+          <SettingsIcon
+            className={cn(
+              "size-4 shrink-0",
+              location.pathname.startsWith("/settings")
+                ? "text-[var(--color-accent)]"
+                : "text-[var(--color-fg-muted)] group-hover:text-[var(--color-fg)]",
+            )}
+          />
+          <span className="flex-1 truncate">Settings</span>
+        </Link>
+      </div>
 
       {/* Footer — small build hint, not load-bearing */}
       <div className="border-t border-[var(--color-border)] px-5 py-3 text-[11px] text-[var(--color-fg-subtle)]">
