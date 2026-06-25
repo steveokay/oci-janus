@@ -1,20 +1,17 @@
 import * as React from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Bell, Monitor, Settings as SettingsIcon, Shield, User } from "lucide-react";
+import { Bell, Settings as SettingsIcon, Shield } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { IdentityCard } from "@/components/profile/identity-card";
-import { ApiKeysSection } from "@/components/profile/api-keys-section";
-import { ChangePasswordDialog } from "@/components/profile/change-password-dialog";
-import { useTheme, type Theme } from "@/lib/theme";
 
 // FUT-019 Phase 1 — /settings hub (skeleton).
 //
-// Four tabs:
-//   Profile        — identity + password + API keys (re-renders the existing
-//                    /profile content so deep-links keep working AND the
-//                    settings hub is the canonical surface).
-//   Display        — theme picker (light / dark / system). Hooks into the
-//                    existing useTheme + localStorage round-trip.
+// Scope deliberately narrow: this page hosts ONLY things that don't have
+// a home elsewhere in the dashboard. Profile already lives at /profile;
+// theme toggling is one click away in the topbar. Putting them on tabs
+// here would just create two paths to the same surface and confuse
+// "which one is the source of truth?".
+//
+// Two tabs:
 //   Notifications  — Phase 2 placeholder. Scheduled notifications + per-
 //                    category opt-in matrix lands in FUT-019 Phase 2 + 3.
 //   Security       — placeholder. MFA enrolment + active sessions land
@@ -23,14 +20,9 @@ import { useTheme, type Theme } from "@/lib/theme";
 // Active tab is driven by the ?tab= search param so deep-links from
 // notifications ("Update your preferences →") survive a page refresh.
 
-type SettingsTab = "profile" | "display" | "notifications" | "security";
+type SettingsTab = "notifications" | "security";
 
-const TABS: ReadonlyArray<SettingsTab> = [
-  "profile",
-  "display",
-  "notifications",
-  "security",
-];
+const TABS: ReadonlyArray<SettingsTab> = ["notifications", "security"];
 
 interface SettingsSearch {
   tab?: SettingsTab;
@@ -49,16 +41,17 @@ export const Route = createFileRoute("/_authenticated/settings")({
 function SettingsPage(): React.ReactElement {
   const { tab } = Route.useSearch();
   const navigate = useNavigate();
-  const activeTab: SettingsTab = tab ?? "profile";
+  const activeTab: SettingsTab = tab ?? "notifications";
 
-  // Sync state with the URL — clicking a tab writes ?tab=, and a
-  // direct visit to /settings?tab=display lands on the right tab. We
-  // use replace so a chain of tab clicks doesn't pollute browser
-  // history (mirrors the proxy-cache + tags filter pattern).
+  // Sync state with the URL — clicking a tab writes ?tab=, and a direct
+  // visit to /settings?tab=security lands on the right tab. We use
+  // replace so a chain of tab clicks doesn't pollute browser history
+  // (mirrors the proxy-cache + tags filter pattern). Default tab
+  // (notifications) is the absent search param so the URL stays clean.
   function setTab(next: string): void {
     void navigate({
       to: "/settings",
-      search: next === "profile" ? {} : { tab: next as SettingsTab },
+      search: next === "notifications" ? {} : { tab: next as SettingsTab },
       replace: true,
     });
   }
@@ -73,19 +66,14 @@ function SettingsPage(): React.ReactElement {
           <SettingsIcon className="size-6" /> Settings
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">
-          Manage your profile, display preferences, notification subscriptions,
-          and security. Changes apply to your own account.
+          Configure your notification subscriptions and account security.
+          Profile and theme live in their own places — this hub is for the
+          settings without a home elsewhere.
         </p>
       </header>
 
       <Tabs value={activeTab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="profile">
-            <User className="size-3.5" /> Profile
-          </TabsTrigger>
-          <TabsTrigger value="display">
-            <Monitor className="size-3.5" /> Display
-          </TabsTrigger>
           <TabsTrigger value="notifications">
             <Bell className="size-3.5" /> Notifications
           </TabsTrigger>
@@ -94,12 +82,6 @@ function SettingsPage(): React.ReactElement {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="profile">
-          <ProfileTab />
-        </TabsContent>
-        <TabsContent value="display">
-          <DisplayTab />
-        </TabsContent>
         <TabsContent value="notifications">
           <NotificationsTab />
         </TabsContent>
@@ -108,78 +90,6 @@ function SettingsPage(): React.ReactElement {
         </TabsContent>
       </Tabs>
     </div>
-  );
-}
-
-// ── Profile tab ──────────────────────────────────────────────────────
-
-function ProfileTab(): React.ReactElement {
-  const [passwordOpen, setPasswordOpen] = React.useState(false);
-  return (
-    <div className="mt-6 space-y-6">
-      <IdentityCard onChangePassword={() => setPasswordOpen(true)} />
-      <ApiKeysSection />
-      <ChangePasswordDialog
-        open={passwordOpen}
-        onOpenChange={setPasswordOpen}
-      />
-    </div>
-  );
-}
-
-// ── Display tab ──────────────────────────────────────────────────────
-
-function DisplayTab(): React.ReactElement {
-  const { theme, setTheme } = useTheme();
-  return (
-    <div className="mt-6 space-y-4">
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-card)]">
-        <h2 className="font-display text-lg font-medium">Theme</h2>
-        <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          Pick a fixed theme or follow your operating system's preference.
-          The choice is saved in this browser and doesn't sync across devices.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {(["light", "dark", "system"] as Theme[]).map((value) => (
-            <ThemeOption
-              key={value}
-              value={value}
-              active={theme === value}
-              onSelect={() => setTheme(value)}
-            />
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ThemeOption({
-  value,
-  active,
-  onSelect,
-}: {
-  value: Theme;
-  active: boolean;
-  onSelect: () => void;
-}): React.ReactElement {
-  const label = value === "light" ? "Light" : value === "dark" ? "Dark" : "System";
-  const hint =
-    value === "system" ? "Follows OS preference" : `Always ${value}`;
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={active}
-      className={`flex flex-col items-start gap-1 rounded-md border px-3 py-2.5 text-left text-sm transition ${
-        active
-          ? "border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
-          : "border-[var(--color-border)] bg-[var(--color-surface-sunken)] text-[var(--color-fg)] hover:border-[var(--color-border-strong)]"
-      }`}
-    >
-      <span className="font-medium">{label}</span>
-      <span className="text-xs text-[var(--color-fg-muted)]">{hint}</span>
-    </button>
   );
 }
 
