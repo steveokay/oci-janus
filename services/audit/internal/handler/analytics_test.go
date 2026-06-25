@@ -224,3 +224,37 @@ func TestGetAnalytics_rangeStartAlignedToBucketBoundary(t *testing.T) {
 		t.Errorf("expected range_start aligned to top of hour, got %v", rs)
 	}
 }
+
+// REM-020 Fix B regression: the window must extend AT-OR-PAST `now`.
+// Previously rangeEnd was aligned-down (rangeStart) + rangeSecs, which
+// dropped up to one bucket of trailing activity (6h for 7d/6h, 1d for
+// 30d/1d). A push at 15:00 with rangeEnd at 12:00 silently fell outside
+// the window and the dashboard read "0 pushes" while audit_events held
+// the row.
+func TestGetAnalytics_rangeEndCoversNow(t *testing.T) {
+	repo := &fakeRepo{}
+	h := newHandler(repo)
+	req := validAnalyticsRequest()
+
+	before := time.Now().UTC()
+	_, err := h.GetAnalytics(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.analyticsCalls) != 1 {
+		t.Fatalf("analyticsCalls: got %d, want 1", len(repo.analyticsCalls))
+	}
+	call := repo.analyticsCalls[0]
+
+	// rangeEnd MUST be at or past `now` (the moment we captured before the
+	// call) so newly-landed events at `now` cannot fall outside the window.
+	if call.rangeEnd.Before(before) {
+		t.Errorf("rangeEnd %v < now %v — recent activity would be excluded",
+			call.rangeEnd, before)
+	}
+	// Sanity: width must still equal range_secs so the bucket grid lines up
+	// with the BFF's pre-allocation.
+	if got := call.rangeEnd.Sub(call.rangeStart); got != time.Duration(req.GetRangeSecs())*time.Second {
+		t.Errorf("window width: got %v, want %v", got, time.Duration(req.GetRangeSecs())*time.Second)
+	}
+}
