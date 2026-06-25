@@ -202,6 +202,22 @@ func (f *handlerFakeUserRepo) LookupByIDs(_ context.Context, _ uuid.UUID, _ []uu
 	return nil, nil
 }
 
+// FUT-012 Phase A: same posture as LookupByIDs — handler tests don't
+// exercise these paths, but the stubs are required so the fake
+// satisfies userRepo. Phase B BFF tests will use a dedicated fake.
+func (f *handlerFakeUserRepo) ListTenantUsers(_ context.Context, _ uuid.UUID, _ repository.ListTenantUsersOpts) ([]repository.TenantUserSummary, string, int32, error) {
+	return nil, "", 0, nil
+}
+func (f *handlerFakeUserRepo) CreateInvitedUser(_ context.Context, _ repository.CreateInvitedUserRequest) (*repository.User, error) {
+	return nil, nil
+}
+func (f *handlerFakeUserRepo) SetUserStatus(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *handlerFakeUserRepo) DisableAPIKeysForUser(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }

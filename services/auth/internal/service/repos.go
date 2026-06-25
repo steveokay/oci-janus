@@ -36,6 +36,11 @@ type userRepo interface {
 	// tuples within a tenant (REM-018-followup). Used by services/management
 	// to enrich the activity / notifications feed.
 	LookupByIDs(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error)
+	// FUT-012 Phase A — tenant-user lifecycle methods.
+	ListTenantUsers(ctx context.Context, tenantID uuid.UUID, opts repository.ListTenantUsersOpts) ([]repository.TenantUserSummary, string, int32, error)
+	CreateInvitedUser(ctx context.Context, req repository.CreateInvitedUserRequest) (*repository.User, error)
+	SetUserStatus(ctx context.Context, tenantID, userID uuid.UUID, status string) error
+	DisableAPIKeysForUser(ctx context.Context, tenantID, userID uuid.UUID) (int64, error)
 	// SSO methods (FE-API-034). GetByEmail is used to match an IdP-asserted
 	// email to an existing user; CreateSSOUser provisions a new account when
 	// auto_provision=true; TouchLastLogin records the SSO login time for

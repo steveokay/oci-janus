@@ -28,6 +28,9 @@ const (
 	AuthService_ListMembers_FullMethodName        = "/registry.auth.v1.AuthService/ListMembers"
 	AuthService_CountTenantUsers_FullMethodName   = "/registry.auth.v1.AuthService/CountTenantUsers"
 	AuthService_LookupUsernames_FullMethodName    = "/registry.auth.v1.AuthService/LookupUsernames"
+	AuthService_ListTenantUsers_FullMethodName    = "/registry.auth.v1.AuthService/ListTenantUsers"
+	AuthService_InviteUser_FullMethodName         = "/registry.auth.v1.AuthService/InviteUser"
+	AuthService_SetUserDisabled_FullMethodName    = "/registry.auth.v1.AuthService/SetUserDisabled"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -60,6 +63,27 @@ type AuthServiceClient interface {
 	// raw UUID / system label fallback". Anonymous / "system" sentinel
 	// strings should be filtered out by the caller before the RPC.
 	LookupUsernames(ctx context.Context, in *LookupUsernamesRequest, opts ...grpc.CallOption) (*LookupUsernamesResponse, error)
+	// FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
+	// gated on tenant-admin OR platform-admin in services/management's
+	// BFF. The handler-side check enforces the same shape so a
+	// misbehaving BFF can't bypass.
+	//
+	// ListTenantUsers returns the full member list of a tenant with a
+	// role-summary chip per user, paginated by cursor. Status is the new
+	// 'active' | 'invited' | 'disabled' enum from migration 00002.
+	ListTenantUsers(ctx context.Context, in *ListTenantUsersRequest, opts ...grpc.CallOption) (*ListTenantUsersResponse, error)
+	// InviteUser creates a users row in 'invited' status with a hashed
+	// single-use token + absolute expiry. The raw token is returned ONCE
+	// in the response so the operator can copy + share it; it's never
+	// readable from the DB again. Phase 1 ships the copy-link affordance;
+	// Phase 2 will wire an SMTP transport.
+	InviteUser(ctx context.Context, in *InviteUserRequest, opts ...grpc.CallOption) (*InviteUserResponse, error)
+	// SetUserDisabled flips users.status between 'active' and 'disabled'.
+	// On disable: all active JWT JTIs land in the Redis revoke set + all
+	// API keys for the user are flipped is_active=false. On re-enable:
+	// the user can log in again; API keys stay disabled (the operator
+	// re-issues them deliberately).
+	SetUserDisabled(ctx context.Context, in *SetUserDisabledRequest, opts ...grpc.CallOption) (*SetUserDisabledResponse, error)
 }
 
 type authServiceClient struct {
@@ -150,6 +174,36 @@ func (c *authServiceClient) LookupUsernames(ctx context.Context, in *LookupUsern
 	return out, nil
 }
 
+func (c *authServiceClient) ListTenantUsers(ctx context.Context, in *ListTenantUsersRequest, opts ...grpc.CallOption) (*ListTenantUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTenantUsersResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListTenantUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) InviteUser(ctx context.Context, in *InviteUserRequest, opts ...grpc.CallOption) (*InviteUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InviteUserResponse)
+	err := c.cc.Invoke(ctx, AuthService_InviteUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) SetUserDisabled(ctx context.Context, in *SetUserDisabledRequest, opts ...grpc.CallOption) (*SetUserDisabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetUserDisabledResponse)
+	err := c.cc.Invoke(ctx, AuthService_SetUserDisabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -180,6 +234,27 @@ type AuthServiceServer interface {
 	// raw UUID / system label fallback". Anonymous / "system" sentinel
 	// strings should be filtered out by the caller before the RPC.
 	LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error)
+	// FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
+	// gated on tenant-admin OR platform-admin in services/management's
+	// BFF. The handler-side check enforces the same shape so a
+	// misbehaving BFF can't bypass.
+	//
+	// ListTenantUsers returns the full member list of a tenant with a
+	// role-summary chip per user, paginated by cursor. Status is the new
+	// 'active' | 'invited' | 'disabled' enum from migration 00002.
+	ListTenantUsers(context.Context, *ListTenantUsersRequest) (*ListTenantUsersResponse, error)
+	// InviteUser creates a users row in 'invited' status with a hashed
+	// single-use token + absolute expiry. The raw token is returned ONCE
+	// in the response so the operator can copy + share it; it's never
+	// readable from the DB again. Phase 1 ships the copy-link affordance;
+	// Phase 2 will wire an SMTP transport.
+	InviteUser(context.Context, *InviteUserRequest) (*InviteUserResponse, error)
+	// SetUserDisabled flips users.status between 'active' and 'disabled'.
+	// On disable: all active JWT JTIs land in the Redis revoke set + all
+	// API keys for the user are flipped is_active=false. On re-enable:
+	// the user can log in again; API keys stay disabled (the operator
+	// re-issues them deliberately).
+	SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -209,6 +284,15 @@ func (UnimplementedAuthServiceServer) CountTenantUsers(context.Context, *CountTe
 }
 func (UnimplementedAuthServiceServer) LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupUsernames not implemented")
+}
+func (UnimplementedAuthServiceServer) ListTenantUsers(context.Context, *ListTenantUsersRequest) (*ListTenantUsersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTenantUsers not implemented")
+}
+func (UnimplementedAuthServiceServer) InviteUser(context.Context, *InviteUserRequest) (*InviteUserResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InviteUser not implemented")
+}
+func (UnimplementedAuthServiceServer) SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetUserDisabled not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -366,6 +450,60 @@ func _AuthService_LookupUsernames_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListTenantUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTenantUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListTenantUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListTenantUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListTenantUsers(ctx, req.(*ListTenantUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_InviteUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InviteUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).InviteUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_InviteUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).InviteUser(ctx, req.(*InviteUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_SetUserDisabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetUserDisabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).SetUserDisabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_SetUserDisabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).SetUserDisabled(ctx, req.(*SetUserDisabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -404,6 +542,18 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LookupUsernames",
 			Handler:    _AuthService_LookupUsernames_Handler,
+		},
+		{
+			MethodName: "ListTenantUsers",
+			Handler:    _AuthService_ListTenantUsers_Handler,
+		},
+		{
+			MethodName: "InviteUser",
+			Handler:    _AuthService_InviteUser_Handler,
+		},
+		{
+			MethodName: "SetUserDisabled",
+			Handler:    _AuthService_SetUserDisabled_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
