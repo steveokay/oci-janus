@@ -14,8 +14,21 @@ export const ROLES: Role[] = ["owner", "admin", "writer", "reader"];
 export interface Member {
   id: string;          // assignment UUID — used as the revoke key
   user_id: string;
+  // REM-018: principal username + best-available display label, populated
+  // by the auth service in a single LEFT JOIN. username is the literal
+  // users.username column; display_name is the COALESCE fallback chain
+  // (service_accounts.name → users.display_name → users.username →
+  // users.email). Both are empty strings only on a malformed row — the
+  // UserCell falls back to a shortened UUID in that case.
+  username: string;
+  display_name: string;
   role: Role;
   granted_by: string;
+  // REM-018: the user who created this assignment. Both empty when the
+  // assignment was system-created (granted_by is the zero UUID). The
+  // UserCell renders a "system" placeholder in that case.
+  granted_by_username: string;
+  granted_by_display_name: string;
 }
 
 interface MembersResponse {
