@@ -22,7 +22,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui/error-state";
 import type { DryRunResponse, UpdateRetentionBody } from "@/lib/api/retention";
 import { useDryRunRetention } from "@/lib/api/retention";
-import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/format";
+import {
+  formatAbsoluteDate,
+  formatBytes,
+  formatRelativeDate,
+  shortenDigest,
+} from "@/lib/format";
 
 // Beacon — RetentionDryRunDialog (S11 Slice 2, FE-API-038).
 //
@@ -372,15 +377,11 @@ function TagList({ tags }: { tags: string[] }): React.ReactElement {
   );
 }
 
-// shortDigest — collapse `sha256:abcdef…` to `sha256:abcdef`. Matches the
-// pattern used on the tag-detail header so two surfaces agree on the
-// visual identity of a manifest.
-function shortDigest(digest: string): string {
-  if (digest.length <= 18) return digest;
-  const colon = digest.indexOf(":");
-  if (colon === -1) return digest.slice(0, 12) + "…";
-  return digest.slice(0, colon + 1) + digest.slice(colon + 1, colon + 11) + "…";
-}
+// shortDigest is now a thin re-export of the shared helper in
+// @/lib/format so the proxy-cache + tags + retention surfaces stay in
+// visual lockstep. Kept as a local name so the existing call sites
+// don't churn.
+const shortDigest = shortenDigest;
 
 function DryRunSkeleton(): React.ReactElement {
   return (

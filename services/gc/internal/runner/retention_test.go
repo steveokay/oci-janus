@@ -544,7 +544,51 @@ func TestRunRetention_zeroMarks_skipsAppliedEvent(t *testing.T) {
 // verifies the finaliser also emits both events. Mode is "retention_grace"
 // on the evaluated payload so consumers can distinguish soft-delete from
 // hard-delete sweeps in their dashboards.
+//
+// Per-tenant variant — run.TenantID is a real UUID so publishes fire.
+// The cross-tenant variant below pins the new skip-on-uuid.Nil behaviour.
 func TestRunRetentionGrace_publisherSuccess_emitsEvaluatedAndGraceCompleted(t *testing.T) {
+	meta := &fakeMeta{
+		listPendingResp: &metadatav1.ListPendingDeleteManifestsResponse{
+			Manifests: []*metadatav1.PendingDeleteManifest{
+				{ManifestId: "m1", Digest: "sha256:aaaa", SizeBytes: 1024, TenantId: "t1", RepositoryId: "r1"},
+			},
+		},
+	}
+	pub := &fakePublisher{}
+	p := newTestRunnerWithPub(meta, pub)
+	_ = captureFinalize(p)
+
+	run := &repository.GCRun{RunID: uuid.New(), TenantID: uuid.New(), Mode: "retention_grace"}
+	if err := p.RunRetentionGrace(context.Background(), run); err != nil {
+		t.Fatalf("RunRetentionGrace: %v", err)
+	}
+	if len(pub.publishes) != 2 {
+		t.Fatalf("expected 2 publishes (evaluated + grace_completed), got %d", len(pub.publishes))
+	}
+	if pub.publishes[0].routingKey != events.RoutingRetentionEvaluated {
+		t.Errorf("first publish key: got %q, want %q",
+			pub.publishes[0].routingKey, events.RoutingRetentionEvaluated)
+	}
+	if pub.publishes[1].routingKey != events.RoutingRetentionGraceCompleted {
+		t.Errorf("second publish key: got %q, want %q",
+			pub.publishes[1].routingKey, events.RoutingRetentionGraceCompleted)
+	}
+}
+
+// TestRunRetentionGrace_crossTenant_skipsPublish pins the
+// 2026-06-25 webhook fix. A platform-wide grace sweep
+// (run.TenantID == uuid.Nil) walks every tenant's pending queue, but the
+// envelope has no single tenant — webhook subscriptions are per-tenant
+// so publishing with TenantID="" would NACK on the consumer with
+// "invalid tenant_id: invalid UUID length: 0" and redeliver until the
+// retry cap. The publisher skips at source; the consumer (defence-in-
+// depth) also drops empty-tenant events cleanly. The grace sweep still
+// finalises + deletes the queued manifests; the per-tenant audit
+// events from services/metadata fire on the individual DeleteManifest
+// calls, so the audit trail isn't lost — only the per-run webhook
+// summary is suppressed for cross-tenant runs.
+func TestRunRetentionGrace_crossTenant_skipsPublish(t *testing.T) {
 	meta := &fakeMeta{
 		listPendingResp: &metadatav1.ListPendingDeleteManifestsResponse{
 			Manifests: []*metadatav1.PendingDeleteManifest{
@@ -560,15 +604,13 @@ func TestRunRetentionGrace_publisherSuccess_emitsEvaluatedAndGraceCompleted(t *t
 	if err := p.RunRetentionGrace(context.Background(), run); err != nil {
 		t.Fatalf("RunRetentionGrace: %v", err)
 	}
-	if len(pub.publishes) != 2 {
-		t.Fatalf("expected 2 publishes (evaluated + grace_completed), got %d", len(pub.publishes))
+	if len(pub.publishes) != 0 {
+		t.Errorf("expected 0 publishes for cross-tenant run, got %d", len(pub.publishes))
 	}
-	if pub.publishes[0].routingKey != events.RoutingRetentionEvaluated {
-		t.Errorf("first publish key: got %q, want %q",
-			pub.publishes[0].routingKey, events.RoutingRetentionEvaluated)
-	}
-	if pub.publishes[1].routingKey != events.RoutingRetentionGraceCompleted {
-		t.Errorf("second publish key: got %q, want %q",
-			pub.publishes[1].routingKey, events.RoutingRetentionGraceCompleted)
+	// The sweep still deletes the manifest — only the webhook event is
+	// suppressed. The audit trail comes from the per-manifest
+	// DeleteManifest calls.
+	if len(meta.deleteCalls) != 1 {
+		t.Errorf("expected DeleteManifest to still run (1 call), got %d", len(meta.deleteCalls))
 	}
 }

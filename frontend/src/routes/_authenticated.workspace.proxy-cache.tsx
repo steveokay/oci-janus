@@ -45,7 +45,12 @@ import {
 } from "@/lib/api/proxy-cache";
 import { UpstreamPoliciesCard } from "@/components/workspace/proxy-cache/upstream-policies-card";
 import { useWorkspace } from "@/lib/api/workspace";
-import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/format";
+import {
+  formatAbsoluteDate,
+  formatBytes,
+  formatRelativeDate,
+  shortenDigest,
+} from "@/lib/format";
 
 // /workspace/proxy-cache — FUT-013.
 //
@@ -468,7 +473,13 @@ export function CachedManifestRow({
           </Link>
         </TableCell>
         <TableCell>
-          <code className="text-xs">{m.reference}</code>
+          {/* sha256 references blow the table layout when rendered full;
+              collapse to the shared "sha256:abcdefghij…" shape and keep
+              the full value in the title attribute for power-users. Tag
+              references (short alphanumerics) pass through unchanged. */}
+          <code className="font-mono text-xs" title={m.reference}>
+            {shortenDigest(m.reference)}
+          </code>
         </TableCell>
         <TableCell className="whitespace-nowrap text-right tabular-nums">
           {formatBytes(m.size_bytes)}

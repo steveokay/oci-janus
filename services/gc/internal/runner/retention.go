@@ -343,6 +343,15 @@ func (p *PersistedRunner) RunRetentionGrace(ctx context.Context, run *repository
 // the policy is in its FE-API-038 preview window — subscribers can use
 // the timestamp to render "would delete after <date>" rather than a hard
 // "deleted X manifests".
+//
+// Cross-tenant grace sweeps (TenantID == uuid.Nil) are intentionally NOT
+// published: the webhook subscription model is per-tenant, every
+// audit_events row carries a tenant_id, and an event with TenantID=""
+// has nowhere to route. Surfaced 2026-06-25 as a `services/webhook`
+// consumer error: `invalid tenant_id in event …: invalid UUID length: 0`
+// retrying forever until the redeliver cap. We skip the publish at
+// source rather than relying on every consumer to handle empty
+// tenant_id; the gc_runs row + slog still capture the observability.
 func (p *PersistedRunner) publishRetentionEvaluated(
 	ctx context.Context,
 	run *repository.GCRun,
@@ -352,6 +361,11 @@ func (p *PersistedRunner) publishRetentionEvaluated(
 ) {
 	if p.pub == nil {
 		slog.DebugContext(ctx, "retention.evaluated: publisher not configured, skipping",
+			"run_id", run.RunID)
+		return
+	}
+	if run.TenantID == uuid.Nil {
+		slog.DebugContext(ctx, "retention.evaluated: cross-tenant run, skipping publish",
 			"run_id", run.RunID)
 		return
 	}
@@ -392,6 +406,13 @@ func (p *PersistedRunner) publishRetentionApplied(
 			"run_id", run.RunID)
 		return
 	}
+	// See publishRetentionEvaluated above — cross-tenant runs have no
+	// webhook target so we skip rather than publishing tenant_id="".
+	if run.TenantID == uuid.Nil {
+		slog.DebugContext(ctx, "retention.applied: cross-tenant run, skipping publish",
+			"run_id", run.RunID)
+		return
+	}
 	payload, _ := json.Marshal(events.RetentionAppliedPayload{
 		RunID:               run.RunID.String(),
 		TenantID:            tenantString(run.TenantID),
@@ -427,6 +448,13 @@ func (p *PersistedRunner) publishRetentionGraceCompleted(
 ) {
 	if p.pub == nil {
 		slog.DebugContext(ctx, "retention.grace_completed: publisher not configured, skipping",
+			"run_id", run.RunID)
+		return
+	}
+	// See publishRetentionEvaluated above — cross-tenant runs have no
+	// webhook target so we skip rather than publishing tenant_id="".
+	if run.TenantID == uuid.Nil {
+		slog.DebugContext(ctx, "retention.grace_completed: cross-tenant run, skipping publish",
 			"run_id", run.RunID)
 		return
 	}
