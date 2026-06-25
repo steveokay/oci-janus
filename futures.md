@@ -888,6 +888,33 @@ tab can't reuse the per-repo tag detail.
 
 **Scope:**
 
+- None blocking. Proxy already persists everything we need; this
+  is read-side surfacing + an evict action.
+- Pairs naturally with a future "Cached blob GC" expansion of
+  `services/gc` (today's GC handles metadata-backed blobs; the
+  cached-blob set has different lifecycle semantics — LRU
+  eviction not orphan sweep). Filed as a known follow-up below.
+
+**Auth (locked 2026-06-24):** all three routes — list, stats,
+evict — gated on **workspace-admin**, matching the pattern set
+by `domains` / `audit-export` / `quota`. Platform-admin retains
+implicit access via the `(admin, org, '*')` marker (it trumps
+workspace-admin everywhere). Rationale: the cache is a
+workspace-level concern (sized + shaped by the workspace's
+pull patterns), not shared infrastructure; treating evict as
+a workspace-admin operation keeps the surface consistent with
+every other workspace-owned write route.
+
+**Affects:** `services/proxy` (3 new RPCs + migration),
+`services/management` (3 new REST routes + sidebar visibility
+gate), `frontend/` (new route + nav entry + page + evict dialog).
+
+**Effort:** ~1 sprint. Backend ~2-3 days (migration + 3 RPCs +
+debounced pull counter + tests); BFF ~half day (route wrappers);
+FE ~2 days (route + stats card + filterable table + evict dialog
++ nav entry); docs ~half day. Open follow-up: cached-blob LRU
+eviction in `services/gc` — separate item, this PR is the
+visibility prerequisite.
 - New route `/workspace/proxy-cache/{id}` showing:
   - Summary header (upstream / image / reference / digest /
     size / cached / last pulled / pulls).
