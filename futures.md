@@ -258,6 +258,116 @@ quickly in real operator workflows.
 
 ---
 
+### FUT-019 — Scheduled notifications + `/settings` hub
+
+**Surfaced:** 2026-06-25 during the FUT-012 Phase C build. Today the
+dashboard surfaces *event-driven* notifications via the topbar bell
+(push.image, scan.completed, retention.evaluated, etc. via the
+existing FE-API-008 feed). There is no shape for **policy-driven or
+calendar-driven** messages — "your Trivy adapter is N months old",
+"3 invite tokens expire tomorrow", "90-day password rotation
+reminder", "mTLS cert expires in 14 days". Operators routinely get
+burnt by exactly this class of missed nudge in real registries. The
+`/admin/scanner` page surfaces the adapter version *if you look*; a
+periodic notification tells you *when you should look*.
+
+There is also no `/settings` route. Profile lives at `/profile`;
+notification preferences, display preferences, security settings
+(MFA enrolment when Tier-1 #1 lands) all want a single home. The
+natural pattern (GitHub, Linear, Notion all do this) is a sticky-
+bottom cog icon in the sidebar opening a tabbed `/settings` page.
+
+**Why this matters:** keeps operators ahead of preventable incidents
+without forcing them to subscribe to every audit event. Per-category
+opt-in means an operator can mute "retention summary" but keep
+"certificate expiry" — same posture as GitHub's email notification
+preferences, which is the bar customers compare against.
+
+**Locked design:**
+
+1. **`/settings` hub** (sidebar cog, sticky-bottom)
+   - Tabs: Notifications, Profile (move existing /profile content
+     here), Display (dark/light/system — currently scattered), Security
+     (MFA enrolment hook for Tier-1 #1).
+   - Single route + tabs over multiple routes because the tabs share a
+     `Save preferences` posture and the URL is the entry point for
+     deep-links from notification messages ("Update your preferences
+     here →").
+
+2. **Scheduled notifications backend** — extend `services/audit`
+   rather than spinning up `services/notifications`. Audit already
+   owns the eventconsumer + `NotificationEvent` proto + the bell-feed
+   handler — adding a scheduled emitter is ~200 LOC + 1 cron-style
+   loop + 1 new table:
+   - `scheduled_notifications(id, category, run_at, payload_json,
+     state)` — the worker drains this with `FOR UPDATE SKIP LOCKED`,
+     emits one `notification_events` row per recipient, marks the
+     scheduled row delivered.
+   - `user_notification_preferences(user_id, category, enabled,
+     channel)` — per-user opt-out. Defaults to "bell on, email off,
+     webhook off" for everything.
+
+3. **Category catalogue** (per `/settings → Notifications` checkbox):
+   - `scanner_freshness` — Trivy/Grype adapter version vs. latest
+     release. Emits monthly + when a new minor release lands.
+   - `invite_expiry_warning` — N days before an invite token expires,
+     ping the inviter so they can resend.
+   - `cert_expiry_warning` — mTLS / TLS cert within 14 days of
+     expiry. Critical operator-facing event.
+   - `password_rotation_reminder` — 90-day cadence per user.
+   - `retention_dry_run_summary` — weekly digest of what retention
+     *would* delete if grace fired now. Lets operators tune rules
+     before they hard-delete.
+   - `failed_login_burst` — N failed logins inside M minutes from a
+     single IP / user. Already an audit event but a notification
+     elevates it.
+   - `plan_quota_threshold` — at 80% storage / pull quota. Currently
+     surfaced as a dashboard chip; adding to notifications means the
+     operator sees it without opening the dashboard.
+
+4. **Frontend** — new `/settings` route + `<NotificationsTab>` table
+   (category | description | bell toggle | email toggle | webhook
+   toggle) + existing `/profile` content moved here. Sidebar cog
+   anchored at the bottom of the sidebar (sticky `mt-auto`) so it's
+   always reachable regardless of where the operator scrolled.
+
+5. **Tone discipline (locked):** "Trivy adapter at v0.52.0 (released
+   2026-04-15). 4 newer minor releases available with X new CVE
+   families covered. Update via `/admin/scanner`." First sentence
+   carries the actionable noun + verb. Operators ignore vague
+   "you have a notification" nudges; the schedule worker MUST emit
+   actionable bodies or it gets muted.
+
+**Affects:** `services/audit` (proto + migration + worker), the
+existing `services/management` notifications wrapper, `frontend/`
+(new route + sidebar cog + 2 new components). No new services.
+
+**Dependencies:** Tier-1 #1 (MFA) shares the `/settings → Security`
+tab — coordinate so MFA enrolment plugs in cleanly when it lands.
+The sidebar cog refactor (small first PR, see below) can land before
+the rest.
+
+**Phasing recommended (~half day skeleton, then iterative):**
+
+1. **Sidebar cog refactor** (~half day, no backend). Sticky-bottom
+   Settings cog in the sidebar. New `/settings` skeleton with
+   Profile + Display tabs (move existing /profile content over). No
+   backend changes — purely structural. Lands the visible
+   scaffolding.
+2. **scheduled_notifications worker + first category** (~1-2 days
+   backend, ~half day FE). Build the table + worker + `scanner_
+   freshness` category end-to-end. Proves the architecture against a
+   concrete known-want category.
+3. **Fan-out** — add the other 6 categories one at a time as
+   separate small PRs (~half day each). Each one is a new payload
+   shape + cron entry + checkbox.
+
+**Effort:** Phase 1 ~half day; Phase 2 ~2 days; Phase 3 ~half day
+per category. Full feature lands across ~1 sprint if dispatched
+agent-style.
+
+---
+
 ## Tier 2 — Access: machine identity & policy
 
 > All four items below have preview UI surfaces already shipped (FE-API-048 T24+)
