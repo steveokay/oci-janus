@@ -113,14 +113,23 @@ func (h *GRPCHandler) GetAnalytics(ctx context.Context, req *auditv1.GetAnalytic
 		return nil, status.Error(codes.InvalidArgument, "too many buckets requested")
 	}
 
-	// Align range_start to a bucket boundary by truncating now-rangeSecs to
-	// a multiple of bucketSecs (in Unix seconds). This matches what date_bin
-	// will produce given an origin we control, and gives the BFF a stable
-	// grid so two calls with the same parameters don't drift across the
-	// minute / hour boundary.
+	// REM-020 Fix B: align rangeEnd to the next bucket boundary at-or-after
+	// `now` so the trailing bucket is guaranteed to cover the current
+	// moment. The previous implementation truncated rangeStart DOWN to the
+	// nearest bucket and set rangeEnd = rangeStart + rangeSecs — which
+	// silently dropped activity in the interval (rangeEnd, now], up to one
+	// bucket wide (6h for 7d/6h, 1d for 30d/1d). On a fresh push the
+	// dashboard read "0 pulls / pushes last 7d" with audit_events
+	// containing the new rows because they fell after rangeEnd.
+	//
+	// rangeStart slides back by the same amount so the (rangeStart,
+	// rangeEnd] window is still exactly rangeSecs wide and the bucket grid
+	// still aligns 1:1 with the BFF's pre-allocation. date_bin uses
+	// rangeStart as the origin so the first bucket boundary is exactly
+	// rangeStart.
 	now := time.Now().UTC()
-	rangeStart := time.Unix(((now.Unix()-rangeSecs)/bucketSecs)*bucketSecs, 0).UTC()
-	rangeEnd := rangeStart.Add(time.Duration(rangeSecs) * time.Second)
+	rangeEnd := time.Unix(((now.Unix()+bucketSecs-1)/bucketSecs)*bucketSecs, 0).UTC()
+	rangeStart := rangeEnd.Add(-time.Duration(rangeSecs) * time.Second)
 
 	rows, err := h.repo.GetAnalytics(ctx, tenantUUID, scope, action, rangeStart, rangeEnd, bucketSecs)
 	if err != nil {

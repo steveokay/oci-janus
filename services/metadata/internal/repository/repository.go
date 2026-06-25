@@ -523,11 +523,20 @@ func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName st
 // S-MAINT-1 Batch 5: COALESCE config_media_type to '' so NULL legacy
 // rows scan as empty string (artifact_type is then derived in Go and
 // left empty so the FE renders the "Unknown" pill tone).
+//
+// REM-020 Fix A: also pull the manifest's own media_type so
+// deriveArtifactType can classify OCI image indexes / Docker manifest
+// lists as "image". These rows have a NULL config_media_type by design
+// (an index is a pointer at per-arch manifests, not an image config)
+// and were previously emitted with artifact_type="" — invisible to the
+// repo Tags tab's `?type=image` filter (added to differentiate Helm vs
+// image artifacts) even though they ARE images.
 const tagSelectCols = `t.id, t.repo_id, t.tenant_id, t.name, t.manifest_digest,
 	t.updated_at, t.created_at, COALESCE(m.image_size_bytes, 0),
 	m.retention_pending_delete_at,
 	COALESCE(m.quarantined, FALSE),
 	COALESCE(m.config_media_type, ''),
+	COALESCE(m.media_type, ''),
 	t.immutable`
 
 const tagFromJoin = `FROM tags t
@@ -553,6 +562,7 @@ func (r *Repository) PutTag(ctx context.Context, tenantID, repoID, name, manifes
 		       m.retention_pending_delete_at,
 		       COALESCE(m.quarantined, FALSE),
 		       COALESCE(m.config_media_type, ''),
+		       COALESCE(m.media_type, ''),
 		       t.immutable
 		FROM upserted t
 		LEFT JOIN manifests m
@@ -610,10 +620,12 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		// S-MAINT-1 Batch 5: pull config_media_type so artifact_type can
 		// be derived in Go (deriveArtifactType) without leaking the raw
 		// mediaType taxonomy on the wire.
-		var configMediaType string
+		// REM-020 Fix A: also pull mediaType so multi-arch image indexes
+		// (no config_media_type) are still classified as "image".
+		var configMediaType, mediaType string
 		if err := rows.Scan(&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 			&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
-			&pendingDeleteAt, &tag.Quarantined, &configMediaType,
+			&pendingDeleteAt, &tag.Quarantined, &configMediaType, &mediaType,
 			&tag.Immutable); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
@@ -622,7 +634,7 @@ func (r *Repository) ListTags(ctx context.Context, tenantID, repoID string, page
 		if pendingDeleteAt != nil {
 			tag.RetentionPendingDeleteAt = timestamppb.New(*pendingDeleteAt)
 		}
-		tag.ArtifactType = deriveArtifactType(configMediaType)
+		tag.ArtifactType = deriveArtifactType(configMediaType, mediaType)
 		tags = append(tags, &tag)
 	}
 	return tags, rows.Err()
@@ -647,11 +659,13 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 	// REM-013 gap 1: see ListTags for the *time.Time scan rationale.
 	var pendingDeleteAt *time.Time
 	// S-MAINT-1 Batch 5: artifact_type derivation mirrors ListTags.
-	var configMediaType string
+	// REM-020 Fix A: media_type also pulled so multi-arch image indexes
+	// classify as "image".
+	var configMediaType, mediaType string
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&tag.TagId, &tag.RepoId, &tag.TenantId, &tag.Name,
 		&tag.ManifestDigest, &updatedAt, &createdAt, &tag.SizeBytes,
-		&pendingDeleteAt, &tag.Quarantined, &configMediaType,
+		&pendingDeleteAt, &tag.Quarantined, &configMediaType, &mediaType,
 		&tag.Immutable,
 	)
 	if err != nil {
@@ -660,7 +674,7 @@ func (r *Repository) scanOneTag(ctx context.Context, query string, args ...any) 
 		}
 		return nil, err
 	}
-	tag.ArtifactType = deriveArtifactType(configMediaType)
+	tag.ArtifactType = deriveArtifactType(configMediaType, mediaType)
 	tag.UpdatedAt = timestamppb.New(updatedAt)
 	tag.CreatedAt = timestamppb.New(createdAt)
 	if pendingDeleteAt != nil {
@@ -755,18 +769,24 @@ func parseConfigMediaType(rawJSON []byte) string {
 	return doc.Config.MediaType
 }
 
-// deriveArtifactType maps a raw `config.mediaType` string to the
-// stable discriminator used on the wire (proto field `artifact_type`).
-// Keeping this mapping in one place means a new OCI artifact category
-// only needs an entry here — no schema change, no proto change.
+// deriveArtifactType maps the manifest's `config.mediaType` (preferred)
+// or — when that's empty — its top-level `mediaType` to the stable
+// discriminator used on the wire (proto field `artifact_type`). Keeping
+// the mapping in one place means a new OCI artifact category only needs
+// an entry here — no schema change, no proto change.
 //
-// Returns "" when configMediaType is empty (NULL in DB) so callers can
-// tell "unknown legacy row" apart from "recognised manifest, unknown
-// artifact category" ("other").
-func deriveArtifactType(configMediaType string) string {
-	if configMediaType == "" {
-		return ""
-	}
+// REM-020 Fix A: OCI image indexes + Docker manifest lists (multi-arch
+// images) carry NULL config_media_type — an index is a pointer at
+// per-arch manifests, not an image config. Before this fix they got
+// artifact_type="" and were hidden by the repo Tags tab's
+// `?type=image` filter (added to differentiate Helm vs image artifacts).
+// Now they classify as "image" via the mediaType fallback so the filter
+// includes them.
+//
+// Returns "" only when BOTH inputs are empty (NULL in DB) so callers can
+// still tell "unknown legacy row" apart from "recognised manifest,
+// unknown artifact category" ("other").
+func deriveArtifactType(configMediaType, mediaType string) string {
 	switch configMediaType {
 	case "application/vnd.docker.container.image.v1+json",
 		"application/vnd.oci.image.config.v1+json":
@@ -779,9 +799,20 @@ func deriveArtifactType(configMediaType string) string {
 	case "application/spdx+json",
 		"application/vnd.cyclonedx+json":
 		return "sbom"
+	case "":
+		// Fall through to the mediaType-based classification below.
 	default:
 		return "other"
 	}
+	// configMediaType was empty — try the manifest-level mediaType. This
+	// catches manifest indexes (multi-arch images) which legitimately
+	// have no config_media_type.
+	switch mediaType {
+	case "application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json":
+		return "image"
+	}
+	return ""
 }
 
 // configMediaTypesFor is the reverse of deriveArtifactType — given a
@@ -1017,7 +1048,9 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 			m.QuarantinedAt = timestamppb.New(*qAt)
 		}
 		m.ConfigMediaType = configMediaType
-		m.ArtifactType = deriveArtifactType(configMediaType)
+		// REM-020 Fix A: pass MediaType so multi-arch image indexes
+		// classify as "image" via the manifest-level fallback.
+		m.ArtifactType = deriveArtifactType(configMediaType, m.MediaType)
 		manifests = append(manifests, &m)
 	}
 	return manifests, rows.Err()
@@ -1052,7 +1085,8 @@ func (r *Repository) scanOneManifest(ctx context.Context, query string, args ...
 		m.QuarantinedAt = timestamppb.New(*qAt)
 	}
 	m.ConfigMediaType = configMediaType
-	m.ArtifactType = deriveArtifactType(configMediaType)
+	// REM-020 Fix A: see ListManifests for the manifest-level mediaType fallback.
+	m.ArtifactType = deriveArtifactType(configMediaType, m.MediaType)
 	return &m, nil
 }
 

@@ -70,31 +70,44 @@ func TestParseConfigMediaType(t *testing.T) {
 
 func TestDeriveArtifactType(t *testing.T) {
 	cases := []struct {
-		mediaType string
-		want      string
+		name             string
+		configMediaType  string
+		mediaType        string
+		want             string
 	}{
 		// Container images — both docker + oci variants land on "image".
-		{"application/vnd.docker.container.image.v1+json", "image"},
-		{"application/vnd.oci.image.config.v1+json", "image"},
+		{"docker image config", "application/vnd.docker.container.image.v1+json", "", "image"},
+		{"oci image config", "application/vnd.oci.image.config.v1+json", "", "image"},
 		// Helm.
-		{"application/vnd.cncf.helm.config.v1+json", "helm"},
+		{"helm chart", "application/vnd.cncf.helm.config.v1+json", "", "helm"},
 		// Cosign signature shapes.
-		{"application/vnd.dev.cosign.simplesigning.v1+json", "signature"},
-		{"application/vnd.dsse.envelope.v1+json", "signature"},
+		{"cosign simplesigning", "application/vnd.dev.cosign.simplesigning.v1+json", "", "signature"},
+		{"dsse envelope", "application/vnd.dsse.envelope.v1+json", "", "signature"},
 		// SBOMs.
-		{"application/spdx+json", "sbom"},
-		{"application/vnd.cyclonedx+json", "sbom"},
-		// Unknown but present mediaType → "other".
-		{"application/vnd.example.unknown.v1+json", "other"},
-		// Empty input passes through empty — distinguishes legacy/null
-		// rows from "recognised manifest, unknown artifact category".
-		{"", ""},
+		{"spdx sbom", "application/spdx+json", "", "sbom"},
+		{"cyclonedx sbom", "application/vnd.cyclonedx+json", "", "sbom"},
+		// Unknown but present mediaType → "other". The manifest-level
+		// fallback is NOT consulted in this case — once we see a recognised
+		// config_media_type taxonomy we trust the answer.
+		{"unknown config", "application/vnd.example.unknown.v1+json", "", "other"},
+		// REM-020 Fix A: manifest-index / manifest-list rows have NULL
+		// config_media_type (an index is a pointer at per-arch manifests,
+		// not an image config). Must classify as "image" via the
+		// manifest-level mediaType fallback so the repo Tags tab's
+		// `?type=image` filter includes multi-arch images.
+		{"oci image index", "", "application/vnd.oci.image.index.v1+json", "image"},
+		{"docker manifest list", "", "application/vnd.docker.distribution.manifest.list.v2+json", "image"},
+		// Both empty → genuine legacy/unknown row.
+		{"both empty", "", "", ""},
+		// config empty + unrecognised manifest mediaType → unknown.
+		{"unknown manifest mediaType", "", "application/vnd.example.unknown.v1+json", ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.mediaType, func(t *testing.T) {
-			got := deriveArtifactType(tc.mediaType)
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveArtifactType(tc.configMediaType, tc.mediaType)
 			if got != tc.want {
-				t.Errorf("deriveArtifactType(%q) = %q, want %q", tc.mediaType, got, tc.want)
+				t.Errorf("deriveArtifactType(config=%q, media=%q) = %q, want %q",
+					tc.configMediaType, tc.mediaType, got, tc.want)
 			}
 		})
 	}
