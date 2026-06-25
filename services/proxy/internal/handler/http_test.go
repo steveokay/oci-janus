@@ -5,7 +5,9 @@ package handler
 import (
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -136,5 +138,94 @@ func TestIsGRPCNotFound_PlainError_ReturnsFalse(t *testing.T) {
 	err := errors.New("plain error")
 	if isGRPCNotFound(err) {
 		t.Error("expected isGRPCNotFound=false for plain error")
+	}
+}
+
+// ── buildProxyPullPayload tests (FUT-014) ────────────────────────────────────
+
+// FUT-014: every proxy-served manifest publishes a pull.image event with
+// these fields locked. Tests below pin the exact payload shape because the
+// audit consumer + dashboard analytics path key off these fields.
+
+func TestBuildProxyPullPayload_TagReference_PopulatesTag(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	now := time.Date(2026, 6, 25, 14, 30, 0, 0, time.UTC)
+	digest := "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+
+	got := buildProxyPullPayload(tenantID, "dockerhub", "library/alpine", "3.20", digest, "user-uuid-xyz", now)
+
+	if got.Tag != "3.20" {
+		t.Errorf("Tag: got %q, want %q", got.Tag, "3.20")
+	}
+	if got.ManifestDigest != digest {
+		t.Errorf("ManifestDigest: got %q, want %q", got.ManifestDigest, digest)
+	}
+	if got.RepositoryName != "cache/dockerhub/library/alpine" {
+		t.Errorf("RepositoryName: got %q, want %q", got.RepositoryName, "cache/dockerhub/library/alpine")
+	}
+	if got.RepositoryID != "" {
+		t.Errorf("RepositoryID: got %q, want empty (proxy manifests not in metadata.manifests)", got.RepositoryID)
+	}
+	if got.Via != "proxy" {
+		t.Errorf("Via: got %q, want %q", got.Via, "proxy")
+	}
+	if got.TenantID != tenantID.String() {
+		t.Errorf("TenantID: got %q, want %q", got.TenantID, tenantID.String())
+	}
+	if got.ActorID != "user-uuid-xyz" {
+		t.Errorf("ActorID: got %q, want %q", got.ActorID, "user-uuid-xyz")
+	}
+	if !got.PulledAt.Equal(now) {
+		t.Errorf("PulledAt: got %v, want %v", got.PulledAt, now)
+	}
+}
+
+func TestBuildProxyPullPayload_DigestReference_ClearsTag(t *testing.T) {
+	// Digest-direct pull (e.g. docker pull cache/dockerhub/library/alpine@sha256:...).
+	// Tag must be empty so the audit consumer falls back to its "name@digest"
+	// Resource form rather than emitting "name:sha256:..." which would be wrong.
+	tenantID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	digest := "sha256:aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+
+	got := buildProxyPullPayload(tenantID, "dockerhub", "library/alpine", digest, digest, "", time.Now().UTC())
+
+	if got.Tag != "" {
+		t.Errorf("Tag: got %q, want empty (digest-direct pull)", got.Tag)
+	}
+	if got.ManifestDigest != digest {
+		t.Errorf("ManifestDigest: got %q, want %q", got.ManifestDigest, digest)
+	}
+}
+
+func TestBuildProxyPullPayload_EmptyActor_KeepsEmpty(t *testing.T) {
+	// Anonymous pulls (no JWT sub) propagate empty ActorID; audit's consumer
+	// rewrites it to "anonymous" downstream. The publisher must NOT invent a
+	// placeholder here — that would break the existing services/core contract.
+	tenantID := uuid.New()
+	got := buildProxyPullPayload(tenantID, "ecr", "nginx/nginx", "mainline-arm64v8", "sha256:0000000000000000000000000000000000000000000000000000000000000000", "", time.Now().UTC())
+	if got.ActorID != "" {
+		t.Errorf("ActorID: got %q, want empty for anonymous pull", got.ActorID)
+	}
+}
+
+func TestBuildProxyPullPayload_RepositoryNameFormat(t *testing.T) {
+	// Multi-segment image paths (org/repo, multi-level/path) must keep the
+	// slashes inside the cache/<upstream>/ prefix so the user-facing pull
+	// command and the audit Resource string remain bijective.
+	cases := []struct {
+		upstream string
+		image    string
+		want     string
+	}{
+		{"dockerhub", "library/alpine", "cache/dockerhub/library/alpine"},
+		{"ecr", "nginx/nginx", "cache/ecr/nginx/nginx"},
+		{"quay", "prometheus/prometheus", "cache/quay/prometheus/prometheus"},
+		{"local", "single", "cache/local/single"},
+	}
+	for _, tc := range cases {
+		got := buildProxyPullPayload(uuid.New(), tc.upstream, tc.image, "latest", "sha256:0000000000000000000000000000000000000000000000000000000000000000", "", time.Now().UTC())
+		if got.RepositoryName != tc.want {
+			t.Errorf("upstream=%q image=%q: RepositoryName=%q, want %q", tc.upstream, tc.image, got.RepositoryName, tc.want)
+		}
 	}
 }

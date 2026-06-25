@@ -185,6 +185,7 @@ func TestPullImagePayload_marshalRoundTrip(t *testing.T) {
 		Tag:            "v1.0.0",
 		ActorID:        "user-xyz",
 		PulledAt:       now,
+		Via:            "proxy",
 	}
 
 	data, err := json.Marshal(orig)
@@ -197,7 +198,8 @@ func TestPullImagePayload_marshalRoundTrip(t *testing.T) {
 	}
 	if got.TenantID != orig.TenantID || got.RepositoryID != orig.RepositoryID ||
 		got.RepositoryName != orig.RepositoryName || got.ManifestDigest != orig.ManifestDigest ||
-		got.ManifestID != orig.ManifestID || got.Tag != orig.Tag || got.ActorID != orig.ActorID {
+		got.ManifestID != orig.ManifestID || got.Tag != orig.Tag || got.ActorID != orig.ActorID ||
+		got.Via != orig.Via {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, orig)
 	}
 	if !got.PulledAt.Equal(orig.PulledAt) {
@@ -224,7 +226,7 @@ func TestPullImagePayload_omitemptyOptionals(t *testing.T) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("unmarshal to map: %v", err)
 	}
-	for _, field := range []string{"manifest_id", "tag", "actor_id"} {
+	for _, field := range []string{"manifest_id", "tag", "actor_id", "via"} {
 		if _, ok := m[field]; ok {
 			t.Errorf("field %q should be omitted when empty, but found in JSON", field)
 		}
