@@ -33,6 +33,28 @@ service AuthService {
   // raw UUID / system label fallback". Anonymous / "system" sentinel
   // strings should be filtered out by the caller before the RPC.
   rpc LookupUsernames(LookupUsernamesRequest) returns (LookupUsernamesResponse);
+
+  // FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
+  // gated on tenant-admin OR platform-admin in services/management's
+  // BFF. The handler-side check enforces the same shape so a
+  // misbehaving BFF can't bypass.
+  //
+  // ListTenantUsers returns the full member list of a tenant with a
+  // role-summary chip per user, paginated by cursor. Status is the new
+  // 'active' | 'invited' | 'disabled' enum from migration 00002.
+  rpc ListTenantUsers(ListTenantUsersRequest) returns (ListTenantUsersResponse);
+  // InviteUser creates a users row in 'invited' status with a hashed
+  // single-use token + absolute expiry. The raw token is returned ONCE
+  // in the response so the operator can copy + share it; it's never
+  // readable from the DB again. Phase 1 ships the copy-link affordance;
+  // Phase 2 will wire an SMTP transport.
+  rpc InviteUser(InviteUserRequest) returns (InviteUserResponse);
+  // SetUserDisabled flips users.status between 'active' and 'disabled'.
+  // On disable: all active JWT JTIs land in the Redis revoke set + all
+  // API keys for the user are flipped is_active=false. On re-enable:
+  // the user can log in again; API keys stay disabled (the operator
+  // re-issues them deliberately).
+  rpc SetUserDisabled(SetUserDisabledRequest) returns (SetUserDisabledResponse);
 }
 
 message ValidateTokenRequest {
@@ -144,9 +166,13 @@ message RevokeRoleRequest {
 }
 
 // ListMembersRequest queries all role assignments within a tenant scope.
+//
+// FUT-012: scope_type widened from ("org" | "repo") to ("org" | "repo" |
+// "tenant") to support tenant-admin grants. The repo + handler enforce
+// the constraint; the wire shape stays a string for forward-compat.
 message ListMembersRequest {
   string tenant_id   = 1;
-  string scope_type  = 2; // "org" | "repo"
+  string scope_type  = 2; // "org" | "repo" | "tenant"
   string scope_value = 3;
 }
 
@@ -188,4 +214,94 @@ message UserLookupResult {
 // absence as "not in this tenant, render the UUID / system fallback".
 message LookupUsernamesResponse {
   repeated UserLookupResult users = 1;
+}
+
+// FUT-012 Phase A messages ──────────────────────────────────────────────
+
+// RoleSummary is the per-user role aggregate ListTenantUsers returns
+// alongside each row. Org-level admin / writer / reader counts are
+// emitted as separate fields so the FE doesn't have to parse a list to
+// render the "Owns 3 / Writes 7 / Reads 12" chip. tenant_admin is the
+// new boolean from the 'tenant' scope grant; platform_admin reflects
+// the `(admin, org, '*')` marker.
+message RoleSummary {
+  int32 org_admin_count   = 1;
+  int32 org_writer_count  = 2;
+  int32 org_reader_count  = 3;
+  int32 repo_grant_count  = 4;
+  bool  tenant_admin      = 5;
+  bool  platform_admin    = 6;
+}
+
+// TenantUser carries one user row from ListTenantUsers. Status is the
+// migrated `users.status` enum value. last_login_at is unset (zero) for
+// users who have never logged in or who only authenticate via API key.
+message TenantUser {
+  string user_id       = 1;
+  string username      = 2;
+  string display_name  = 3;
+  string email         = 4;
+  string kind          = 5; // "human" | "service_account"
+  string status        = 6; // "active" | "invited" | "disabled"
+  google.protobuf.Timestamp last_login_at = 7;
+  google.protobuf.Timestamp created_at    = 8;
+  RoleSummary roles    = 9;
+}
+
+// ListTenantUsersRequest is paginated by cursor. page_size is clamped
+// to [1, 200] server-side. page_token is opaque to the caller — empty
+// means "first page".
+message ListTenantUsersRequest {
+  string tenant_id  = 1;
+  int32  page_size  = 2;
+  string page_token = 3;
+}
+
+message ListTenantUsersResponse {
+  repeated TenantUser users           = 1;
+  string              next_page_token = 2;
+  int32               total_count     = 3;
+}
+
+// InviteUserRequest creates a users row in 'invited' status. invited_by
+// is the caller's user_id, captured for audit. initial_org_role +
+// initial_org_name are optional — when both are set, the invited user
+// gets a role_assignments row the moment they accept the invite, so a
+// fresh tenant doesn't require the inviter to follow up with a separate
+// grant. expires_in_secs defaults to 7 days when zero.
+message InviteUserRequest {
+  string tenant_id          = 1;
+  string email              = 2;
+  string display_name       = 3;
+  string invited_by         = 4;
+  string initial_org_role   = 5; // optional; "" = no initial grant
+  string initial_org_name   = 6; // optional; required iff initial_org_role != ""
+  int64  expires_in_secs    = 7;
+}
+
+// InviteUserResponse returns the new user_id + the raw single-use
+// invite token. The raw token is shown to the caller ONCE — only the
+// argon2id hash is stored, and the DB has no way to surface the value
+// on a follow-up read. The FE's expected UX: surface a copy-link
+// affordance immediately after the InviteUser call returns.
+message InviteUserResponse {
+  string user_id        = 1;
+  string invite_token   = 2;
+  google.protobuf.Timestamp invite_expires_at = 3;
+}
+
+// SetUserDisabledRequest flips users.status between 'active' and
+// 'disabled'. caller_user_id is captured for audit. The handler
+// rejects status='invited' targets (a disable on a pending invite is
+// the InviteUser caller's job to revoke via a token expiry, not this
+// RPC).
+message SetUserDisabledRequest {
+  string tenant_id      = 1;
+  string user_id        = 2;
+  bool   disabled       = 3;
+  string caller_user_id = 4;
+}
+
+message SetUserDisabledResponse {
+  string status = 1; // resulting 'active' | 'disabled' after the flip
 }

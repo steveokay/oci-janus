@@ -160,6 +160,24 @@ func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) 
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
 	return int64(len(f.users)), nil
 }
+// FUT-012 Phase A: service-layer fakes get the same minimal stubs.
+// Tests that exercise the new tenant-user methods build dedicated
+// fixtures rather than wiring in-memory state into these existing
+// fakes (the service-layer tests for FUT-012 use a real
+// testcontainers DB via the integration path).
+func (f *fakeUserRepo) ListTenantUsers(_ context.Context, _ uuid.UUID, _ repository.ListTenantUsersOpts) ([]repository.TenantUserSummary, string, int32, error) {
+	return nil, "", 0, nil
+}
+func (f *fakeUserRepo) CreateInvitedUser(_ context.Context, _ repository.CreateInvitedUserRequest) (*repository.User, error) {
+	return nil, nil
+}
+func (f *fakeUserRepo) SetUserStatus(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeUserRepo) DisableAPIKeysForUser(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeUserRepo) LookupByIDs(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error) {
 	// REM-018-followup fake: filters in-memory users by (tenant_id, id) so
 	// LookupUsernames service tests can assert the lookup is tenant-scoped
