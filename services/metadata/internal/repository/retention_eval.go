@@ -340,17 +340,43 @@ func (r *Repository) loadManifestsForEval(ctx context.Context, tenantID, repoID 
 	// last_pulled_at is selected as a nullable timestamp — FE-API-043's
 	// max_idle_days rule treats NULL distinctly from "an old timestamp", so
 	// the scan decodes it through a *time.Time on evalManifest below.
+	//
+	// REM-021: the tag aggregate UNION-s "direct tags" with
+	// "tags reachable through a parent index". For a multi-arch image, the
+	// per-platform child manifests have no direct tag — only the parent
+	// index does. Before this change they classified as dangling and got
+	// marked for delete by `dangling_grace_days` / `max_age_days`.
+	// `manifest_children` (migration 00017) persists the parent↔child
+	// reachability so the LEFT JOIN through pt resolves the parent index's
+	// tags onto every child. Single-arch manifests (no children, no
+	// parents) behave identically — both LEFT JOINs miss and the
+	// FILTER drops the NULL rows.
 	const q = `
 		SELECT m.id::text,
 		       m.digest,
 		       m.image_size_bytes,
 		       m.created_at,
 		       m.last_pulled_at,
-		       COALESCE(array_agg(t.name ORDER BY t.name) FILTER (WHERE t.name IS NOT NULL), '{}'::text[]) AS tag_names
+		       COALESCE(
+		         array_agg(DISTINCT name ORDER BY name)
+		           FILTER (WHERE name IS NOT NULL),
+		         '{}'::text[]
+		       ) AS tag_names
 		FROM   manifests m
-		LEFT JOIN tags t
-		       ON t.repo_id = m.repo_id
-		      AND t.manifest_digest = m.digest
+		LEFT JOIN LATERAL (
+		  SELECT t.name
+		    FROM tags t
+		   WHERE t.repo_id         = m.repo_id
+		     AND t.manifest_digest = m.digest
+		  UNION ALL
+		  SELECT pt.name
+		    FROM manifest_children mc
+		    JOIN tags pt
+		      ON pt.repo_id         = mc.repo_id
+		     AND pt.manifest_digest = mc.parent_digest
+		   WHERE mc.tenant_id    = m.tenant_id
+		     AND mc.child_digest = m.digest
+		) tag_sources ON TRUE
 		WHERE  m.repo_id = $1
 		  AND  m.tenant_id = $2
 		GROUP BY m.id, m.digest, m.image_size_bytes, m.created_at, m.last_pulled_at
