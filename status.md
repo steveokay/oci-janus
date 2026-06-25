@@ -38,6 +38,7 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| FUT-014 | services/proxy publishes `pull.image` on every successful manifest GET + HEAD (cache hit + miss). Adds optional `Via` field to `PullImagePayload`; new `buildProxyPullPayload` + `publishPullImage` helpers; HEAD cache hits also bump fast-path `pull_count`. Fixes both dashboard 24h pulls card excluding cache traffic AND `proxy_manifests.pull_count` freezing on docker's HEAD-fast-path | PR #98 | 2026-06-25 | DONE |
 | FUT-018 Phase B | Frontend — `useScanByDigest` / `useTriggerScanByDigest` / `useSignaturesByDigest` / `useSignByDigest` hooks + `<ScansTab>` + `<SigningTab>` components on /workspace/proxy-cache/{id} detail page + Severity + Signed columns on the cache list table; 46 new vitest cases (118 total pass) | PR #94 | 2026-06-24 | DONE |
 | FUT-018 backend | services/management — 4 digest-keyed REST routes: GET/POST `/api/v1/scan-by-digest/{digest}` + GET/POST `/api/v1/signatures-by-digest/{digest}` + `/api/v1/sign-by-digest/{digest}`. 15 bufconn tests | PR #93 | 2026-06-24 | DONE |
 | dev-stack-signer-wiring | Fixed FUT-017 dev-stack 500s: signer go.mod transitive amqp091-go via go mod tidy + new `registry_signer` DB + `SIGNER_DB_DSN` + `RABBITMQ_URL` env in docker-compose; auto-scan toggle now end-to-end-functional | PR #92 | 2026-06-24 | DONE |
