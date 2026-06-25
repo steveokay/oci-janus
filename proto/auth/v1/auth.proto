@@ -21,6 +21,18 @@ service AuthService {
   // count includes inactive users intentionally (operators want to see total
   // headcount, not just currently-active sessions).
   rpc CountTenantUsers(CountTenantUsersRequest) returns (CountTenantUsersResponse);
+  // LookupUsernames (REM-018-followup) batch-resolves a set of user_ids to
+  // their username + best-available display_name within a tenant. Used by
+  // services/management to enrich `/api/v1/notifications` + activity-feed
+  // responses with operator-friendly labels without forcing the FE into a
+  // per-row hydrate fan-out.
+  //
+  // Bounded: the handler rejects calls with >200 ids so a misbehaving BFF
+  // can't fan out a 10k-id lookup. Unknown ids are silently dropped from
+  // the response — caller iterates by id, treats absence as "render the
+  // raw UUID / system label fallback". Anonymous / "system" sentinel
+  // strings should be filtered out by the caller before the RPC.
+  rpc LookupUsernames(LookupUsernamesRequest) returns (LookupUsernamesResponse);
 }
 
 message ValidateTokenRequest {
@@ -151,4 +163,29 @@ message CountTenantUsersRequest {
 // CountTenantUsersResponse carries the integer user count for the tenant.
 message CountTenantUsersResponse {
   int64 count = 1;
+}
+
+// LookupUsernamesRequest carries the batch of user_ids to resolve. Bounded
+// at 200 ids per call — the handler returns InvalidArgument above that.
+message LookupUsernamesRequest {
+  string tenant_id = 1;
+  repeated string user_ids = 2;
+}
+
+// UserLookupResult is the resolved (username, display_name) pair for one
+// user_id. display_name mirrors the COALESCE fallback chain used by
+// ListMembers (service_accounts.name → users.display_name → users.username
+// → users.email) so callers can render a single label without parsing the
+// fallback themselves.
+message UserLookupResult {
+  string user_id      = 1;
+  string username     = 2;
+  string display_name = 3;
+}
+
+// LookupUsernamesResponse returns one entry per resolved user_id. Unknown
+// ids are silently dropped — callers iterate by their input set and treat
+// absence as "not in this tenant, render the UUID / system fallback".
+message LookupUsernamesResponse {
+  repeated UserLookupResult users = 1;
 }

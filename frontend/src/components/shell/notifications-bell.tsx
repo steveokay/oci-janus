@@ -16,6 +16,7 @@ import {
   useNotifications,
   type Notification,
 } from "@/lib/api/notifications";
+import { UserCell } from "@/components/users/user-cell";
 import { useAuthStore } from "@/lib/auth/store";
 import { formatRelativeDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -199,9 +200,18 @@ function NotificationRow({
         <div className="truncate text-xs text-[var(--color-fg-muted)]">
           {n.summary}
         </div>
-        <div className="mt-0.5 text-[11px] text-[var(--color-fg-subtle)]">
-          {n.actor_username || n.actor_id || "system"} ·{" "}
-          {formatRelativeDate(n.occurred_at)}
+        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--color-fg-subtle)]">
+          {/* REM-018-followup: actor cell renders display_name + @username
+              when the BFF was able to join auth; otherwise UserCell falls
+              back to @username or the System placeholder. */}
+          <UserCell
+            userId={n.actor_id}
+            username={n.actor_username}
+            displayName={n.actor_display_name}
+            variant="inline"
+          />
+          <span>·</span>
+          <span>{formatRelativeDate(n.occurred_at)}</span>
         </div>
       </div>
     </div>

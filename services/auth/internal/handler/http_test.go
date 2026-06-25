@@ -196,6 +196,12 @@ func (f *handlerFakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int
 	return int64(len(f.users)), nil
 }
 
+// REM-018-followup: handler-level fake just needs to satisfy the
+// interface; no handler test paths inspect the result.
+func (f *handlerFakeUserRepo) LookupByIDs(_ context.Context, _ uuid.UUID, _ []uuid.UUID) ([]repository.UserSummary, error) {
+	return nil, nil
+}
+
 func (f *handlerFakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }

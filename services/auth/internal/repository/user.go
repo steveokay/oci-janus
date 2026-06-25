@@ -363,6 +363,59 @@ func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*Use
 	return r.scanOne(ctx, q, id)
 }
 
+// UserSummary is the lightweight (id, username, display_name) shape returned
+// by LookupByIDs. It's the minimum a caller needs to render a user-facing
+// label and intentionally omits everything else so the wire shape stays
+// narrow even when the lookup batch is large.
+type UserSummary struct {
+	ID          uuid.UUID
+	Username    string
+	DisplayName string
+}
+
+// LookupByIDs batch-resolves users by their primary key within a tenant.
+// REM-018-followup: services/management calls this from
+// `/api/v1/notifications` enrichment so the activity feed renders
+// display_name instead of a raw UUID.
+//
+// DisplayName uses the same COALESCE fallback chain as ListMembers
+// (service_accounts.name → users.display_name → users.username →
+// users.email) so the caller doesn't have to know about service accounts
+// or the email backstop. The shadow_user_id LEFT JOIN on service_accounts
+// keeps SA-driven actions (e.g. `push.image` by a bot) rendering as the
+// SA name instead of the auto-generated shadow username.
+//
+// Tenant isolation is enforced in the WHERE clause; ids outside the
+// tenant are dropped silently — the caller treats absence as "not in this
+// tenant, render UUID fallback".
+func (r *UserRepository) LookupByIDs(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]UserSummary, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	const q = `
+		SELECT u.id,
+		       u.username,
+		       COALESCE(sa.name, u.display_name, u.username, COALESCE(u.email, '')) AS display_name
+		FROM   users u
+		LEFT   JOIN service_accounts sa ON sa.shadow_user_id = u.id
+		WHERE  u.tenant_id = $1
+		  AND  u.id        = ANY($2)`
+	rows, err := r.pool.Query(ctx, q, tenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("lookup users by ids: %w", err)
+	}
+	defer rows.Close()
+	out := make([]UserSummary, 0, len(ids))
+	for rows.Next() {
+		var s UserSummary
+		if err := rows.Scan(&s.ID, &s.Username, &s.DisplayName); err != nil {
+			return nil, fmt.Errorf("scan user summary: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // ResetFailedLogins clears failed_logins and locked_until and records the login time.
 // Called on every successful authentication.
 func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) error {

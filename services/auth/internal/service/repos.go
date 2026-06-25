@@ -32,6 +32,10 @@ type userRepo interface {
 	ListMembers(ctx context.Context, tenantID uuid.UUID, scopeType, scopeValue string) ([]repository.Member, error)
 	// CountByTenant returns the user count for a tenant (FE-API-028).
 	CountByTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
+	// LookupByIDs batch-resolves users to (id, username, display_name)
+	// tuples within a tenant (REM-018-followup). Used by services/management
+	// to enrich the activity / notifications feed.
+	LookupByIDs(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error)
 	// SSO methods (FE-API-034). GetByEmail is used to match an IdP-asserted
 	// email to an existing user; CreateSSOUser provisions a new account when
 	// auto_provision=true; TouchLastLogin records the SSO login time for

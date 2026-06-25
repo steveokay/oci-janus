@@ -399,6 +399,74 @@ func (h *GRPCHandler) CountTenantUsers(ctx context.Context, req *authv1.CountTen
 	return &authv1.CountTenantUsersResponse{Count: n}, nil
 }
 
+// lookupUsernamesMaxBatch caps the batch size so a misbehaving BFF can't
+// fan out a multi-thousand-id lookup. 200 mirrors the audit / notification
+// page cap which is the main upstream call site.
+const lookupUsernamesMaxBatch = 200
+
+// LookupUsernames (REM-018-followup) batch-resolves user_ids to
+// (username, display_name) tuples within a tenant. Used by
+// services/management to enrich `/api/v1/notifications` + activity-feed
+// responses so the FE renders a friendly label instead of a raw UUID.
+//
+// Validation:
+//   - tenant_id MUST be a UUID (cross-tenant isolation enforced in SQL).
+//   - empty user_ids → empty response (not an error; lets the BFF skip
+//     the round-trip without branching).
+//   - >lookupUsernamesMaxBatch ids → InvalidArgument.
+//   - Malformed ids are dropped silently (the BFF passes through actor_id
+//     values from audit which may include the literal "system" or
+//     "anonymous" sentinels — these are not UUIDs).
+//
+// Unknown / cross-tenant ids are dropped from the result. Caller iterates
+// by its input set and renders the UUID / system fallback for absent ids.
+func (h *GRPCHandler) LookupUsernames(ctx context.Context, req *authv1.LookupUsernamesRequest) (*authv1.LookupUsernamesResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	raw := req.GetUserIds()
+	if len(raw) == 0 {
+		return &authv1.LookupUsernamesResponse{}, nil
+	}
+	if len(raw) > lookupUsernamesMaxBatch {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"user_ids exceeds batch cap of %d", lookupUsernamesMaxBatch)
+	}
+	// Dedupe + parse. Drop non-UUID values silently so the BFF can pass
+	// the raw audit actor_id list through without filtering "system" /
+	// "anonymous" sentinel strings itself.
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	parsed := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, perr := uuid.Parse(s)
+		if perr != nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parsed = append(parsed, id)
+	}
+	if len(parsed) == 0 {
+		return &authv1.LookupUsernamesResponse{}, nil
+	}
+	summaries, err := h.svc.LookupUsernames(ctx, tenantID, parsed)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "lookup usernames")
+	}
+	out := make([]*authv1.UserLookupResult, len(summaries))
+	for i, s := range summaries {
+		out[i] = &authv1.UserLookupResult{
+			UserId:      s.ID.String(),
+			Username:    s.Username,
+			DisplayName: s.DisplayName,
+		}
+	}
+	return &authv1.LookupUsernamesResponse{Users: out}, nil
+}
+
 // scopesToProto wraps a flat scope list as a single wildcard RepositoryAccess.
 // This is a Sprint 1 simplification; full scope-to-access mapping comes later.
 func scopesToProto(scopes []string) []*authv1.RepositoryAccess {
