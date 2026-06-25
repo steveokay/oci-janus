@@ -122,6 +122,26 @@ func (f *fakeAuditClient) GetLastTenantPush(_ context.Context, _ *auditv1.GetLas
 	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
 }
 
+// Audit export config trio added to AuditServiceClient post-FE-API-018 —
+// stubbed Unimplemented here so the fake keeps satisfying the interface.
+// REM-018 doesn't touch this surface; the stubs are a "while we're here"
+// build-unstuck so the rest of the service test package can run.
+func (f *fakeAuditClient) GetAuditExportConfig(_ context.Context, _ *auditv1.GetAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.AuditExportConfig, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+func (f *fakeAuditClient) PutAuditExportConfig(_ context.Context, _ *auditv1.PutAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.AuditExportConfig, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+func (f *fakeAuditClient) DeleteAuditExportConfig(_ context.Context, _ *auditv1.DeleteAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.DeleteAuditExportConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+func (f *fakeAuditClient) TestAuditExportConfig(_ context.Context, _ *auditv1.TestAuditExportConfigRequest, _ ...grpc.CallOption) (*auditv1.TestAuditExportConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+func (f *fakeAuditClient) DrainAuditExportDLX(_ context.Context, _ *auditv1.DrainAuditExportDLXRequest, _ ...grpc.CallOption) (*auditv1.DrainAuditExportDLXResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+
 // ── Test harness ──────────────────────────────────────────────────────────────
 
 // activityFakes bundles the fakes needed by newActivityService.

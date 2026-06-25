@@ -49,6 +49,13 @@ type CreateUserRequest struct {
 	Username     string
 	Email        string
 	PasswordHash string // pre-hashed with argon2id
+	// DisplayName is the human-friendly name for the account. Empty string
+	// inserts SQL NULL via NULLIF so the column stays comparable to the
+	// SSO-provisioned and shadow-user paths. The HTTP handler enforces
+	// non-empty for the public POST /api/v1/users route (REM-018), but
+	// internal callers (e.g. shadow-user creation for service accounts)
+	// may still pass empty.
+	DisplayName string
 	// Kind sets the users.kind column; defaults to "human" when empty.
 	// Pass "service_account" only when creating a shadow user for a
 	// service_accounts row — all other callers should leave this unset.
@@ -84,16 +91,19 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 		kind = "human"
 	}
 
+	// REM-018: NULLIF($X, '') keeps the column NULL when DisplayName is the
+	// zero value (internal callers like service-account shadow rows) and
+	// stores the literal string otherwise.
 	const q = `
-		INSERT INTO users (tenant_id, username, email, password_hash, kind)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO users (tenant_id, username, email, password_hash, display_name, kind)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
 		          last_login_at, created_at, updated_at, kind`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
-		req.TenantID, req.Username, req.Email, req.PasswordHash, kind,
+		req.TenantID, req.Username, req.Email, req.PasswordHash, req.DisplayName, kind,
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,

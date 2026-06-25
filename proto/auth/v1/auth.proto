@@ -79,13 +79,34 @@ message RepositoryAccess {
 }
 
 // RoleAssignment represents a user's role within a specific scope.
+//
+// REM-018 enrichment (fields 7-10): the BFF used to surface raw UUIDs in
+// member tables, audit-event actor cells, and granted-by columns. The auth
+// service is the system of record for these joins, so it returns the
+// principal's username + best-available display label inline with the
+// assignment rather than forcing the BFF (or worse, the FE) to do per-row
+// hydrate fan-outs against /api/v1/users/{id}.
+//
+// Username is the literal users.username (always non-empty). DisplayName is
+// COALESCE(service_accounts.name, users.display_name, users.username,
+// users.email) — the primary label the FE renders. Equals Username when no
+// display_name is set, which is the natural fallback the UserCell primitive
+// uses to decide whether to show "Name (@handle)" vs just "@handle".
+//
+// GrantedByUsername + GrantedByDisplayName are empty strings when granted_by
+// is the system zero-UUID (no LEFT JOIN row matches), so the BFF can emit a
+// stable absent-shape without inventing placeholders.
 message RoleAssignment {
-  string id          = 1;
-  string user_id     = 2;
-  string role        = 3; // "owner" | "admin" | "writer" | "reader"
-  string scope_type  = 4; // "org" | "repo"
-  string scope_value = 5; // org name or "org/repo"
-  string granted_by  = 6;
+  string id                       = 1;
+  string user_id                  = 2;
+  string role                     = 3; // "owner" | "admin" | "writer" | "reader"
+  string scope_type               = 4; // "org" | "repo"
+  string scope_value              = 5; // org name or "org/repo"
+  string granted_by               = 6;
+  string username                 = 7;
+  string display_name             = 8;
+  string granted_by_username      = 9;
+  string granted_by_display_name  = 10;
 }
 
 // GrantRoleRequest assigns a named role to a user within a tenant scope.
