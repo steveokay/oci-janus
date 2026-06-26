@@ -26,6 +26,10 @@ import (
 // that back a service_accounts row. All single-row lookups on the human login
 // path use GetHuman* variants so the kind guard is enforced at the repository
 // layer rather than scattered across callers.
+//
+// IsGlobalAdmin holds users.is_global_admin (migration 20260629000001):
+// the typed primitive that replaces the (admin, org, '*') legacy marker.
+// REDESIGN-001 Phase 5.1.
 type User struct {
 	ID           uuid.UUID
 	TenantID     uuid.UUID
@@ -41,6 +45,9 @@ type User struct {
 	UpdatedAt    time.Time
 	// Kind is "human" or "service_account" (added by migration 20260622000001).
 	Kind string
+	// IsGlobalAdmin reflects users.is_global_admin — typed platform-admin flag.
+	// Added by migration 20260629000001 (REDESIGN-001 Phase 5.1).
+	IsGlobalAdmin bool
 }
 
 // CreateUserRequest carries the validated inputs for creating a new user.
@@ -94,12 +101,13 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 	// REM-018: NULLIF($X, '') keeps the column NULL when DisplayName is the
 	// zero value (internal callers like service-account shadow rows) and
 	// stores the literal string otherwise.
+	// is_global_admin defaults to false on INSERT (migration 20260629000001).
 	const q = `
 		INSERT INTO users (tenant_id, username, email, password_hash, display_name, kind)
 		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind`
+		          last_login_at, created_at, updated_at, kind, is_global_admin`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -107,7 +115,7 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -126,7 +134,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind
+		       last_login_at, created_at, updated_at, kind, is_global_admin
 		FROM   users -- allow-any-kind: username lookup is kind-agnostic; callers on the
 		             -- human login path must use GetHumanByUsername instead (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND username = $2`
@@ -189,13 +197,14 @@ type CreateSSOUserRequest struct {
 // collision — the caller may then re-query by email and treat that row as
 // the same user (race with another concurrent SSO callback).
 func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserRequest) (*User, error) {
+	// is_global_admin defaults to false on INSERT (migration 20260629000001).
 	const q = `
 		INSERT INTO users (tenant_id, username, email, password_hash,
 		                   display_name, sso_provider_id, kind)
 		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, 'human')
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind`
+		          last_login_at, created_at, updated_at, kind, is_global_admin`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -203,7 +212,7 @@ func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserReq
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -274,7 +283,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind
+		       last_login_at, created_at, updated_at, kind, is_global_admin
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND kind = 'human'
 		ORDER  BY created_at DESC`
@@ -291,7 +300,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 		if err := rows.Scan(
 			&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 			&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 		); err != nil {
 			return nil, fmt.Errorf("scan human user: %w", err)
 		}
@@ -315,7 +324,7 @@ func (r *UserRepository) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind
+		       last_login_at, created_at, updated_at, kind, is_global_admin
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2) AND kind = 'human'`
 
@@ -330,7 +339,7 @@ func (r *UserRepository) GetHumanByID(ctx context.Context, id uuid.UUID) (*User,
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind
+		       last_login_at, created_at, updated_at, kind, is_global_admin
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  id = $1 AND kind = 'human'`
 
@@ -359,7 +368,7 @@ func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*Use
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind
+		       last_login_at, created_at, updated_at, kind, is_global_admin
 		FROM   users -- allow-any-kind: intentional — SA management handlers need shadow users
 		WHERE  id = $1`
 
@@ -432,14 +441,16 @@ func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) er
 }
 
 // scanOne executes query with args and scans a single User row.
-// Every SELECT that feeds into this helper must include 'kind' as the last
-// column in the select list (migration 20260622000001 added the column).
+// Every SELECT that feeds into this helper must include 'kind' and
+// 'is_global_admin' as the last two columns in the select list
+// (migration 20260622000001 added kind; migration 20260629000001 added
+// is_global_admin — REDESIGN-001 Phase 5.1).
 func (r *UserRepository) scanOne(ctx context.Context, query string, args ...any) (*User, error) {
 	var u User
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -502,13 +513,13 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, req Up
 		WHERE  id = $1
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind`
+		          last_login_at, created_at, updated_at, kind, is_global_admin`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q, id, setName, nameVal, setEmail, emailVal).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -530,6 +541,25 @@ func (r *UserRepository) UpdatePasswordHash(ctx context.Context, id uuid.UUID, n
 	tag, err := r.pool.Exec(ctx, q, newHash, id)
 	if err != nil {
 		return fmt.Errorf("update password hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetGlobalAdmin updates the users.is_global_admin flag for the given user.
+// REDESIGN-001 Phase 5.1 — replaces writing (admin, org, '*') grants.
+// Returns ErrNotFound when no row with the given ID exists.
+func (r *UserRepository) SetGlobalAdmin(ctx context.Context, userID uuid.UUID, granted bool) error {
+	const q = `
+		UPDATE users
+		SET    is_global_admin = $1,
+		       updated_at      = now()
+		WHERE  id = $2`
+	tag, err := r.pool.Exec(ctx, q, granted, userID)
+	if err != nil {
+		return fmt.Errorf("set global admin: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

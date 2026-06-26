@@ -53,6 +53,12 @@ type Claims struct {
 	// presence of "owner" or "admin" here. Empty for tokens issued before RBAC
 	// resolution (e.g. legacy refresh paths).
 	Roles []string `json:"roles,omitempty"`
+	// IsGlobalAdmin mirrors users.is_global_admin — the typed platform-admin
+	// primitive that replaces the (admin, org, '*') legacy marker.
+	// REDESIGN-001 Phase 5.1. Existing cached JWT-validation values without
+	// this field decode as false, which is safe — they trigger a re-validation
+	// on the next request so the flag is refreshed promptly.
+	IsGlobalAdmin bool `json:"is_global_admin,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -153,10 +159,11 @@ func New(
 }
 
 // IssueToken signs and returns a JWT for the given user with the requested access
-// scopes and roles. Roles is the flat list of RBAC role names held by the user
-// in the tenant; it is embedded in the JWT so downstream services (and the
-// frontend) can read user roles without an extra RPC.
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string) (string, error) {
+// scopes, roles, and the global-admin flag. Roles is the flat list of RBAC role
+// names held by the user in the tenant; it is embedded in the JWT so downstream
+// services (and the frontend) can read user roles without an extra RPC.
+// isGlobalAdmin mirrors users.is_global_admin (REDESIGN-001 Phase 5.1).
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -167,9 +174,10 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 			IssuedAt:  jwt.NewNumericDate(now),
 			ID:        uuid.New().String(),
 		},
-		TenantID: tenantID,
-		Access:   access,
-		Roles:    roles,
+		TenantID:      tenantID,
+		Access:        access,
+		Roles:         roles,
+		IsGlobalAdmin: isGlobalAdmin,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = s.keyID
@@ -271,11 +279,16 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 		return "", ErrInvalidCredentials
 	}
 
-	// Issue a new token carrying the same subject, tenant, and roles, but with
-	// a fresh JTI and updated iat/exp. Access scopes are not carried over for
-	// session tokens (login flow) because they are issued without explicit scopes
-	// (nil); Docker-scoped tokens are short-lived and are never refreshed this way.
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles)
+	// Issue a new token carrying the same subject, tenant, roles, and
+	// global-admin flag, but with a fresh JTI and updated iat/exp. Access
+	// scopes are not carried over for session tokens (login flow) because they
+	// are issued without explicit scopes (nil); Docker-scoped tokens are
+	// short-lived and are never refreshed this way.
+	// IsGlobalAdmin is carried forward from the original claims — the DB value
+	// may have changed between issue and refresh, but the TTL is 300s so the
+	// staleness window is the same as for Roles. A flag revocation takes effect
+	// on the next login, like role removals.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -298,8 +311,8 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 }
 
 // Login validates credentials, enforces account lockout, and issues a token.
-// The user's RBAC role names are loaded and embedded in the JWT `roles` claim
-// so downstream services (and the frontend) can read user roles without an
+// The user's RBAC role names and global-admin flag are loaded and embedded in
+// the JWT so downstream services (and the frontend) can read them without an
 // extra RPC.
 func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (string, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
@@ -311,7 +324,10 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// of two orgs). A failure here is non-fatal — log it and issue a token
 	// without roles rather than blocking login on a transient DB error.
 	roles := s.loadRoleNames(ctx, user.ID, user.TenantID)
-	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles)
+	// user.IsGlobalAdmin comes from the scanned users.is_global_admin column
+	// (migration 20260629000001). It is always fresh from the DB on the login
+	// path so no separate lookup is needed.
+	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin)
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in
@@ -707,6 +723,46 @@ func (s *Service) LookupUsernames(ctx context.Context, tenantID uuid.UUID, ids [
 // GetUserRoles returns all role assignments for a user within a tenant.
 func (s *Service) GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
 	return s.users.GetUserRoles(ctx, userID, tenantID)
+}
+
+// SetGlobalAdmin updates users.is_global_admin for the given user. Only callers
+// that are themselves global admins may invoke this; the bootstrap CLI writes
+// the flag directly via SQL on first run.
+//
+// Audits via rbac.role_granted / rbac.role_revoked routing keys with the
+// synthetic role name "global_admin" so the audit catalogue (Phase 6.3)
+// surfaces the change in /activity.
+func (s *Service) SetGlobalAdmin(ctx context.Context, userID uuid.UUID, granted bool, actorID uuid.UUID) error {
+	if err := s.users.SetGlobalAdmin(ctx, userID, granted); err != nil {
+		return err
+	}
+	// Emit a best-effort audit event so the change appears in /activity.
+	// A publish failure is logged but does not roll back the DB write — the
+	// flag is already set; the audit gap is preferable to leaving the flag
+	// in an inconsistent state.
+	if s.audit != nil {
+		action := "rbac.role_granted"
+		if !granted {
+			action = "rbac.role_revoked"
+		}
+		ev := AuditEvent{
+			Action:  action,
+			ActorID: actorID.String(),
+			Fields: map[string]any{
+				"role":    "global_admin",
+				"user_id": userID.String(),
+				"granted": granted,
+			},
+		}
+		if err := s.audit.Emit(ctx, ev); err != nil {
+			slog.WarnContext(ctx, "SetGlobalAdmin: audit emit failed",
+				"user_id", userID,
+				"granted", granted,
+				"err", err,
+			)
+		}
+	}
+	return nil
 }
 
 // GrantRole creates a role assignment. The role is looked up by name.

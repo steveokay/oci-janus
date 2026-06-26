@@ -243,7 +243,9 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	// Docker /auth/token issues per-action OCI tokens; roles claim is omitted
 	// because the OCI client only consumes the `access` scopes. The dashboard's
 	// /api/v1/login path goes through Service.Login() which embeds roles.
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil)
+	// is_global_admin is also false here — OCI clients don't need platform-admin
+	// context; they only need the scoped access list.
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")

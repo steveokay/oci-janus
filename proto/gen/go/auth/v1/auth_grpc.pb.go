@@ -31,6 +31,7 @@ const (
 	AuthService_ListTenantUsers_FullMethodName    = "/registry.auth.v1.AuthService/ListTenantUsers"
 	AuthService_InviteUser_FullMethodName         = "/registry.auth.v1.AuthService/InviteUser"
 	AuthService_SetUserDisabled_FullMethodName    = "/registry.auth.v1.AuthService/SetUserDisabled"
+	AuthService_SetGlobalAdmin_FullMethodName     = "/registry.auth.v1.AuthService/SetGlobalAdmin"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -84,6 +85,13 @@ type AuthServiceClient interface {
 	// the user can log in again; API keys stay disabled (the operator
 	// re-issues them deliberately).
 	SetUserDisabled(ctx context.Context, in *SetUserDisabledRequest, opts ...grpc.CallOption) (*SetUserDisabledResponse, error)
+	// SetGlobalAdmin sets or clears users.is_global_admin for the given user.
+	// Only callers that are themselves global admins may invoke this; the
+	// bootstrap CLI writes the flag directly via SQL on first run.
+	// Audits via rbac.role_granted / rbac.role_revoked routing keys with a
+	// synthetic role name "global_admin" so the audit catalogue surfaces the
+	// change in /activity. REDESIGN-001 Phase 5.1.
+	SetGlobalAdmin(ctx context.Context, in *SetGlobalAdminRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type authServiceClient struct {
@@ -204,6 +212,16 @@ func (c *authServiceClient) SetUserDisabled(ctx context.Context, in *SetUserDisa
 	return out, nil
 }
 
+func (c *authServiceClient) SetGlobalAdmin(ctx context.Context, in *SetGlobalAdminRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, AuthService_SetGlobalAdmin_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -255,6 +273,13 @@ type AuthServiceServer interface {
 	// the user can log in again; API keys stay disabled (the operator
 	// re-issues them deliberately).
 	SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error)
+	// SetGlobalAdmin sets or clears users.is_global_admin for the given user.
+	// Only callers that are themselves global admins may invoke this; the
+	// bootstrap CLI writes the flag directly via SQL on first run.
+	// Audits via rbac.role_granted / rbac.role_revoked routing keys with a
+	// synthetic role name "global_admin" so the audit catalogue surfaces the
+	// change in /activity. REDESIGN-001 Phase 5.1.
+	SetGlobalAdmin(context.Context, *SetGlobalAdminRequest) (*emptypb.Empty, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -293,6 +318,9 @@ func (UnimplementedAuthServiceServer) InviteUser(context.Context, *InviteUserReq
 }
 func (UnimplementedAuthServiceServer) SetUserDisabled(context.Context, *SetUserDisabledRequest) (*SetUserDisabledResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetUserDisabled not implemented")
+}
+func (UnimplementedAuthServiceServer) SetGlobalAdmin(context.Context, *SetGlobalAdminRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetGlobalAdmin not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -504,6 +532,24 @@ func _AuthService_SetUserDisabled_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_SetGlobalAdmin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetGlobalAdminRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).SetGlobalAdmin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_SetGlobalAdmin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).SetGlobalAdmin(ctx, req.(*SetGlobalAdminRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -554,6 +600,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetUserDisabled",
 			Handler:    _AuthService_SetUserDisabled_Handler,
+		},
+		{
+			MethodName: "SetGlobalAdmin",
+			Handler:    _AuthService_SetGlobalAdmin_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

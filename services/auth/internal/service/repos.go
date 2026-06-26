@@ -59,6 +59,9 @@ type userRepo interface {
 	// is intentional (e.g. verifying cascade delete, loading creator snapshots).
 	GetHumanByID(ctx context.Context, id uuid.UUID) (*repository.User, error)
 	GetUserAnyKind(ctx context.Context, id uuid.UUID) (*repository.User, error)
+	// SetGlobalAdmin updates users.is_global_admin for the given user.
+	// REDESIGN-001 Phase 5.1 — typed platform-admin primitive.
+	SetGlobalAdmin(ctx context.Context, userID uuid.UUID, granted bool) error
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

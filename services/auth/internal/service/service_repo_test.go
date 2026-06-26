@@ -293,6 +293,18 @@ func (f *fakeUserRepo) GetUserAnyKind(_ context.Context, id uuid.UUID) (*reposit
 	return nil, repository.ErrNotFound
 }
 
+// SetGlobalAdmin updates is_global_admin on the in-memory user record.
+// Satisfies the userRepo interface (REDESIGN-001 Phase 5.1).
+func (f *fakeUserRepo) SetGlobalAdmin(_ context.Context, userID uuid.UUID, granted bool) error {
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.IsGlobalAdmin = granted
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
 	keys             map[uuid.UUID]*repository.APIKey
@@ -1087,7 +1099,7 @@ func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
 	ctx := context.Background()
 	userID := uuid.New()
 	tenantID := uuid.New()
-	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil)
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false)
 	if err != nil {
 		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
 	}

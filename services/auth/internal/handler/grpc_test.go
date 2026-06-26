@@ -363,6 +363,216 @@ func TestCountTenantUsers_invalidTenantID_returnsInvalidArgument(t *testing.T) {
 	}
 }
 
+// ── GetUserPermissions: is_global_admin (REDESIGN-001 Phase 5.1) ──────────────
+
+// TestGetUserPermissions_includes_is_global_admin verifies that when a user's
+// is_global_admin flag is true the GetUserPermissions response carries
+// IsGlobalAdmin=true. Before Phase 5.1 this field was absent and all callers
+// inferred platform-admin status from the (admin, org, '*') role_assignments
+// marker — the test encodes the new typed-column contract.
+func TestGetUserPermissions_includes_is_global_admin(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	// Register a user via the normal path so the fake repo has them.
+	tenantID := uuid.New()
+	userID := registerTestUser(t, tc.svc, tenantID, "globaladmin", "Str0ng!Password123")
+
+	// Directly mark the user as a global admin in the fake repo
+	// (mirrors what SetGlobalAdmin/migration would do on a real DB).
+	if err := tc.users.SetGlobalAdmin(ctx, userID, true); err != nil {
+		t.Fatalf("SetGlobalAdmin in fake: %v", err)
+	}
+
+	resp, err := h.GetUserPermissions(ctx, &authv1.GetUserPermissionsRequest{
+		UserId:   userID.String(),
+		TenantId: tenantID.String(),
+	})
+	if err != nil {
+		t.Fatalf("GetUserPermissions: %v", err)
+	}
+	if !resp.GetIsGlobalAdmin() {
+		t.Error("expected IsGlobalAdmin=true for a user whose is_global_admin flag was set")
+	}
+}
+
+// TestGetUserPermissions_is_global_admin_false verifies that a normal user
+// (is_global_admin not set) returns IsGlobalAdmin=false — the safe default.
+func TestGetUserPermissions_is_global_admin_false(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+
+	tenantID := uuid.New()
+	userID := registerTestUser(t, tc.svc, tenantID, "regularuser", "Str0ng!Password123")
+
+	resp, err := h.GetUserPermissions(context.Background(), &authv1.GetUserPermissionsRequest{
+		UserId:   userID.String(),
+		TenantId: tenantID.String(),
+	})
+	if err != nil {
+		t.Fatalf("GetUserPermissions: %v", err)
+	}
+	if resp.GetIsGlobalAdmin() {
+		t.Error("expected IsGlobalAdmin=false for a regular user")
+	}
+}
+
+// ── SetGlobalAdmin (REDESIGN-001 Phase 5.1) ───────────────────────────────────
+
+// TestSetGlobalAdmin_grant verifies that SetGlobalAdmin(granted=true) updates
+// the user record so a subsequent GetUserPermissions reflects the change.
+func TestSetGlobalAdmin_grant(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	userID := registerTestUser(t, tc.svc, tenantID, "tobeadmin", "Str0ng!Password123")
+	actorID := uuid.New()
+
+	_, err := h.SetGlobalAdmin(ctx, &authv1.SetGlobalAdminRequest{
+		UserId:  userID.String(),
+		Granted: true,
+		ActorId: actorID.String(),
+	})
+	if err != nil {
+		t.Fatalf("SetGlobalAdmin(grant): %v", err)
+	}
+
+	// Verify the flag is now visible through GetUserPermissions.
+	resp, err := h.GetUserPermissions(ctx, &authv1.GetUserPermissionsRequest{
+		UserId:   userID.String(),
+		TenantId: tenantID.String(),
+	})
+	if err != nil {
+		t.Fatalf("GetUserPermissions after grant: %v", err)
+	}
+	if !resp.GetIsGlobalAdmin() {
+		t.Error("expected IsGlobalAdmin=true after SetGlobalAdmin(granted=true)")
+	}
+}
+
+// TestSetGlobalAdmin_revoke verifies that SetGlobalAdmin(granted=false) clears
+// the is_global_admin flag so subsequent GetUserPermissions returns false.
+func TestSetGlobalAdmin_revoke(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	userID := registerTestUser(t, tc.svc, tenantID, "toberevoked", "Str0ng!Password123")
+
+	// Seed the flag directly so we have something to revoke.
+	if err := tc.users.SetGlobalAdmin(ctx, userID, true); err != nil {
+		t.Fatalf("seed SetGlobalAdmin: %v", err)
+	}
+
+	_, err := h.SetGlobalAdmin(ctx, &authv1.SetGlobalAdminRequest{
+		UserId:  userID.String(),
+		Granted: false,
+	})
+	if err != nil {
+		t.Fatalf("SetGlobalAdmin(revoke): %v", err)
+	}
+
+	resp, err := h.GetUserPermissions(ctx, &authv1.GetUserPermissionsRequest{
+		UserId:   userID.String(),
+		TenantId: tenantID.String(),
+	})
+	if err != nil {
+		t.Fatalf("GetUserPermissions after revoke: %v", err)
+	}
+	if resp.GetIsGlobalAdmin() {
+		t.Error("expected IsGlobalAdmin=false after SetGlobalAdmin(granted=false)")
+	}
+}
+
+// TestSetGlobalAdmin_unknownUser_returnsNotFound verifies that a non-existent
+// user ID surfaces as a NotFound gRPC error rather than an internal error.
+func TestSetGlobalAdmin_unknownUser_returnsNotFound(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	_, err := h.SetGlobalAdmin(context.Background(), &authv1.SetGlobalAdminRequest{
+		UserId:  uuid.New().String(),
+		Granted: true,
+	})
+	if err == nil {
+		t.Fatal("expected NotFound error for unknown user, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.NotFound {
+		t.Errorf("code: got %v, want NotFound", st.Code())
+	}
+}
+
+// TestSetGlobalAdmin_invalidUserID_returnsInvalidArgument verifies that a
+// non-UUID user_id is rejected before touching the repository.
+func TestSetGlobalAdmin_invalidUserID_returnsInvalidArgument(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	_, err := h.SetGlobalAdmin(context.Background(), &authv1.SetGlobalAdminRequest{
+		UserId:  "not-a-uuid",
+		Granted: true,
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for non-UUID user_id, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("code: got %v, want InvalidArgument", st.Code())
+	}
+}
+
+// ── GrantRole: star-scope guard (REDESIGN-001 Phase 5.1) ─────────────────────
+
+// TestGrantRole_rejects_star_scope verifies that GrantRole now returns
+// InvalidArgument when scope_value='*' is passed. This is the mechanical guard
+// that prevents any caller from minting the deprecated (admin, org, '*') legacy
+// platform-admin marker via the normal role-assignment path.
+// Callers must use SetGlobalAdmin instead (REDESIGN-001 Phase 5.1).
+func TestGrantRole_rejects_star_scope(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	_, err := h.GrantRole(context.Background(), &authv1.GrantRoleRequest{
+		TenantId:   uuid.New().String(),
+		UserId:     uuid.New().String(),
+		Role:       "admin",
+		ScopeType:  "org",
+		ScopeValue: "*", // the forbidden value
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument for scope_value='*', got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("code: got %v, want InvalidArgument", st.Code())
+	}
+}
+
+// TestGrantRole_non_star_scope_succeeds verifies that the star-scope guard
+// only fires on scope_value='*' — a regular org scope still works.
+func TestGrantRole_non_star_scope_succeeds(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	_, err := h.GrantRole(context.Background(), &authv1.GrantRoleRequest{
+		TenantId:   uuid.New().String(),
+		UserId:     uuid.New().String(),
+		Role:       "admin",
+		ScopeType:  "org",
+		ScopeValue: "myorg", // a normal scope — must pass the guard
+	})
+	// The fake repo's GrantRole is a no-op so no error is expected here.
+	if err != nil {
+		t.Errorf("GrantRole with regular scope: unexpected error %v", err)
+	}
+}
+
 // TestScopesToProto_withScopes_wrapsAsWildcardAccess verifies that a non-empty
 // scope list is wrapped as a single wildcard RepositoryAccess entry.
 func TestScopesToProto_withScopes_wrapsAsWildcardAccess(t *testing.T) {

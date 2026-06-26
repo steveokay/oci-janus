@@ -260,6 +260,18 @@ func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.Cr
 
 func (f *handlerFakeUserRepo) TouchLastLogin(_ context.Context, _ uuid.UUID) error { return nil }
 
+// SetGlobalAdmin updates is_global_admin on the in-memory user record.
+// Satisfies the userRepo interface (REDESIGN-001 Phase 5.1).
+func (f *handlerFakeUserRepo) SetGlobalAdmin(_ context.Context, userID uuid.UUID, granted bool) error {
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.IsGlobalAdmin = granted
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey
@@ -416,7 +428,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testCtx) {
 // issueTestToken issues a JWT from the service and returns it.
 func issueTestToken(t *testing.T, svc *service.Service, userID, tenantID string, access []service.RepositoryAccess) string {
 	t.Helper()
-	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil)
+	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil, false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

@@ -70,15 +70,18 @@ func (s *adminFakeAuthServer) ValidateToken(_ context.Context, req *authv1.Valid
 func (s *adminFakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUserPermissionsRequest) (*authv1.GetUserPermissionsResponse, error) {
 	switch req.GetUserId() {
 	case platformAdminUser:
-		// The marker grant — see PENTEST-024 + admin_tenants.go.
+		// REDESIGN-001 Phase 5.1: typed is_global_admin flag replaces the legacy
+		// (org=*, admin) marker grant. The fake returns IsGlobalAdmin=true so that
+		// effectiveGlobalAdmin passes in multi-mode without any legacy fallback.
 		return &authv1.GetUserPermissionsResponse{
-			Roles: []string{"admin"},
+			IsGlobalAdmin: true,
+			Roles:         []string{"admin"},
 			RoleAssignments: []*authv1.RoleAssignment{
-				{Id: "marker", UserId: platformAdminUser, Role: "admin", ScopeType: "org", ScopeValue: "*"},
+				{Id: "r-admin", UserId: platformAdminUser, Role: "admin", ScopeType: "org", ScopeValue: "myorg"},
 			},
 		}, nil
 	default:
-		// Plain reader — no marker, so RBAC must refuse.
+		// Plain reader — no global-admin flag, so RBAC must refuse.
 		return &authv1.GetUserPermissionsResponse{
 			Roles: []string{"reader"},
 			RoleAssignments: []*authv1.RoleAssignment{

@@ -231,6 +231,7 @@ func (r *UserRepository) CreateInvitedUser(
 	ctx context.Context,
 	req CreateInvitedUserRequest,
 ) (*User, error) {
+	// is_global_admin defaults to false on INSERT (migration 20260629000001).
 	const q = `
 		INSERT INTO users (tenant_id, username, email, password_hash,
 		                   display_name, kind, status, is_active,
@@ -240,7 +241,7 @@ func (r *UserRepository) CreateInvitedUser(
 		        $5, $6)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind`
+		          last_login_at, created_at, updated_at, kind, is_global_admin`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -249,7 +250,7 @@ func (r *UserRepository) CreateInvitedUser(
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {

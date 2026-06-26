@@ -90,15 +90,16 @@ type gcRunNowBody struct {
 }
 
 // requireGCAdmin gates a route on (a) the gc gRPC client being wired
-// and (b) the caller holding the platform-admin marker. Both checks
-// match the admin_tenants.go pattern.
+// and (b) the caller holding the platform-admin authority. The platform-admin
+// check delegates to h.effectiveGlobalAdmin (REDESIGN-001 Phase 5.1) which
+// reads users.is_global_admin instead of the legacy (admin, org, '*') marker.
 func (h *Handler) requireGCAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.gc == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
 		return false
 	}
-	if !hasScopedRole(h.getUserAssignments(r), "org", "*", "admin") {
-		writeError(w, http.StatusForbidden, "platform-admin role required (org=*, admin)")
+	if !h.effectiveGlobalAdmin(r) {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	return true

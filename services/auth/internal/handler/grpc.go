@@ -111,7 +111,7 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
 	}
 
-	_, err = h.svc.GetUserByID(ctx, userID)
+	user, err := h.svc.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Error(codes.NotFound, "user not found")
@@ -170,6 +170,10 @@ func (h *GRPCHandler) GetUserPermissions(ctx context.Context, req *authv1.GetUse
 		Access:          protoAccess,
 		Roles:           roleNames,
 		RoleAssignments: protoAssignments,
+		// IsGlobalAdmin reflects users.is_global_admin (REDESIGN-001 Phase 5.1).
+		// The typed column replaces the (admin, org, '*') legacy marker so
+		// callers no longer need to inspect role_assignments for the magic scope.
+		IsGlobalAdmin: user.IsGlobalAdmin,
 	}, nil
 }
 
@@ -215,6 +219,15 @@ func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleReques
 	}
 	if req.GetScopeValue() == "" {
 		return nil, status.Error(codes.InvalidArgument, "scope_value must not be empty")
+	}
+
+	// Forbid the deprecated platform-admin marker. Use SetGlobalAdmin instead.
+	// REDESIGN-001 Phase 5.1: the (admin, org, '*') convention was a string
+	// privilege that any GrantRole caller could mint by passing scope_value='*'.
+	// The typed users.is_global_admin column removes that footgun.
+	if req.GetScopeType() == "org" && req.GetScopeValue() == "*" {
+		return nil, status.Error(codes.InvalidArgument,
+			"scope_value '*' is no longer a valid platform-admin marker; use SetGlobalAdmin instead (REDESIGN-001 Phase 5.1)")
 	}
 
 	err = h.svc.GrantRole(ctx, repository.RoleAssignment{
@@ -465,6 +478,81 @@ func (h *GRPCHandler) LookupUsernames(ctx context.Context, req *authv1.LookupUse
 		}
 	}
 	return &authv1.LookupUsernamesResponse{Users: out}, nil
+}
+
+// SetGlobalAdmin sets or clears users.is_global_admin for the given user.
+// Only callers that are themselves global admins may invoke this (enforced
+// in the management BFF); the bootstrap CLI writes the flag directly via SQL
+// on first run and does not call this RPC.
+//
+// On success an rbac.role_granted / rbac.role_revoked event is emitted with
+// the synthetic role name "global_admin" so the audit catalogue surfaces the
+// change in /activity. REDESIGN-001 Phase 5.1.
+func (h *GRPCHandler) SetGlobalAdmin(ctx context.Context, req *authv1.SetGlobalAdminRequest) (*emptypb.Empty, error) {
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+
+	// actorID is optional — the zero UUID is acceptable for system-initiated changes.
+	actorID := uuid.Nil
+	if a := req.GetActorId(); a != "" {
+		if actorID, err = uuid.Parse(a); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid actor_id")
+		}
+	}
+
+	if err := h.svc.SetGlobalAdmin(ctx, userID, req.GetGranted(), actorID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "user not found")
+		}
+		return nil, errcodes.MapDBError(err, "internal error")
+	}
+
+	// Publish audit event after the DB write. A publish failure is logged but
+	// does not fail the RPC — the flag is already set in the DB and will be
+	// picked up by any subsequent GetUserPermissions call.
+	h.publishGlobalAdminChanged(ctx, req.GetUserId(), req.GetGranted(), actorID.String())
+
+	return &emptypb.Empty{}, nil
+}
+
+// publishGlobalAdminChanged emits an rbac.role_granted / rbac.role_revoked event
+// for a global-admin flag change. Both grant and revoke use the RoleGrantedPayload
+// shape (which carries the full grant context); the routing key differentiates the
+// direction. Errors are logged, not returned, so a broker outage never blocks the
+// operation that already succeeded in the DB.
+func (h *GRPCHandler) publishGlobalAdminChanged(ctx context.Context, userID string, granted bool, actorID string) {
+	if h.pub == nil {
+		return
+	}
+	routingKey := events.RoutingRBACRoleGranted
+	if !granted {
+		routingKey = events.RoutingRBACRoleRevoked
+	}
+	// Use RoleGrantedPayload for both directions: it carries the actor context
+	// (GrantedBy) that the audit catalogue needs to render the /activity entry
+	// regardless of whether the change was a grant or revoke.
+	payload, err := json.Marshal(events.RoleGrantedPayload{
+		UserID:    userID,
+		Role:      "global_admin",
+		ScopeType: "global",
+		GrantedBy: actorID,
+	})
+	if err != nil {
+		slog.Error("marshal global_admin audit payload", "err", err)
+		return
+	}
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       routingKey,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := h.pub.Publish(ctx, routingKey, evt); err != nil {
+		slog.Error("publish global_admin change", "err", err, "user_id", userID, "granted", granted)
+	}
 }
 
 // scopesToProto wraps a flat scope list as a single wildcard RepositoryAccess.

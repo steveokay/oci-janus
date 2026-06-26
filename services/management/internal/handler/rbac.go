@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
@@ -68,7 +69,9 @@ func hasScopedRole(assignments []*authv1.RoleAssignment, scopeType, scopeValue, 
 //
 // Two paths qualify:
 //   - Platform-admin marker (admin, org, "*") — the legacy convention;
-//     Phase 5.1 will replace with users.is_global_admin column.
+//     Phase 5.1 replaces this with users.is_global_admin column. The legacy
+//     marker check is retained here as a fallback during the migration window
+//     in case any marker grants survived the backfill (e.g. in test envs).
 //   - Tenant-scoped admin (admin, tenant, <tenant_id>) — introduced by
 //     migration 20260625000001.
 //
@@ -76,13 +79,61 @@ func hasScopedRole(assignments []*authv1.RoleAssignment, scopeType, scopeValue, 
 // tenant. An org-A admin must NOT be able to configure tenant-wide settings
 // that affect org-B (Review §A1, Top-5 #2 fix).
 func effectiveTenantAdmin(assignments []*authv1.RoleAssignment, tenantID string) bool {
-	// Platform-admin marker: (admin, org, "*") — legacy convention.
+	// Platform-admin marker: (admin, org, "*") — legacy fallback. After
+	// Phase 5.1 backfill this will match no rows; the field is kept so
+	// partially-migrated environments don't lose admin access during the
+	// upgrade window.
 	if hasScopedRole(assignments, "org", "*", "admin") {
 		return true
 	}
 	// Tenant-scoped admin — the new scope_type introduced in migration
 	// 20260625000001_add_tenant_scope.sql.
 	return hasScopedRole(assignments, "tenant", tenantID, "admin")
+}
+
+// effectiveGlobalAdmin returns true if the caller has platform-admin authority.
+//
+// Two paths qualify:
+//   - users.is_global_admin = true (Phase 5.1 typed primitive). This is the
+//     canonical gate going forward — it is set/cleared exclusively via
+//     SetGlobalAdmin and cannot be minted by calling GrantRole with scope='*'.
+//   - In DEPLOYMENT_MODE=single, ANY tenant-admin grant qualifies because the
+//     deployment IS the platform — there is no meaningful distinction between
+//     "this tenant's admin" and "the platform's admin" when there's only one
+//     tenant.
+//
+// In multi mode the distinction is preserved: only the typed flag qualifies.
+//
+// Single source of truth for "is this caller allowed to touch platform-level
+// surfaces" (scanner adapters, GC, deployment info, cross-tenant management).
+// REDESIGN-001 Phase 5.1.
+func (h *Handler) effectiveGlobalAdmin(r *http.Request) bool {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	userID := middleware.UserIDFromContext(r.Context())
+
+	// Fetch the full permissions response — it includes is_global_admin (Phase 5.1)
+	// alongside role_assignments (PENTEST-002). A nil/error response fails closed.
+	resp, err := h.auth.GetUserPermissions(r.Context(), &authv1.GetUserPermissionsRequest{
+		UserId:   userID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.Warn("effectiveGlobalAdmin: GetUserPermissions failed", "err", err)
+		return false
+	}
+
+	// Typed column path (Phase 5.1) — the preferred check.
+	if resp.GetIsGlobalAdmin() {
+		return true
+	}
+
+	// Single-mode shortcut: any tenant-admin qualifies as platform-admin when
+	// the whole deployment is a single tenant.
+	if h.deploymentMode == loader.DeploymentModeSingle {
+		return hasScopedRole(resp.GetRoleAssignments(), "tenant", tenantID, "admin")
+	}
+
+	return false
 }
 
 // getUserAssignments fetches the caller's full role-assignment list for the

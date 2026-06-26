@@ -55,6 +55,13 @@ service AuthService {
   // the user can log in again; API keys stay disabled (the operator
   // re-issues them deliberately).
   rpc SetUserDisabled(SetUserDisabledRequest) returns (SetUserDisabledResponse);
+  // SetGlobalAdmin sets or clears users.is_global_admin for the given user.
+  // Only callers that are themselves global admins may invoke this; the
+  // bootstrap CLI writes the flag directly via SQL on first run.
+  // Audits via rbac.role_granted / rbac.role_revoked routing keys with a
+  // synthetic role name "global_admin" so the audit catalogue surfaces the
+  // change in /activity. REDESIGN-001 Phase 5.1.
+  rpc SetGlobalAdmin(SetGlobalAdminRequest) returns (google.protobuf.Empty);
 }
 
 message ValidateTokenRequest {
@@ -104,6 +111,9 @@ message GetUserPermissionsResponse {
   // role_assignments is the full per-scope assignment list, the only safe
   // source of truth for scope-aware authorization checks (PENTEST-002).
   repeated RoleAssignment role_assignments = 3;
+  // is_global_admin reflects users.is_global_admin — the typed primitive that
+  // replaces the (admin, org, '*') legacy marker. REDESIGN-001 Phase 5.1.
+  bool is_global_admin = 4;
 }
 
 message RepositoryAccess {
@@ -304,4 +314,12 @@ message SetUserDisabledRequest {
 
 message SetUserDisabledResponse {
   string status = 1; // resulting 'active' | 'disabled' after the flip
+}
+
+// SetGlobalAdminRequest sets or clears users.is_global_admin for a given user.
+// REDESIGN-001 Phase 5.1 — replaces the (admin, org, '*') legacy marker.
+message SetGlobalAdminRequest {
+  string user_id  = 1; // users.id of the target account
+  bool   granted  = 2; // true = grant global admin; false = revoke
+  string actor_id = 3; // caller's user_id — captured for the audit trail
 }
