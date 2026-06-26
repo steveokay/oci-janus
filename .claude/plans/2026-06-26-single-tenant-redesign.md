@@ -52,13 +52,13 @@
 | 3.1.c | `make dev-bootstrap` + production runbook | ✅ DONE | #128 | 2026-06-27 |
 | 3.2 | Tenant gRPC single-tenant guard | ⬜ OPEN | — | — |
 | 3.3 | Tenant context middleware (single-mode injector) | ⬜ OPEN | — | — |
-| 4.1 | `useDeploymentInfo()` FE hook + Provider | ⬜ OPEN | — | — |
+| 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2 | Sidebar + unified Settings IA | ⬜ OPEN | — | — |
 | 4.3 | First-run onboarding wizard | ⬜ OPEN | — | — |
-| 4.4 | `/me/abilities` BFF + `useAbility()` hook | ⬜ OPEN | — | — |
+| 4.4 | `/me/abilities` BFF + `useAbility()` hook | ✅ DONE | #139 | 2026-06-27 |
 | 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
 | 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
-| 4.7 | Remove SSO admin FE (companion to 2.2) | ⬜ OPEN | — | — |
+| 4.7 | Remove SSO admin FE (companion to 2.2) | ⛔ N/A | — | 2026-06-27 |
 | 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |
 | 5.2 | Scope-aware tenant-admin gates (**closes Top-5 #2**) | ✅ DONE | #131 | 2026-06-27 |
 | 5.3 | Delegator-dominates-delegatee in `GrantRole` | ⬜ OPEN | — | — |
@@ -971,6 +971,8 @@ grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 - [ ] Verify with Chrome DevTools mobile emulation (iPhone SE, Pixel 5).
 
 ### Task 4.7: Remove SSO admin FE [companion to RM-003]
+
+> ⛔ N/A (2026-06-27) — investigated; no `/admin/sso` route ever existed in the FE. The only SSO-related FE file is `frontend/src/components/auth/sso-buttons.tsx` (the login-screen provider buttons consumed by users, which stays). PR #133 (Phase 2.2) removed all SSO admin RPCs on the BFF; there's no FE consumer to clean up. Closed without a PR.
 
 **Files:**
 - Modify: `frontend/src/routes/_authenticated.admin.sso.tsx` — convert to read-only display of configured providers (from `/api/v1/deployment-info`)
