@@ -28,6 +28,72 @@
 
 ---
 
+## Progress dashboard
+
+> **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
+> **As-of:** 2026-06-28 — 17 PRs shipped, ~50% complete, 4 of 5 Top-5 critical findings closed.
+
+| Phase | Task | Status | PR | Date |
+|---|---|---|---|---|
+| 0 | Cleanup confirmation table | ✅ DONE | #119 | 2026-06-26 |
+| 1.1 | `DEPLOYMENT_MODE` primitive | ✅ DONE | #120 | 2026-06-26 |
+| 1.2 | `MTLS_REQUIRED` gate (`libs/config/loader`) | ✅ DONE | #121 | 2026-06-26 |
+| 1.3 | Wire mTLS check into all 13 services' main.go | ✅ DONE | #125 | 2026-06-26 |
+| 1.4 | `/api/v1/deployment-info` BFF endpoint | ✅ DONE | #124 | 2026-06-26 |
+| 2.1 | Drop custom-domain CRUD (**closes Top-5 #3**) | ✅ DONE | #132 | 2026-06-27 |
+| 2.2 | Per-tenant SSO → global config | ✅ DONE | #133 | 2026-06-28 |
+| 2.3 | Tenant signup BFF removal | ⬜ OPEN | — | — |
+| 2.4 | Plan/billing UI strip (FE) | ⬜ OPEN | — | — |
+| 2.5 | Login copy + tenant chrome (FE) | ⬜ OPEN | — | — |
+| 2.6 | Delete dev-seed admin (**closes Top-5 #5**) | ✅ DONE | #129 | 2026-06-27 |
+| 2.7 | Helm dead config cleanup | ⛔ N/A | — | 2026-06-26 |
+| 3.1.a | Tenant `deployment_metadata` table + repo | ✅ DONE | #126 | 2026-06-27 |
+| 3.1.b | `registry-auth bootstrap` CLI subcommand | ✅ DONE | #127 | 2026-06-27 |
+| 3.1.c | `make dev-bootstrap` + production runbook | ✅ DONE | #128 | 2026-06-27 |
+| 3.2 | Tenant gRPC single-tenant guard | ⬜ OPEN | — | — |
+| 3.3 | Tenant context middleware (single-mode injector) | ⬜ OPEN | — | — |
+| 4.1 | `useDeploymentInfo()` FE hook + Provider | ⬜ OPEN | — | — |
+| 4.2 | Sidebar + unified Settings IA | ⬜ OPEN | — | — |
+| 4.3 | First-run onboarding wizard | ⬜ OPEN | — | — |
+| 4.4 | `/me/abilities` BFF + `useAbility()` hook | ⬜ OPEN | — | — |
+| 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
+| 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
+| 4.7 | Remove SSO admin FE (companion to 2.2) | ⬜ OPEN | — | — |
+| 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |
+| 5.2 | Scope-aware tenant-admin gates (**closes Top-5 #2**) | ✅ DONE | #131 | 2026-06-27 |
+| 5.3 | Delegator-dominates-delegatee in `GrantRole` | ⬜ OPEN | — | — |
+| 5.4 | `digest_keyed.go` writer-tier scope (RED-FU-003) | ⬜ OPEN | — | — |
+| 5.5 | SSO subject-id binding | ⬜ OPEN | — | — |
+| 5.6 | SAML `EmailVerified` hard-code fix | ⬜ OPEN | — | — |
+| 6.1 | Pull-through proxy digest verify (**closes Top-5 #4**) | ✅ DONE | #123 | 2026-06-26 |
+| 6.2 | Custom-domain takeover guard | ⛔ N/A | — | (replaced by 2.1) |
+| 6.3 | Audit catalogue completeness + lint test | ✅ DONE | #130 | 2026-06-27 |
+| 6.4 | AES-GCM KEK version prefix | ⬜ OPEN | — | — |
+| 6.5 | JWKS rotation prep (multi-key support) | ⬜ OPEN | — | — |
+| 6.6 | Redis fail-closed in `revoke:user:` check | ✅ DONE | #122 | 2026-06-26 |
+| 6.7 | API-key Argon2 verify cache | ⬜ OPEN | — | — |
+| 6.8 | SAML library upgrade to v0.5.x | ⬜ OPEN | — | — |
+| 6.9 | mTLS hot reload via `GetCertificate` + fsnotify | ⬜ OPEN | — | — |
+| 6.10 | mTLS peer-CN interceptor | ⬜ OPEN | — | — |
+| 6.11 | Scanner plugin sandbox | ⬜ OPEN | — | — |
+| 6.12 | Audit hash-chain + checkpoint signing | ⬜ OPEN | — | — |
+| 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ⬜ OPEN | — | — |
+| 8 | Migration / rollout / release prep | ⬜ OPEN | — | — |
+
+**Top-5 critical findings status (4 of 5 closed):**
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | RLS missing on 8 of 9 DBs | ⏸️ DEFERRED — Phase 0 D4 decision |
+| 2 | `require*Admin` accepts any-org-admin | ✅ closed by Phase 5.2 (PR #131) |
+| 3 | Custom-domain takeover via `ON CONFLICT` | ✅ closed by Phase 2.1 (PR #132) — feature removed |
+| 4 | Pull-through proxy missing digest verify | ✅ closed by Phase 6.1 (PR #123) |
+| 5 | Dev-seed admin shipped in prod image | ✅ closed by Phase 2.6 (PR #129) |
+
+**Companion trackers:** `status-tracker.md` (REDESIGN-001 entry), `status.md` (per-PR resolution rows), `futures.md` (RED-FU-001..005 follow-ups), `memory/current_sprint_status.md`.
+
+---
+
 ## Phase 0 — Cleanup confirmation (BLOCKER)
 
 > **STOP. Read this section. Mark each `RM-NNN` row APPROVED / MODIFY / KEEP before proceeding to Phase 2.**
@@ -141,13 +207,14 @@ Phase 2 is now UNBLOCKED. Phases 1 + 6 can start in parallel.
 > Phase 1 introduces the deployment-mode primitive and centralizes the mTLS production-gate. Both are required by every later phase but neither depends on the Phase 0 outcome.
 
 ### Task 1.1: Add `deployment_mode` to shared config loader
+> ✅ DONE — PR #120 (2026-06-26)
 
 **Files:**
 - Modify: `libs/config/loader/loader.go`
 - Modify: `libs/config/loader/loader_test.go`
 - Modify: `libs/config/loader/.env.example` (if exists)
 
-- [ ] **Step 1: Write the failing test in `loader_test.go`**
+- [x] **Step 1: Write the failing test in `loader_test.go`**
 
 ```go
 // TestLoadDeploymentMode verifies that DEPLOYMENT_MODE is parsed,
@@ -179,14 +246,14 @@ func TestLoadDeploymentMode(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 ```
 go test ./libs/config/loader/... -run TestLoadDeploymentMode -v
 ```
 Expected: FAIL (function undefined).
 
-- [ ] **Step 3: Implement in `loader.go`**
+- [x] **Step 3: Implement in `loader.go`**
 
 ```go
 // DeploymentMode describes how this binary is deployed.
@@ -216,14 +283,14 @@ func LoadDeploymentMode() (DeploymentMode, error) {
 }
 ```
 
-- [ ] **Step 4: Run tests to confirm pass**
+- [x] **Step 4: Run tests to confirm pass**
 
 ```
 go test ./libs/config/loader/... -run TestLoadDeploymentMode -v
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add libs/config/loader/loader.go libs/config/loader/loader_test.go
@@ -231,12 +298,13 @@ git commit -m "feat(libs/config): add DEPLOYMENT_MODE flag (single|multi)"
 ```
 
 ### Task 1.2: Add `MTLS_REQUIRED` gate to shared config loader [Review §A3]
+> ✅ DONE — PR #121 (2026-06-26)
 
 **Files:**
 - Modify: `libs/config/loader/loader.go`
 - Modify: `libs/config/loader/loader_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 // TestValidateMTLSConfig enforces that when MTLS_REQUIRED=true,
@@ -260,14 +328,14 @@ func TestValidateMTLSConfig(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 ```
 go test ./libs/config/loader/... -run TestValidateMTLSConfig -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```go
 // MTLSConfig is the shared mTLS configuration block.
@@ -307,28 +375,29 @@ func ValidateMTLSConfig(cfg MTLSConfig) error {
 }
 ```
 
-- [ ] **Step 4: Verify pass**
+- [x] **Step 4: Verify pass**
 
 ```
 go test ./libs/config/loader/... -run TestValidateMTLSConfig -v
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git commit -am "feat(libs/config): centralize MTLS_REQUIRED enforcement (Review §A3)"
 ```
 
 ### Task 1.3: Wire `ValidateMTLSConfig` into every service's `main.go`
+> ✅ DONE — PR #125 (2026-06-26) — covered all 13 services (gateway included)
 
 **Files:** every `services/*/cmd/server/main.go` (12 services).
 
-- [ ] **Step 1:** Identify the 12 main.go files
+- [x] **Step 1:** Identify the 12 main.go files
 ```
 find services -path "*/cmd/server/main.go" -type f
 ```
 
-- [ ] **Step 2:** For each main.go, add the call after config load and before any server start:
+- [x] **Step 2:** For each main.go, add the call after config load and before any server start:
 
 ```go
 // mTLS configuration validation — fails loudly if MTLS_REQUIRED=true and any
@@ -341,7 +410,7 @@ if err := loader.ValidateMTLSConfig(mtlsCfg); err != nil {
 }
 ```
 
-- [ ] **Step 3:** Run every service in a fresh shell with `MTLS_REQUIRED=true` and no paths, verify each fails
+- [x] **Step 3:** Run every service in a fresh shell with `MTLS_REQUIRED=true` and no paths, verify each fails
 
 ```
 for svc in auth core gateway gc management metadata proxy scanner signer storage tenant webhook audit; do
@@ -351,9 +420,9 @@ done
 ```
 Expected: every service exits with "MTLS_REQUIRED=true but missing: …".
 
-- [ ] **Step 4:** Update each service's `.env.example` to document `MTLS_REQUIRED`
+- [x] **Step 4:** Update each service's `.env.example` to document `MTLS_REQUIRED`
 
-- [ ] **Step 5:** Commit
+- [x] **Step 5:** Commit
 
 ```
 git add services/*/cmd/server/main.go services/*/.env.example
@@ -361,13 +430,14 @@ git commit -m "feat(services): enforce MTLS_REQUIRED at startup in all services 
 ```
 
 ### Task 1.4: Surface `/api/v1/deployment-info` from BFF
+> ✅ DONE — PR #124 (2026-06-26) — `sso_enabled` field deferred until SSO collapse shipped
 
 **Files:**
 - Modify: `services/management/internal/handler/handler.go` (add route)
 - Create: `services/management/internal/handler/deployment_info.go`
 - Create: `services/management/internal/handler/deployment_info_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 // TestHandleDeploymentInfo verifies the public read-only endpoint that
@@ -389,7 +459,7 @@ func TestHandleDeploymentInfo(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2:** Verify failure, implement, verify pass, commit per usual pattern.
+- [x] **Step 2:** Verify failure, implement, verify pass, commit per usual pattern.
 
 ```go
 // handleDeploymentInfo returns the deployment posture the FE needs to
@@ -405,7 +475,7 @@ func (h *Handler) handleDeploymentInfo(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-- [ ] Commit: `git commit -am "feat(management): add /api/v1/deployment-info (Phase 1.4)"`
+- [x] Commit: `git commit -am "feat(management): add /api/v1/deployment-info (Phase 1.4)"`
 
 ---
 
@@ -416,6 +486,7 @@ func (h *Handler) handleDeploymentInfo(w http.ResponseWriter, r *http.Request) {
 Tasks in this phase are large refactors. Each one creates a feature branch (e.g. `feat/redesign-rm-001-custom-domains`). PR per task per `memory/feedback_git_workflow.md`. The order below is the suggested merge sequence — each task is independent so they can be developed in parallel.
 
 ### Task 2.1: Remove custom-domain CRUD [RM-001]
+> ✅ DONE — PR #132 (2026-06-27) — **closes Top-5 #3**. Net –5362 LOC; RM-002 folded into same PR.
 
 **Files to DELETE:**
 - `services/management/internal/handler/workspace_domains.go` (~250 LOC)
@@ -434,19 +505,19 @@ Tasks in this phase are large refactors. Each one creates a feature branch (e.g.
 
 **Steps:**
 
-- [ ] Create feature branch: `git checkout -b feat/redesign-rm-001-custom-domains`
-- [ ] Identify every callsite via grep:
+- [x] Create feature branch: `git checkout -b feat/redesign-rm-001-custom-domains`
+- [x] Identify every callsite via grep:
 ```
 grep -rn "RegisterDomain\|MarkDomainVerified\|SetPrimaryDomain\|tenant_domains\|domains.ts" services/ frontend/ proto/
 ```
-- [ ] Confirm no other service consumes the domain RPCs (gateway, core, etc.). Expected: only `services/management` and `services/tenant` itself.
-- [ ] Delete the FE route file. Verify FE still builds:
+- [x] Confirm no other service consumes the domain RPCs (gateway, core, etc.). Expected: only `services/management` and `services/tenant` itself.
+- [x] Delete the FE route file. Verify FE still builds:
 ```
 cd frontend && npm run build
 ```
-- [ ] Delete `workspace_domains.go` + test. Remove route registrations from `handler.go`.
-- [ ] Remove the Domains entry from sidebar (look for `domains` href in `sidebar.tsx`).
-- [ ] Mark domain RPCs deprecated in `proto/tenant/v1/tenant.proto` with a comment:
+- [x] Delete `workspace_domains.go` + test. Remove route registrations from `handler.go`.
+- [x] Remove the Domains entry from sidebar (look for `domains` href in `sidebar.tsx`).
+- [x] Mark domain RPCs deprecated in `proto/tenant/v1/tenant.proto` with a comment:
 ```protobuf
 // DEPRECATED: removed in single-tenant redesign (.claude/plans/2026-06-26-single-tenant-redesign.md RM-001).
 // To re-introduce: revert this commit + the `services/tenant` handler removal.
@@ -454,10 +525,10 @@ cd frontend && npm run build
 // rpc RegisterDomain(RegisterDomainRequest) returns (RegisterDomainResponse);
 // ... (the original signatures, commented out)
 ```
-- [ ] Regenerate Go stubs: `cd proto && buf generate`
-- [ ] Remove the handlers from `services/tenant/internal/handler/grpc.go`.
-- [ ] Remove the repo methods.
-- [ ] If RM-002 is APPROVED, write a down-migration that drops `tenant_domains`:
+- [x] Regenerate Go stubs: `cd proto && buf generate`
+- [x] Remove the handlers from `services/tenant/internal/handler/grpc.go`.
+- [x] Remove the repo methods.
+- [x] If RM-002 is APPROVED, write a down-migration that drops `tenant_domains`:
 ```
 -- migrations/YYYYMMDDHHMMSS_drop_tenant_domains.sql
 -- +goose Up
@@ -466,13 +537,14 @@ DROP TABLE IF EXISTS tenant_domains;
 -- See git history at <commit hash> for the original schema; restoring requires
 -- a manual schema-recovery step since dropped data cannot be recovered.
 ```
-- [ ] If RM-002 is REJECTED, leave the table in place; only the RPCs are gone.
-- [ ] Update `docs/SERVICES.md` §12 to remove the Domain RPC documentation.
-- [ ] Drop the `infra/helm/registry/charts/gateway/templates/ingressroutes.yaml` dead routes.
-- [ ] Run full test suite: `make test`
-- [ ] Push branch, open PR titled "feat(redesign): drop custom-domain CRUD [RM-001]"
+- [x] If RM-002 is REJECTED, leave the table in place; only the RPCs are gone.
+- [x] Update `docs/SERVICES.md` §12 to remove the Domain RPC documentation.
+- [x] Drop the `infra/helm/registry/charts/gateway/templates/ingressroutes.yaml` dead routes.
+- [x] Run full test suite: `make test`
+- [x] Push branch, open PR titled "feat(redesign): drop custom-domain CRUD [RM-001]"
 
 ### Task 2.2: Collapse per-tenant SSO into global SSO [RM-003]
+> ✅ DONE — PR #133 (2026-06-28) — also handled RM-004 (`auth_login_sessions.tenant_id` dropped) in same PR.
 
 **Files to DELETE:**
 - `services/auth/internal/handler/sso_admin.go`
@@ -488,9 +560,9 @@ DROP TABLE IF EXISTS tenant_domains;
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-003-global-sso`
-- [ ] Decide config storage: env vars vs YAML file vs `global_sso_config` DB row. Per Q-003 recommendation, **single config row** in a new `global_sso_config` table keyed by deployment.
-- [ ] Write the new schema migration:
+- [x] Branch: `feat/redesign-rm-003-global-sso`
+- [x] Decide config storage: env vars vs YAML file vs `global_sso_config` DB row. Per Q-003 recommendation, **single config row** in a new `global_sso_config` table keyed by deployment.
+- [x] Write the new schema migration:
 ```sql
 -- migrations/YYYYMMDDHHMMSS_global_sso_config.sql
 -- +goose Up
@@ -507,7 +579,7 @@ CREATE TABLE global_sso_config (
 -- +goose Down
 DROP TABLE global_sso_config;
 ```
-- [ ] Migrate any existing `auth_providers` rows to the global config (one row per unique provider_id):
+- [x] Migrate any existing `auth_providers` rows to the global config (one row per unique provider_id):
 ```sql
 INSERT INTO global_sso_config (provider_id, kind, enabled, config_json, secret_enc, auto_provision)
 SELECT DISTINCT ON (provider_id) provider_id, kind, enabled, config_json, oauth_client_secret_enc, auto_provision
@@ -515,14 +587,14 @@ FROM auth_providers
 WHERE enabled
 ORDER BY provider_id, created_at DESC;
 ```
-- [ ] Modify `services/auth/internal/service/sso.go` — `LookupProvider` no longer takes `tenantID`. Replace every call.
-- [ ] Modify `services/auth/internal/handler/sso.go` — start/callback handlers no longer thread tenant_id through state.
-- [ ] Delete `sso_admin.go` + tests + management BFF route.
-- [ ] FE: rewrite `_authenticated.admin.sso.tsx` to a read-only view showing what's configured (no edit) — config now lives in deployment-time config files.
-- [ ] Update `docs/SAML.md` and `docs/SERVICES.md` §2 to reflect global SSO model.
-- [ ] If RM-004 is APPROVED, drop `auth_login_sessions.tenant_id` in a separate migration (it's still in use by per-tenant state — drop the column once the lookups are gone).
-- [ ] Test SSO end-to-end with a single Google OAuth provider and a single SAML IdP.
-- [ ] PR: "feat(auth): collapse per-tenant SSO into global config [RM-003,004]"
+- [x] Modify `services/auth/internal/service/sso.go` — `LookupProvider` no longer takes `tenantID`. Replace every call.
+- [x] Modify `services/auth/internal/handler/sso.go` — start/callback handlers no longer thread tenant_id through state.
+- [x] Delete `sso_admin.go` + tests + management BFF route.
+- [x] FE: rewrite `_authenticated.admin.sso.tsx` to a read-only view showing what's configured (no edit) — config now lives in deployment-time config files.
+- [x] Update `docs/SAML.md` and `docs/SERVICES.md` §2 to reflect global SSO model.
+- [x] If RM-004 is APPROVED, drop `auth_login_sessions.tenant_id` in a separate migration (it's still in use by per-tenant state — drop the column once the lookups are gone).
+- [x] Test SSO end-to-end with a single Google OAuth provider and a single SAML IdP.
+- [x] PR: "feat(auth): collapse per-tenant SSO into global config [RM-003,004]"
 
 ### Task 2.3: Remove tenant signup / public tenant-create [RM-005]
 
@@ -576,6 +648,7 @@ grep -rn "workspace.plan\|tenant.plan\|plan_badge\|PlanBadge" frontend/src/
 - [ ] PR: "feat(fe): single-mode login copy + tenant chrome [RM-007, HD-001]"
 
 ### Task 2.6: Delete dev-seed migration [RM-008] [Top-5 #5]
+> ✅ DONE — PR #129 (2026-06-27) — **closes Top-5 #5**. Conformance user residual risk flagged as RED-FU-004 follow-up.
 
 **Files to DELETE:**
 - `services/auth/migrations/20260618000001_seed_dev_admin.sql`
@@ -588,10 +661,10 @@ grep -rn "workspace.plan\|tenant.plan\|plan_badge\|PlanBadge" frontend/src/
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-008-drop-dev-seed`
-- [ ] Confirm `migrations.go` doesn't reference specific filenames; if it does, remove the references.
-- [ ] Delete the two SQL files.
-- [ ] Add Makefile target:
+- [x] Branch: `feat/redesign-rm-008-drop-dev-seed`
+- [x] Confirm `migrations.go` doesn't reference specific filenames; if it does, remove the references.
+- [x] Delete the two SQL files.
+- [x] Add Makefile target:
 ```make
 .PHONY: dev-bootstrap
 dev-bootstrap: ## Bootstrap a dev admin via the CLI (no migration-baked secrets)
@@ -600,11 +673,12 @@ dev-bootstrap: ## Bootstrap a dev admin via the CLI (no migration-baked secrets)
 		--admin-password-stdin < .secrets/dev-admin-password \
 		--tenant-name "Development"
 ```
-- [ ] Document `.secrets/dev-admin-password` as gitignored (verify).
-- [ ] Update `infra/runbooks/local-setup.md` to point at `make dev-bootstrap`.
-- [ ] PR: "fix(security): delete dev-seed admin migration [RM-008, Top-5 #5]"
+- [x] Document `.secrets/dev-admin-password` as gitignored (verify).
+- [x] Update `infra/runbooks/local-setup.md` to point at `make dev-bootstrap`.
+- [x] PR: "fix(security): delete dev-seed admin migration [RM-008, Top-5 #5]"
 
 ### Task 2.7: Drop dead custom-domain Helm + ACME config [RM-009]
+> ⛔ N/A (2026-06-26) — investigated; the dead per-domain Helm config the task expected did not exist. Closed without a PR.
 
 **Files to MODIFY:**
 - `infra/helm/registry/charts/gateway/values.yaml` — remove `domains:` list (if exists)
@@ -625,13 +699,14 @@ dev-bootstrap: ## Bootstrap a dev admin via the CLI (no migration-baked secrets)
 ## Phase 3 — Soft-hide multi-tenancy in BE
 
 ### Task 3.1: Add `registry-auth bootstrap` CLI subcommand
+> ✅ DONE across 3 PRs: 3.1.a #126, 3.1.b #127, 3.1.c #128 (2026-06-27).
 
 **Files:**
 - Create: `services/auth/cmd/bootstrap/main.go` (or extend `services/auth/cmd/server/main.go` with a `bootstrap` subcommand)
 - Create: `services/auth/internal/service/bootstrap.go`
 - Create: `services/auth/internal/service/bootstrap_test.go`
 
-- [ ] **Step 1: Define the contract**
+- [x] **Step 1: Define the contract**
 
 The CLI runs as a one-shot inside the auth container:
 ```
@@ -643,7 +718,7 @@ registry-auth bootstrap \
 ```
 On success: prints the created admin user UUID + tenant UUID to stdout. On any error (DB unreachable, admin already exists, tenant already exists in single mode): exit non-zero.
 
-- [ ] **Step 2: Write test cases**
+- [x] **Step 2: Write test cases**
 
 ```go
 // TestBootstrap_FreshDB creates admin + tenant + grants the global-admin role.
@@ -659,11 +734,11 @@ func TestBootstrap_SecondCallFails(t *testing.T) { ... }
 func TestBootstrap_SingleModeRefusesSecondTenant(t *testing.T) { ... }
 ```
 
-- [ ] **Step 3: Implement** the bootstrap service + CLI parser. Use argon2id (existing `libs/crypto/argon2`) for the password.
+- [x] **Step 3: Implement** the bootstrap service + CLI parser. Use argon2id (existing `libs/crypto/argon2`) for the password.
 
-- [ ] **Step 4: Wire into the Docker image** — multi-stage build, single binary, dispatch by `os.Args[1]`.
+- [x] **Step 4: Wire into the Docker image** — multi-stage build, single binary, dispatch by `os.Args[1]`.
 
-- [ ] **Step 5: Smoke-test against a fresh local DB**:
+- [x] **Step 5: Smoke-test against a fresh local DB**:
 ```
 docker compose down -v && docker compose up -d auth-db
 sleep 2
@@ -676,7 +751,7 @@ echo "Again" | docker compose run --rm -T auth registry-auth bootstrap \
 # Expected: exits non-zero, "admin already exists"
 ```
 
-- [ ] **Step 6: Commit + PR**
+- [x] **Step 6: Commit + PR**
 
 ### Task 3.2: Make `services/tenant` single-tenant aware
 
@@ -906,6 +981,7 @@ grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 ## Phase 5 — RBAC simplification
 
 ### Task 5.1: Introduce `users.is_global_admin` typed primitive [Review §A1 + D1]
+> ✅ DONE — PR #134 (2026-06-28) — closes Review §A1 D1 at the type level. `GrantRole` rejects `scope_value=*` going forward.
 
 **Files:**
 - Create: migration `services/auth/migrations/YYYYMMDDHHMMSS_users_is_global_admin.sql`
@@ -915,7 +991,7 @@ grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 
 **Steps:**
 
-- [ ] **Step 1: Migration**
+- [x] **Step 1: Migration**
 
 ```sql
 -- +goose Up
@@ -943,7 +1019,7 @@ WHERE role_name = 'admin' AND scope_type = 'org' AND scope_value = '*';
 ALTER TABLE users DROP COLUMN is_global_admin;
 ```
 
-- [ ] **Step 2:** `GrantRole` (services/auth/internal/handler/grpc.go:189) rejects `scope_type='org', scope_value='*'`:
+- [x] **Step 2:** `GrantRole` (services/auth/internal/handler/grpc.go:189) rejects `scope_type='org', scope_value='*'`:
 ```go
 // Forbid the deprecated platform-admin marker. Use SetGlobalAdmin instead.
 if req.ScopeType == "org" && req.ScopeValue == "*" {
@@ -952,9 +1028,9 @@ if req.ScopeType == "org" && req.ScopeValue == "*" {
 }
 ```
 
-- [ ] **Step 3:** New `SetGlobalAdmin(user_id, granted_by, granted)` gRPC + BFF route, gated on the caller already being a global admin (chicken-and-egg solved by bootstrap CLI).
+- [x] **Step 3:** New `SetGlobalAdmin(user_id, granted_by, granted)` gRPC + BFF route, gated on the caller already being a global admin (chicken-and-egg solved by bootstrap CLI).
 
-- [ ] **Step 4:** Implement the `effectiveGlobalAdmin(claims, mode)` helper in `services/management/internal/handler/rbac.go` (signature already defined in Task 4.2). This helper is the single point of truth for "is this user allowed to touch platform-level surfaces" — in single mode it collapses to "workspace admin = effective platform admin", in multi mode it requires the actual `is_global_admin` flag.
+- [x] **Step 4:** Implement the `effectiveGlobalAdmin(claims, mode)` helper in `services/management/internal/handler/rbac.go` (signature already defined in Task 4.2). This helper is the single point of truth for "is this user allowed to touch platform-level surfaces" — in single mode it collapses to "workspace admin = effective platform admin", in multi mode it requires the actual `is_global_admin` flag.
 
 ```go
 func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
@@ -968,11 +1044,12 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 }
 ```
 
-- [ ] **Step 5:** Update every `requirePlatformAdmin` site in `services/management/internal/handler/` to call `effectiveGlobalAdmin(claims, h.deploymentMode)` instead of checking `claims.IsGlobalAdmin` directly. Grep targets: `admin_tenants.go:106`, `admin_gc.go:95`, `admin_scanners.go:95` (Review §A1 finding #5 sites).
+- [x] **Step 5:** Update every `requirePlatformAdmin` site in `services/management/internal/handler/` to call `effectiveGlobalAdmin(claims, h.deploymentMode)` instead of checking `claims.IsGlobalAdmin` directly. Grep targets: `admin_tenants.go:106`, `admin_gc.go:95`, `admin_scanners.go:95` (Review §A1 finding #5 sites).
 
-- [ ] **Step 6:** FE: `useDeploymentInfo()` + `useAbility()` (Task 4.4) read the new field. The `useAbility("platform_admin", ...)` predicate replicates `effectiveGlobalAdmin` client-side so the Settings › Platform tab visibility matches BFF gates exactly.
+- [x] **Step 6:** FE: `useDeploymentInfo()` + `useAbility()` (Task 4.4) read the new field. The `useAbility("platform_admin", ...)` predicate replicates `effectiveGlobalAdmin` client-side so the Settings › Platform tab visibility matches BFF gates exactly.
 
 ### Task 5.2: Tighten every `require*Admin` helper to scope-aware tenant-admin [Review §A1, Top-5 #2]
+> ✅ DONE — PR #131 (2026-06-27) — **closes Top-5 #2**. `digest_keyed.go` writer-tier scope deferred to Phase 5.4 (RED-FU-003).
 
 **Files:**
 - Modify: `services/auth/internal/handler/http.go:415` (`callerIsTenantAdmin`)
@@ -985,10 +1062,10 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 
 **Steps:**
 
-- [ ] Replace each "any org admin" check with `hasScopedRole(assignments, "tenant", tenantID, "admin")`.
-- [ ] Write a unit test per helper that demonstrates: org-A admin → 403 when calling webhook/SSO/etc.
-- [ ] Where the role doesn't yet have a tenant-scoped grant, write a tiny migration that promotes existing org-admins to tenant-admin (one-time, with operator confirmation).
-- [ ] PR.
+- [x] Replace each "any org admin" check with `hasScopedRole(assignments, "tenant", tenantID, "admin")`.
+- [x] Write a unit test per helper that demonstrates: org-A admin → 403 when calling webhook/SSO/etc.
+- [x] Where the role doesn't yet have a tenant-scoped grant, write a tiny migration that promotes existing org-admins to tenant-admin (one-time, with operator confirmation).
+- [x] PR.
 
 ### Task 5.3: Delegator-dominates-delegatee rule in `GrantRole` and SA creation [Review §A1]
 
@@ -1043,18 +1120,20 @@ The current `callerIsTenantAdmin` re-queries `GetUserRoles` by `claims.Subject` 
 ## Phase 6 — Security debt cleanup (from review §A)
 
 ### Task 6.1: Pull-through proxy upstream digest verification [Top-5 #4, Review §A4]
+> ✅ DONE — PR #123 (2026-06-26) — **closes Top-5 #4**.
 
 **Files:**
 - Modify: `services/proxy/internal/handler/http.go:319-358`
 - Modify: `services/proxy/internal/upstream/client.go:268-293`
 
-- [ ] Tee the upstream body through `sha256.New()` while writing to storage.
-- [ ] On finalize, compare computed digest to requested digest.
-- [ ] On mismatch: abort the storage commit, return `500 BLOB_UPLOAD_INVALID`, audit-log the failure.
-- [ ] Test: stub upstream returns bytes with a tampered digest → request fails, blob is not cached.
-- [ ] PR titled: "fix(proxy): verify upstream blob digest before caching [Top-5 #4, A4]"
+- [x] Tee the upstream body through `sha256.New()` while writing to storage.
+- [x] On finalize, compare computed digest to requested digest.
+- [x] On mismatch: abort the storage commit, return `500 BLOB_UPLOAD_INVALID`, audit-log the failure.
+- [x] Test: stub upstream returns bytes with a tampered digest → request fails, blob is not cached.
+- [x] PR titled: "fix(proxy): verify upstream blob digest before caching [Top-5 #4, A4]"
 
 ### Task 6.2: Custom-domain takeover guard — REPLACED by RM-001 removal
+> ⛔ N/A (2026-06-27) — Phase 2.1 removed the surface; no code change required.
 
 Marked here for traceability. If RM-001 is REJECTED, this task takes its place:
 
@@ -1062,6 +1141,7 @@ Marked here for traceability. If RM-001 is REJECTED, this task takes its place:
 - [ ] Audit event: `tenant.domain.register.rejected` with previous-owner tenant id.
 
 ### Task 6.3: Audit catalogue completeness [Review §A5]
+> ✅ DONE — PR #130 (2026-06-27) — 13 missing event types mapped + lint test enforces invariant.
 
 **Files:**
 - Modify: `services/audit/internal/eventconsumer/consumer.go:335-572`
@@ -1069,10 +1149,10 @@ Marked here for traceability. If RM-001 is REJECTED, this task takes its place:
 
 **Steps:**
 
-- [ ] List every event type defined in `libs/rabbitmq/events`.
-- [ ] Compare to the switch in `mapEvent`.
-- [ ] For each missing event, add a case that emits an `audit_events` row.
-- [ ] Add a Go test that enumerates registered event keys + asserts that every key either has a case in `mapEvent` or has the `// audit: skip` comment in `events.go`. Test fails for any new event type that's silently dropped.
+- [x] List every event type defined in `libs/rabbitmq/events`.
+- [x] Compare to the switch in `mapEvent`.
+- [x] For each missing event, add a case that emits an `audit_events` row.
+- [x] Add a Go test that enumerates registered event keys + asserts that every key either has a case in `mapEvent` or has the `// audit: skip` comment in `events.go`. Test fails for any new event type that's silently dropped.
 
 Specific events to add (from review):
 - `rbac.role_granted`, `rbac.role_revoked`
@@ -1110,13 +1190,14 @@ Specific events to add (from review):
 - [ ] After old key's max-TTL has passed, the old env var can be removed without invalidating any live token.
 
 ### Task 6.6: `revoke:user:<sub>` fail-closed on Redis error [Review §B]
+> ✅ DONE — PR #122 (2026-06-26) — closes Review §B (Redis fail-closed).
 
 **Files:**
 - Modify: `services/auth/internal/service/auth.go:225-227`
 
-- [ ] On Redis error: deny token (return `codes.Unavailable` to caller, log error, increment metric).
-- [ ] Test: stub Redis returns an error → ValidateToken returns Unavailable.
-- [ ] PR.
+- [x] On Redis error: deny token (return `codes.Unavailable` to caller, log error, increment metric).
+- [x] Test: stub Redis returns an error → ValidateToken returns Unavailable.
+- [x] PR.
 
 ### Task 6.7: API-key Argon2 verify cache [Review §B]
 
