@@ -1,12 +1,18 @@
-// FE-API-034 — SSO provider configuration + OAuth callback business logic.
+// REDESIGN-001 RM-003 — SSO service, global-config edition.
 //
-// This file lives in the service package because it crosses two repository
-// boundaries (auth_providers and users) and because token issuance lives here
-// already. The HTTP handler layer translates redirect-dance HTTP traffic into
-// calls on these methods.
+// Per-tenant auth_providers (and the admin CRUD surface that had the Review §A1
+// gate flaw) are replaced by the global_sso_config table. The SSO service now
+// looks up providers by a stable string provider_id (e.g. "google", "okta_saml")
+// rather than a per-tenant UUID.
 //
-// SAML is intentionally not implemented in this iteration — the handler stubs
-// SAML routes with 501 Not Implemented. See the DEFERRAL commit note.
+// What changed vs. FE-API-034:
+//   - authProviderRepo → globalSSOConfigRepo (string-keyed)
+//   - CreateProvider / UpdateProvider / DeleteProvider / ListAllProviders removed
+//   - StartLoginInput.ProviderID: uuid.UUID → string
+//   - LoginSession.ProviderID: uuid.UUID → string
+//   - EnsureSSOUser: accepts *repository.GlobalSSOProvider instead of *repository.AuthProvider
+//   - TenantID no longer threaded through the session; resolved at callback time
+//     from users.tenant_id or AUTH_DEFAULT_TENANT_ID for new provisioned users.
 package service
 
 import (
@@ -33,37 +39,20 @@ import (
 // status codes; all error paths log server-side detail so an operator can
 // debug a stuck redirect without leaking the cause to the user.
 var (
-	ErrProviderNotFound       = errors.New("auth provider not found or disabled")
-	ErrInvalidProviderConfig  = errors.New("invalid provider configuration")
-	ErrSessionNotFound        = errors.New("login session not found or expired")
-	ErrAutoProvisionDisabled  = errors.New("auto-provision disabled and no matching user")
-	ErrEmailNotVerified       = errors.New("email not verified by identity provider")
-	ErrInvalidNextParam       = errors.New("invalid next parameter")
-	ErrSAMLNotImplemented     = errors.New("SAML support is not implemented in this build")
+	ErrProviderNotFound      = errors.New("auth provider not found or disabled")
+	ErrInvalidProviderConfig = errors.New("invalid provider configuration")
+	ErrSessionNotFound       = errors.New("login session not found or expired")
+	ErrAutoProvisionDisabled = errors.New("auto-provision disabled and no matching user")
+	ErrEmailNotVerified      = errors.New("email not verified by identity provider")
+	ErrInvalidNextParam      = errors.New("invalid next parameter")
+	ErrSAMLNotImplemented    = errors.New("SAML support is not implemented in this build")
 )
 
-// SSO is the FE-API-034 SSO service. It owns auth_providers + login_sessions
-// repositories and reuses the existing Service for JWT issuance, user lookup,
-// and role assignment.
-//
-// CredentialKey is the AES-256 key used to encrypt OAuth client_secret at
-// rest. Must be exactly 32 bytes; constructor enforces this.
-type SSO struct {
-	auth          *Service
-	providers     authProviderRepo
-	sessions      loginSessionRepo
-	credentialKey []byte
-}
-
-// authProviderRepo is the subset of AuthProviderRepository used by the SSO
-// service. Mirrors the userRepo pattern so handler-package tests can swap in
-// in-memory fakes.
-type authProviderRepo interface {
-	Create(ctx context.Context, p *repository.AuthProvider) (*repository.AuthProvider, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*repository.AuthProvider, error)
-	ListByTenant(ctx context.Context, tenantID uuid.UUID, enabledOnly bool) ([]*repository.AuthProvider, error)
-	Update(ctx context.Context, id uuid.UUID, req repository.UpdateAuthProviderRequest) (*repository.AuthProvider, error)
-	Delete(ctx context.Context, id uuid.UUID) error
+// globalSSOConfigRepo is the subset of GlobalSSOConfigRepository used by the
+// SSO service. In-memory fakes in handler tests implement this interface.
+type globalSSOConfigRepo interface {
+	Get(ctx context.Context, providerID string) (*repository.GlobalSSOProvider, error)
+	List(ctx context.Context, enabledOnly bool) ([]*repository.GlobalSSOProvider, error)
 }
 
 // loginSessionRepo is the subset of LoginSessionRepository used by the SSO
@@ -74,21 +63,37 @@ type loginSessionRepo interface {
 	DeleteExpired(ctx context.Context) (int64, error)
 }
 
-// Compile-time interface check.
-var _ authProviderRepo = (*repository.AuthProviderRepository)(nil)
+// Compile-time interface checks.
+var _ globalSSOConfigRepo = (*repository.GlobalSSOConfigRepository)(nil)
 var _ loginSessionRepo = (*repository.LoginSessionRepository)(nil)
 
-// AuthProviderRepo is an exported alias so handler-package tests can build
+// GlobalSSOConfigRepo is an exported alias so handler-package tests can build
 // fakes without importing the repository package transitively.
-type AuthProviderRepo = authProviderRepo
+type GlobalSSOConfigRepo = globalSSOConfigRepo
 
 // LoginSessionRepo is an exported alias for handler-package tests.
 type LoginSessionRepo = loginSessionRepo
 
+// SSO is the REDESIGN-001 RM-003 SSO service. It owns the global_sso_config
+// and login_sessions repositories and reuses the existing Service for JWT
+// issuance, user lookup, and role assignment.
+//
+// CredentialKey is the AES-256 key used to decrypt OAuth client_secret_enc
+// at callback time. Must be exactly 32 bytes; constructor enforces this.
+type SSO struct {
+	auth          *Service
+	providers     globalSSOConfigRepo
+	sessions      loginSessionRepo
+	credentialKey []byte
+	// defaultTenantID is used when auto-provisioning a new SSO user and no
+	// existing user row can be matched by email. Comes from AUTH_DEFAULT_TENANT_ID.
+	defaultTenantID uuid.UUID
+}
+
 // NewSSO constructs the SSO service. credentialKey must be exactly 32 bytes
-// (AES-256). A nil key disables provider CRUD with a clear startup error so
-// no plaintext secret can ever be persisted unencrypted.
-func NewSSO(auth *Service, providers authProviderRepo, sessions loginSessionRepo, credentialKey []byte) (*SSO, error) {
+// (AES-256). A nil key disables SSO with a clear startup error so no plaintext
+// secret can ever be persisted unencrypted.
+func NewSSO(auth *Service, providers globalSSOConfigRepo, sessions loginSessionRepo, credentialKey []byte) (*SSO, error) {
 	if auth == nil {
 		return nil, errors.New("SSO: auth service is nil")
 	}
@@ -103,201 +108,80 @@ func NewSSO(auth *Service, providers authProviderRepo, sessions loginSessionRepo
 	}, nil
 }
 
+// WithDefaultTenantID sets the fallback tenant used when auto-provisioning a
+// new SSO user. Called from server.go when AUTH_DEFAULT_TENANT_ID is set.
+func (s *SSO) WithDefaultTenantID(id uuid.UUID) *SSO {
+	s.defaultTenantID = id
+	return s
+}
+
 // AuthService returns the underlying *Service so HTTP handlers can issue
-// tokens after a successful SSO callback. Read-only accessor — callers must
-// not mutate the returned service.
+// tokens after a successful SSO callback.
 func (s *SSO) AuthService() *Service { return s.auth }
 
-// Providers returns the underlying provider repo so the admin CRUD handler
-// can use it directly.
-func (s *SSO) Providers() authProviderRepo { return s.providers }
-
-// Sessions returns the underlying session repo (used by tests and the
-// background cleanup goroutine).
+// Sessions returns the underlying session repo (used by the background
+// cleanup goroutine).
 func (s *SSO) Sessions() loginSessionRepo { return s.sessions }
 
-// CredentialKey returns the AES-256 key used for client_secret encryption.
-// Exported so the admin CRUD handler can re-encrypt on PATCH without needing
-// to plumb the raw key through every layer.
+// CredentialKey returns the AES-256 key used for client_secret_enc decryption.
 func (s *SSO) CredentialKey() []byte { return s.credentialKey }
 
-// ── Provider CRUD helpers ───────────────────────────────────────────────────
+// ── Provider lookup ─────────────────────────────────────────────────────────
 
-// CreateProviderInput is the validated input for CreateProvider. ClientSecret
-// is the plaintext OAuth client_secret — encrypted here and never stored.
-type CreateProviderInput struct {
-	TenantID     uuid.UUID
-	Type         repository.AuthProviderType
-	DisplayName  string
-	Enabled      bool
-
-	OAuthClientID     string
-	OAuthClientSecret string // plaintext; encrypted before storage
-	OAuthIssuerURL    string
-	OAuthScopes       []string
-
-	SAMLIdpMetadataXML string
-	SAMLEntityID       string
-	SAMLAudience       string
-
-	AutoProvision bool
-	DefaultRole   string
-
-	UpdatedBy *uuid.UUID
-}
-
-// CreateProvider validates the input, encrypts the plaintext client_secret,
-// and persists the row. Returns the persisted record with the ciphertext
-// stripped — callers must never expose ciphertext to the wire.
-func (s *SSO) CreateProvider(ctx context.Context, in CreateProviderInput) (*repository.AuthProvider, error) {
-	if err := validateProviderInput(in.Type, in.DisplayName, in.OAuthClientID, in.OAuthClientSecret,
-		in.OAuthIssuerURL, in.SAMLIdpMetadataXML, in.DefaultRole); err != nil {
-		return nil, err
-	}
-
-	var secretEnc []byte
-	if in.Type.IsOAuth() && in.OAuthClientSecret != "" {
-		ct, err := aes.Encrypt([]byte(in.OAuthClientSecret), s.credentialKey)
-		if err != nil {
-			return nil, fmt.Errorf("encrypt client secret: %w", err)
-		}
-		secretEnc = ct
-	}
-
-	p := &repository.AuthProvider{
-		TenantID:             in.TenantID,
-		Type:                 in.Type,
-		DisplayName:          in.DisplayName,
-		Enabled:              in.Enabled,
-		OAuthClientID:        in.OAuthClientID,
-		OAuthClientSecretEnc: secretEnc,
-		OAuthIssuerURL:       in.OAuthIssuerURL,
-		OAuthScopes:          in.OAuthScopes,
-		SAMLIdpMetadataXML:   in.SAMLIdpMetadataXML,
-		SAMLEntityID:         in.SAMLEntityID,
-		SAMLAudience:         in.SAMLAudience,
-		AutoProvision:        in.AutoProvision,
-		DefaultRole:          in.DefaultRole,
-		UpdatedBy:            in.UpdatedBy,
-	}
-	return s.providers.Create(ctx, p)
-}
-
-// UpdateProviderInput is the partial-update input for UpdateProvider.
-// ClientSecret is the plaintext replacement; nil pointer = leave unchanged.
-type UpdateProviderInput struct {
-	DisplayName        *string
-	Enabled            *bool
-	OAuthClientID      *string
-	OAuthClientSecret  *string // plaintext; encrypted before storage
-	OAuthIssuerURL     *string
-	OAuthScopes        *[]string
-	SAMLIdpMetadataXML *string
-	SAMLEntityID       *string
-	SAMLAudience       *string
-	AutoProvision      *bool
-	DefaultRole        *string
-	UpdatedBy          *uuid.UUID
-}
-
-// UpdateProvider applies a partial update. When OAuthClientSecret is non-nil
-// the plaintext is re-encrypted before storage; a non-nil pointer to an empty
-// string clears the secret (sets the column to NULL).
-func (s *SSO) UpdateProvider(ctx context.Context, id uuid.UUID, in UpdateProviderInput) (*repository.AuthProvider, error) {
-	if in.DefaultRole != nil {
-		if !validRoles[*in.DefaultRole] {
-			return nil, fmt.Errorf("%w: invalid default_role", ErrInvalidProviderConfig)
-		}
-	}
-
-	req := repository.UpdateAuthProviderRequest{
-		DisplayName:        in.DisplayName,
-		Enabled:            in.Enabled,
-		OAuthClientID:      in.OAuthClientID,
-		OAuthIssuerURL:     in.OAuthIssuerURL,
-		OAuthScopes:        in.OAuthScopes,
-		SAMLIdpMetadataXML: in.SAMLIdpMetadataXML,
-		SAMLEntityID:       in.SAMLEntityID,
-		SAMLAudience:       in.SAMLAudience,
-		AutoProvision:      in.AutoProvision,
-		DefaultRole:        in.DefaultRole,
-		UpdatedBy:          in.UpdatedBy,
-	}
-
-	if in.OAuthClientSecret != nil {
-		// Empty plaintext → empty ciphertext → repo stores NULL.
-		var ct []byte
-		if *in.OAuthClientSecret != "" {
-			enc, err := aes.Encrypt([]byte(*in.OAuthClientSecret), s.credentialKey)
-			if err != nil {
-				return nil, fmt.Errorf("encrypt client secret: %w", err)
-			}
-			ct = enc
-		}
-		req.OAuthClientSecretEnc = &ct
-	}
-
-	return s.providers.Update(ctx, id, req)
-}
-
-// DeleteProvider removes a provider by ID. Users provisioned via this
-// provider keep working (sso_provider_id is set to NULL by the FK rule).
-func (s *SSO) DeleteProvider(ctx context.Context, id uuid.UUID) error {
-	return s.providers.Delete(ctx, id)
-}
-
-// ListEnabledProviders returns the providers a tenant has enabled. Used by
-// the public /api/v1/auth/providers list endpoint. Ciphertext is stripped
-// before return so callers cannot expose it accidentally.
-func (s *SSO) ListEnabledProviders(ctx context.Context, tenantID uuid.UUID) ([]*repository.AuthProvider, error) {
-	ps, err := s.providers.ListByTenant(ctx, tenantID, true)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range ps {
-		p.OAuthClientSecretEnc = nil
-	}
-	return ps, nil
-}
-
-// ListAllProviders returns every provider (enabled + disabled) for the admin
-// CRUD list endpoint. Ciphertext is stripped.
-func (s *SSO) ListAllProviders(ctx context.Context, tenantID uuid.UUID) ([]*repository.AuthProvider, error) {
-	ps, err := s.providers.ListByTenant(ctx, tenantID, false)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range ps {
-		p.OAuthClientSecretEnc = nil
-	}
-	return ps, nil
-}
-
-// GetProvider returns one provider by ID. Returns ErrProviderNotFound if
-// the provider is missing OR disabled when forLogin=true. Ciphertext is
-// returned only when forCallback=true (the callback needs the plaintext for
-// the token exchange).
-func (s *SSO) GetProvider(ctx context.Context, id uuid.UUID, forLogin, forCallback bool) (*repository.AuthProvider, error) {
-	p, err := s.providers.GetByID(ctx, id)
+// LookupProvider returns the global SSO config for a given providerID.
+// Returns (nil, ErrProviderNotFound) when the provider is unknown or disabled
+// — the caller treats this as "this SSO option is not available" and surfaces
+// a clean 404.
+//
+// REDESIGN-001 RM-003: collapsed from per-tenant per-uuid to global per-string-id.
+func (s *SSO) LookupProvider(ctx context.Context, providerID string) (*repository.GlobalSSOProvider, error) {
+	p, err := s.providers.Get(ctx, providerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrProviderNotFound
 		}
 		return nil, err
 	}
-	if forLogin && !p.Enabled {
+	if !p.Enabled {
 		return nil, ErrProviderNotFound
 	}
-	if !forCallback {
+	return p, nil
+}
+
+// LookupProviderWithSecret returns the provider together with the decrypted
+// OAuth client_secret. Only the OAuth callback path may call this; the
+// plaintext must never escape the request scope.
+func (s *SSO) LookupProviderWithSecret(ctx context.Context, providerID string) (*repository.GlobalSSOProvider, string, error) {
+	p, err := s.LookupProvider(ctx, providerID)
+	if err != nil {
+		return nil, "", err
+	}
+	secret, err := s.DecryptClientSecret(p)
+	if err != nil {
+		return nil, "", err
+	}
+	return p, secret, nil
+}
+
+// ListEnabledProviders returns the globally-enabled providers. Used by the
+// public /api/v1/auth/providers list endpoint. Ciphertext is stripped before
+// return so callers cannot expose it accidentally.
+func (s *SSO) ListEnabledProviders(ctx context.Context) ([]*repository.GlobalSSOProvider, error) {
+	ps, err := s.providers.List(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	// Strip ciphertext at the service boundary — defence in depth.
+	for _, p := range ps {
 		p.OAuthClientSecretEnc = nil
 	}
-	return p, nil
+	return ps, nil
 }
 
 // DecryptClientSecret decodes the persisted ciphertext and returns the
 // plaintext OAuth client_secret. Only the callback path may call this; the
 // plaintext must never escape the request scope.
-func (s *SSO) DecryptClientSecret(p *repository.AuthProvider) (string, error) {
+func (s *SSO) DecryptClientSecret(p *repository.GlobalSSOProvider) (string, error) {
 	if len(p.OAuthClientSecretEnc) == 0 {
 		return "", nil
 	}
@@ -317,15 +201,14 @@ const loginSessionTTL = 10 * time.Minute
 
 // StartLoginInput carries the validated inputs for StartLogin.
 type StartLoginInput struct {
-	ProviderID uuid.UUID
-	TenantID   uuid.UUID
+	ProviderID string // stable string id from global_sso_config
 	NextURL    string // intra-app path; validated by SanitizeNextParam
 }
 
 // StartLoginResult carries the values the handler needs to build the
 // authorization redirect.
 type StartLoginResult struct {
-	Provider      *repository.AuthProvider
+	Provider      *repository.GlobalSSOProvider
 	State         string
 	PKCEVerifier  string
 	PKCEChallenge string
@@ -336,11 +219,11 @@ type StartLoginResult struct {
 // The handler owns the URL construction so this layer remains free of
 // provider-specific URL knowledge.
 func (s *SSO) StartLogin(ctx context.Context, in StartLoginInput) (*StartLoginResult, error) {
-	p, err := s.GetProvider(ctx, in.ProviderID, true, false)
+	p, err := s.LookupProvider(ctx, in.ProviderID)
 	if err != nil {
 		return nil, err
 	}
-	if !p.Type.IsOAuth() {
+	if !p.AuthProviderType().IsOAuth() {
 		return nil, ErrSAMLNotImplemented
 	}
 
@@ -354,9 +237,9 @@ func (s *SSO) StartLogin(ctx context.Context, in StartLoginInput) (*StartLoginRe
 	}
 	challenge := pkceS256(verifier)
 
+	// RM-004: TenantID is no longer stored in the session.
 	sess := &repository.LoginSession{
 		State:        state,
-		TenantID:     in.TenantID,
 		ProviderID:   in.ProviderID,
 		PKCEVerifier: verifier,
 		RedirectURL:  in.NextURL,
@@ -374,24 +257,21 @@ func (s *SSO) StartLogin(ctx context.Context, in StartLoginInput) (*StartLoginRe
 }
 
 // CreateSAMLLoginSession mints a single-use RelayState token, persists it in
-// auth_login_sessions alongside the AuthnRequest ID, and returns the
-// generated state value. The OAuth flow uses StartLogin (which also builds
-// PKCE); the SAML flow only needs the RelayState + the AuthnRequest ID +
-// the redirect URL, so this method keeps that surface small.
+// auth_login_sessions alongside the AuthnRequest ID, and returns the generated
+// state value.
 //
 // authnRequestID is the ID attribute crewjam/saml generated on the
-// AuthnRequest; we persist it in the pkce_verifier column (unused for SAML
-// otherwise) so callbackSAML can pass it to ParseResponse as the only
-// permitted InResponseTo value. Stashing it here means we don't need a new
-// migration to add a saml_request_id column for v1.
-func (s *SSO) CreateSAMLLoginSession(ctx context.Context, tenantID, providerID uuid.UUID, authnRequestID, nextURL string) (string, error) {
+// AuthnRequest; we persist it in the pkce_verifier column so callbackSAML can
+// pass it to ParseResponse as the only permitted InResponseTo value.
+//
+// RM-004: TenantID is no longer stored in the session.
+func (s *SSO) CreateSAMLLoginSession(ctx context.Context, providerID string, authnRequestID, nextURL string) (string, error) {
 	relayState, err := randomURLToken(32)
 	if err != nil {
 		return "", fmt.Errorf("generate relay state: %w", err)
 	}
 	sess := &repository.LoginSession{
 		State:        relayState,
-		TenantID:     tenantID,
 		ProviderID:   providerID,
 		PKCEVerifier: authnRequestID, // SAML reuses this column for the AuthnRequest ID
 		RedirectURL:  nextURL,
@@ -449,7 +329,11 @@ func isSyntheticSAEmail(email string) bool {
 // Concurrency: if a parallel SSO callback races to create the same user, the
 // CreateSSOUser call returns ErrAlreadyExists and we re-query by email so
 // the second caller still gets a valid user record.
-func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ident SSOIdentity) (*repository.User, []string, error) {
+//
+// REDESIGN-001 RM-003: accepts *repository.GlobalSSOProvider instead of
+// *repository.AuthProvider. TenantID for new auto-provisioned users falls
+// back to s.defaultTenantID when no existing user row can be found by email.
+func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider, ident SSOIdentity, tenantID uuid.UUID) (*repository.User, []string, error) {
 	if ident.Email == "" {
 		return nil, nil, fmt.Errorf("%w: idp returned empty email", ErrInvalidProviderConfig)
 	}
@@ -468,19 +352,28 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 		return nil, nil, fmt.Errorf("%w: email domain is reserved for internal service accounts", ErrInvalidProviderConfig)
 	}
 
-	user, err := s.auth.users.GetHumanByEmail(ctx, p.TenantID, ident.Email)
+	// Resolve the tenant to search in. The caller supplies tenantID when it
+	// can be determined from context (e.g. a custom domain request); it falls
+	// back to defaultTenantID for single-tenant deployments.
+	resolvedTenantID := tenantID
+	if resolvedTenantID == uuid.Nil {
+		resolvedTenantID = s.defaultTenantID
+	}
+	if resolvedTenantID == uuid.Nil {
+		return nil, nil, fmt.Errorf("cannot resolve tenant for SSO callback: set AUTH_DEFAULT_TENANT_ID")
+	}
+
+	user, err := s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
 	switch {
 	case err == nil:
-		// Existing human user — accept the SSO login. Note that we do NOT
-		// check whether they originally registered via SSO or password; either
-		// path is a valid way to reach the same account. GetHumanByEmail
-		// already excludes shadow users (kind='service_account'), so we cannot
+		// Existing human user — accept the SSO login. GetHumanByEmail already
+		// excludes shadow users (kind='service_account'), so we cannot
 		// accidentally bind an SA identity here.
 		if !user.IsActive {
 			return nil, nil, ErrAccountDisabled
 		}
 		_ = s.auth.users.TouchLastLogin(ctx, user.ID)
-		roles := s.auth.loadRoleNames(ctx, user.ID, p.TenantID)
+		roles := s.auth.loadRoleNames(ctx, user.ID, resolvedTenantID)
 		return user, roles, nil
 	case errors.Is(err, repository.ErrNotFound):
 		if !p.AutoProvision {
@@ -493,21 +386,16 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 	// Auto-provision path.
 	username := DeriveSSOUsername(ident.Email)
 	created, err := s.auth.users.CreateSSOUser(ctx, repository.CreateSSOUserRequest{
-		TenantID:      p.TenantID,
+		TenantID:      resolvedTenantID,
 		Username:      username,
 		Email:         ident.Email,
 		DisplayName:   ident.DisplayName,
-		SSOProviderID: p.ID,
+		SSOProviderID: p.ProviderID, // stable string id (e.g. "google")
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
-			// Lost a race with a parallel callback — re-query by email and
-			// return that row. GetHumanByEmail is used here intentionally: if
-			// the race created a shadow-user row instead of a human row
-			// (should never happen in normal operation) this call returns
-			// ErrNotFound and we propagate it as an error rather than silently
-			// authenticating as a non-human principal.
-			created, err = s.auth.users.GetHumanByEmail(ctx, p.TenantID, ident.Email)
+			// Lost a race with a parallel callback — re-query by email.
+			created, err = s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
 			if err != nil {
 				return nil, nil, fmt.Errorf("no human user with email %q after race: %w", ident.Email, err)
 			}
@@ -516,21 +404,21 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.AuthProvider, ide
 		}
 	}
 
-	// Grant the default role at org scope "*" so the user can sign in but
-	// has no implicit access to any org until an admin grants it. CLAUDE.md
-	// §7 forbids the wildcard org from colliding with a real org name
+	// Grant the reader role at org scope "*" so the user can sign in but has
+	// no implicit access to any org until an admin grants it. CLAUDE.md §7
+	// forbids the wildcard org from colliding with a real org name
 	// (validateOrgName rejects "*"), so this is unambiguous.
 	if err := s.auth.users.GrantRole(ctx, repository.RoleAssignment{
-		TenantID:   p.TenantID,
+		TenantID:   resolvedTenantID,
 		UserID:     created.ID,
-		RoleName:   p.DefaultRole,
+		RoleName:   "reader",
 		ScopeType:  "org",
 		ScopeValue: "*",
 	}); err != nil {
 		slog.WarnContext(ctx, "SSO auto-provision: GrantRole failed", "user_id", created.ID, "err", err)
 	}
 
-	roles := s.auth.loadRoleNames(ctx, created.ID, p.TenantID)
+	roles := s.auth.loadRoleNames(ctx, created.ID, resolvedTenantID)
 	return created, roles, nil
 }
 
@@ -542,54 +430,6 @@ func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────
-
-// validRoles is the allowlist of default_role values. Mirrors the CHECK
-// constraint on auth_providers.default_role so a BFF-level rejection beats
-// a DB-level constraint-violation error.
-var validRoles = map[string]bool{
-	"reader": true,
-	"writer": true,
-	"admin":  true,
-	"owner":  true,
-}
-
-// providerDisplayNameMax bounds the display_name field so a misconfigured
-// admin cannot poison the login dropdown with a multi-megabyte string.
-const providerDisplayNameMax = 128
-
-// validateProviderInput enforces the per-type required fields. OAuth needs
-// client_id and (for create) a non-empty client_secret; SAML needs the IdP
-// metadata XML. Both types need a sane display_name and an allowed default
-// role.
-func validateProviderInput(t repository.AuthProviderType, displayName, clientID, clientSecret, issuerURL, samlMetadata, defaultRole string) error {
-	if !t.IsValid() {
-		return fmt.Errorf("%w: invalid type", ErrInvalidProviderConfig)
-	}
-	dn := strings.TrimSpace(displayName)
-	if dn == "" || len(dn) > providerDisplayNameMax {
-		return fmt.Errorf("%w: display_name must be 1..%d chars", ErrInvalidProviderConfig, providerDisplayNameMax)
-	}
-	if !validRoles[defaultRole] {
-		return fmt.Errorf("%w: invalid default_role", ErrInvalidProviderConfig)
-	}
-	if t.IsOAuth() {
-		if strings.TrimSpace(clientID) == "" {
-			return fmt.Errorf("%w: oauth_client_id is required", ErrInvalidProviderConfig)
-		}
-		if strings.TrimSpace(clientSecret) == "" {
-			return fmt.Errorf("%w: oauth_client_secret is required", ErrInvalidProviderConfig)
-		}
-		if t == repository.AuthProviderOAuthGeneric && strings.TrimSpace(issuerURL) == "" {
-			return fmt.Errorf("%w: oauth_issuer_url is required for generic OIDC", ErrInvalidProviderConfig)
-		}
-	}
-	if t == repository.AuthProviderSAML {
-		if strings.TrimSpace(samlMetadata) == "" {
-			return fmt.Errorf("%w: saml_idp_metadata_xml is required", ErrInvalidProviderConfig)
-		}
-	}
-	return nil
-}
 
 // SanitizeNextParam validates and returns a safe intra-app redirect path or
 // "" if no path was provided. Rejects anything that could become an open

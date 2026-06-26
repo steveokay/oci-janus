@@ -1,19 +1,23 @@
-// FE-API-034 — SSO HTTP handlers (OAuth flow + provider list + admin CRUD).
+// REDESIGN-001 RM-003 — SSO HTTP handlers (OAuth flow + public provider list).
 //
 // Three URL families live here:
 //
-//   GET  /api/v1/auth/providers?tenant_id=    — public list of enabled providers
-//   GET  /auth/oauth/{provider_id}/start      — kicks off the redirect dance
-//   GET  /auth/oauth/{provider_id}/callback   — exchanges code → JWT and redirects
+//	GET  /api/v1/auth/providers           — public list of enabled providers
+//	GET  /auth/oauth/{provider_id}/start  — kicks off the redirect dance
+//	GET  /auth/oauth/{provider_id}/callback — exchanges code → JWT and redirects
 //
-// Plus admin CRUD under /api/v1/admin/auth-providers/... (see sso_admin.go).
+// The per-tenant admin CRUD routes (/api/v1/admin/auth-providers/...) are
+// REMOVED by REDESIGN-001 RM-003. The Review §A1 sso_admin gate flaw is closed
+// by removing the surface entirely.
 //
-// SAML routes live in saml.go and currently return 501 Not Implemented.
+// provider_id in URL paths is now a stable string (e.g. "google", "okta_saml")
+// rather than a per-tenant UUID.
+//
+// SAML routes live in saml.go.
 package handler
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +27,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
@@ -45,12 +47,11 @@ type providerListResponse struct {
 	Providers []providerListItem `json:"providers"`
 }
 
-// providerListItem is the public projection of an auth_providers row. It
-// intentionally omits the encrypted client_secret and the client_id (which
-// could leak to a foreign tenant via the list endpoint).
+// providerListItem is the public projection of a global_sso_config row. It
+// intentionally omits the encrypted client_secret and client_id.
 type providerListItem struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
+	ID          string `json:"id"`   // stable string provider_id (e.g. "google")
+	Type        string `json:"type"` // kind value (e.g. "oauth_google")
 	DisplayName string `json:"display_name"`
 	LoginURL    string `json:"login_url"`
 }
@@ -68,38 +69,35 @@ func (h *HTTPHandler) RegisterSSO(mux *http.ServeMux) {
 		slog.Warn("SSO routes not registered — auth.WithSSO() was not called")
 		return
 	}
+	// Public provider list — queried by the FE login screen.
 	mux.HandleFunc("GET /api/v1/auth/providers", h.listAuthProviders)
+
+	// OAuth redirect dance.
 	mux.HandleFunc("GET /auth/oauth/{provider_id}/start", h.startOAuth)
 	mux.HandleFunc("GET /auth/oauth/{provider_id}/callback", h.callbackOAuth)
 
-	// SAML — currently 501 Not Implemented; routes registered so the URLs
-	// are reserved and the dashboard can detect "SAML coming soon" via a
-	// status code rather than a 404.
+	// SAML — currently returns 501 when SP cert/key are not configured.
+	// Routes registered so the URLs are reserved and the dashboard can detect
+	// "SAML coming soon" via a status code rather than a 404.
 	mux.HandleFunc("GET /auth/saml/{provider_id}/start", h.startSAML)
 	mux.HandleFunc("POST /auth/saml/{provider_id}/acs", h.callbackSAML)
 
-	// Admin CRUD — see sso_admin.go.
-	mux.HandleFunc("GET /api/v1/admin/auth-providers", h.adminListAuthProviders)
-	mux.HandleFunc("POST /api/v1/admin/auth-providers", h.adminCreateAuthProvider)
-	mux.HandleFunc("GET /api/v1/admin/auth-providers/{id}", h.adminGetAuthProvider)
-	mux.HandleFunc("PATCH /api/v1/admin/auth-providers/{id}", h.adminUpdateAuthProvider)
-	mux.HandleFunc("DELETE /api/v1/admin/auth-providers/{id}", h.adminDeleteAuthProvider)
+	// NOTE: Per REDESIGN-001 RM-003 the admin CRUD routes
+	// (GET/POST/PATCH/DELETE /api/v1/admin/auth-providers/...) are intentionally
+	// NOT registered here. The per-tenant SSO admin surface has been removed.
 }
 
 // ── GET /api/v1/auth/providers ──────────────────────────────────────────────
 
-// listAuthProviders returns the public, enabled-only provider list for a
-// tenant. Used by the dashboard's sign-in page to render SSO buttons.
+// listAuthProviders returns the public, enabled-only global provider list.
+// Used by the dashboard's sign-in page to render SSO buttons.
+//
+// The ?tenant_id= query parameter is accepted but ignored for backward
+// compatibility — providers are now global, not per-tenant.
 func (h *HTTPHandler) listAuthProviders(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := h.resolveListTenantID(r)
+	providers, err := h.sso.ListEnabledProviders(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "BADREQUEST", err.Error())
-		return
-	}
-
-	providers, err := h.sso.ListEnabledProviders(r.Context(), tenantID)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "sso: ListEnabledProviders", "err", err, "tenant_id", tenantID)
+		slog.ErrorContext(r.Context(), "sso: ListEnabledProviders", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list providers")
 		return
 	}
@@ -107,8 +105,8 @@ func (h *HTTPHandler) listAuthProviders(w http.ResponseWriter, r *http.Request) 
 	resp := providerListResponse{Providers: make([]providerListItem, 0, len(providers))}
 	for _, p := range providers {
 		resp.Providers = append(resp.Providers, providerListItem{
-			ID:          p.ID.String(),
-			Type:        string(p.Type),
+			ID:          p.ProviderID,
+			Type:        p.Kind,
 			DisplayName: p.DisplayName,
 			LoginURL:    loginURLForProvider(p),
 		})
@@ -116,31 +114,15 @@ func (h *HTTPHandler) listAuthProviders(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// resolveListTenantID returns the tenant_id to use for the public provider
-// list. Query param wins; falls back to the dev default tenant if configured.
-func (h *HTTPHandler) resolveListTenantID(r *http.Request) (uuid.UUID, error) {
-	if raw := r.URL.Query().Get("tenant_id"); raw != "" {
-		id, err := uuid.Parse(raw)
-		if err != nil {
-			return uuid.Nil, fmt.Errorf("invalid tenant_id")
-		}
-		return id, nil
-	}
-	if h.devDefaultTenant != uuid.Nil {
-		return h.devDefaultTenant, nil
-	}
-	return uuid.Nil, fmt.Errorf("tenant_id is required")
-}
-
 // loginURLForProvider returns the intra-app path that initiates the redirect
 // dance for one provider. SAML providers point at /auth/saml/.../start; OAuth
 // at /auth/oauth/.../start. Centralised so the dashboard never builds the
 // URL itself.
-func loginURLForProvider(p *repository.AuthProvider) string {
-	if p.Type == repository.AuthProviderSAML {
-		return "/auth/saml/" + p.ID.String() + "/start"
+func loginURLForProvider(p *repository.GlobalSSOProvider) string {
+	if p.Kind == string(repository.AuthProviderSAML) {
+		return "/auth/saml/" + p.ProviderID + "/start"
 	}
-	return "/auth/oauth/" + p.ID.String() + "/start"
+	return "/auth/oauth/" + p.ProviderID + "/start"
 }
 
 // ── GET /auth/oauth/{provider_id}/start ─────────────────────────────────────
@@ -148,9 +130,13 @@ func loginURLForProvider(p *repository.AuthProvider) string {
 // startOAuth begins the redirect dance: it validates the provider, mints a
 // CSRF state + PKCE pair, persists the login session, and 302s the user to
 // the IdP's authorize endpoint.
+//
+// REDESIGN-001 RM-003: {provider_id} is now a stable string (e.g. "google")
+// rather than a per-tenant UUID. TenantID is no longer threaded through the
+// session.
 func (h *HTTPHandler) startOAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := uuid.Parse(r.PathValue("provider_id"))
-	if err != nil {
+	providerID := r.PathValue("provider_id")
+	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
 		return
 	}
@@ -165,26 +151,25 @@ func (h *HTTPHandler) startOAuth(w http.ResponseWriter, r *http.Request) {
 		nextURL = "/"
 	}
 
-	// Look up the provider once to discover its tenant; StartLogin
-	// re-validates the enabled flag inside the service.
-	p, err := h.sso.GetProvider(r.Context(), providerID, true, false)
+	// Look up the provider so we can reject disabled providers before building
+	// the session row.
+	p, err := h.sso.LookupProvider(r.Context(), providerID)
 	if err != nil {
 		if errors.Is(err, service.ErrProviderNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
 			return
 		}
-		slog.ErrorContext(r.Context(), "sso: GetProvider", "err", err, "provider_id", providerID)
+		slog.ErrorContext(r.Context(), "sso: LookupProvider", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	if !p.Type.IsOAuth() {
+	if !p.AuthProviderType().IsOAuth() {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider is not an OAuth provider")
 		return
 	}
 
 	res, err := h.sso.StartLogin(r.Context(), service.StartLoginInput{
 		ProviderID: providerID,
-		TenantID:   p.TenantID,
 		NextURL:    nextURL,
 	})
 	if err != nil {
@@ -203,12 +188,10 @@ func (h *HTTPHandler) startOAuth(w http.ResponseWriter, r *http.Request) {
 
 // buildAuthorizeURL composes the provider-specific authorize URL with the
 // state, PKCE challenge, and our callback redirect_uri. Endpoints for the
-// named providers (Google/GitHub/Microsoft) are hardcoded per the brief.
-// Generic OIDC providers need an oauth_issuer_url and use the discovery
-// endpoint at issuer + /.well-known/openid-configuration — we currently
-// assume the standard /authorize path under the issuer URL.
-func buildAuthorizeURL(p *repository.AuthProvider, baseURL, state, challenge string) string {
-	redirectURI := baseURL + "/auth/oauth/" + p.ID.String() + "/callback"
+// named providers (Google/GitHub/Microsoft) are hardcoded compile-time
+// constants. Generic OIDC uses the issuer URL + /authorize.
+func buildAuthorizeURL(p *repository.GlobalSSOProvider, baseURL, state, challenge string) string {
+	redirectURI := baseURL + "/auth/oauth/" + p.ProviderID + "/callback"
 	v := url.Values{}
 	v.Set("client_id", p.OAuthClientID)
 	v.Set("redirect_uri", redirectURI)
@@ -217,7 +200,7 @@ func buildAuthorizeURL(p *repository.AuthProvider, baseURL, state, challenge str
 	v.Set("code_challenge", challenge)
 	v.Set("code_challenge_method", "S256")
 
-	switch p.Type {
+	switch repository.AuthProviderType(p.Kind) {
 	case repository.AuthProviderOAuthGoogle:
 		v.Set("scope", strings.Join(defaultScopes(p, "openid", "email", "profile"), " "))
 		// access_type=online: we do not need refresh tokens — short JWT TTL.
@@ -242,7 +225,7 @@ func buildAuthorizeURL(p *repository.AuthProvider, baseURL, state, challenge str
 
 // defaultScopes returns the persisted scope list, falling back to the
 // caller-supplied defaults when the row was created with an empty array.
-func defaultScopes(p *repository.AuthProvider, fallback ...string) []string {
+func defaultScopes(p *repository.GlobalSSOProvider, fallback ...string) []string {
 	if len(p.OAuthScopes) > 0 {
 		return p.OAuthScopes
 	}
@@ -261,8 +244,8 @@ func defaultScopes(p *repository.AuthProvider, fallback ...string) []string {
 // the FE-API-034 commit body: the JWT briefly appears in browser history,
 // which is acceptable given the 5-minute token TTL.
 func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
-	providerID, err := uuid.Parse(r.PathValue("provider_id"))
-	if err != nil {
+	providerID := r.PathValue("provider_id")
+	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
 		return
 	}
@@ -287,33 +270,20 @@ func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Defence in depth: the URL-supplied state must also match what we just
-	// consumed (constant-time compare avoids a timing side channel on the
-	// 43-char base64url string).
-	if subtle.ConstantTimeCompare([]byte(state), []byte(sess.State)) != 1 {
-		writeError(w, http.StatusBadRequest, "BADREQUEST", "state mismatch")
-		return
-	}
+	// Defence in depth: session's provider_id must match the URL.
 	if sess.ProviderID != providerID {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider mismatch")
 		return
 	}
 
-	// Load the provider WITH the encrypted secret so we can decrypt it for
-	// the token exchange.
-	p, err := h.sso.GetProvider(r.Context(), providerID, true, true)
+	// Load the provider WITH the encrypted secret for the token exchange.
+	p, clientSecret, err := h.sso.LookupProviderWithSecret(r.Context(), providerID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
 		return
 	}
-	clientSecret, err := h.sso.DecryptClientSecret(p)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "sso: DecryptClientSecret", "err", err, "provider_id", providerID)
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return
-	}
 
-	redirectURI := h.ssoBaseURL + "/auth/oauth/" + providerID.String() + "/callback"
+	redirectURI := h.ssoBaseURL + "/auth/oauth/" + providerID + "/callback"
 	tokens, err := exchangeOAuthCode(r.Context(), p, redirectURI, code, sess.PKCEVerifier, clientSecret)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "sso: token exchange failed", "err", err, "provider_id", providerID)
@@ -328,7 +298,9 @@ func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, roles, err := h.sso.EnsureSSOUser(r.Context(), p, ident)
+	// RM-004: TenantID is no longer in the session. EnsureSSOUser resolves
+	// the tenant from the user row or falls back to s.defaultTenantID.
+	user, roles, err := h.sso.EnsureSSOUser(r.Context(), p, ident, h.devDefaultTenant)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrEmailNotVerified):
@@ -394,10 +366,10 @@ type oauthTokens struct {
 // authenticates the request without exposing client_secret to the browser
 // (the secret is still sent here as an additional confidential-client
 // authentication factor for Google/Microsoft; GitHub allows both).
-func exchangeOAuthCode(ctx context.Context, p *repository.AuthProvider, redirectURI, code, verifier, clientSecret string) (*oauthTokens, error) {
+func exchangeOAuthCode(ctx context.Context, p *repository.GlobalSSOProvider, redirectURI, code, verifier, clientSecret string) (*oauthTokens, error) {
 	tokenURL := tokenEndpoint(p)
 	if tokenURL == "" {
-		return nil, fmt.Errorf("no token endpoint for provider type %s", p.Type)
+		return nil, fmt.Errorf("no token endpoint for provider kind %s", p.Kind)
 	}
 	form := url.Values{}
 	form.Set("client_id", p.OAuthClientID)
@@ -440,8 +412,8 @@ func exchangeOAuthCode(ctx context.Context, p *repository.AuthProvider, redirect
 // tokenEndpoint returns the token endpoint URL for the provider. Hardcoded
 // for the named providers; for generic OIDC the issuer URL + /token is
 // assumed (full discovery is left for follow-up work).
-func tokenEndpoint(p *repository.AuthProvider) string {
-	switch p.Type {
+func tokenEndpoint(p *repository.GlobalSSOProvider) string {
+	switch repository.AuthProviderType(p.Kind) {
 	case repository.AuthProviderOAuthGoogle:
 		return "https://oauth2.googleapis.com/token"
 	case repository.AuthProviderOAuthGitHub:
@@ -457,10 +429,10 @@ func tokenEndpoint(p *repository.AuthProvider) string {
 // fetchUserInfo calls the IdP's userinfo endpoint with the access token and
 // returns the normalised identity. The verified-email semantics differ by
 // provider so each branch has its own mapping.
-func fetchUserInfo(ctx context.Context, p *repository.AuthProvider, tokens *oauthTokens) (service.SSOIdentity, error) {
+func fetchUserInfo(ctx context.Context, p *repository.GlobalSSOProvider, tokens *oauthTokens) (service.SSOIdentity, error) {
 	endpoint := userInfoEndpoint(p)
 	if endpoint == "" {
-		return service.SSOIdentity{}, fmt.Errorf("no userinfo endpoint for provider type %s", p.Type)
+		return service.SSOIdentity{}, fmt.Errorf("no userinfo endpoint for provider kind %s", p.Kind)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -482,7 +454,7 @@ func fetchUserInfo(ctx context.Context, p *repository.AuthProvider, tokens *oaut
 		return service.SSOIdentity{}, fmt.Errorf("userinfo %d: %s", resp.StatusCode, truncateBody(body))
 	}
 
-	switch p.Type {
+	switch repository.AuthProviderType(p.Kind) {
 	case repository.AuthProviderOAuthGoogle, repository.AuthProviderOAuthMicrosoft, repository.AuthProviderOAuthGeneric:
 		// Standard OIDC userinfo payload — email_verified is a boolean.
 		var u struct {
@@ -513,7 +485,7 @@ func fetchUserInfo(ctx context.Context, p *repository.AuthProvider, tokens *oaut
 			}
 			// Graph does not expose email_verified — trust the IdP (the user
 			// authenticated against MS Entra ID).
-			if p.Type == repository.AuthProviderOAuthMicrosoft && u.Email != "" {
+			if repository.AuthProviderType(p.Kind) == repository.AuthProviderOAuthMicrosoft && u.Email != "" {
 				u.EmailVerified = true
 			}
 		}
@@ -548,14 +520,14 @@ func fetchUserInfo(ctx context.Context, p *repository.AuthProvider, tokens *oaut
 			Subject:       fmt.Sprintf("%d", u.ID),
 		}, nil
 	}
-	return service.SSOIdentity{}, fmt.Errorf("unsupported provider type: %s", p.Type)
+	return service.SSOIdentity{}, fmt.Errorf("unsupported provider kind: %s", p.Kind)
 }
 
 // userInfoEndpoint returns the userinfo URL for the provider. For Microsoft
 // we use Graph's /me (the v2 endpoint exposes a small userinfo too but Graph
 // is the canonical path for Entra ID).
-func userInfoEndpoint(p *repository.AuthProvider) string {
-	switch p.Type {
+func userInfoEndpoint(p *repository.GlobalSSOProvider) string {
+	switch repository.AuthProviderType(p.Kind) {
 	case repository.AuthProviderOAuthGoogle:
 		return "https://openidconnect.googleapis.com/v1/userinfo"
 	case repository.AuthProviderOAuthGitHub:

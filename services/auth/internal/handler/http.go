@@ -14,18 +14,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
-
-// SSOEventPublisher is the narrow contract the SSO admin handlers need from
-// the RabbitMQ publisher. Lets tests substitute a no-op without standing up
-// a broker; *publisher.Publisher satisfies the interface.
-type SSOEventPublisher interface {
-	Publish(ctx context.Context, routingKey string, event events.Event) error
-}
 
 // trustedProxyCIDRs holds the parsed CIDR ranges that are allowed to set
 // X-Forwarded-For. An empty slice means no proxy is trusted and RemoteAddr
@@ -92,9 +84,6 @@ type HTTPHandler struct {
 	// ssoBaseURL is the public origin used to build the OAuth redirect_uri
 	// (must match what the IdP has registered). Configured via SSO_BASE_URL.
 	ssoBaseURL string
-	// eventPublisher is the optional RabbitMQ publisher used by the SSO admin
-	// CRUD audit events. nil silently skips the publish.
-	eventPublisher SSOEventPublisher
 	// samlConfig is the optional SAML SP signing keypair (FE-API-034). nil
 	// disables SAML support — the /auth/saml/... routes return 501.
 	samlConfig *saml.SPConfig
@@ -131,13 +120,6 @@ func NewHTTPHandler(svc *service.Service, devDefaultTenantID uuid.UUID) *HTTPHan
 func (h *HTTPHandler) WithSSO(sso *service.SSO, baseURL string) *HTTPHandler {
 	h.sso = sso
 	h.ssoBaseURL = strings.TrimRight(baseURL, "/")
-	return h
-}
-
-// WithEventPublisher wires the RabbitMQ publisher used by the SSO admin
-// CRUD audit events. Optional; nil publisher silently skips publishes.
-func (h *HTTPHandler) WithEventPublisher(p SSOEventPublisher) *HTTPHandler {
-	h.eventPublisher = p
 	return h
 }
 

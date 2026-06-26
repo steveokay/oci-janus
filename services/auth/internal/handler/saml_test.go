@@ -1,10 +1,11 @@
-// FE-API-034 — handler tests for the SAML SP-initiated flow.
+// REDESIGN-001 RM-003 — handler tests for the SAML SP-initiated flow.
 //
-// We don't ship test fixtures on disk — every keypair is generated in-process
-// via crypto/x509.CreateCertificate so the tests are deterministic and have
-// no expiry. The IdP is the real crewjam/saml.IdentityProvider driven through
-// its public API, which gives us signed responses that the SP can validate
-// end-to-end without any hand-rolled XML.
+// Changes from FE-API-034:
+//   - fakeProviderRepo replaced by fakeGlobalSSORepo (implements globalSSOConfigRepo).
+//   - provider_id is now a stable string (e.g. "saml") not a UUID.
+//   - sso.CreateProvider removed; tests seed providers directly in the fake.
+//   - sso.CreateSAMLLoginSession signature: (ctx, providerID string, authnReqID, nextURL string).
+//   - repository.AuthProvider → repository.GlobalSSOProvider.
 package handler
 
 import (
@@ -23,6 +24,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +36,44 @@ import (
 	authsaml "github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
+
+// ── fakeGlobalSSORepo ───────────────────────────────────────────────────────
+
+// fakeGlobalSSORepo is an in-memory implementation of globalSSOConfigRepo.
+// Tests seed Providers directly by string key.
+type fakeGlobalSSORepo struct {
+	mu        sync.Mutex
+	Providers map[string]*repository.GlobalSSOProvider
+}
+
+func newFakeGlobalSSORepo() *fakeGlobalSSORepo {
+	return &fakeGlobalSSORepo{Providers: make(map[string]*repository.GlobalSSOProvider)}
+}
+
+func (f *fakeGlobalSSORepo) Get(_ context.Context, providerID string) (*repository.GlobalSSOProvider, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.Providers[providerID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	out := *p
+	return &out, nil
+}
+
+func (f *fakeGlobalSSORepo) List(_ context.Context, enabledOnly bool) ([]*repository.GlobalSSOProvider, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*repository.GlobalSSOProvider, 0, len(f.Providers))
+	for _, p := range f.Providers {
+		if enabledOnly && !p.Enabled {
+			continue
+		}
+		cp := *p
+		out = append(out, &cp)
+	}
+	return out, nil
+}
 
 // ── keypair + IdP helpers ───────────────────────────────────────────────────
 
@@ -129,8 +169,7 @@ func newTestIDP(t *testing.T, spMetadataXML []byte, email, name string) *testIDP
 
 	// Allocate a listener up front so we know the origin BEFORE building the
 	// IdP — crewjam/saml's IdentityProvider.Handler() reads SSOURL/MetadataURL
-	// during construction and uses them as ServeMux patterns, which only works
-	// when they are full URLs filled in ahead of time.
+	// during construction and uses them as ServeMux patterns.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -154,8 +193,6 @@ func newTestIDP(t *testing.T, spMetadataXML []byte, email, name string) *testIDP
 		Config:   &http.Server{Handler: idp.Handler()},
 	}
 	srv.Start()
-	// httptest.Server.Start sets URL from Listener when URL is empty, but
-	// belt-and-braces: assign so other helpers can read it.
 	srv.URL = origin
 	t.Cleanup(srv.Close)
 
@@ -175,9 +212,6 @@ func newTestIDP(t *testing.T, spMetadataXML []byte, email, name string) *testIDP
 func (t *testIDP) produceSignedResponse(tb testing.TB, authnURL string) (samlResponse, relayState string) {
 	tb.Helper()
 
-	// Hit the IdP's SSO endpoint with the SAML AuthnRequest. The IdP's
-	// Handler parses the AuthnRequest, invokes the SessionProvider, and
-	// renders an HTML form whose hidden inputs are SAMLResponse + RelayState.
 	req, err := http.NewRequest(http.MethodGet, authnURL, nil)
 	if err != nil {
 		tb.Fatalf("build SSO request: %v", err)
@@ -198,8 +232,7 @@ func (t *testIDP) produceSignedResponse(tb testing.TB, authnURL string) (samlRes
 }
 
 // extractFormInput pulls the value of a hidden input field out of the IdP's
-// rendered HTML form. The IdP's template is stable across crewjam/saml v0.4.x
-// so this brittle-looking parse is fine for tests.
+// rendered HTML form.
 func extractFormInput(body []byte, name string) string {
 	needle := []byte(`name="` + name + `" value="`)
 	idx := bytes.Index(body, needle)
@@ -217,22 +250,21 @@ func extractFormInput(body []byte, name string) string {
 // ── SAML-enabled test server builder ────────────────────────────────────────
 
 // buildSSOTestServerWithSAML mirrors buildSSOTestServer but also wires a
-// freshly-generated SP keypair via WithSAMLConfig. Tests that need to drive
-// a real IdP construct their own server inline so they control the SP
-// keypair (the IdP needs to see the SP metadata pinned to a specific ACS
-// URL, which requires the provider ID up front).
+// freshly-generated SP keypair via WithSAMLConfig.
+//
+// REDESIGN-001 RM-003: uses fakeGlobalSSORepo instead of fakeProviderRepo.
 func buildSSOTestServerWithSAML(t *testing.T) (srv *httptest.Server, sso *service.SSO, sessions *fakeSessionRepo, tenantID uuid.UUID) {
 	t.Helper()
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
 
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions = newFakeSessionRepo()
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i)
 	}
-	sso, err := service.NewSSO(tc.svc, providers, sessions, key)
+	sso, err := service.NewSSO(tc.svc, globalProviders, sessions, key)
 	if err != nil {
 		t.Fatalf("NewSSO: %v", err)
 	}
@@ -259,11 +291,10 @@ func buildSSOTestServerWithSAML(t *testing.T) (srv *httptest.Server, sso *servic
 
 // buildSPMetadataForProvider returns the SP metadata XML the test IdP needs
 // in order to issue responses targeted at this exact provider's ACS URL.
-// Called after we've created the provider so the metadata's AcsURL reflects
-// the real path /auth/saml/{provider_id}/acs.
-func buildSPMetadataForProvider(t *testing.T, srvURL string, providerID uuid.UUID, key *rsa.PrivateKey, cert *x509.Certificate, entityID string) []byte {
+// provider_id is now a string (e.g. "saml").
+func buildSPMetadataForProvider(t *testing.T, srvURL string, providerID string, key *rsa.PrivateKey, cert *x509.Certificate, entityID string) []byte {
 	t.Helper()
-	acsURL, _ := url.Parse(srvURL + "/auth/saml/" + providerID.String() + "/acs")
+	acsURL, _ := url.Parse(srvURL + "/auth/saml/" + providerID + "/acs")
 	sp := &crewjamsaml.ServiceProvider{
 		EntityID:    entityID,
 		Key:         key,
@@ -343,40 +374,54 @@ func TestSAMLExtractAttribute(t *testing.T) {
 // TestSAMLStart_BuildsAuthnRequestAndRedirects asserts startSAML mints a
 // session and 302s to the IdP's SSO URL with a SAMLRequest query param.
 func TestSAMLStart_BuildsAuthnRequestAndRedirects(t *testing.T) {
-	srv, sso, sessions, tenantID := buildSSOTestServerWithSAML(t)
+	srv, _, sessions, tenantID := buildSSOTestServerWithSAML(t)
+	// Extract the sso + globalProviders from a fresh build so we can seed.
+	tc, cleanup := buildTestService(t)
+	t.Cleanup(cleanup)
 
-	// We need the SP keypair to build SP metadata for the IdP. Rather than
-	// thread it back through the helper return, re-extract it from the
-	// handler — easier: just generate a SECOND keypair and use it both as
-	// the test IdP's reference AND as a fake provider metadata. Simpler
-	// still: generate the test IdP, get its metadata XML, feed THAT into
-	// CreateProvider as the IdP metadata. Then the SP cert in the handler
-	// doesn't need to match anything the IdP sees.
-	//
-	// (For start, we never validate signatures — just check the redirect.)
+	globalProviders := newFakeGlobalSSORepo()
+	sessRepo := newFakeSessionRepo()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	sso, err := service.NewSSO(tc.svc, globalProviders, sessRepo, key)
+	if err != nil {
+		t.Fatalf("NewSSO: %v", err)
+	}
+	_, _, certPEM, keyPEM := genTestKeypair(t, "test-sp")
+	spCfg, err := authsaml.LoadSPConfig(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("LoadSPConfig: %v", err)
+	}
 
-	// Spin up a throwaway test IdP just to harvest a valid IdP metadata XML.
-	// SP metadata for the throwaway IdP is just our SP cert, but the IdP
-	// won't actually be hit in this test — startSAML stops at the redirect.
+	// Use a fixed providerID string.
+	const providerID = "saml"
+
+	// Spin up a throwaway test IdP to harvest valid IdP metadata XML.
 	dummySPMD := dummySPMetadataXML(t)
 	idp := newTestIDP(t, dummySPMD, "noop@example.com", "Noop")
 	idpMD := idpMetadataXML(t, idp.idp)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:           tenantID,
-		Type:               repository.AuthProviderSAML,
-		DisplayName:        "Corp SAML",
-		Enabled:            true,
-		SAMLIdpMetadataXML: string(idpMD),
-		AutoProvision:      true,
-		DefaultRole:        "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	// Seed provider directly.
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:      providerID,
+		Kind:            "saml",
+		DisplayName:     "Corp SAML",
+		Enabled:         true,
+		SAMLMetadataXML: idpMD,
+		AutoProvision:   true,
 	}
 
+	mux2 := http.NewServeMux()
+	httpH2 := NewHTTPHandler(tc.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg)
+	httpH2.Register(mux2)
+	srv2 := httptest.NewServer(mux2)
+	t.Cleanup(srv2.Close)
+	httpH2.WithSSO(sso, srv2.URL)
+
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(srv.URL + "/auth/saml/" + p.ID.String() + "/start?next=/dashboard")
+	resp, err := client.Get(srv2.URL + "/auth/saml/" + providerID + "/start?next=/dashboard")
 	if err != nil {
 		t.Fatalf("GET start: %v", err)
 	}
@@ -396,15 +441,17 @@ func TestSAMLStart_BuildsAuthnRequestAndRedirects(t *testing.T) {
 	if u.Query().Get("SAMLRequest") == "" {
 		t.Error("missing SAMLRequest query param")
 	}
-	if u.Query().Get("RelayState") == "" {
+	relayState := u.Query().Get("RelayState")
+	if relayState == "" {
 		t.Error("missing RelayState query param")
 	}
-
-	// One session row should now exist keyed by the RelayState.
-	relayState := u.Query().Get("RelayState")
-	if _, ok := sessions.sessions[relayState]; !ok {
+	// One session row should now exist keyed by the RelayState (in sessRepo).
+	if _, ok := sessRepo.sessions[relayState]; !ok {
 		t.Errorf("session row not created for relay_state=%s", relayState)
 	}
+	// Suppress unused variable warning from earlier buildSSOTestServerWithSAML call.
+	_ = srv
+	_ = sessions
 }
 
 // TestSAMLCallback_HappyPath drives a full SP-initiated flow end-to-end via
@@ -416,13 +463,13 @@ func TestSAMLCallback_HappyPath(t *testing.T) {
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
 
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	credKey := make([]byte, 32)
 	for i := range credKey {
 		credKey[i] = byte(i)
 	}
-	sso, err := service.NewSSO(tc.svc, providers, sessions, credKey)
+	sso, err := service.NewSSO(tc.svc, globalProviders, sessions, credKey)
 	if err != nil {
 		t.Fatalf("NewSSO: %v", err)
 	}
@@ -439,36 +486,26 @@ func TestSAMLCallback_HappyPath(t *testing.T) {
 	t.Cleanup(srv.Close)
 	httpH.WithSSO(sso, srv.URL)
 
-	// Create the provider with a placeholder metadata so we know its ID,
-	// then rebuild proper IdP metadata once we have the SP metadata that
-	// references the real ACS URL.
-	providerID := uuid.New()
-	// Stand up the IdP using SP metadata pinned to this providerID.
+	// provider_id is a stable string in the new model.
+	const providerID = "saml"
 	entityID := srv.URL + "/auth/saml/metadata"
 	spMetadataXML := buildSPMetadataForProvider(t, srv.URL, providerID, spKey, spCert, entityID)
 	idp := newTestIDP(t, spMetadataXML, "alice@example.com", "Alice")
 	idpMD := idpMetadataXML(t, idp.idp)
 
-	// Inject the provider row directly so its ID matches what we baked into
-	// the SP metadata above (avoids a chicken-and-egg loop between provider
-	// creation and ACS URL).
-	providers.providers[providerID] = &repository.AuthProvider{
-		ID:                 providerID,
-		TenantID:           tenantID,
-		Type:               repository.AuthProviderSAML,
-		DisplayName:        "Corp SAML",
-		Enabled:            true,
-		SAMLIdpMetadataXML: string(idpMD),
-		SAMLEntityID:       entityID,
-		AutoProvision:      true,
-		DefaultRole:        "reader",
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
+	// Seed provider directly with the string ID.
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:      providerID,
+		Kind:            "saml",
+		DisplayName:     "Corp SAML",
+		Enabled:         true,
+		SAMLMetadataXML: idpMD,
+		AutoProvision:   true,
 	}
 
 	// /start — redirect to IdP carrying AuthnRequest + RelayState.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(srv.URL + "/auth/saml/" + providerID.String() + "/start?next=/dashboard")
+	resp, err := client.Get(srv.URL + "/auth/saml/" + providerID + "/start?next=/dashboard")
 	if err != nil {
 		t.Fatalf("GET start: %v", err)
 	}
@@ -490,7 +527,7 @@ func TestSAMLCallback_HappyPath(t *testing.T) {
 	form := url.Values{}
 	form.Set("SAMLResponse", samlResponse)
 	form.Set("RelayState", relayState)
-	cbResp, err := client.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", form)
+	cbResp, err := client.PostForm(srv.URL+"/auth/saml/"+providerID+"/acs", form)
 	if err != nil {
 		t.Fatalf("POST acs: %v", err)
 	}
@@ -511,21 +548,20 @@ func TestSAMLCallback_HappyPath(t *testing.T) {
 
 // TestSAMLCallback_RejectsReplayedRelayState confirms a second submission of
 // the same RelayState is rejected even if the SAMLResponse signature is still
-// valid. The single-use rule is enforced by ConsumeByState on the login
-// session — the second consume returns ErrSessionNotFound → 400.
+// valid.
 func TestSAMLCallback_RejectsReplayedRelayState(t *testing.T) {
 	spKey, spCert, certPEM, keyPEM := genTestKeypair(t, "test-sp")
 
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
 
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	credKey := make([]byte, 32)
 	for i := range credKey {
 		credKey[i] = byte(i)
 	}
-	sso, _ := service.NewSSO(tc.svc, providers, sessions, credKey)
+	sso, _ := service.NewSSO(tc.svc, globalProviders, sessions, credKey)
 	spCfg, _ := authsaml.LoadSPConfig(certPEM, keyPEM)
 
 	tenantID := uuid.New()
@@ -536,27 +572,22 @@ func TestSAMLCallback_RejectsReplayedRelayState(t *testing.T) {
 	t.Cleanup(srv.Close)
 	httpH.WithSSO(sso, srv.URL)
 
-	providerID := uuid.New()
+	const providerID = "saml"
 	entityID := srv.URL + "/auth/saml/metadata"
 	spMetadataXML := buildSPMetadataForProvider(t, srv.URL, providerID, spKey, spCert, entityID)
 	idp := newTestIDP(t, spMetadataXML, "alice@example.com", "Alice")
 	idpMD := idpMetadataXML(t, idp.idp)
-	providers.providers[providerID] = &repository.AuthProvider{
-		ID:                 providerID,
-		TenantID:           tenantID,
-		Type:               repository.AuthProviderSAML,
-		DisplayName:        "Corp SAML",
-		Enabled:            true,
-		SAMLIdpMetadataXML: string(idpMD),
-		SAMLEntityID:       entityID,
-		AutoProvision:      true,
-		DefaultRole:        "reader",
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:      providerID,
+		Kind:            "saml",
+		DisplayName:     "Corp SAML",
+		Enabled:         true,
+		SAMLMetadataXML: idpMD,
+		AutoProvision:   true,
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, _ := client.Get(srv.URL + "/auth/saml/" + providerID.String() + "/start?next=/x")
+	resp, _ := client.Get(srv.URL + "/auth/saml/" + providerID + "/start?next=/x")
 	authnURL := resp.Header.Get("Location")
 	_ = resp.Body.Close()
 
@@ -564,13 +595,13 @@ func TestSAMLCallback_RejectsReplayedRelayState(t *testing.T) {
 	form := url.Values{}
 	form.Set("SAMLResponse", samlResponse)
 	form.Set("RelayState", relayState)
-	r1, _ := client.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", form)
+	r1, _ := client.PostForm(srv.URL+"/auth/saml/"+providerID+"/acs", form)
 	_ = r1.Body.Close()
 	if r1.StatusCode != http.StatusFound {
 		t.Fatalf("first ACS: want 302, got %d", r1.StatusCode)
 	}
 	// Replay must fail — RelayState already consumed.
-	r2, err := client.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", form)
+	r2, err := client.PostForm(srv.URL+"/auth/saml/"+providerID+"/acs", form)
 	if err != nil {
 		t.Fatalf("replay POST acs: %v", err)
 	}
@@ -581,19 +612,18 @@ func TestSAMLCallback_RejectsReplayedRelayState(t *testing.T) {
 }
 
 // TestSAMLCallback_MissingFormFields asserts a POST without SAMLResponse or
-// RelayState is rejected with 400 — defence in depth before the SP touches
-// the XML.
+// RelayState is rejected with 400.
 func TestSAMLCallback_MissingFormFields(t *testing.T) {
 	_, _, certPEM, keyPEM := genTestKeypair(t, "test-sp")
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	credKey := make([]byte, 32)
 	for i := range credKey {
 		credKey[i] = byte(i)
 	}
-	sso, _ := service.NewSSO(tc.svc, providers, sessions, credKey)
+	sso, _ := service.NewSSO(tc.svc, globalProviders, sessions, credKey)
 	spCfg, _ := authsaml.LoadSPConfig(certPEM, keyPEM)
 
 	tenantID := uuid.New()
@@ -605,10 +635,8 @@ func TestSAMLCallback_MissingFormFields(t *testing.T) {
 	httpH.WithSSO(sso, srv.URL)
 
 	// Provider doesn't need to exist for this test — the missing-form-fields
-	// branch fires before provider lookup. But we still need SOME provider
-	// id in the URL.
-	providerID := uuid.New()
-	resp, err := http.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", url.Values{})
+	// branch fires before provider lookup.
+	resp, err := http.PostForm(srv.URL+"/auth/saml/anyprovider/acs", url.Values{})
 	if err != nil {
 		t.Fatalf("POST acs: %v", err)
 	}
@@ -619,19 +647,18 @@ func TestSAMLCallback_MissingFormFields(t *testing.T) {
 }
 
 // TestSAMLCallback_MalformedSAMLResponse asserts a POST with a bogus
-// SAMLResponse value is rejected with 400 INVALIDSAML. We supply a valid
-// RelayState (consume succeeds) so the failure has to come from ParseResponse.
+// SAMLResponse value is rejected with 400 INVALIDSAML.
 func TestSAMLCallback_MalformedSAMLResponse(t *testing.T) {
 	_, _, certPEM, keyPEM := genTestKeypair(t, "test-sp")
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	credKey := make([]byte, 32)
 	for i := range credKey {
 		credKey[i] = byte(i)
 	}
-	sso, _ := service.NewSSO(tc.svc, providers, sessions, credKey)
+	sso, _ := service.NewSSO(tc.svc, globalProviders, sessions, credKey)
 	spCfg, _ := authsaml.LoadSPConfig(certPEM, keyPEM)
 
 	tenantID := uuid.New()
@@ -642,29 +669,24 @@ func TestSAMLCallback_MalformedSAMLResponse(t *testing.T) {
 	t.Cleanup(srv.Close)
 	httpH.WithSSO(sso, srv.URL)
 
-	providerID := uuid.New()
-	// Seed a valid IdP metadata XML — we need it to pass SP construction
-	// during the callback handler before ParseResponse fails on the bogus
-	// SAMLResponse.
+	const providerID = "saml"
+	// Seed a valid IdP metadata XML so SP construction succeeds before
+	// ParseResponse fails on the bogus SAMLResponse.
 	dummySPMD := dummySPMetadataXML(t)
 	idp := newTestIDP(t, dummySPMD, "noop@example.com", "Noop")
 	idpMD := idpMetadataXML(t, idp.idp)
-	providers.providers[providerID] = &repository.AuthProvider{
-		ID:                 providerID,
-		TenantID:           tenantID,
-		Type:               repository.AuthProviderSAML,
-		DisplayName:        "Corp",
-		Enabled:            true,
-		SAMLIdpMetadataXML: string(idpMD),
-		AutoProvision:      true,
-		DefaultRole:        "reader",
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:      providerID,
+		Kind:            "saml",
+		DisplayName:     "Corp",
+		Enabled:         true,
+		SAMLMetadataXML: idpMD,
+		AutoProvision:   true,
 	}
 
-	// Mint a real relay state so the ConsumeByState step succeeds and we
-	// reach ParseResponse. AuthnRequest ID is a dummy here — ParseResponse
-	// will fail before checking InResponseTo because the SAMLResponse is
-	// bogus.
-	relayState, err := sso.CreateSAMLLoginSession(context.Background(), tenantID, providerID, "dummy-authn-req-id", "/x")
+	// Mint a real relay state so ConsumeByState succeeds and we reach ParseResponse.
+	// RM-003/RM-004: CreateSAMLLoginSession now takes (ctx, providerID string, authnReqID, nextURL string).
+	relayState, err := sso.CreateSAMLLoginSession(context.Background(), providerID, "dummy-authn-req-id", "/x")
 	if err != nil {
 		t.Fatalf("CreateSAMLLoginSession: %v", err)
 	}
@@ -672,7 +694,7 @@ func TestSAMLCallback_MalformedSAMLResponse(t *testing.T) {
 	form := url.Values{}
 	form.Set("SAMLResponse", "not-a-real-saml-response")
 	form.Set("RelayState", relayState)
-	resp, err := http.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", form)
+	resp, err := http.PostForm(srv.URL+"/auth/saml/"+providerID+"/acs", form)
 	if err != nil {
 		t.Fatalf("POST acs: %v", err)
 	}
@@ -684,18 +706,17 @@ func TestSAMLCallback_MalformedSAMLResponse(t *testing.T) {
 }
 
 // TestSAMLCallback_NotConfiguredReturns501 confirms a deployment without the
-// SAML SP keypair returns 501 on ACS — the dashboard relies on this status
-// to detect "SAML coming soon" without parsing error bodies.
+// SAML SP keypair returns 501 on ACS.
 func TestSAMLCallback_NotConfiguredReturns501(t *testing.T) {
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	credKey := make([]byte, 32)
 	for i := range credKey {
 		credKey[i] = byte(i)
 	}
-	sso, _ := service.NewSSO(tc.svc, providers, sessions, credKey)
+	sso, _ := service.NewSSO(tc.svc, globalProviders, sessions, credKey)
 
 	tenantID := uuid.New()
 	mux := http.NewServeMux()
@@ -706,11 +727,10 @@ func TestSAMLCallback_NotConfiguredReturns501(t *testing.T) {
 	t.Cleanup(srv.Close)
 	httpH.WithSSO(sso, srv.URL)
 
-	providerID := uuid.New()
 	form := url.Values{}
 	form.Set("SAMLResponse", "x")
 	form.Set("RelayState", "y")
-	resp, err := http.PostForm(srv.URL+"/auth/saml/"+providerID.String()+"/acs", form)
+	resp, err := http.PostForm(srv.URL+"/auth/saml/anyprovider/acs", form)
 	if err != nil {
 		t.Fatalf("POST acs: %v", err)
 	}
@@ -722,8 +742,7 @@ func TestSAMLCallback_NotConfiguredReturns501(t *testing.T) {
 
 // ── small helpers ───────────────────────────────────────────────────────────
 
-// idpMetadataXML returns the IdP's metadata document as XML bytes. The IdP
-// embeds its signing cert + SSO endpoint so the SP can verify Responses.
+// idpMetadataXML returns the IdP's metadata document as XML bytes.
 func idpMetadataXML(t *testing.T, idp *crewjamsaml.IdentityProvider) []byte {
 	t.Helper()
 	md := idp.Metadata()
