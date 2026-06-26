@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -13,6 +14,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrNotFound is returned by repository helpers when a requested row does not
+// exist. Callers should treat this as "value is zero / unset" rather than as a
+// hard error. Mapped to gRPC NotFound by the handler layer where appropriate.
+// Sentinel error so callers can branch on errors.Is without coupling to pgx.
+var ErrNotFound = errors.New("not found")
 
 // ErrDomainNotFound is returned by domain-mutation repository helpers when the
 // (tenant_id, domain) pair is unknown. Mapped to gRPC NotFound by the handler.
@@ -554,6 +561,51 @@ func (r *Repository) SetPrimaryDomain(ctx context.Context, tenantID uuid.UUID, d
 		return nil, fmt.Errorf("SetPrimaryDomain commit: %w", err)
 	}
 	return &rec, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REDESIGN-001 Phase 3.1.a — deployment_metadata
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GetDeploymentMetadata retrieves a deployment-scoped fact by key.
+// Returns (nil, ErrNotFound) when the key has never been set — callers
+// should treat this as "value is zero / unset" not as an error.
+//
+// REDESIGN-001 Phase 3.1.a. Used by the bootstrap CLI to check whether
+// the deployment has already been bootstrapped.
+func (r *Repository) GetDeploymentMetadata(ctx context.Context, key string) (json.RawMessage, error) {
+	var value []byte
+	err := r.pool.QueryRow(ctx,
+		`SELECT value FROM deployment_metadata WHERE key = $1`, key,
+	).Scan(&value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetDeploymentMetadata: %w", err)
+	}
+	return json.RawMessage(value), nil
+}
+
+// SetDeploymentMetadata upserts a deployment-scoped fact. Idempotent —
+// repeated calls with the same key + value are no-ops aside from the
+// updated_at bump. Callers requiring "create once, never overwrite"
+// semantics (e.g. bootstrap_tenant_id) MUST check Get first.
+//
+// REDESIGN-001 Phase 3.1.a. Used by the bootstrap CLI to record the
+// bootstrap tenant id.
+func (r *Repository) SetDeploymentMetadata(ctx context.Context, key string, value json.RawMessage) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO deployment_metadata (key, value)
+		 VALUES ($1, $2::jsonb)
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value, updated_at = now()`,
+		key, []byte(value),
+	)
+	if err != nil {
+		return fmt.Errorf("SetDeploymentMetadata: %w", err)
+	}
+	return nil
 }
 
 // DeleteDomainByName removes the (tenant_id, domain) row and reports whether
