@@ -31,6 +31,16 @@ export function isExpiringSoon(claims: JanusJwtClaims, withinSeconds = 60): bool
   return claims.exp - now <= withinSeconds;
 }
 
+/**
+ * @deprecated Use `useIsGlobalAdmin()` from `"@/lib/api/abilities"` instead.
+ *
+ * This function reads `claims.roles` which is a flat deduped list that lost
+ * scope information — it can produce wrong results (e.g. any org-admin appears
+ * as "platform admin" because both hold the "admin" role string). The BFF's
+ * actual authorization uses scope-aware containment via `GET /api/v1/me/abilities`.
+ *
+ * REDESIGN-001 Phase 4.4 — sweep of call-sites follows in Phase 4.2.
+ */
 export function isPlatformAdmin(claims: JanusJwtClaims | null): boolean {
   // Platform-admin marker — backend grants `(admin, org, "*")` via the dev seed
   // migration. The `roles` claim is the deduped role-name list; we look for the
@@ -39,6 +49,17 @@ export function isPlatformAdmin(claims: JanusJwtClaims | null): boolean {
   return claims.roles.includes("admin");
 }
 
+/**
+ * @deprecated Use `useAbility(role, scope)` from `"@/lib/api/abilities"` instead.
+ *
+ * This function reads `claims.roles` which is a flat deduped list that lost
+ * scope information — it returns true for any user who holds admin or owner on
+ * *any* scope, not just on the workspace-admin surfaces it is meant to guard.
+ * The BFF's actual authorization uses scope-aware containment via
+ * `GET /api/v1/me/abilities` and `hasScopedRole`.
+ *
+ * REDESIGN-001 Phase 4.4 — sweep of call-sites follows in Phase 4.2.
+ */
 // isWorkspaceAdmin returns true when the principal can administer their own
 // workspace — i.e. holds the `admin` or `owner` role on any scope within the
 // tenant. Matches the backend's `requireDomainAdmin` posture (BFF
