@@ -33,6 +33,7 @@ import (
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -94,6 +95,14 @@ type Handler struct {
 	// Optional — when nil, every authenticated request passes through unthrottled
 	// (useful for tests that want deterministic timing).
 	rateLimiter *middleware.PerUserRateLimiter
+	// deploymentMode is the binary's deployment posture (single or multi-tenant).
+	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
+	// endpoint to tell the FE which chrome to render.
+	deploymentMode loader.DeploymentMode
+	// buildVersion is the binary version string injected at build time.
+	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
+	// endpoint.
+	buildVersion string
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -209,6 +218,16 @@ func (h *Handler) WithProxyClient(c proxyv1.ProxyServiceClient) *Handler {
 	return h
 }
 
+// WithDeploymentInfo wires the deployment posture and build version that
+// the /api/v1/deployment-info handler needs to tell the FE which chrome
+// to render (tenant switcher, plan badges, etc.). Must be called before
+// Register to ensure the endpoint is properly wired.
+func (h *Handler) WithDeploymentInfo(mode loader.DeploymentMode, version string) *Handler {
+	h.deploymentMode = mode
+	h.buildVersion = version
+	return h
+}
+
 // checkServicesHealth calls the gRPC health check on each configured service and
 // returns the percentage (0–100) that are currently SERVING.
 // Uses a 2-second deadline so a slow or unreachable service never stalls the stats page.
@@ -252,6 +271,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Health — unauthenticated, used by docker-compose and K8s probes.
 	mux.Handle("GET /healthz", http.HandlerFunc(handleHealthz))
+
+	// Deployment info — unauthenticated, public. Returns the deployment mode
+	// and version so the FE can decide which chrome to render (REDESIGN-001 Phase 1.4).
+	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.HandleDeploymentInfo))
 
 	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
