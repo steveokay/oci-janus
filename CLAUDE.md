@@ -1,5 +1,15 @@
 # CLAUDE.md — OCI-Compliant Docker Registry Platform
 
+> ⚠ **ARCHITECTURE REDESIGN IN FLIGHT (2026-06-26).**
+> A deep system review (`.claude/reviews/system-review-2026-06-26.md`) surfaced significant drift between this file's claims and the codebase. The agreed direction (REDESIGN-001 in `status-tracker.md`, plan in `.claude/plans/2026-06-26-single-tenant-redesign.md`) is:
+> - **Default deployment mode shifts to `single` (self-hosted single-tenant);** `DEPLOYMENT_MODE=multi` preserves the SaaS capability.
+> - **Custom domains, per-tenant SSO, tenant signup, plan/billing UI are being removed.**
+> - **Settings IA collapses Admin + Workspace + Account into one role-gated `/settings` page.** No standalone Admin / Deployment sidebar group.
+> - **`is_global_admin` typed primitive replaces the `scope_value='*'` magic-string platform-admin convention.** In single mode, workspace admins are effective global admins.
+> - **Several security/spec claims in this file are aspirational** until the redesign Phases 1, 5, 6, 7 land: RLS coverage (§9), mTLS hot reload (§7), fail-closed Redis check (§7), JWT cache on management path (§7), audit-event catalogue completeness (§10). Treat these sections as the *target state*, not the current state, until Phase 7.1 rewrites them.
+>
+> Until the redesign ships, prefer the plan + review docs over this file when they conflict.
+
 > **Purpose:** Canonical rules for AI-assisted development of the Docker Registry Platform.
 > This file holds prescriptive conventions and pointers; descriptive content lives next to the code.
 > When code disagrees with this file, the code is wrong — but proto files (`proto/*/v1/*.proto`) and migration files (`services/*/migrations/`) are the authoritative contracts.
