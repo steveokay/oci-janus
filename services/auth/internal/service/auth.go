@@ -111,7 +111,7 @@ type Service struct {
 	apiKeys         apiKeyRepo
 	serviceAccounts saRepo
 	audit           AuditEmitter
-	redis           *redis.Client
+	redis           redisClient
 	privKey         *rsa.PrivateKey
 	pubKey          *rsa.PublicKey
 	keyID           string
@@ -212,17 +212,25 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		return nil, ErrTokenRevoked
 	}
 
-	// Check principal-level revocation (spec §5.5 / security HIGH H2).
+	// Check principal-level revocation (spec §5.5 / security HIGH H2 / Review §B).
 	// T8's ServiceAccountService.SetDisabled writes "revoke:user:<shadow_user_id>"
 	// with a 25-minute TTL when an SA is disabled. We check the same key here so
 	// any outstanding JWT for the disabled principal is rejected immediately
 	// without waiting for the token's natural expiry.
 	//
-	// Fail-open on Redis error: the DB row (disabled_at) is the authoritative
-	// source for ValidateAPIKey; this check is an optimisation layer for the JWT
-	// path. A Redis hiccup should not cause a login outage — the token will be
-	// rejected at the API-key validation layer anyway for SA principals.
-	if val, err := s.redis.Get(ctx, "revoke:user:"+claims.Subject).Result(); err == nil && val != "" {
+	// Fail-CLOSED on Redis error: human users have no second-layer check (only SA
+	// principals get a ValidateAPIKey DB lookup), so a Redis outage that prevented
+	// revocation lookups would silently allow disabled human users to keep using
+	// their JWT until natural expiry (up to JWT TTL = 5 minutes). Returning
+	// codes.Unavailable forces clients to retry; momentary 503s are preferred over
+	// principal-revocation bypass.
+	val, err := s.redis.Get(ctx, "revoke:user:"+claims.Subject).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		slog.ErrorContext(ctx, "principal revocation check failed; failing closed",
+			"err", err, "subject", claims.Subject)
+		return nil, status.Error(codes.Unavailable, "principal revocation check unavailable")
+	}
+	if val != "" {
 		return nil, status.Error(codes.Unauthenticated, "principal revoked")
 	}
 

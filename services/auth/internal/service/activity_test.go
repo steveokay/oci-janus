@@ -141,6 +141,12 @@ func (f *fakeAuditClient) TestAuditExportConfig(_ context.Context, _ *auditv1.Te
 func (f *fakeAuditClient) DrainAuditExportDLX(_ context.Context, _ *auditv1.DrainAuditExportDLXRequest, _ ...grpc.CallOption) (*auditv1.DrainAuditExportDLXResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
 }
+func (f *fakeAuditClient) GetUserNotificationPreferences(_ context.Context, _ *auditv1.GetUserNotificationPreferencesRequest, _ ...grpc.CallOption) (*auditv1.GetUserNotificationPreferencesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
+func (f *fakeAuditClient) UpdateUserNotificationPreferences(_ context.Context, _ *auditv1.UpdateUserNotificationPreferencesRequest, _ ...grpc.CallOption) (*auditv1.UpdateUserNotificationPreferencesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
 
 // ── Test harness ──────────────────────────────────────────────────────────────
 
