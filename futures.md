@@ -33,6 +33,11 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   - Workspace policy toggle: "require MFA for all members" — gates token
     issuance at the auth service.
 - **Affects:** `services/auth`, `services/management`, `frontend`.
+- **REDESIGN-001 note (2026-06-28):** `auth_login_sessions.tenant_id` was
+  dropped per RM-004; sessions are deployment-wide. MFA design still works
+  but the "Workspace policy" toggle becomes deployment-wide in single mode.
+  In multi mode the policy needs a separate `tenant_security_policy` table
+  since `auth_providers` is gone.
 
 ### 2. Tag immutability + image promotion workflow
 - **Why:** Without an immutability flag, an attacker (or a sleepy
@@ -173,13 +178,17 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 - **What:**
   - SCIM v2 endpoints on services/auth (`/scim/v2/Users`,
     `/scim/v2/Groups`).
-  - Mapping: IdP group → tenant + role (e.g. `eng-admin@acme.okta` →
-    `tenant=acme, role=admin`).
-  - Workspace admin UI: SCIM token issuance + mapping editor.
+  - Mapping: IdP group → role (e.g. `eng-admin@acme.okta` → `role=admin`).
+  - Admin UI: SCIM token issuance + mapping editor.
 - **Affects:** `services/auth`, `services/management`, `frontend`.
 - **Depends on:** `FUT-012` (tenant-user lifecycle management) — SCIM
   is the automated source-of-truth layered on top of the same
   invite / disable / list machinery. Build the manual surface first.
+- **REDESIGN-001 note (2026-06-28):** per-tenant SSO was collapsed to a
+  global `global_sso_config` table per RM-003. SCIM mapping now hangs off
+  the global IdP. Single mode = natural shape. Multi mode needs the SCIM
+  mapping to gain a tenant-resolution step (IdP group → tenant + role) —
+  document the multi-mode story explicitly before pickup.
 
 ---
 
@@ -482,15 +491,11 @@ agent-style.
   cosmetic over-emission, can be deduped in a small future PR.
 
 ### FUT-007-FE: Domain re-poll reset action — ~1h
-- **Why:** After 48h of failed DNS TXT verification the worker gives
-  up on a `tenant_domains` row. Operator's only recourse today is
-  delete + re-register. A small "Re-arm polling" button on the row
-  (or auto-reset on Verify Now success) closes that cliff without
-  forcing a re-register cycle.
-- **Scope:** repo method to clear the 48h notify timestamps + reset
-  `next_poll_after`, BFF route, FE button on the domain row.
-- **Affects:** `services/tenant`, `services/management`, `frontend`.
-- **Surfaced:** 2026-06-23 custom-domain documentation pass.
+
+> **OBSOLETE 2026-06-27** — REDESIGN-001 Phase 2.1 (PR #132 / RM-001) removed
+> the entire custom-domain feature. `tenant_domains` table dropped; the
+> domain worker + DNS-TXT verification flow no longer exist. Nothing to
+> re-poll. Item closed without work.
 
 ### FUT-008: Sign dialog "Recent signer_ids" dropdown — ~1h
 - **Why:** Today the Sign dialog asks for `signer_id` as a free-form
@@ -559,6 +564,28 @@ agent-style.
   new `docs/DEPLOYMENT-MODELS.md`, possibly small README updates.
 
 ### FUT-010: RBAC + FE-RBAC polish pass — ~1 sprint
+
+> **PARTIALLY SUBSUMED 2026-06-28** by REDESIGN-001. The BFF half has shipped:
+> - **Phase 5.2** (PR #131) — every `require*Admin` helper (`requireScanPolicyAdmin`,
+>   `requireWebhookAdmin`, `requireDomainAdmin`) tightened to scope-aware
+>   tenant-admin via `effectiveTenantAdmin`. Closes the "any-org-admin =
+>   tenant-admin" gate flaw.
+> - **Phase 5.1** (PR #134) — typed `users.is_global_admin` column +
+>   `effectiveGlobalAdmin` helper replaces the `(admin, org, '*')` marker.
+>   `GrantRole` rejects the legacy marker going forward.
+>
+> What REMAINS open from the original scope:
+> - **FE affordance hiding** — sidebar / button / form-field gating. Now
+>   mapped to REDESIGN-001 **Phase 4.4** (`useAbility()` hook + `/me/abilities`
+>   BFF endpoint).
+> - **`useHasRole(role, scope)` hook** — replaced by Phase 4.4's
+>   `useAbility(action, scope)` (action-centric, not role-centric — cleaner
+>   per Review §C2).
+> - **`docs/RBAC.md`** — defer to REDESIGN-001 Phase 7.1 (doc rewrite).
+>
+> Once Phase 4.4 ships, close this item. Don't pick up FUT-010 standalone —
+> it'll collide with Phase 4.
+
 - **Why:** DEPLOY-001's tenant-persona testing will surface a class of
   gaps where the FE renders affordances that the BFF will then reject
   with 403, or where the sidebar leaks admin-only groups to roles that
@@ -936,6 +963,66 @@ Docker v2 manifest list shapes are well-defined.
   PR #46. **Effort:** S.
 
 (Each item has the full where/why/fix breakdown in [`.claude/reviews/`](.claude/reviews/).)
+
+---
+
+## REDESIGN-001 — small follow-ups from shipped PRs
+
+> Carve-outs from PRs that shipped in the redesign batch. Each is a
+> documented should-fix kept out of the original PR to keep that PR
+> reviewable. Sized in minutes / hours, not days.
+
+### RED-FU-001 — `services/auth/internal/bootstrap/bootstrap_test.go` schema refresh
+- **Why:** PR #132 (Phase 2.1) dropped the `tenant_domains` schema. The
+  bootstrap integration test still inlines a snapshot of tenant migrations
+  including the dropped table. Doesn't break the default suite (build tag
+  `integration`) but rots quietly.
+- **Scope:** refresh the inlined migrations snapshot to match current
+  `services/tenant/migrations/`. ~15 min.
+- **Affects:** `services/auth/internal/bootstrap/bootstrap_test.go`.
+
+### RED-FU-002 — `services/auth/internal/repository/auth_providers.go` cleanup
+- **Why:** PR #133 (Phase 2.2) replaced the per-tenant `auth_providers`
+  table with global config. The Go file still hosts shared helpers
+  (`AuthProviderType` constants, `nullIfEmpty`, `nullableBytes`,
+  `scanAuthProvider`, `rowScanner`) used by `global_sso_config.go`. The
+  legacy `AuthProviderRepository` methods have zero callers.
+- **Scope:** rename to `sso_helpers.go` and trim the legacy repo methods,
+  OR move helpers into a new `pgutil.go` and delete the legacy file. ~30 min.
+- **Affects:** `services/auth/internal/repository/`.
+
+### RED-FU-003 — `digest_keyed.go:295` `hasAnyWriterRole` writer-tier scoping (Phase 5.4)
+- **Why:** PR #131 (Phase 5.2) tightened the admin-tier gates but
+  deferred the writer-tier `hasAnyWriterRole` helper. Today any
+  writer/admin/owner anywhere in the tenant can sign manifests by digest
+  even for repos they don't have write access to (Review §A1 #4).
+  Requires digest → repo resolution to do correctly.
+- **Scope:** thread `manifest_digest` → owning repo lookup; gate via
+  `hasScopedRole(assignments, "repo", repo, "writer")`. ~2-3h.
+- **Affects:** `services/management/internal/handler/digest_keyed.go`,
+  `services/metadata` (digest → repo lookup).
+
+### RED-FU-004 — OCI conformance user → CI-time bootstrap
+- **Why:** PR #129 (Phase 2.6 / Top-5 #5) removed the dev admin from the
+  migration but kept the conformance user (`00000000-…-003`) since CI
+  workflows depend on it. The conformance user has zero role assignments
+  so the security risk is bounded, but a known argon2 hash is still
+  baked in the production Docker image.
+- **Scope:** CI workflow seeds the conformance user once via SQL,
+  scrubbed from the production image. ~1h.
+- **Affects:** `services/auth/migrations/20260610000001_seed_dev_tenant.sql`
+  (strip the second INSERT), `services/core/Makefile`, new GH Action step.
+
+### RED-FU-005 — Phase 7.1 CLAUDE.md / docs/SERVICES.md rewrite
+- **Why:** REDESIGN-001 Phase 7.1 is the catch-all "make CLAUDE.md and
+  docs/SERVICES.md match the new reality." Once enough phases ship, the
+  aspirational-section banner at the top of CLAUDE.md gets replaced with
+  a real rewrite covering: custom-domain removal, SSO global config,
+  `is_global_admin`, bootstrap CLI, single-mode tenant behaviour, audit
+  catalogue completeness.
+- **Scope:** doc-only sweep across `CLAUDE.md`, `docs/SERVICES.md` §2
+  (auth) + §12 (tenant), `docs/SAML.md`, `docs/EVENTS.md`. ~half-day.
+- **Affects:** docs only.
 
 ---
 
