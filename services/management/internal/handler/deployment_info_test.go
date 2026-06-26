@@ -1,5 +1,5 @@
-// Package handler_test exercises the public deployment-info endpoint.
-package handler_test
+// Package handler tests the public deployment-info endpoint.
+package handler
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
-	"github.com/steveokay/oci-janus/services/management/internal/handler"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,12 +15,14 @@ import (
 // the FE consumes at /api/v1/deployment-info. Unauthenticated by design —
 // it returns only the deployment posture, not tenant data.
 func TestHandleDeploymentInfo(t *testing.T) {
-	h := &handler.Handler{}
-	h = h.WithDeploymentInfo(loader.DeploymentModeSingle, "test-1.0")
+	h := &Handler{
+		deploymentMode: loader.DeploymentModeSingle,
+		buildVersion:   "test-1.0",
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/deployment-info", nil)
 	rr := httptest.NewRecorder()
-	h.HandleDeploymentInfo(rr, req)
+	h.handleDeploymentInfo(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, "application/json", rr.Header().Get("Content-Type"))
@@ -38,12 +39,14 @@ func TestHandleDeploymentInfo(t *testing.T) {
 // TestHandleDeploymentInfo_MultiMode verifies that multi mode is correctly
 // returned in the response.
 func TestHandleDeploymentInfo_MultiMode(t *testing.T) {
-	h := &handler.Handler{}
-	h = h.WithDeploymentInfo(loader.DeploymentModeMulti, "v2.0.0")
+	h := &Handler{
+		deploymentMode: loader.DeploymentModeMulti,
+		buildVersion:   "v2.0.0",
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/deployment-info", nil)
 	rr := httptest.NewRecorder()
-	h.HandleDeploymentInfo(rr, req)
+	h.handleDeploymentInfo(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
 	var body map[string]any

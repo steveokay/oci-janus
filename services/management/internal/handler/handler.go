@@ -274,7 +274,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Deployment info — unauthenticated, public. Returns the deployment mode
 	// and version so the FE can decide which chrome to render (REDESIGN-001 Phase 1.4).
-	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.HandleDeploymentInfo))
+	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.handleDeploymentInfo))
 
 	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
