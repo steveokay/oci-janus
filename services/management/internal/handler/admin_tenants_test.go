@@ -115,15 +115,15 @@ func (s *adminFakeTenantServer) GetTenant(_ context.Context, _ *tenantv1.GetTena
 	if adminTenantGet != nil {
 		return adminTenantGet, nil
 	}
-	// Default happy-path tenant identity.
+	// Default happy-path tenant identity. After REDESIGN-001 RM-001 host is
+	// always the wildcard subdomain — HostIsCustom field removed.
 	return &tenantv1.Tenant{
-		TenantId:     detailTenantID,
-		Name:         "acme",
-		Slug:         "acme",
-		Plan:         "pro",
-		Host:         "acme.registry.example.com",
-		HostIsCustom: false,
-		CreatedAt:    timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		TenantId:  detailTenantID,
+		Name:      "acme",
+		Slug:      "acme",
+		Plan:      "pro",
+		Host:      "acme.registry.example.com",
+		CreatedAt: timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}, nil
 }
 
@@ -341,8 +341,8 @@ func TestAdminGetTenant_HappyPath_composesFromFourServices(t *testing.T) {
 	if body.TenantID != detailTenantID || body.Name != "acme" || body.Plan != "pro" {
 		t.Errorf("identity mismatch: %+v", body)
 	}
-	if body.Slug != "acme" || body.Host != "acme.registry.example.com" || body.HostIsCustom {
-		t.Errorf("workspace fields mismatch: slug=%q host=%q custom=%v", body.Slug, body.Host, body.HostIsCustom)
+	if body.Slug != "acme" || body.Host != "acme.registry.example.com" {
+		t.Errorf("workspace fields mismatch: slug=%q host=%q", body.Slug, body.Host)
 	}
 	if body.StorageUsedBytes != 4096 || body.RepositoryCount != 5 || body.OrganizationCount != 2 {
 		t.Errorf("metadata aggregate mismatch: %+v", body)

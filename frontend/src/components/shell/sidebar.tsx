@@ -12,7 +12,6 @@ import {
   Building2,
   Activity,
   KeyRound,
-  Globe,
   ScanLine,
   Ship,
   Radio,
@@ -85,7 +84,6 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       // sidebar (which would require loading role assignments here).
       { to: "/tenant/users", label: "Tenant users", icon: UsersRound },
       { to: "/api-keys", label: "API keys", icon: KeyRound },
-      { to: "/workspace/domains", label: "Custom domains", icon: Globe },
     ],
   },
   {

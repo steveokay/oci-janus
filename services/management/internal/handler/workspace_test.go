@@ -41,16 +41,13 @@ func (s *fakeTenantServer) GetTenant(_ context.Context, _ *tenantv1.GetTenantReq
 	if workspaceTenantOverride != nil {
 		return workspaceTenantOverride, nil
 	}
+	// After REDESIGN-001 RM-001 host is always the wildcard subdomain.
 	return &tenantv1.Tenant{
-		TenantId:     testTenantID,
-		Name:         "Acme",
-		Slug:         "acme",
-		Plan:         "enterprise",
-		Host:         "registry.acme.com",
-		HostIsCustom: true,
-		Domains: []*tenantv1.DomainEntry{
-			{Domain: "registry.acme.com", Verified: true, IsPrimary: true},
-		},
+		TenantId:  testTenantID,
+		Name:      "Acme",
+		Slug:      "acme",
+		Plan:      "enterprise",
+		Host:      "acme.registry.example.com",
 		CreatedAt: timestamppb.Now(),
 	}, nil
 }
@@ -145,8 +142,8 @@ func TestWorkspaceMe_TenantClientUnset_returns404(t *testing.T) {
 }
 
 // TestWorkspaceMe_HappyPath_returnsFullShape covers the FE-API-009 wire shape
-// end-to-end: slug + host + host_is_custom + domains[]. The fake returns a
-// verified custom primary domain so HostIsCustom must be true.
+// end-to-end: slug + host. After REDESIGN-001 RM-001 host is always the
+// wildcard subdomain — no HostIsCustom or Domains fields.
 func TestWorkspaceMe_HappyPath_returnsFullShape(t *testing.T) {
 	env := newWorkspaceEnv(t)
 	resp := env.get(t, "/api/v1/workspace/me", adminToken)
@@ -163,38 +160,24 @@ func TestWorkspaceMe_HappyPath_returnsFullShape(t *testing.T) {
 	if body.Slug != "acme" {
 		t.Errorf("slug: got %q, want acme", body.Slug)
 	}
-	if body.Host != "registry.acme.com" {
-		t.Errorf("host: got %q, want registry.acme.com", body.Host)
-	}
-	if !body.HostIsCustom {
-		t.Errorf("host_is_custom: got false, want true")
+	if body.Host != "acme.registry.example.com" {
+		t.Errorf("host: got %q, want acme.registry.example.com", body.Host)
 	}
 	if body.Plan != "enterprise" {
 		t.Errorf("plan: got %q, want enterprise", body.Plan)
 	}
-	if len(body.Domains) != 1 {
-		t.Fatalf("domains: got %d, want 1", len(body.Domains))
-	}
-	d := body.Domains[0]
-	if d.Domain != "registry.acme.com" || !d.Verified || !d.IsPrimary {
-		t.Errorf("domains[0]: got %+v, want verified+primary registry.acme.com", d)
-	}
 }
 
-// TestWorkspaceMe_WildcardFallback_returnsHostIsCustomFalse covers a tenant
-// without any verified custom domain — the gRPC server emits a wildcard
-// hostname and HostIsCustom=false, and the BFF must pass that through
-// rather than re-deriving it.
-func TestWorkspaceMe_WildcardFallback_returnsHostIsCustomFalse(t *testing.T) {
+// TestWorkspaceMe_WildcardSubdomain_returnsCorrectHost confirms that a tenant
+// with a custom slug returns the expected wildcard subdomain hostname.
+func TestWorkspaceMe_WildcardSubdomain_returnsCorrectHost(t *testing.T) {
 	workspaceTenantOverride = &tenantv1.Tenant{
-		TenantId:     testTenantID,
-		Name:         "Newco",
-		Slug:         "newco",
-		Plan:         "standard",
-		Host:         "newco.registry.example.com",
-		HostIsCustom: false,
-		Domains:      nil,
-		CreatedAt:    timestamppb.Now(),
+		TenantId:  testTenantID,
+		Name:      "Newco",
+		Slug:      "newco",
+		Plan:      "standard",
+		Host:      "newco.registry.example.com",
+		CreatedAt: timestamppb.Now(),
 	}
 	t.Cleanup(func() { workspaceTenantOverride = nil })
 
@@ -206,19 +189,11 @@ func TestWorkspaceMe_WildcardFallback_returnsHostIsCustomFalse(t *testing.T) {
 
 	var body handler.WorkspaceResponse
 	decodeJSON(t, resp, &body)
-	if body.HostIsCustom {
-		t.Errorf("host_is_custom: got true, want false")
-	}
 	if body.Host != "newco.registry.example.com" {
-		t.Errorf("host: got %q, want wildcard newco.registry.example.com", body.Host)
+		t.Errorf("host: got %q, want newco.registry.example.com", body.Host)
 	}
-	// The frontend treats null as a hard error — domains must be an empty
-	// array even when the tenant has none.
-	if body.Domains == nil {
-		t.Errorf("domains: got nil, want non-nil empty slice")
-	}
-	if len(body.Domains) != 0 {
-		t.Errorf("domains: got %d entries, want 0", len(body.Domains))
+	if body.Slug != "newco" {
+		t.Errorf("slug: got %q, want newco", body.Slug)
 	}
 }
 

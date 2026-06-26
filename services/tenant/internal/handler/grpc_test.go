@@ -25,14 +25,11 @@ import (
 // without modifying the production type signature.
 type fakeTenantRepo struct {
 	tenants  map[uuid.UUID]*repository.TenantRecord
-	domains  map[string]uuid.UUID // domain → tenant_id (verified)
 	policies map[uuid.UUID]*repository.PolicyRecord
 
 	createErr    error // non-nil → return this from CreateTenant
 	getErr       error
 	deleteErr    error
-	resolveErr   error
-	registerErr  error
 	getPolicyErr error
 	updateErr    error
 
@@ -43,7 +40,6 @@ type fakeTenantRepo struct {
 func newFakeTenantRepo() *fakeTenantRepo {
 	return &fakeTenantRepo{
 		tenants:  make(map[uuid.UUID]*repository.TenantRecord),
-		domains:  make(map[string]uuid.UUID),
 		policies: make(map[uuid.UUID]*repository.PolicyRecord),
 	}
 }
@@ -79,27 +75,6 @@ func (f *fakeTenantRepo) DeleteTenant(_ context.Context, tenantID uuid.UUID) err
 	}
 	delete(f.tenants, tenantID)
 	return nil
-}
-
-func (f *fakeTenantRepo) ResolveDomain(_ context.Context, domain string) (uuid.UUID, bool, error) {
-	if f.resolveErr != nil {
-		return uuid.Nil, false, f.resolveErr
-	}
-	id, ok := f.domains[domain]
-	return id, ok, nil
-}
-
-func (f *fakeTenantRepo) RegisterDomain(_ context.Context, tenantID uuid.UUID, domain, token string) (*repository.DomainRecord, error) {
-	if f.registerErr != nil {
-		return nil, f.registerErr
-	}
-	return &repository.DomainRecord{
-		ID:                uuid.New(),
-		TenantID:          tenantID,
-		Domain:            domain,
-		VerificationToken: token,
-		RegisteredAt:      time.Now(),
-	}, nil
 }
 
 func (f *fakeTenantRepo) GetPolicy(_ context.Context, tenantID uuid.UUID) (*repository.PolicyRecord, error) {
@@ -152,26 +127,14 @@ func (f *fakeTenantRepo) UpdateTenant(_ context.Context, tenantID uuid.UUID, nam
 // GRPCHandler embeds *repository.Repository directly, so we need a way to
 // inject a fake without changing the production code. We achieve this by
 // wrapping GRPCHandler and overriding the repository via a thin interface adapter
-// that re-uses the same method signatures. Since the handler calls h.repo.X(...),
-// we create a handlerWithFake that wraps the fake as a *repository.Repository
-// by embedding a custom struct.
+// that re-uses the same method signatures.
 //
-// A simpler approach: extract an internal interface in the handler and replace
-// the concrete field. The handler already calls h.repo.CreateTenant etc., which
-// match our fake exactly. We compose a GRPCHandler with a nil repo pointer and
-// patch the internal repo field via a pointer to our fake wrapped in a thin shim.
-//
-// The cleanest testable approach here is to expose an internal constructor that
-// accepts a repo interface. We do this by defining a repoInterface locally and
-// a newWithRepo constructor used only in tests.
-
-// tenantRepo is the minimal interface the handler actually uses.
+// tenantRepo is the minimal interface the handler actually uses after
+// REDESIGN-001 RM-001 removed custom-domain RPCs.
 type tenantRepo interface {
 	CreateTenant(ctx context.Context, name, plan string) (*repository.TenantRecord, error)
 	GetTenant(ctx context.Context, tenantID uuid.UUID) (*repository.TenantRecord, error)
 	DeleteTenant(ctx context.Context, tenantID uuid.UUID) error
-	ResolveDomain(ctx context.Context, domain string) (uuid.UUID, bool, error)
-	RegisterDomain(ctx context.Context, tenantID uuid.UUID, domain, token string) (*repository.DomainRecord, error)
 	GetPolicy(ctx context.Context, tenantID uuid.UUID) (*repository.PolicyRecord, error)
 	UpdatePolicy(ctx context.Context, p *repository.PolicyRecord) error
 	UpdateTenant(ctx context.Context, tenantID uuid.UUID, name, plan *string) (*repository.TenantRecord, error)
@@ -182,7 +145,8 @@ type tenantRepo interface {
 // production code while still providing full test coverage of handler logic.
 type testableHandler struct {
 	tenantv1.UnimplementedTenantServiceServer
-	repo tenantRepo
+	repo               tenantRepo
+	platformBaseDomain string
 }
 
 func newTestable(repo tenantRepo) *testableHandler {
@@ -238,42 +202,6 @@ func (h *testableHandler) DeleteTenant(ctx context.Context, req *tenantv1.Delete
 		return status.Errorf(codes.Internal, "delete tenant: %v", err)
 	}
 	return nil
-}
-
-func (h *testableHandler) ResolveDomain(ctx context.Context, req *tenantv1.ResolveDomainRequest) (*tenantv1.ResolveDomainResponse, error) {
-	if req.Domain == "" {
-		return nil, status.Error(codes.InvalidArgument, "domain is required")
-	}
-	tenantID, found, err := h.repo.ResolveDomain(ctx, req.Domain)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "resolve domain: %v", err)
-	}
-	resp := &tenantv1.ResolveDomainResponse{Found: found}
-	if found {
-		resp.TenantId = tenantID.String()
-	}
-	return resp, nil
-}
-
-func (h *testableHandler) RegisterDomain(ctx context.Context, req *tenantv1.RegisterDomainRequest) (*tenantv1.RegisterDomainResponse, error) {
-	if req.TenantId == "" || req.Domain == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id and domain are required")
-	}
-	tenantID, err := uuid.Parse(req.TenantId)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
-	}
-	if !domainRE.MatchString(req.Domain) {
-		return nil, status.Errorf(codes.InvalidArgument, "domain %q is not a valid RFC 1123 hostname", req.Domain)
-	}
-	token, err := generateToken()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generate token: %v", err)
-	}
-	if _, err := h.repo.RegisterDomain(ctx, tenantID, req.Domain, token); err != nil {
-		return nil, status.Errorf(codes.Internal, "register domain: %v", err)
-	}
-	return &tenantv1.RegisterDomainResponse{VerificationToken: token}, nil
 }
 
 // UpdateTenant mirrors the production handler's validation rules so the test
@@ -507,117 +435,6 @@ func TestDeleteTenant_RepoError_ReturnsInternal(t *testing.T) {
 	}
 }
 
-// ── ResolveDomain tests ──────────────────────────────────────────────────────
-
-func TestResolveDomain_KnownDomain_ReturnsFound(t *testing.T) {
-	repo := newFakeTenantRepo()
-	tid := uuid.New()
-	repo.domains["registry.acme.com"] = tid
-	h := newTestable(repo)
-
-	resp, err := h.ResolveDomain(context.Background(), &tenantv1.ResolveDomainRequest{Domain: "registry.acme.com"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resp.Found {
-		t.Error("expected found=true")
-	}
-	if resp.TenantId != tid.String() {
-		t.Errorf("tenant_id = %q, want %q", resp.TenantId, tid.String())
-	}
-}
-
-func TestResolveDomain_UnknownDomain_ReturnsNotFound(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	resp, err := h.ResolveDomain(context.Background(), &tenantv1.ResolveDomainRequest{Domain: "unknown.example.com"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Found {
-		t.Error("expected found=false")
-	}
-}
-
-func TestResolveDomain_EmptyDomain_ReturnsInvalidArgument(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	_, err := h.ResolveDomain(context.Background(), &tenantv1.ResolveDomainRequest{Domain: ""})
-	if grpcCode(err) != codes.InvalidArgument {
-		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
-	}
-}
-
-func TestResolveDomain_RepoError_ReturnsInternal(t *testing.T) {
-	repo := newFakeTenantRepo()
-	repo.resolveErr = errors.New("connection reset")
-	h := newTestable(repo)
-	_, err := h.ResolveDomain(context.Background(), &tenantv1.ResolveDomainRequest{Domain: "test.example.com"})
-	if grpcCode(err) != codes.Internal {
-		t.Errorf("code = %v, want Internal", grpcCode(err))
-	}
-}
-
-// ── RegisterDomain tests ─────────────────────────────────────────────────────
-
-func TestRegisterDomain_ValidRequest_ReturnsToken(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	resp, err := h.RegisterDomain(context.Background(), &tenantv1.RegisterDomainRequest{
-		TenantId: uuid.NewString(),
-		Domain:   "registry.acme.com",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(resp.VerificationToken) != 64 {
-		t.Errorf("token length = %d, want 64 hex chars", len(resp.VerificationToken))
-	}
-}
-
-func TestRegisterDomain_MissingFields_ReturnsInvalidArgument(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	_, err := h.RegisterDomain(context.Background(), &tenantv1.RegisterDomainRequest{
-		TenantId: uuid.NewString(),
-		Domain:   "",
-	})
-	if grpcCode(err) != codes.InvalidArgument {
-		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
-	}
-}
-
-func TestRegisterDomain_InvalidDomain_ReturnsInvalidArgument(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	_, err := h.RegisterDomain(context.Background(), &tenantv1.RegisterDomainRequest{
-		TenantId: uuid.NewString(),
-		Domain:   "not a valid domain!",
-	})
-	if grpcCode(err) != codes.InvalidArgument {
-		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
-	}
-}
-
-func TestRegisterDomain_InvalidTenantID_ReturnsInvalidArgument(t *testing.T) {
-	h := newTestable(newFakeTenantRepo())
-	_, err := h.RegisterDomain(context.Background(), &tenantv1.RegisterDomainRequest{
-		TenantId: "bad-uuid",
-		Domain:   "registry.acme.com",
-	})
-	if grpcCode(err) != codes.InvalidArgument {
-		t.Errorf("code = %v, want InvalidArgument", grpcCode(err))
-	}
-}
-
-func TestRegisterDomain_RepoError_ReturnsInternal(t *testing.T) {
-	repo := newFakeTenantRepo()
-	repo.registerErr = errors.New("constraint violation")
-	h := newTestable(repo)
-	_, err := h.RegisterDomain(context.Background(), &tenantv1.RegisterDomainRequest{
-		TenantId: uuid.NewString(),
-		Domain:   "registry.acme.com",
-	})
-	if grpcCode(err) != codes.Internal {
-		t.Errorf("code = %v, want Internal", grpcCode(err))
-	}
-}
-
 // ── Policy tests ─────────────────────────────────────────────────────────────
 
 func TestGetPolicy_ValidTenant_ReturnsPolicy(t *testing.T) {
@@ -724,35 +541,9 @@ func TestIsDuplicateKeyError_PlainError_ReturnsFalse(t *testing.T) {
 	}
 }
 
-// ── domainRE validation tests ─────────────────────────────────────────────────
-
-func TestDomainRE_ValidHostnames_Match(t *testing.T) {
-	valid := []string{
-		"registry.acme.com",
-		"sub.domain.example.org",
-		"my-registry.io",
-	}
-	for _, d := range valid {
-		if !domainRE.MatchString(d) {
-			t.Errorf("domainRE did not match valid hostname %q", d)
-		}
-	}
-}
-
-func TestDomainRE_InvalidHostnames_DoNotMatch(t *testing.T) {
-	invalid := []string{
-		"192.168.1.1",
-		"not a domain",
-		"domain",
-		"UPPER.COM",
-		"",
-	}
-	for _, d := range invalid {
-		if domainRE.MatchString(d) {
-			t.Errorf("domainRE unexpectedly matched invalid hostname %q", d)
-		}
-	}
-}
+// ── domainRE validation tests — removed (REDESIGN-001 RM-001) ────────────────
+// The domainRE variable and all custom-domain RPCs have been deleted; these
+// tests are superseded by the migration that drops tenant_domains.
 
 // ── UpdateTenant tests (FE-API-029) ──────────────────────────────────────────
 
@@ -898,6 +689,74 @@ func TestNormalizeSlug_RenameDerivesValidHandle(t *testing.T) {
 	for in, want := range cases {
 		if got := repository.NormalizeSlug(in); got != want {
 			t.Errorf("NormalizeSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestBuildTenantProto_WildcardHost verifies the simplified buildTenantProto
+// always produces the wildcard subdomain after REDESIGN-001 RM-001.
+func TestBuildTenantProto_WildcardHost(t *testing.T) {
+	h := New(nil, "registry.example.com")
+	rec := &repository.TenantRecord{ID: uuid.New(), Name: "Acme", Slug: "acme", CreatedAt: time.Now()}
+
+	got := h.buildTenantProto(rec)
+
+	if got.GetHost() != "acme.registry.example.com" {
+		t.Errorf("host: got %q, want acme.registry.example.com", got.GetHost())
+	}
+	if got.GetSlug() != "acme" {
+		t.Errorf("slug: got %q, want acme", got.GetSlug())
+	}
+}
+
+// TestBuildTenantProto_EmptySlug_UsesTenantID guards the edge case where slug
+// somehow ends up empty. The host must still be a parseable hostname.
+func TestBuildTenantProto_EmptySlug_UsesTenantID(t *testing.T) {
+	h := New(nil, "registry.example.com")
+	tid := uuid.New()
+	rec := &repository.TenantRecord{ID: tid, Name: "??", Slug: "", CreatedAt: time.Now()}
+
+	got := h.buildTenantProto(rec)
+
+	want := tid.String() + ".registry.example.com"
+	if got.GetHost() != want {
+		t.Errorf("host: got %q, want %q", got.GetHost(), want)
+	}
+}
+
+// TestBuildTenantProto_EmptyBaseDomain_UsesBareSlug covers tests / misconfig
+// where PLATFORM_BASE_DOMAIN is empty. The host should be the bare slug.
+func TestBuildTenantProto_EmptyBaseDomain_UsesBareSlug(t *testing.T) {
+	h := New(nil, "")
+	rec := &repository.TenantRecord{ID: uuid.New(), Name: "Acme", Slug: "acme", CreatedAt: time.Now()}
+
+	got := h.buildTenantProto(rec)
+
+	if got.GetHost() != "acme" {
+		t.Errorf("host: got %q, want bare slug 'acme'", got.GetHost())
+	}
+}
+
+// TestNormalizeSlug_TableDriven covers the slug-normalization algorithm
+// shared between the SQL backfill and CreateTenant.
+func TestNormalizeSlug_TableDriven(t *testing.T) {
+	cases := map[string]string{
+		"Acme":          "acme",
+		"Acme Corp":     "acme-corp",
+		"Acme  Corp":    "acme-corp",   // collapse multi-space
+		"acme--corp":    "acme-corp",   // collapse multi-dash
+		"  Acme  ":      "acme",        // trim leading/trailing
+		"Acme/Corp_Inc": "acme-corp-inc",
+		"":              "",            // empty → empty (caller falls back to id)
+		"!@#$":          "",            // no alphanumerics → empty
+		"AlreadySlug123": "alreadyslug123",
+		"-leading-dash":  "leading-dash",
+		"trailing-dash-": "trailing-dash",
+	}
+	for in, want := range cases {
+		got := repository.NormalizeSlug(in)
+		if got != want {
+			t.Errorf("NormalizeSlug(%q): got %q, want %q", in, got, want)
 		}
 	}
 }
