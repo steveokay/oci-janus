@@ -87,13 +87,16 @@ type AdminScannerHealthResponse struct {
 // requireScannerAdmin is the shared platform-admin gate. Returns false
 // (and writes the response) when the caller is denied — the handler
 // must return immediately.
+//
+// REDESIGN-001 Phase 5.1: delegates to h.effectiveGlobalAdmin which reads
+// users.is_global_admin (typed primitive) instead of (admin, org, '*').
 func (h *Handler) requireScannerAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.scanner == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
 		return false
 	}
-	if !hasScopedRole(h.getUserAssignments(r), "org", "*", "admin") {
-		writeError(w, http.StatusForbidden, "platform-admin role required (org=*, admin)")
+	if !h.effectiveGlobalAdmin(r) {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	return true

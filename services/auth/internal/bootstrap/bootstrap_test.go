@@ -358,7 +358,20 @@ func TestBootstrap_FreshDB(t *testing.T) {
 	assert.Equal(t, "human", userKind)
 	assert.Equal(t, "active", userStatus)
 
-	// Platform-admin marker: role=admin, scope_type='org', scope_value='*'.
+	// REDESIGN-001 Phase 5.1: bootstrap must set is_global_admin=true on the
+	// admin user row directly instead of inserting a legacy (admin, org, '*')
+	// role_assignments marker. Verify the typed column is set.
+	var isGlobalAdmin bool
+	err = authPool.QueryRow(ctx,
+		`SELECT is_global_admin FROM users WHERE email = $1`,
+		"admin@example.com",
+	).Scan(&isGlobalAdmin)
+	require.NoError(t, err, "user row not found when checking is_global_admin")
+	assert.True(t, isGlobalAdmin, "bootstrap admin must have is_global_admin=true (REDESIGN-001 Phase 5.1)")
+
+	// Confirm no legacy (admin, org, '*') role_assignment was inserted — the
+	// typed column replaces it entirely and the old marker row is no longer
+	// written.
 	var raCount int
 	err = authPool.QueryRow(ctx,
 		`SELECT COUNT(*)
@@ -366,13 +379,13 @@ func TestBootstrap_FreshDB(t *testing.T) {
 		 JOIN roles r ON r.id = ra.role_id
 		 JOIN users u ON u.id = ra.user_id
 		 WHERE u.email = $1
-		   AND r.name   = 'admin'
+		   AND r.name        = 'admin'
 		   AND ra.scope_type  = 'org'
 		   AND ra.scope_value = '*'`,
 		"admin@example.com",
 	).Scan(&raCount)
 	require.NoError(t, err)
-	assert.Equal(t, 1, raCount, "platform-admin marker role_assignment not found")
+	assert.Equal(t, 0, raCount, "bootstrap must NOT insert the legacy (admin, org, '*') marker after Phase 5.1")
 }
 
 // TestBootstrap_SecondCallSameAdmin_Fails verifies that a second bootstrap
@@ -517,4 +530,55 @@ func TestBootstrap_EmptyPasswordRejected(t *testing.T) {
 	var verr *bootstrap.ValidationError
 	require.ErrorAs(t, err, &verr, "expected a *ValidationError for empty password, got %T: %v", err, err)
 	assert.Contains(t, verr.Error(), "empty")
+}
+
+// TestBootstrap_SetsIsGlobalAdmin is a focused test for REDESIGN-001 Phase 5.1:
+// it verifies that writeAdmin sets is_global_admin=true on the users row and
+// does NOT insert the deprecated (admin, org, '*') role_assignments marker.
+//
+// This is the definitive database-level assertion for the typed column contract.
+// It supplements the broader assertions already in TestBootstrap_FreshDB.
+func TestBootstrap_SetsIsGlobalAdmin(t *testing.T) {
+	ctx := context.Background()
+	authDSN, tenantDSN := setupDatabases(t)
+
+	cfg := baseConfig(authDSN, tenantDSN)
+	cfg.AdminEmail = "admin-pga5@example.com"
+	cfg.AdminUsername = "pga5admin"
+
+	err := bootstrap.RunWithConfig(ctx, cfg, "Str0ng!Phase5.1Password", &bytes.Buffer{})
+	require.NoError(t, err, "bootstrap should succeed")
+
+	authPool, err := pgxpool.New(ctx, authDSN)
+	require.NoError(t, err)
+	defer authPool.Close()
+
+	// ── Typed column must be set ────────────────────────────────────────────────
+
+	var isGlobalAdmin bool
+	err = authPool.QueryRow(ctx,
+		`SELECT is_global_admin FROM users WHERE email = $1`,
+		cfg.AdminEmail,
+	).Scan(&isGlobalAdmin)
+	require.NoError(t, err, "admin user not found in auth DB")
+	assert.True(t, isGlobalAdmin,
+		"REDESIGN-001 Phase 5.1: bootstrap must set users.is_global_admin=true on the first admin")
+
+	// ── Legacy (admin, org, '*') marker must NOT exist ─────────────────────────
+
+	var markerCount int
+	err = authPool.QueryRow(ctx,
+		`SELECT COUNT(*)
+		 FROM role_assignments ra
+		 JOIN roles r ON r.id = ra.role_id
+		 JOIN users u ON u.id = ra.user_id
+		 WHERE u.email       = $1
+		   AND r.name        = 'admin'
+		   AND ra.scope_type  = 'org'
+		   AND ra.scope_value = '*'`,
+		cfg.AdminEmail,
+	).Scan(&markerCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, markerCount,
+		"REDESIGN-001 Phase 5.1: bootstrap must NOT insert the (admin, org, '*') legacy marker — is_global_admin column replaces it")
 }

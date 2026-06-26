@@ -78,7 +78,7 @@ func TestIssueToken_validTokenCanBeValidated(t *testing.T) {
 	ctx := context.Background()
 	token, err := svc.IssueToken(ctx, "user-1", "tenant-1", []RepositoryAccess{
 		{Type: "repository", Name: "myorg/myimage", Actions: []string{"push", "pull"}},
-	}, nil)
+	}, nil, false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRevokeToken_revokedTokenIsRejected(t *testing.T) {
 	ctx := context.Background()
 
 	// Issue a fresh token.
-	token, err := svc.IssueToken(ctx, "user-revoke", "tenant-1", nil, nil)
+	token, err := svc.IssueToken(ctx, "user-revoke", "tenant-1", nil, nil, false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestIssueToken_jwtHeader(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	_, err := svc.IssueToken(ctx, "user-1", "tenant-1", nil, nil)
+	_, err := svc.IssueToken(ctx, "user-1", "tenant-1", nil, nil, false)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

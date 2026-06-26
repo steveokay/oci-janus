@@ -424,9 +424,10 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 
 // IssueSSOToken issues a JWT for an SSO-authenticated user. Wraps the
 // existing IssueToken path so the SSO callback does not duplicate JWT
-// signing logic.
+// signing logic. The user's is_global_admin flag is included in the JWT
+// (REDESIGN-001 Phase 5.1).
 func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []string) (string, error) {
-	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles)
+	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin)
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────

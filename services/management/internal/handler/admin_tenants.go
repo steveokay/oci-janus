@@ -103,13 +103,17 @@ func tenantToAdminResp(t *tenantv1.Tenant) AdminTenantResponse {
 // requirePlatformAdmin enforces both prerequisites for every admin-tenant
 // route. Returns false (and writes the response) when the caller is denied,
 // in which case the handler must return immediately.
+//
+// REDESIGN-001 Phase 5.1: the platform-admin check now delegates to
+// h.effectiveGlobalAdmin which reads users.is_global_admin (the typed
+// primitive) instead of the (admin, org, '*') legacy marker string.
 func (h *Handler) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.tenant == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
 		return false
 	}
-	if !hasScopedRole(h.getUserAssignments(r), "org", "*", "admin") {
-		writeError(w, http.StatusForbidden, "platform-admin role required (org=*, admin)")
+	if !h.effectiveGlobalAdmin(r) {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	return true

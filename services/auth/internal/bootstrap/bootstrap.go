@@ -531,18 +531,22 @@ func findExistingAdmin(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UU
 	return true, nil
 }
 
-// writeAdmin inserts the admin user and grants them the platform-admin marker
-// in a single transaction. It returns the new user's UUID.
+// writeAdmin inserts the admin user and sets users.is_global_admin = true in
+// a single transaction. It returns the new user's UUID.
 //
-// Platform-admin marker convention (CLAUDE.md §7 + dev-seed migration
-// comments): scope_type='org', scope_value='*'. The literal '*' is reserved
-// and cannot collide with a real org name (validateOrgName in management
-// service rejects '*'). This matches the pattern in the dev-seed migration
-// 20260618000001_seed_dev_admin_role.sql.
+// REDESIGN-001 Phase 5.1: the legacy (admin, org, '*') role_assignments marker
+// has been replaced by users.is_global_admin. The bootstrap sets the typed
+// column directly; no role_assignments row is inserted. Callers on the login
+// path will find is_global_admin=true in the users row and embed the flag in
+// the JWT (service.Claims.IsGlobalAdmin).
 //
 // We intentionally skip org-scoped grants here — the operator can grant those
-// via the FE after first login. The platform-admin marker alone gives access to
-// every admin route through the platform-admin gate.
+// via the FE after first login. The is_global_admin flag alone gives access to
+// every platform-admin route through h.effectiveGlobalAdmin in services/management.
+//
+// Pre-condition: the Phase 5.1 migration (20260629000001_users_is_global_admin.sql)
+// must already be applied. If the column does not exist, the INSERT will fail
+// and the error will surface as an infrastructure problem (not a ValidationError).
 func writeAdmin(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -555,42 +559,31 @@ func writeAdmin(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// (a) Insert the user row.
+	// Insert the user row with is_global_admin=true.
 	// - kind='human' is explicit even though the column defaults to 'human' so
 	//   the intent is visible at the call site.
 	// - status='active' is explicit for the same reason (default is 'active').
+	// - is_global_admin=true is the Phase 5.1 typed platform-admin primitive.
+	//   No role_assignments row is inserted for the legacy (admin, org, '*')
+	//   marker — that convention is retired by migration 20260629000001.
 	// - display_name defaults to NULL; the user can set it later via the FE.
 	var adminUserID uuid.UUID
 	err = tx.QueryRow(ctx,
 		`INSERT INTO users
-		     (tenant_id, username, email, password_hash, kind, status)
-		 VALUES ($1, $2, $3, $4, 'human', 'active')
+		     (tenant_id, username, email, password_hash, kind, status, is_global_admin)
+		 VALUES ($1, $2, $3, $4, 'human', 'active', TRUE)
 		 RETURNING id`,
 		tenantID, username, email, passwordHash,
 	).Scan(&adminUserID)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("insert user: %w", err)
-	}
-
-	// (b) Grant the platform-admin marker:
-	//     role=admin, scope_type='org', scope_value='*'
-	// granted_by is NULL because there is no actor at bootstrap time.
-	_, err = tx.Exec(ctx,
-		`INSERT INTO role_assignments
-		     (tenant_id, user_id, role_id, scope_type, scope_value, granted_by)
-		 SELECT $1, $2, id, 'org', '*', NULL
-		 FROM roles
-		 WHERE name = 'admin'`,
-		tenantID, adminUserID,
-	)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("grant platform-admin marker: %w", err)
+		return uuid.Nil, fmt.Errorf("insert admin user: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, fmt.Errorf("commit auth tx: %w", err)
 	}
 
-	slog.Info("bootstrap: admin user created", "user_id", adminUserID, "tenant_id", tenantID)
+	slog.Info("bootstrap: admin user created with is_global_admin=true",
+		"user_id", adminUserID, "tenant_id", tenantID)
 	return adminUserID, nil
 }
