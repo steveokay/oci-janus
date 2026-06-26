@@ -380,6 +380,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// RBAC management — org and repo membership endpoints.
 	h.RegisterRBAC(mux, authMW)
 
+	// REDESIGN-001 Phase 4.4 — caller abilities. Returns the caller's role
+	// assignments + is_global_admin flag so the FE evaluates the same
+	// containment rule the BFF enforces via hasScopedRole (Review §C2 + §D3).
+	// Closes the FE/BE RBAC drift where the FE was reading claims.roles (flat
+	// deduped list that lost scope info). Auth-gated; no impersonation.
+	mux.Handle("GET /api/v1/me/abilities",
+		authMW(http.HandlerFunc(h.handleAbilities)))
+
 	// FUT-019 Phase 2 — per-user notification preferences. Auth gated
 	// at the JWT layer (any logged-in user can manage their own
 	// preferences). Drives the /settings → Notifications opt-in matrix
