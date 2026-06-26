@@ -1,7 +1,13 @@
-// FE-API-034 — short-lived login session repository for the OAuth/SAML
-// redirect dance. Each row is single-use: it is inserted on /start and
-// deleted (via ConsumeByState) on /callback so a captured CSRF token cannot
-// be replayed.
+// REDESIGN-001 RM-003 / RM-004 — short-lived login session repository for the
+// OAuth/SAML redirect dance. Each row is single-use: it is inserted on /start
+// and deleted (via ConsumeByState) on /callback so a captured CSRF token
+// cannot be replayed.
+//
+// Changes from FE-API-034:
+//   - TenantID removed (RM-004): sessions are deployment-wide; the callback
+//     resolves the tenant from the authenticated user's row.
+//   - ProviderID changed from UUID to string (RM-003): providers are now
+//     identified by their stable string id (e.g. "google", "okta_saml").
 package repository
 
 import (
@@ -10,25 +16,24 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // LoginSession is the in-flight state for an SSO redirect.
 //
-// PKCEVerifier holds the OAuth PKCE code_verifier (or, for SAML, an opaque
-// RelayState). RedirectURL is the intra-app path the user is sent to after
-// a successful callback. ExpiresAt bounds the lifetime so a stale row can
-// never be used; the periodic cleanup sweep deletes rows past expiry.
+// PKCEVerifier holds the OAuth PKCE code_verifier (or, for SAML, the
+// AuthnRequest ID stashed so the ACS handler can enforce InResponseTo).
+// RedirectURL is the intra-app path the user is sent to after a successful
+// callback. ExpiresAt bounds the lifetime; the periodic cleanup sweep
+// deletes rows past expiry.
 type LoginSession struct {
-	State         string
-	TenantID      uuid.UUID
-	ProviderID    uuid.UUID
-	PKCEVerifier  string
-	RedirectURL   string
-	ExpiresAt     time.Time
-	CreatedAt     time.Time
+	State        string
+	ProviderID   string // stable string id matching global_sso_config.provider_id
+	PKCEVerifier string
+	RedirectURL  string
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
 }
 
 // LoginSessionRepository owns the auth_login_sessions table.
@@ -47,10 +52,10 @@ func NewLoginSessionRepository(pool *pgxpool.Pool) *LoginSessionRepository {
 func (r *LoginSessionRepository) Create(ctx context.Context, s *LoginSession) error {
 	const q = `
 		INSERT INTO auth_login_sessions
-		    (state, tenant_id, provider_id, pkce_verifier, redirect_url, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		    (state, provider_id, pkce_verifier, redirect_url, expires_at)
+		VALUES ($1, $2, $3, $4, $5)`
 	_, err := r.pool.Exec(ctx, q,
-		s.State, s.TenantID, s.ProviderID, nullIfEmpty(s.PKCEVerifier),
+		s.State, s.ProviderID, nullIfEmpty(s.PKCEVerifier),
 		s.RedirectURL, s.ExpiresAt,
 	)
 	if err != nil {
@@ -70,12 +75,12 @@ func (r *LoginSessionRepository) ConsumeByState(ctx context.Context, state strin
 		DELETE FROM auth_login_sessions
 		WHERE state = $1
 		  AND expires_at > NOW()
-		RETURNING state, tenant_id, provider_id,
+		RETURNING state, provider_id,
 		          COALESCE(pkce_verifier, ''), redirect_url, expires_at, created_at`
 
 	var s LoginSession
 	err := r.pool.QueryRow(ctx, q, state).Scan(
-		&s.State, &s.TenantID, &s.ProviderID,
+		&s.State, &s.ProviderID,
 		&s.PKCEVerifier, &s.RedirectURL, &s.ExpiresAt, &s.CreatedAt,
 	)
 	if err != nil {

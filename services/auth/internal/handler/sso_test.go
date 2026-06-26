@@ -1,9 +1,10 @@
-// FE-API-034 — HTTP handler tests for the SSO flow.
+// REDESIGN-001 RM-003 — HTTP handler tests for the SSO flow.
 //
-// The tests stand up an httptest.Server with the SSO sub-service wired to
-// hand-written in-memory fakes (no real PostgreSQL). A second
-// httptest.Server impersonates the IdP so the OAuth flow can run
-// end-to-end inside one process.
+// Changes from FE-API-034:
+//   - fakeProviderRepo replaced by fakeGlobalSSORepo (implements globalSSOConfigRepo).
+//   - sso.CreateProvider removed; tests seed providers directly into the fake.
+//   - provider_id is now a stable string (e.g. "generic") not a per-tenant UUID.
+//   - TenantID removed from StartLoginInput and LoginSession.
 package handler
 
 import (
@@ -25,112 +26,9 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
-// ── In-memory provider + session fakes ──────────────────────────────────────
+// ── In-memory session fake ───────────────────────────────────────────────────
 
-type fakeProviderRepo struct {
-	mu        sync.Mutex
-	providers map[uuid.UUID]*repository.AuthProvider
-}
-
-func newFakeProviderRepo() *fakeProviderRepo {
-	return &fakeProviderRepo{providers: make(map[uuid.UUID]*repository.AuthProvider)}
-}
-
-func (f *fakeProviderRepo) Create(_ context.Context, p *repository.AuthProvider) (*repository.AuthProvider, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	// Per-canonical-type uniqueness like the SQL constraint.
-	switch p.Type {
-	case repository.AuthProviderOAuthGoogle, repository.AuthProviderOAuthGitHub, repository.AuthProviderOAuthMicrosoft:
-		for _, existing := range f.providers {
-			if existing.TenantID == p.TenantID && existing.Type == p.Type {
-				return nil, repository.ErrAlreadyExists
-			}
-		}
-	}
-	cp := *p
-	cp.ID = uuid.New()
-	cp.CreatedAt = time.Now()
-	cp.UpdatedAt = time.Now()
-	f.providers[cp.ID] = &cp
-	out := cp
-	return &out, nil
-}
-
-func (f *fakeProviderRepo) GetByID(_ context.Context, id uuid.UUID) (*repository.AuthProvider, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.providers[id]
-	if !ok {
-		return nil, repository.ErrNotFound
-	}
-	out := *p
-	return &out, nil
-}
-
-func (f *fakeProviderRepo) ListByTenant(_ context.Context, tenantID uuid.UUID, enabledOnly bool) ([]*repository.AuthProvider, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]*repository.AuthProvider, 0, len(f.providers))
-	for _, p := range f.providers {
-		if p.TenantID != tenantID {
-			continue
-		}
-		if enabledOnly && !p.Enabled {
-			continue
-		}
-		cp := *p
-		out = append(out, &cp)
-	}
-	return out, nil
-}
-
-func (f *fakeProviderRepo) Update(_ context.Context, id uuid.UUID, req repository.UpdateAuthProviderRequest) (*repository.AuthProvider, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.providers[id]
-	if !ok {
-		return nil, repository.ErrNotFound
-	}
-	if req.DisplayName != nil {
-		p.DisplayName = *req.DisplayName
-	}
-	if req.Enabled != nil {
-		p.Enabled = *req.Enabled
-	}
-	if req.OAuthClientID != nil {
-		p.OAuthClientID = *req.OAuthClientID
-	}
-	if req.OAuthClientSecretEnc != nil {
-		p.OAuthClientSecretEnc = *req.OAuthClientSecretEnc
-	}
-	if req.OAuthIssuerURL != nil {
-		p.OAuthIssuerURL = *req.OAuthIssuerURL
-	}
-	if req.OAuthScopes != nil {
-		p.OAuthScopes = *req.OAuthScopes
-	}
-	if req.AutoProvision != nil {
-		p.AutoProvision = *req.AutoProvision
-	}
-	if req.DefaultRole != nil {
-		p.DefaultRole = *req.DefaultRole
-	}
-	p.UpdatedAt = time.Now()
-	out := *p
-	return &out, nil
-}
-
-func (f *fakeProviderRepo) Delete(_ context.Context, id uuid.UUID) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, ok := f.providers[id]; !ok {
-		return repository.ErrNotFound
-	}
-	delete(f.providers, id)
-	return nil
-}
-
+// fakeSessionRepo is the same as before — no changes needed.
 type fakeSessionRepo struct {
 	mu       sync.Mutex
 	sessions map[string]*repository.LoginSession
@@ -188,9 +86,7 @@ func (f *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error) {
 // /token and /userinfo for the generic OAuth flow so the SSO handler can
 // drive a full round trip without external network access.
 type fakeIdP struct {
-	server *httptest.Server
-	// emailVerified controls the email_verified field in the userinfo
-	// response so tests can assert the verified-email gate.
+	server        *httptest.Server
 	emailVerified bool
 	email         string
 	name          string
@@ -200,8 +96,6 @@ func newFakeIdP(t *testing.T, email, name string, verified bool) *fakeIdP {
 	idp := &fakeIdP{email: email, name: name, emailVerified: verified}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		// Echo a fixed access token. PKCE verification is not enforced here
-		// — the handler-side test asserts the verifier was sent.
 		_ = r.ParseForm()
 		if r.Form.Get("code") == "" || r.Form.Get("code_verifier") == "" {
 			http.Error(w, "missing code or verifier", http.StatusBadRequest)
@@ -227,19 +121,21 @@ func newFakeIdP(t *testing.T, email, name string, verified bool) *fakeIdP {
 
 // buildSSOTestServer stands up the auth HTTP handler with the SSO sub-
 // service wired to in-memory fakes. Returns the running server, the SSO
-// service for direct manipulation, and the tenant ID used by the fakes.
-func buildSSOTestServer(t *testing.T) (*httptest.Server, *service.SSO, *fakeProviderRepo, *fakeSessionRepo, uuid.UUID) {
+// service, the global-provider fake, the session fake, and the dev tenant ID.
+//
+// REDESIGN-001 RM-003: uses fakeGlobalSSORepo instead of fakeProviderRepo.
+func buildSSOTestServer(t *testing.T) (*httptest.Server, *service.SSO, *fakeGlobalSSORepo, *fakeSessionRepo, uuid.UUID) {
 	t.Helper()
 	tc, cleanup := buildTestService(t)
 	t.Cleanup(cleanup)
 
-	providers := newFakeProviderRepo()
+	globalProviders := newFakeGlobalSSORepo()
 	sessions := newFakeSessionRepo()
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i)
 	}
-	sso, err := service.NewSSO(tc.svc, providers, sessions, key)
+	sso, err := service.NewSSO(tc.svc, globalProviders, sessions, key)
 	if err != nil {
 		t.Fatalf("NewSSO: %v", err)
 	}
@@ -254,7 +150,7 @@ func buildSSOTestServer(t *testing.T) (*httptest.Server, *service.SSO, *fakeProv
 	// Now that we know the test server's base URL, reset the SSO base URL
 	// to that origin so redirect_uri matches in the token exchange.
 	httpH.WithSSO(sso, srv.URL)
-	return srv, sso, providers, sessions, tenantID
+	return srv, sso, globalProviders, sessions, tenantID
 }
 
 // keep imports referenced even if a subset of tests are skipped during refactor.
@@ -263,38 +159,30 @@ var _ = strings.NewReader
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 func TestSSOListProviders_OnlyEnabled(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
 
 	// Seed two providers, one enabled and one disabled.
-	enabled, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Sign in with Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    "https://idp.example.com",
-		AutoProvision:     true,
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider enabled: %v", err)
+	const enabledID = "generic-enabled"
+	const disabledID = "generic-disabled"
+	globalProviders.Providers[enabledID] = &repository.GlobalSSOProvider{
+		ProviderID:     enabledID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Sign in with Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: "https://idp.example.com",
+		AutoProvision:  true,
 	}
-	_, err = sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Other (disabled)",
-		Enabled:           false,
-		OAuthClientID:     "client-id-2",
-		OAuthClientSecret: "client-secret-2",
-		OAuthIssuerURL:    "https://idp2.example.com",
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider disabled: %v", err)
+	globalProviders.Providers[disabledID] = &repository.GlobalSSOProvider{
+		ProviderID:     disabledID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Other (disabled)",
+		Enabled:        false,
+		OAuthClientID:  "client-id-2",
+		OAuthIssuerURL: "https://idp2.example.com",
 	}
 
-	resp, err := http.Get(srv.URL + "/api/v1/auth/providers?tenant_id=" + tenantID.String())
+	resp, err := http.Get(srv.URL + "/api/v1/auth/providers")
 	if err != nil {
 		t.Fatalf("GET providers: %v", err)
 	}
@@ -312,7 +200,7 @@ func TestSSOListProviders_OnlyEnabled(t *testing.T) {
 	if len(out.Providers) != 1 {
 		t.Fatalf("expected 1 enabled provider, got %d", len(out.Providers))
 	}
-	if out.Providers[0]["id"] != enabled.ID.String() {
+	if out.Providers[0]["id"] != enabledID {
 		t.Errorf("wrong provider returned: %v", out.Providers[0])
 	}
 	// Defence in depth: secret-related fields must never appear.
@@ -324,24 +212,21 @@ func TestSSOListProviders_OnlyEnabled(t *testing.T) {
 }
 
 func TestSSOStart_GeneratesStateAndRedirects(t *testing.T) {
-	srv, sso, _, sessions, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, sessions, _ := buildSSOTestServer(t)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    "https://idp.example.com",
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: "https://idp.example.com",
+		AutoProvision:  true,
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(srv.URL + "/auth/oauth/" + p.ID.String() + "/start?next=/repos")
+	resp, err := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/repos")
 	if err != nil {
 		t.Fatalf("GET start: %v", err)
 	}
@@ -374,20 +259,17 @@ func TestSSOStart_GeneratesStateAndRedirects(t *testing.T) {
 }
 
 func TestSSOStart_RejectsOpenRedirectNext(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    "https://idp.example.com",
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: "https://idp.example.com",
+		AutoProvision:  true,
 	}
 
 	bad := []string{
@@ -399,7 +281,7 @@ func TestSSOStart_RejectsOpenRedirectNext(t *testing.T) {
 	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for _, n := range bad {
-		u := srv.URL + "/auth/oauth/" + p.ID.String() + "/start?next=" + url.QueryEscape(n)
+		u := srv.URL + "/auth/oauth/" + providerID + "/start?next=" + url.QueryEscape(n)
 		resp, err := client.Get(u)
 		if err != nil {
 			t.Fatalf("GET %s: %v", n, err)
@@ -412,27 +294,26 @@ func TestSSOStart_RejectsOpenRedirectNext(t *testing.T) {
 }
 
 func TestSSOCallback_HappyPath_AutoProvisions(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, _, tenantID := buildSSOTestServer(t)
 	idp := newFakeIdP(t, "alice@example.com", "Alice", true)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    idp.server.URL,
-		AutoProvision:     true,
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: idp.server.URL,
+		AutoProvision:  true,
 	}
+	// devDefaultTenant was set in buildSSOTestServer (= tenantID) — EnsureSSOUser
+	// uses it when auto-provisioning a new user.
+	_ = tenantID
 
 	// Drive /start to mint a session.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(srv.URL + "/auth/oauth/" + p.ID.String() + "/start?next=/dashboard")
+	resp, err := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/dashboard")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -443,7 +324,7 @@ func TestSSOCallback_HappyPath_AutoProvisions(t *testing.T) {
 	// Now drive /callback. The fake IdP will accept any code as long as a
 	// verifier accompanies it.
 	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake-code&state=%s",
-		srv.URL, p.ID.String(), url.QueryEscape(state))
+		srv.URL, providerID, url.QueryEscape(state))
 	resp, err = client.Get(cb)
 	if err != nil {
 		t.Fatalf("callback: %v", err)
@@ -465,31 +346,27 @@ func TestSSOCallback_HappyPath_AutoProvisions(t *testing.T) {
 }
 
 func TestSSOCallback_RejectsReplayedState(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
 	idp := newFakeIdP(t, "alice@example.com", "Alice", true)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    idp.server.URL,
-		AutoProvision:     true,
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: idp.server.URL,
+		AutoProvision:  true,
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, _ := client.Get(srv.URL + "/auth/oauth/" + p.ID.String() + "/start?next=/x")
+	resp, _ := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/x")
 	loc, _ := url.Parse(resp.Header.Get("Location"))
 	state := loc.Query().Get("state")
 	_ = resp.Body.Close()
 
-	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s", srv.URL, p.ID.String(), state)
+	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s", srv.URL, providerID, state)
 	// First callback succeeds.
 	r1, _ := client.Get(cb)
 	_ = r1.Body.Close()
@@ -505,31 +382,27 @@ func TestSSOCallback_RejectsReplayedState(t *testing.T) {
 }
 
 func TestSSOCallback_RejectsUnverifiedEmail(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
 	idp := newFakeIdP(t, "evil@victim.com", "Evil", false)
 
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:          tenantID,
-		Type:              repository.AuthProviderOAuthGeneric,
-		DisplayName:       "Acme",
-		Enabled:           true,
-		OAuthClientID:     "client-id",
-		OAuthClientSecret: "client-secret",
-		OAuthIssuerURL:    idp.server.URL,
-		AutoProvision:     true,
-		DefaultRole:       "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: idp.server.URL,
+		AutoProvision:  true,
 	}
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	r1, _ := client.Get(srv.URL + "/auth/oauth/" + p.ID.String() + "/start?next=/x")
+	r1, _ := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/x")
 	loc, _ := url.Parse(r1.Header.Get("Location"))
 	state := loc.Query().Get("state")
 	_ = r1.Body.Close()
 
-	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s", srv.URL, p.ID.String(), state)
+	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s", srv.URL, providerID, state)
 	resp, _ := client.Get(cb)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -539,24 +412,26 @@ func TestSSOCallback_RejectsUnverifiedEmail(t *testing.T) {
 }
 
 func TestSSOSAML_Returns501(t *testing.T) {
-	srv, sso, _, _, tenantID := buildSSOTestServer(t)
-	p, err := sso.CreateProvider(t.Context(), service.CreateProviderInput{
-		TenantID:           tenantID,
-		Type:               repository.AuthProviderSAML,
-		DisplayName:        "Corp SAML",
-		Enabled:            true,
-		SAMLIdpMetadataXML: "<EntityDescriptor/>",
-		DefaultRole:        "reader",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider SAML: %v", err)
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
+
+	// Seed a SAML provider.
+	const providerID = "saml"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:      providerID,
+		Kind:            "saml",
+		DisplayName:     "Corp SAML",
+		Enabled:         true,
+		SAMLMetadataXML: []byte("<EntityDescriptor/>"),
+		AutoProvision:   true,
 	}
+
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(srv.URL + "/auth/saml/" + p.ID.String() + "/start")
+	resp, err := client.Get(srv.URL + "/auth/saml/" + providerID + "/start")
 	if err != nil {
 		t.Fatalf("GET saml start: %v", err)
 	}
 	defer resp.Body.Close()
+	// No SAML SP cert configured → 501 NOT_CONFIGURED.
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Errorf("SAML start: want 501, got %d", resp.StatusCode)
 	}

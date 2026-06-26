@@ -1,9 +1,9 @@
-// FE-API-034 — SAML SP-initiated authentication flow.
+// REDESIGN-001 RM-003 — SAML SP-initiated authentication flow.
 //
 // Two routes:
 //
-//   GET  /auth/saml/{provider_id}/start  — mints the AuthnRequest + redirects
-//   POST /auth/saml/{provider_id}/acs    — receives the IdP SAMLResponse
+//	GET  /auth/saml/{provider_id}/start  — mints the AuthnRequest + redirects
+//	POST /auth/saml/{provider_id}/acs    — receives the IdP SAMLResponse
 //
 // Both routes return 501 NOT_CONFIGURED when SAML support is not wired
 // (SAML_SP_CERT_PATH / SAML_SP_KEY_PATH unset). When wired, the start handler
@@ -13,6 +13,12 @@
 // validates the IdP signature + Conditions via crewjam/saml, extracts the
 // user identifier, and reuses EnsureSSOUser + IssueSSOToken so the
 // auto-provisioning path is identical to OAuth.
+//
+// Changes from FE-API-034 (REDESIGN-001 RM-003):
+//   - {provider_id} in URL is now a stable string (e.g. "okta_saml") not a UUID.
+//   - TenantID is no longer threaded through the SAML session (RM-004).
+//   - GetProvider → LookupProvider (string-keyed, global).
+//   - CreateSAMLLoginSession: tenantID + providerID UUID args removed.
 package handler
 
 import (
@@ -23,7 +29,6 @@ import (
 	"strings"
 
 	crewjamsaml "github.com/crewjam/saml"
-	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/saml"
@@ -68,8 +73,8 @@ var samlNameAttributes = []string{
 // startSAML mints an AuthnRequest, persists the login session, and 302s the
 // user to the IdP's SSO endpoint via the HTTP-Redirect binding.
 func (h *HTTPHandler) startSAML(w http.ResponseWriter, r *http.Request) {
-	providerID, err := uuid.Parse(r.PathValue("provider_id"))
-	if err != nil {
+	providerID := r.PathValue("provider_id")
+	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
 		return
 	}
@@ -92,28 +97,29 @@ func (h *HTTPHandler) startSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.sso.GetProvider(r.Context(), providerID, true, false)
+	p, err := h.sso.LookupProvider(r.Context(), providerID)
 	if err != nil {
 		if errors.Is(err, service.ErrProviderNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
 			return
 		}
-		slog.ErrorContext(r.Context(), "saml: GetProvider", "err", err, "provider_id", providerID)
+		slog.ErrorContext(r.Context(), "saml: LookupProvider", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	if p.Type != repository.AuthProviderSAML {
+	if p.Kind != string(repository.AuthProviderSAML) {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider is not a SAML provider")
 		return
 	}
 
+	// saml_metadata_xml is stored as BYTEA; convert to []byte for BuildServiceProvider.
 	sp, err := saml.BuildServiceProvider(
 		h.samlConfig,
-		[]byte(p.SAMLIdpMetadataXML),
+		p.SAMLMetadataXML,
 		h.ssoBaseURL,
-		p.ID.String(),
-		p.SAMLEntityID,
-		p.SAMLAudience,
+		p.ProviderID,
+		"", // entity_id override — not stored in global_sso_config (follow-up)
+		"", // audience override — not stored in global_sso_config (follow-up)
 	)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "saml: BuildServiceProvider", "err", err, "provider_id", providerID)
@@ -138,10 +144,8 @@ func (h *HTTPHandler) startSAML(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Mint a single-use RelayState — same shape as the OAuth `state` token
-	// (32 random bytes, base64url). Reusing CreateSAMLLoginSession lets the
-	// callback look up the originating tenant + next URL by relay state. We
-	// pass the AuthnRequest ID so it round-trips back as InResponseTo.
-	relayState, err := h.sso.CreateSAMLLoginSession(r.Context(), p.TenantID, p.ID, authnReq.ID, nextURL)
+	// (32 random bytes, base64url). RM-003: string providerID. RM-004: no tenantID.
+	relayState, err := h.sso.CreateSAMLLoginSession(r.Context(), p.ProviderID, authnReq.ID, nextURL)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "saml: CreateSAMLLoginSession", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not start SAML session")
@@ -163,8 +167,8 @@ func (h *HTTPHandler) startSAML(w http.ResponseWriter, r *http.Request) {
 // and Recipient — anything failing those checks bubbles up as an error and
 // becomes a 400 INVALIDSAML response.
 func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
-	providerID, err := uuid.Parse(r.PathValue("provider_id"))
-	if err != nil {
+	providerID := r.PathValue("provider_id")
+	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid provider_id")
 		return
 	}
@@ -186,17 +190,17 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.sso.GetProvider(r.Context(), providerID, true, false)
+	p, err := h.sso.LookupProvider(r.Context(), providerID)
 	if err != nil {
 		if errors.Is(err, service.ErrProviderNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "provider not found")
 			return
 		}
-		slog.ErrorContext(r.Context(), "saml: GetProvider", "err", err, "provider_id", providerID)
+		slog.ErrorContext(r.Context(), "saml: LookupProvider", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	if p.Type != repository.AuthProviderSAML {
+	if p.Kind != string(repository.AuthProviderSAML) {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "provider is not a SAML provider")
 		return
 	}
@@ -222,11 +226,11 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 
 	sp, err := saml.BuildServiceProvider(
 		h.samlConfig,
-		[]byte(p.SAMLIdpMetadataXML),
+		p.SAMLMetadataXML,
 		h.ssoBaseURL,
-		p.ID.String(),
-		p.SAMLEntityID,
-		p.SAMLAudience,
+		p.ProviderID,
+		"", // entity_id override
+		"", // audience override
 	)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "saml: BuildServiceProvider", "err", err, "provider_id", providerID)
@@ -247,10 +251,6 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		// Don't echo the underlying error string back to the user — it can
 		// leak details about our SP config or the IdP cert. Log full detail
 		// server-side; return a generic 400.
-		//
-		// crewjam/saml wraps the real cause in InvalidResponseError.PrivateErr.
-		// We unwrap so the operator can debug signature / clock-skew issues
-		// without enabling debug logging on the IdP.
 		privErr := err
 		if invalid, ok := err.(*crewjamsaml.InvalidResponseError); ok && invalid.PrivateErr != nil {
 			privErr = invalid.PrivateErr
@@ -268,8 +268,7 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 
 	// Fall back to NameID when the assertion didn't include a separate email
 	// attribute — many IdPs populate NameID with the user's email when
-	// Format is emailAddress. We do NOT enforce the Format value because some
-	// IdPs use "unspecified" even for email-shaped NameIDs.
+	// Format is emailAddress.
 	if email == "" {
 		if assertion.Subject != nil && assertion.Subject.NameID != nil {
 			email = strings.TrimSpace(assertion.Subject.NameID.Value)
@@ -285,12 +284,15 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	// every SAML login since EnsureSSOUser's OAuth path enforces verified.
 	// This is documented in CLAUDE.md §7 and matches the way Auth0, Okta,
 	// and Azure AD treat SAML claims.
+	//
+	// RM-004: devDefaultTenant is passed as the fallback; EnsureSSOUser
+	// resolves the final tenant from the user row or s.defaultTenantID.
 	user, roles, err := h.sso.EnsureSSOUser(r.Context(), p, service.SSOIdentity{
 		Email:         email,
 		EmailVerified: true,
 		DisplayName:   name,
 		Subject:       samlSubject(assertion),
-	})
+	}, h.devDefaultTenant)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrAutoProvisionDisabled):
@@ -312,9 +314,7 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same JWT return mechanism as OAuth: 302 to {next}?sso_token=<jwt>. The
-	// frontend swaps the token into authStore on first paint then strips it
-	// from the URL via history.replaceState. Documented in sso.go.
+	// Same JWT return mechanism as OAuth: 302 to {next}?sso_token=<jwt>.
 	dest, perr := safeAppendQuery(sess.RedirectURL, "sso_token", tok)
 	if perr != nil {
 		dest = "/?sso_token=" + url.QueryEscape(tok)

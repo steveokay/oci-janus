@@ -170,10 +170,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.Warn("AUDIT_GRPC_ADDR not set — /api/v1/access/activity returns 501")
 	}
 
-	// ── 5c. SSO sub-service (FE-API-034) ─────────────────────────────────
+	// ── 5c. SSO sub-service (REDESIGN-001 RM-003) ────────────────────────
 	// SSO is opt-in: without SSO_CREDENTIAL_KEY_HEX the routes are not
 	// registered and the dashboard's SSO buttons keep their "coming soon"
-	// behaviour. With it, the OAuth flow + admin CRUD endpoints come online.
+	// behaviour. With it, the OAuth flow comes online. Per-tenant admin CRUD
+	// routes have been removed (RM-003); providers are global and configured
+	// via SQL / seed migrations.
 	if cfg.SSOCredentialKeyHex != "" {
 		key, err := hex.DecodeString(cfg.SSOCredentialKeyHex)
 		if err != nil || len(key) != 32 {
@@ -181,17 +183,29 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		ssoSvc, err := service.NewSSO(
 			svc,
-			repository.NewAuthProviderRepository(pool),
+			repository.NewGlobalSSOConfigRepository(pool),
 			repository.NewLoginSessionRepository(pool),
 			key,
 		)
 		if err != nil {
 			return fmt.Errorf("init sso service: %w", err)
 		}
-		httpH = httpH.WithSSO(ssoSvc, cfg.SSOBaseURL)
-		if pub != nil {
-			httpH = httpH.WithEventPublisher(pub)
+		// RM-004: AUTH_DEFAULT_TENANT_ID is the fallback tenant for auto-
+		// provisioned SSO users in single-tenant deployments. Optional; when
+		// unset the callback returns an error for new users (they must be
+		// pre-created by an admin). Multi-tenant routing is out of scope for
+		// this PR.
+		if cfg.DefaultTenantID != "" {
+			dtid, err := uuid.Parse(cfg.DefaultTenantID)
+			if err != nil {
+				return fmt.Errorf("AUTH_DEFAULT_TENANT_ID is not a valid UUID: %w", err)
+			}
+			ssoSvc = ssoSvc.WithDefaultTenantID(dtid)
+			slog.Info("SSO default tenant configured", "tenant_id", dtid)
+		} else {
+			slog.Warn("AUTH_DEFAULT_TENANT_ID not set — new SSO users will fail to auto-provision in single-tenant mode")
 		}
+		httpH = httpH.WithSSO(ssoSvc, cfg.SSOBaseURL)
 
 		// SAML SP cert/key are independent of OAuth — operators can run with
 		// only OAuth (cert paths empty) or both. Both paths must be set

@@ -166,12 +166,15 @@ func (r *UserRepository) GetByEmail(ctx context.Context, tenantID uuid.UUID, ema
 // CreateSSOUserRequest carries the validated inputs for provisioning an
 // account from an SSO callback. PasswordHash is intentionally empty — SSO
 // users authenticate via the IdP, never via the local password endpoint.
+//
+// REDESIGN-001 RM-003: SSOProviderID changed from uuid.UUID to string to match
+// the global_sso_config.provider_id stable string identifier.
 type CreateSSOUserRequest struct {
 	TenantID      uuid.UUID
 	Username      string
 	Email         string
 	DisplayName   string
-	SSOProviderID uuid.UUID
+	SSOProviderID string // stable string id from global_sso_config (e.g. "google")
 }
 
 // CreateSSOUser inserts a user provisioned from an SSO callback.

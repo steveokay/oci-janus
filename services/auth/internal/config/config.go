@@ -34,13 +34,19 @@ type Config struct {
 	// Required so that GrantRole / RevokeRole changes are traceable via registry-audit.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 
-	// FE-API-034 — SSO config.
+	// REDESIGN-001 RM-003 — SSO config (global model).
 	//
 	// SSOCredentialKeyHex is the 64-character (32-byte) hex AES-256 key used
-	// to encrypt OAuth client_secret values at rest. When empty, SSO routes
-	// are not registered and the dashboard's SSO buttons fall back to "coming
-	// soon". Required in production.
+	// to decrypt OAuth client_secret_enc values stored in global_sso_config.
+	// When empty, SSO routes are not registered. Required in production.
 	SSOCredentialKeyHex string `mapstructure:"SSO_CREDENTIAL_KEY_HEX"`
+
+	// DefaultTenantID is the fallback tenant UUID used when auto-provisioning
+	// a new SSO user and no existing user row can be matched by email
+	// (RM-004: tenant_id is no longer stored in the SSO session). Required
+	// for single-tenant self-hosted deployments where all users belong to one
+	// tenant. Multi-tenant routing is a follow-up item.
+	DefaultTenantID string `mapstructure:"AUTH_DEFAULT_TENANT_ID"`
 
 	// SSOBaseURL is the public origin used to compose OAuth redirect_uri
 	// values (e.g. "https://registry.example.com"). Must match what the IdP
