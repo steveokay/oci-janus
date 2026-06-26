@@ -1,18 +1,30 @@
+// REDESIGN-001 Phase 4.2.a — sidebar IA matches the operator mental
+// model (Registry / Security / Governance / Integrations / Access),
+// NOT microservice boundaries (per memory/feedback_sidebar_nav_grouping.md).
+//
+// Items moved/removed in this PR:
+//   - /admin/tenants  — route still works via URL; folds under
+//                       Settings › Platform in Phase 4.2.d
+//   - /admin/scanner  — same
+//   - /admin/gc       — same (was never in the sidebar)
+//
+// The Platform sidebar group was deleted entirely. Until Phase 4.2.d
+// migrates the /admin/* surfaces into Settings › Platform tab, platform
+// admins must bookmark or type the URLs directly.
 import * as React from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspace } from "@/lib/api/workspace";
 import { useCacheStats } from "@/lib/api/proxy-cache";
+import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import {
   LayoutDashboard,
   Boxes,
   ShieldCheck,
   Webhook,
   Building,
-  Building2,
   Activity,
   KeyRound,
-  ScanLine,
   Ship,
   Radio,
   Repeat,
@@ -20,36 +32,43 @@ import {
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuthStore } from "@/lib/auth/store";
-import { isPlatformAdmin } from "@/lib/auth/jwt";
 
 interface NavItem {
   to: string;
   label: string;
   icon: typeof LayoutDashboard;
-  adminOnly?: boolean;
   // probeKey opts the item into a probe-then-show contract: the
   // sidebar runs the probe hook and hides the item when the probe
-  // returns undefined (403 or 404). Keeps the SECTIONS table
-  // declarative while still allowing dynamic visibility for routes
-  // that depend on optional backend wiring.
+  // returns undefined (403 or 404). Keeps the GROUPS table declarative
+  // while still allowing dynamic visibility for routes that depend on
+  // optional backend wiring.
   probeKey?: "proxy-cache";
 }
 
-// Section groupings mirror the persona: ops first, RBAC second, infra
-// integrations third. Each group's heading is the only hierarchy needed —
-// we deliberately avoid nested expanding menus.
-const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
+// GROUPS define the sidebar's operator mental model:
+//   Registry    — things you push/pull
+//   Security    — vulnerability and trust posture
+//   Governance  — compliance + audit (same audience: security ops / compliance)
+//   Integrations — repo-event webhooks (audience: devs / CI pipelines)
+//   Access      — identity and org management
+//
+// Audit streaming lives under Governance rather than Integrations because its
+// audience is compliance / security ops — the same people who use Activity.
+// Webhooks live separately under Integrations because their audience is devs
+// and CI pipelines who care about repo events, not audit compliance.
+const GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
-    title: "Operate",
+    title: "Registry",
     items: [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard },
+      // Repositories is the primary landing for operators — everything
+      // they push/pull lives here.
       { to: "/repositories", label: "Repositories", icon: Boxes },
-      // FUT-013: pull-through cache visibility. Operator-facing
-      // signal alongside Repositories — operators think of the
-      // cache as "another set of images we serve," not as an
-      // integration. probeKey gates visibility on a successful
-      // /proxy/cache/stats probe so deployments without the proxy
+      // S-MAINT-1 Batch 5 F4 follow-up — dedicated landing for Helm chart
+      // users (platform engineers running `helm install`). MVP renders the
+      // same repos table as /repositories with chart-focused copy.
+      { to: "/helm", label: "Helm charts", icon: Ship },
+      // FUT-013: pull-through cache visibility. probeKey gates visibility on a
+      // successful /proxy/cache/stats probe so deployments without the proxy
       // (403/404) don't show a dead link.
       {
         to: "/workspace/proxy-cache",
@@ -57,85 +76,74 @@ const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
         icon: Repeat,
         probeKey: "proxy-cache",
       },
-      // S-MAINT-1 Batch 5 F4 follow-up — dedicated landing for Helm chart
-      // users (platform engineers running `helm install`). MVP renders
-      // the same repos table as /repositories with chart-focused copy;
-      // a workspace-wide chart browser ships in a follow-up sprint.
-      { to: "/helm", label: "Helm charts", icon: Ship },
+    ],
+  },
+  {
+    title: "Security",
+    items: [
+      // Single Security page for now. Phase 4.2.e splits this into
+      // Overview / Vulnerabilities / Scans / Signing / Policies / Reports.
       { to: "/security", label: "Security", icon: ShieldCheck },
+    ],
+  },
+  {
+    title: "Governance",
+    items: [
       { to: "/activity", label: "Activity", icon: Activity },
+      // Audit-log streaming to SIEM (futures.md Tier 1 #4). Lives in
+      // Governance — same audience as Activity (compliance, security ops).
+      // Repo-event webhooks live separately under Integrations because their
+      // audience is devs/CI, not compliance.
+      { to: "/workspace/audit-export", label: "Audit streaming", icon: Radio },
+    ],
+  },
+  {
+    title: "Integrations",
+    items: [
+      // Webhooks are repo-event delivery channels for devs and CI pipelines.
+      // Kept in a standalone Integrations group rather than merged into
+      // Governance because the audiences differ: devs/CI (webhooks) vs
+      // compliance/security ops (audit streaming + activity).
+      { to: "/webhooks", label: "Webhooks", icon: Webhook },
     ],
   },
   {
     title: "Access",
     items: [
       // /members is the org-list landing — each card represents one
-      // organization and links to the per-org member roster. "Members"
-      // didn't carry that meaning at a glance; "Organizations" matches
-      // what the page actually surfaces. URL stays /members so existing
-      // links + bookmarks don't break. Icon is `Building` (singular)
-      // to stay visually distinct from `Building2` already used by
-      // the Platform → Tenants entry.
+      // organization and links to the per-org member roster. URL stays
+      // /members so existing bookmarks don't break.
       { to: "/members", label: "Organizations", icon: Building },
       // FUT-012 Phase C — tenant-user lifecycle. Always rendered; the
       // route itself surfaces a 403 ErrorState for non-tenant-admin
-      // callers, mirroring how /admin/scanner falls back to the
-      // BFF gate rather than duplicating the role check in the
-      // sidebar (which would require loading role assignments here).
+      // callers, mirroring how /admin/scanner falls back to the BFF gate
+      // rather than duplicating the role check in the sidebar.
       { to: "/tenant/users", label: "Tenant users", icon: UsersRound },
       { to: "/api-keys", label: "API keys", icon: KeyRound },
-    ],
-  },
-  {
-    title: "Integrations",
-    items: [
-      { to: "/webhooks", label: "Webhooks", icon: Webhook },
-      // Audit-log streaming to SIEM (futures.md Tier 1 #4). Lives in
-      // Integrations alongside Webhooks because both are outbound
-      // delivery channels — same admin posture, similar mental model.
-      { to: "/workspace/audit-export", label: "Audit streaming", icon: Radio },
-    ],
-  },
-  {
-    title: "Platform",
-    items: [
-      {
-        to: "/admin/tenants",
-        label: "Tenants",
-        icon: Building2,
-        adminOnly: true,
-      },
-      // REM-011 Phase 2 FE — platform-wide scanner adapter picker. Gated
-      // behind the platform-admin marker (same JWT check as Tenants).
-      {
-        to: "/admin/scanner",
-        label: "Scanner",
-        icon: ScanLine,
-        adminOnly: true,
-      },
     ],
   },
 ];
 
 export function Sidebar(): React.ReactElement {
-  const claims = useAuthStore((s) => s.claims);
-  const showAdmin = isPlatformAdmin(claims);
   const { location } = useRouterState();
   const { data: workspace } = useWorkspace();
-  // FUT-013 probe: null ⇒ caller is not workspace-admin OR the BFF
-  // has no PROXY_GRPC_ADDR wired (both surface as 403/404 → null in
-  // the hook). Either way the menu item stays hidden — the page
-  // itself would 403/404, no point advertising it. Undefined means
-  // "query still loading"; we treat that as not-yet-available so the
+  // FUT-013 probe: null ⇒ caller is not workspace-admin OR the BFF has no
+  // PROXY_GRPC_ADDR wired (both surface as 403/404 → null in the hook).
+  // Either way the menu item stays hidden — the page would 403/404 anyway.
+  // undefined means "query still loading"; treat as not-yet-available so the
   // sidebar doesn't flash the item between mount and first response.
   const { data: proxyCacheStats } = useCacheStats();
   const proxyCacheAvailable = proxyCacheStats != null;
 
-  // FE-API-009 — sidebar header reflects the live workspace name once the
-  // BFF responds. Falls back to "Janus / Registry control" on first paint
-  // and when the tenant gRPC client isn't wired (BFF returns 404). The
-  // tenant id chip in the user menu remains the source of truth for the
-  // exact tenant uuid.
+  // useDeploymentInfo called for future-proofing: Phase 4.2.b/c/d will use
+  // deploymentInfo.data?.deployment_mode === "multi" to gate platform-only items.
+  // Called here (result unused) so the hook is load-bearing and its cache is
+  // primed before the Settings tab renders in the same shell.
+  useDeploymentInfo();
+
+  // FE-API-009 — sidebar header reflects the live workspace name once the BFF
+  // responds. Falls back to "Janus" on first paint and when the tenant gRPC
+  // client isn't wired (BFF returns 404).
   const workspaceName = workspace?.name ?? "Janus";
   const workspaceSubLabel = workspace?.name ? "Workspace" : "Registry control";
 
@@ -183,26 +191,26 @@ export function Sidebar(): React.ReactElement {
       </Link>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {SECTIONS.map((section) => {
-          const visibleItems = section.items.filter((i) => {
-            if (i.adminOnly && !showAdmin) return false;
-            if (i.probeKey === "proxy-cache" && !proxyCacheAvailable) return false;
+        {GROUPS.map((group) => {
+          // Filter items by probe key. No adminOnly flag exists in the new IA —
+          // the Platform group (which used adminOnly) was removed entirely.
+          const visibleItems = group.items.filter((i) => {
+            if (i.probeKey === "proxy-cache" && !proxyCacheAvailable)
+              return false;
             return true;
           });
+          // Skip rendering the entire group heading if all items are hidden.
           if (visibleItems.length === 0) return null;
           return (
-            <div key={section.title} className="mt-6 first:mt-0">
+            <div key={group.title} className="mt-6 first:mt-0">
               <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-                {section.title}
+                {group.title}
               </div>
               <ul className="space-y-0.5">
                 {visibleItems.map((item) => {
                   const Icon = item.icon;
                   // Mark exact-match for the root path; everything else is prefix.
-                  const active =
-                    item.to === "/"
-                      ? location.pathname === "/"
-                      : location.pathname.startsWith(item.to);
+                  const active = location.pathname.startsWith(item.to);
                   return (
                     <li key={item.to}>
                       <Link
@@ -235,11 +243,11 @@ export function Sidebar(): React.ReactElement {
       </nav>
 
       {/* FUT-019 Phase 1 — sticky-bottom Settings cog. Mirrors the GitHub
-          / Linear / Notion pattern where personal preferences live at
-          the bottom of the chrome and stay reachable regardless of
-          scroll. Always rendered — tab-level gates inside /settings
-          handle visibility of Notifications / Security per the
-          per-category opt-in matrix that lands in FUT-019 Phase 2+. */}
+          / Linear / Notion pattern where personal preferences live at the
+          bottom of the chrome and stay reachable regardless of scroll.
+          Always rendered — tab-level gates inside /settings handle
+          visibility of Notifications / Security per the per-category
+          opt-in matrix that lands in FUT-019 Phase 2+. */}
       <div className="border-t border-[var(--color-border)] px-3 py-2">
         <Link
           to="/settings"
