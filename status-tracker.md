@@ -22,17 +22,76 @@
 
 ## Open remediation items
 
-### REDESIGN-001 — Single-tenant self-hosted redesign (planning phase)
+### REDESIGN-001 — Single-tenant self-hosted redesign
 
-**Surfaced:** 2026-06-26 after a deep system review (`.claude/reviews/system-review-2026-06-26.md`) identified that the multi-tenant SaaS architecture was half-built and the security debt that flowed from that drift (Top-5 findings: RLS missing on 8 of 9 DBs, "any-org-admin = tenant-admin" gate flaw, custom-domain takeover via `ON CONFLICT DO UPDATE`, pull-through proxy missing digest verification, dev-seed admin shipped in prod image).
+**Surfaced:** 2026-06-26 after a deep system review (`.claude/reviews/system-review-2026-06-26.md`) identified 5 critical findings (Top-5) flowing from drift between the multi-tenant SaaS architecture and the codebase.
 
-**Decision:** Soft-hide multi-tenancy rather than fully drop or keep as-is. `DEPLOYMENT_MODE=single` becomes the default OSS posture; `=multi` preserves the SaaS capability. Drop the SaaS-only features (custom domains, per-tenant SSO, plan UI, tenant signup); keep schema-level `tenant_id` for forward compat; fix the security debt as part of the redesign.
+**Decision:** Soft-hide multi-tenancy rather than fully drop or keep as-is. `DEPLOYMENT_MODE=single` becomes the default OSS posture; `=multi` preserves the SaaS capability. Drop SaaS-only features (custom domains, per-tenant SSO, plan UI, tenant signup); keep schema-level `tenant_id` for forward compat; fix the security debt as part of the redesign.
 
-**Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated.
+**Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 0 ✅ COMPLETE (2026-06-26). All 9 RM-NNN approved for full removal (no soft preservation). All 6 HD-NNN confirmed (HD-006 N/A since RM-003 went full removal). All 5 Q-NNN answered. Phase 2 (SaaS removal) UNBLOCKED. Phases 1 (foundation) + 6 (security debt) safe to start in parallel.
+**Status:** IN PROGRESS — ~50% shipped (17 PRs through 2026-06-28).
 
-**Blocks:** FUT-019 Phase 3 (email channel design substantially simplifies under single-mode); FUT-010 (RBAC polish becomes part of Phase 5); FUT-011 (subsumed by Phase 3.1 bootstrap CLI + Phase 4.3 onboarding wizard); DEPLOY-001 (subsumed by Phase 1.4 deployment-info + Phase 8.2 README rewrite).
+**Phases shipped so far:**
+
+| Phase | What | PR | Date |
+|---|---|---|---|
+| Planning | Review + plan + Phase 0 sign-off + CLAUDE.md banner | #119 | 2026-06-26 |
+| 1.1 | `DEPLOYMENT_MODE` primitive in `libs/config/loader` | #120 | 2026-06-26 |
+| 1.2 | `MTLS_REQUIRED` gate centralised | #121 | 2026-06-26 |
+| 1.3 | Wire `ValidateMTLSConfig` into all 13 services | #125 | 2026-06-26 |
+| 1.4 | Public `/api/v1/deployment-info` endpoint | #124 | 2026-06-26 |
+| 6.1 | Pull-through proxy upstream digest verification — **closes Top-5 #4** | #123 | 2026-06-26 |
+| 6.3 | Audit catalogue completeness — 13 new event mappings + lint test | #130 | 2026-06-27 |
+| 6.6 | Redis fail-closed in `revoke:user:` check | #122 | 2026-06-26 |
+| 2.6 | Delete dev-seed admin migration — **closes Top-5 #5** | #129 | 2026-06-27 |
+| 2.7 | Helm dead config cleanup — N/A (no actual dead config existed) | — | 2026-06-26 |
+| 3.1.a | Tenant `deployment_metadata` table + repo methods | #126 | 2026-06-27 |
+| 3.1.b | `registry-auth bootstrap` CLI subcommand | #127 | 2026-06-27 |
+| 3.1.c | `make dev-bootstrap` target + production runbook | #128 | 2026-06-27 |
+| 5.1 | Typed `users.is_global_admin` replaces `(admin, org, '*')` marker | #134 | 2026-06-28 |
+| 5.2 | Scope-aware tenant-admin gates — **closes Top-5 #2** | #131 | 2026-06-27 |
+| 2.1 | Drop custom-domain CRUD end-to-end — **closes Top-5 #3** | #132 | 2026-06-27 |
+| 2.2 | Collapse per-tenant SSO to global config | #133 | 2026-06-28 |
+| futures align | Mark obsolete + subsumed items, add RED-FU-001..005 follow-ups | #135 | 2026-06-28 |
+
+**Top-5 security findings status (4 of 5 closed):**
+- #1 RLS missing — deferred per Phase 0 D4 decision
+- #2 `require*Admin` scope creep — ✅ closed by Phase 5.2 (PR #131)
+- #3 Custom-domain takeover — ✅ closed by Phase 2.1 (PR #132, feature removed)
+- #4 Pull-through proxy missing digest verify — ✅ closed by Phase 6.1 (PR #123)
+- #5 Dev-seed admin shipped in prod image — ✅ closed by Phase 2.6 (PR #129)
+
+**Phases still OPEN:**
+- 2.3 — Tenant signup BFF removal
+- 2.4 — Plan/billing UI strip (FE)
+- 2.5 — Login copy + tenant chrome (FE; depends on Phase 4.1 `useDeploymentInfo` hook)
+- 3.2 — Single-tenant guard in tenant gRPC `CreateTenant`
+- 3.3 — Tenant context middleware (single-mode injector)
+- 4.1 — `useDeploymentInfo()` FE hook + Provider
+- 4.2 — Sidebar + unified Settings IA
+- 4.3 — First-run onboarding wizard
+- 4.4 — `/me/abilities` BFF + `useAbility()` FE hook (replaces FUT-010 FE half)
+- 4.5 — Strip placeholder "Coming Soon" surfaces
+- 4.6 — Mobile-responsive shell
+- 4.7 — Remove SSO admin FE (companion to 2.2)
+- 5.3 — Delegator-dominates-delegatee rule in `GrantRole`
+- 5.4 — `digest_keyed.go` writer-tier scope (see RED-FU-003 in futures.md)
+- 5.5 — SSO subject-id binding
+- 5.6 — SAML `EmailVerified` hard-code fix
+- 6.2 — Domain takeover guard (REPLACED by 2.1 removal; closed without code change)
+- 6.4 — AES-GCM KEK version prefix
+- 6.5 — JWKS rotation prep (multi-key support)
+- 6.7 — API-key Argon2 verify cache
+- 6.8 — SAML library upgrade to v0.5.x
+- 6.9 — mTLS hot reload via `GetCertificate` + fsnotify
+- 6.10 — mTLS peer-CN interceptor
+- 6.11 — Scanner plugin sandbox
+- 6.12 — Audit hash-chain
+- 7 — Documentation + CI lint
+- 8 — Migration / rollout / release prep
+
+**Blocks:** FUT-019 Phase 3 (email channel); FUT-010 RBAC FE half (now mapped to Phase 4.4); FUT-011 (subsumed by Phase 3.1 + 4.3); DEPLOY-001 (subsumed by Phase 1.4 + 8.2).
 
 ---
 
