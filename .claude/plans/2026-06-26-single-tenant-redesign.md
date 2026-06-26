@@ -28,6 +28,72 @@
 
 ---
 
+## Progress dashboard
+
+> **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
+> **As-of:** 2026-06-28 — 17 PRs shipped, ~50% complete, 4 of 5 Top-5 critical findings closed.
+
+| Phase | Task | Status | PR | Date |
+|---|---|---|---|---|
+| 0 | Cleanup confirmation table | ✅ DONE | #119 | 2026-06-26 |
+| 1.1 | `DEPLOYMENT_MODE` primitive | ✅ DONE | #120 | 2026-06-26 |
+| 1.2 | `MTLS_REQUIRED` gate (`libs/config/loader`) | ✅ DONE | #121 | 2026-06-26 |
+| 1.3 | Wire mTLS check into all 13 services' main.go | ✅ DONE | #125 | 2026-06-26 |
+| 1.4 | `/api/v1/deployment-info` BFF endpoint | ✅ DONE | #124 | 2026-06-26 |
+| 2.1 | Drop custom-domain CRUD (**closes Top-5 #3**) | ✅ DONE | #132 | 2026-06-27 |
+| 2.2 | Per-tenant SSO → global config | ✅ DONE | #133 | 2026-06-28 |
+| 2.3 | Tenant signup BFF removal | ⬜ OPEN | — | — |
+| 2.4 | Plan/billing UI strip (FE) | ⬜ OPEN | — | — |
+| 2.5 | Login copy + tenant chrome (FE) | ⬜ OPEN | — | — |
+| 2.6 | Delete dev-seed admin (**closes Top-5 #5**) | ✅ DONE | #129 | 2026-06-27 |
+| 2.7 | Helm dead config cleanup | ⛔ N/A | — | 2026-06-26 |
+| 3.1.a | Tenant `deployment_metadata` table + repo | ✅ DONE | #126 | 2026-06-27 |
+| 3.1.b | `registry-auth bootstrap` CLI subcommand | ✅ DONE | #127 | 2026-06-27 |
+| 3.1.c | `make dev-bootstrap` + production runbook | ✅ DONE | #128 | 2026-06-27 |
+| 3.2 | Tenant gRPC single-tenant guard | ⬜ OPEN | — | — |
+| 3.3 | Tenant context middleware (single-mode injector) | ⬜ OPEN | — | — |
+| 4.1 | `useDeploymentInfo()` FE hook + Provider | ⬜ OPEN | — | — |
+| 4.2 | Sidebar + unified Settings IA | ⬜ OPEN | — | — |
+| 4.3 | First-run onboarding wizard | ⬜ OPEN | — | — |
+| 4.4 | `/me/abilities` BFF + `useAbility()` hook | ⬜ OPEN | — | — |
+| 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
+| 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
+| 4.7 | Remove SSO admin FE (companion to 2.2) | ⬜ OPEN | — | — |
+| 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |
+| 5.2 | Scope-aware tenant-admin gates (**closes Top-5 #2**) | ✅ DONE | #131 | 2026-06-27 |
+| 5.3 | Delegator-dominates-delegatee in `GrantRole` | ⬜ OPEN | — | — |
+| 5.4 | `digest_keyed.go` writer-tier scope (RED-FU-003) | ⬜ OPEN | — | — |
+| 5.5 | SSO subject-id binding | ⬜ OPEN | — | — |
+| 5.6 | SAML `EmailVerified` hard-code fix | ⬜ OPEN | — | — |
+| 6.1 | Pull-through proxy digest verify (**closes Top-5 #4**) | ✅ DONE | #123 | 2026-06-26 |
+| 6.2 | Custom-domain takeover guard | ⛔ N/A | — | (replaced by 2.1) |
+| 6.3 | Audit catalogue completeness + lint test | ✅ DONE | #130 | 2026-06-27 |
+| 6.4 | AES-GCM KEK version prefix | ⬜ OPEN | — | — |
+| 6.5 | JWKS rotation prep (multi-key support) | ⬜ OPEN | — | — |
+| 6.6 | Redis fail-closed in `revoke:user:` check | ✅ DONE | #122 | 2026-06-26 |
+| 6.7 | API-key Argon2 verify cache | ⬜ OPEN | — | — |
+| 6.8 | SAML library upgrade to v0.5.x | ⬜ OPEN | — | — |
+| 6.9 | mTLS hot reload via `GetCertificate` + fsnotify | ⬜ OPEN | — | — |
+| 6.10 | mTLS peer-CN interceptor | ⬜ OPEN | — | — |
+| 6.11 | Scanner plugin sandbox | ⬜ OPEN | — | — |
+| 6.12 | Audit hash-chain + checkpoint signing | ⬜ OPEN | — | — |
+| 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ⬜ OPEN | — | — |
+| 8 | Migration / rollout / release prep | ⬜ OPEN | — | — |
+
+**Top-5 critical findings status (4 of 5 closed):**
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | RLS missing on 8 of 9 DBs | ⏸️ DEFERRED — Phase 0 D4 decision |
+| 2 | `require*Admin` accepts any-org-admin | ✅ closed by Phase 5.2 (PR #131) |
+| 3 | Custom-domain takeover via `ON CONFLICT` | ✅ closed by Phase 2.1 (PR #132) — feature removed |
+| 4 | Pull-through proxy missing digest verify | ✅ closed by Phase 6.1 (PR #123) |
+| 5 | Dev-seed admin shipped in prod image | ✅ closed by Phase 2.6 (PR #129) |
+
+**Companion trackers:** `status-tracker.md` (REDESIGN-001 entry), `status.md` (per-PR resolution rows), `futures.md` (RED-FU-001..005 follow-ups), `memory/current_sprint_status.md`.
+
+---
+
 ## Phase 0 — Cleanup confirmation (BLOCKER)
 
 > **STOP. Read this section. Mark each `RM-NNN` row APPROVED / MODIFY / KEEP before proceeding to Phase 2.**
