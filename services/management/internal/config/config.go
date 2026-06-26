@@ -99,14 +99,12 @@ func validate(cfg *Config) error {
 		return err
 	}
 
-	// In production, CORS origin and mTLS certs are mandatory.
-	// Plaintext gRPC in production would expose every token validation response.
+	// In production, CORS origin is mandatory.
+	// mTLS cert validation is handled centrally in main.go via loader.ValidateMTLSConfig
+	// (REDESIGN-001 Phase 1.3) — the ad-hoc per-service check here was removed.
 	if cfg.OTELEnvironment == "production" {
 		if cfg.CORSAllowedOrigin == "" {
 			return fmt.Errorf("CORS_ALLOWED_ORIGIN is required in production")
-		}
-		if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
-			return fmt.Errorf("MTLS_CA_CERT_PATH, MTLS_CERT_PATH, and MTLS_KEY_PATH are all required in production")
 		}
 	}
 	return nil
