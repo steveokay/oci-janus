@@ -93,42 +93,9 @@ func TestRequireWebhookAdmin_PlatformAdmin_Allowed(t *testing.T) {
 	}
 }
 
-// ─── requireDomainAdmin HTTP gate tests (domains route) ───────────────────
-
-// TestRequireDomainAdmin_OrgAdminOnly_Denied verifies that an org-scoped admin
-// cannot list custom domains. Domain list exposes verification tokens and
-// notification timestamps that are tenant-admin-only.
-// (Review §A1, Top-5 #2 fix — domains gate.)
-func TestRequireDomainAdmin_OrgAdminOnly_Denied(t *testing.T) {
-	env := newDomainsEnv(t)
-	// adminToken carries (admin, org, "myorg") — must be denied.
-	resp := env.get(t, "/api/v1/workspace/me/domains", adminToken)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("org-scoped admin must be denied domain list: got %d, want 403", resp.StatusCode)
-	}
-}
-
-// TestRequireDomainAdmin_TenantAdmin_Allowed verifies that a tenant-admin
-// can list domains.
-func TestRequireDomainAdmin_TenantAdmin_Allowed(t *testing.T) {
-	env := newDomainsEnv(t)
-	resp := env.get(t, "/api/v1/workspace/me/domains", "tenant-admin-token")
-	if resp.StatusCode == http.StatusForbidden {
-		t.Errorf("tenant-admin must NOT be denied domain list: got 403")
-	}
-}
-
-// TestRequireDomainAdmin_PlatformAdmin_Allowed verifies the platform-admin
-// marker (admin, org, "*") still passes the domain gate.
-func TestRequireDomainAdmin_PlatformAdmin_Allowed(t *testing.T) {
-	env := newDomainsEnv(t)
-	resp := env.get(t, "/api/v1/workspace/me/domains", platformAdminToken)
-	if resp.StatusCode == http.StatusForbidden {
-		t.Errorf("platform-admin must NOT be denied domain list: got 403")
-	}
-}
-
 // ─── requireDomainAdmin HTTP gate tests (proxy-cache route) ───────────────
+// Note: the custom-domain route tests (TestRequireDomainAdmin_*) were removed
+// in REDESIGN-001 RM-001 along with the /api/v1/workspace/me/domains routes.
 
 // TestRequireProxyCacheAdmin_OrgAdminOnly_Denied verifies that an org-scoped
 // admin cannot view proxy-cache stats (proxy cache is a tenant-wide resource).

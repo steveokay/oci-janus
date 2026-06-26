@@ -414,9 +414,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Routes return 404 when h.webhook is nil (WEBHOOK_GRPC_ADDR unset).
 	h.RegisterWebhooks(mux, authMW)
 
-	// Workspace custom-domain CRUD (FE-API-027). Routes return 404 when
-	// h.tenant is nil (TENANT_GRPC_ADDR unset).
-	h.RegisterWorkspaceDomains(mux, authMW)
 	// Audit-log streaming to SIEM (futures.md Tier 1 #4). Mounted
 	// alongside the other workspace-scoped admin surfaces.
 	h.RegisterWorkspaceAuditExport(mux, authMW)
@@ -1656,31 +1653,19 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/workspace/me   (FE-API-009)
 // ---------------------------------------------------------------------------
 
-// WorkspaceDomainEntry mirrors tenantv1.DomainEntry in the REST shape. Carries
-// just enough state for the dashboard's domain settings page: the hostname,
-// whether the DNS TXT challenge succeeded, and which one is the canonical
-// registry hostname (FE-API-007).
-type WorkspaceDomainEntry struct {
-	Domain    string `json:"domain"`
-	Verified  bool   `json:"verified"`
-	IsPrimary bool   `json:"is_primary"`
-}
-
 // WorkspaceResponse is the JSON body for GET /api/v1/workspace/me.
 //
-// FE-API-009 expanded shape: Slug + Host + HostIsCustom + Domains. Host is the
-// resolved registry hostname for `docker login` / `docker push`; HostIsCustom
-// distinguishes a verified custom domain from the wildcard fallback so the
-// dashboard can label the source.
+// FE-API-009 shape: Slug + Host. Host is the resolved registry hostname
+// for `docker login` / `docker push` — always the wildcard subdomain
+// (`<slug>.<PLATFORM_BASE_DOMAIN>`) after REDESIGN-001 RM-001 removed the
+// per-tenant custom-domain feature.
 type WorkspaceResponse struct {
-	TenantID     string                 `json:"tenant_id"`
-	Name         string                 `json:"name"`
-	Slug         string                 `json:"slug"`
-	Plan         string                 `json:"plan"`
-	Host         string                 `json:"host"`
-	HostIsCustom bool                   `json:"host_is_custom"`
-	Domains      []WorkspaceDomainEntry `json:"domains"`
-	CreatedAt    time.Time              `json:"created_at"`
+	TenantID  string    `json:"tenant_id"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	Plan      string    `json:"plan"`
+	Host      string    `json:"host"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -1698,27 +1683,25 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Translate proto domains to the REST shape. Always emit a non-nil slice so
-	// the frontend doesn't have to guard against null.
-	domains := make([]WorkspaceDomainEntry, 0, len(t.GetDomains()))
-	for _, d := range t.GetDomains() {
-		domains = append(domains, WorkspaceDomainEntry{
-			Domain:    d.GetDomain(),
-			Verified:  d.GetVerified(),
-			IsPrimary: d.GetIsPrimary(),
-		})
-	}
-
 	writeJSON(w, http.StatusOK, WorkspaceResponse{
-		TenantID:     t.GetTenantId(),
-		Name:         t.GetName(),
-		Slug:         t.GetSlug(),
-		Plan:         t.GetPlan(),
-		Host:         t.GetHost(),
-		HostIsCustom: t.GetHostIsCustom(),
-		Domains:      domains,
-		CreatedAt:    t.GetCreatedAt().AsTime(),
+		TenantID:  t.GetTenantId(),
+		Name:      t.GetName(),
+		Slug:      t.GetSlug(),
+		Plan:      t.GetPlan(),
+		Host:      t.GetHost(),
+		CreatedAt: t.GetCreatedAt().AsTime(),
 	})
+}
+
+// requireDomainAdmin returns true when the caller holds at least tenant-admin
+// level access for the current workspace. Used as the RBAC gate on all
+// workspace-admin surfaces (proxy-cache, audit-export, etc.).
+//
+// Moved from workspace_domains.go during REDESIGN-001 RM-001 (custom-domain
+// removal); the gate is still needed by proxy-cache and audit-export handlers.
+func (h *Handler) requireDomainAdmin(r *http.Request) bool {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }
 
 // writeJSON sets Content-Type, writes the given status code, and encodes v as JSON.

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
@@ -26,7 +25,6 @@ import (
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	tenantmigrations "github.com/steveokay/oci-janus/services/tenant/migrations"
 	"github.com/steveokay/oci-janus/services/tenant/internal/config"
-	"github.com/steveokay/oci-janus/services/tenant/internal/domainworker"
 	"github.com/steveokay/oci-janus/services/tenant/internal/handler"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
@@ -52,20 +50,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
-	})
-	defer func() { _ = rdb.Close() }()
-
 	repo := repository.New(pool)
-	dw := domainworker.New(repo, rdb)
-	go dw.Run(ctx)
 
 	// Pass the configured platform base domain so handler.GetTenant can build
-	// the wildcard host fallback `<slug>.<base>` for tenants without a
-	// verified primary custom domain (FE-API-007).
+	// the wildcard host `<slug>.<base>` (FE-API-007).
 	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain)
 
 	grpcOpts, err := buildGRPCOptions(cfg)

@@ -73,12 +73,12 @@ type AdminTenantResponse struct {
 // epoch-vs-null specifically, which is a footgun.
 type AdminTenantDetailResponse struct {
 	AdminTenantResponse
-	// Slug, Host, HostIsCustom mirror the workspace endpoint (FE-API-007) so
+	// Slug and Host mirror the workspace endpoint (FE-API-007) so
 	// the admin card can show how the tenant reaches the registry without an
-	// extra round trip.
-	Slug         string `json:"slug"`
-	Host         string `json:"host"`
-	HostIsCustom bool   `json:"host_is_custom"`
+	// extra round trip. Host is always the wildcard subdomain after
+	// REDESIGN-001 RM-001 removed the per-tenant custom-domain feature.
+	Slug string `json:"slug"`
+	Host string `json:"host"`
 
 	StorageUsedBytes  int64 `json:"storage_used_bytes"`
 	StorageQuotaBytes int64 `json:"storage_quota_bytes"`
@@ -256,7 +256,6 @@ func (h *Handler) buildAdminTenantDetail(r *http.Request, t *tenantv1.Tenant) Ad
 		AdminTenantResponse: tenantToAdminResp(t),
 		Slug:                t.GetSlug(),
 		Host:                t.GetHost(),
-		HostIsCustom:        t.GetHostIsCustom(),
 	}
 
 	if usage, err := h.meta.GetTenantUsage(r.Context(), &metadatav1.GetTenantUsageRequest{
