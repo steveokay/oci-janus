@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/libs/observability/otel"
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
 	"github.com/steveokay/oci-janus/services/audit/internal/server"
@@ -24,6 +25,15 @@ func main() {
 	}
 
 	setupLogger(cfg.LogFormat, cfg.LogLevel)
+
+	// mTLS configuration validation — fails loudly if MTLS_REQUIRED=true and any
+	// path is empty. Centralised in libs/config/loader so every service inherits
+	// the production-safe check (Review §A3, REDESIGN-001 Phase 1.3).
+	mtlsCfg := loader.LoadMTLSConfig()
+	if err := loader.ValidateMTLSConfig(mtlsCfg); err != nil {
+		slog.Error("mTLS configuration invalid", "err", err)
+		os.Exit(1)
+	}
 
 	shutdown, err := otel.Bootstrap(ctx, otel.Config{
 		Exporter:     cfg.OTELExporter,
