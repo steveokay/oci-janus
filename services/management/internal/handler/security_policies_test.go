@@ -307,10 +307,12 @@ func TestScanPolicy_UpdateForbidden_forReader(t *testing.T) {
 }
 
 // TestScanPolicy_UpdateInvalidSeverity_returns400.
+// Uses platformAdminToken (Phase 5.2): validation fires after the auth gate,
+// so the caller must pass requireScanPolicyAdmin first.
 func TestScanPolicy_UpdateInvalidSeverity_returns400(t *testing.T) {
 	env, _ := newScannerEnv(t)
 	body := `{"auto_scan_on_push":true,"block_on_severity":"EXTREME","exempt_cves":[],"scanner_plugin":"trivy","scanner_version_pin":""}`
-	resp := env.putBody(t, "/api/v1/security/policies", adminToken, body)
+	resp := env.putBody(t, "/api/v1/security/policies", platformAdminToken, body)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
@@ -318,20 +320,22 @@ func TestScanPolicy_UpdateInvalidSeverity_returns400(t *testing.T) {
 
 // TestScanPolicy_UpdateInvalidCVE_returns400 verifies the CVE entry shape
 // gate fires before the gRPC call.
+// Uses platformAdminToken (Phase 5.2): validation fires after the auth gate.
 func TestScanPolicy_UpdateInvalidCVE_returns400(t *testing.T) {
 	env, _ := newScannerEnv(t)
 	body := `{"auto_scan_on_push":true,"block_on_severity":"","exempt_cves":["NOT-A-CVE"],"scanner_plugin":"trivy","scanner_version_pin":""}`
-	resp := env.putBody(t, "/api/v1/security/policies", adminToken, body)
+	resp := env.putBody(t, "/api/v1/security/policies", platformAdminToken, body)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
 // TestScanPolicy_UpdateInvalidScannerPlugin_returns400.
+// Uses platformAdminToken (Phase 5.2): validation fires after the auth gate.
 func TestScanPolicy_UpdateInvalidScannerPlugin_returns400(t *testing.T) {
 	env, _ := newScannerEnv(t)
 	body := `{"auto_scan_on_push":true,"block_on_severity":"","exempt_cves":[],"scanner_plugin":"snyk","scanner_version_pin":""}`
-	resp := env.putBody(t, "/api/v1/security/policies", adminToken, body)
+	resp := env.putBody(t, "/api/v1/security/policies", platformAdminToken, body)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
@@ -339,10 +343,12 @@ func TestScanPolicy_UpdateInvalidScannerPlugin_returns400(t *testing.T) {
 
 // TestScanPolicy_UpdateHappyPath_forwardsFields verifies a valid PUT
 // reaches the scanner with the request body's values preserved.
+// Uses platformAdminToken (Phase 5.2): tenant-wide policy requires
+// platform-admin or tenant-admin, not merely any org-scoped admin.
 func TestScanPolicy_UpdateHappyPath_forwardsFields(t *testing.T) {
 	env, fake := newScannerEnv(t)
 	body := `{"auto_scan_on_push":false,"block_on_severity":"HIGH","exempt_cves":["CVE-2024-1234","CVE-2025-99999"],"scanner_plugin":"grype","scanner_version_pin":"v0.74.0"}`
-	resp := env.putBody(t, "/api/v1/security/policies", adminToken, body)
+	resp := env.putBody(t, "/api/v1/security/policies", platformAdminToken, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}

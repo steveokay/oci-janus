@@ -190,13 +190,13 @@ func TestProxyCache_Disabled_returns404(t *testing.T) {
 		// FUT-016 — detail route also 404s when proxy client is unwired.
 		"/api/v1/proxy/cache/00000000-0000-0000-0000-000000000001",
 	} {
-		resp := env.get(t, path, adminToken)
+		resp := env.get(t, path, platformAdminToken)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: expected 404, got %d", path, resp.StatusCode)
 		}
 	}
 	// DELETE — must also 404 before the RBAC gate fires.
-	resp := env.del(t, "/api/v1/proxy/cache/00000000-0000-0000-0000-000000000001", adminToken)
+	resp := env.del(t, "/api/v1/proxy/cache/00000000-0000-0000-0000-000000000001", platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("delete on disabled route: expected 404, got %d", resp.StatusCode)
 	}
@@ -261,7 +261,7 @@ func TestProxyCacheList_HappyPath(t *testing.T) {
 		NextPageToken: "next-page-token-blob",
 	}
 
-	resp := env.get(t, "/api/v1/proxy/cache?page_size=2&image_contains=lib", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache?page_size=2&image_contains=lib", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -303,7 +303,7 @@ func TestProxyCacheList_HappyPath(t *testing.T) {
 // (not a validation failure) but negative and >100 should 400.
 func TestProxyCacheList_BadPageSize(t *testing.T) {
 	env, _ := newProxyEnv(t)
-	resp := env.get(t, "/api/v1/proxy/cache?page_size=999", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache?page_size=999", platformAdminToken)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("page_size=999: expected 400, got %d", resp.StatusCode)
 	}
@@ -318,7 +318,7 @@ func TestProxyCacheStats_HappyPath(t *testing.T) {
 		UniqueUpstreams: 2,
 		TotalPulls:      117,
 	}
-	resp := env.get(t, "/api/v1/proxy/cache/stats", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/stats", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -339,7 +339,7 @@ func TestProxyCacheStats_HappyPath(t *testing.T) {
 func TestProxyCacheEvict_HappyPath(t *testing.T) {
 	env, fake := newProxyEnv(t)
 	target := "44444444-4444-4444-8444-444444444444"
-	resp := env.del(t, "/api/v1/proxy/cache/"+target, adminToken)
+	resp := env.del(t, "/api/v1/proxy/cache/"+target, platformAdminToken)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
@@ -352,7 +352,7 @@ func TestProxyCacheEvict_HappyPath(t *testing.T) {
 func TestProxyCacheEvict_NotFound(t *testing.T) {
 	env, fake := newProxyEnv(t)
 	fake.deleteErr = status.Error(codes.NotFound, "cached manifest not found")
-	resp := env.del(t, "/api/v1/proxy/cache/55555555-5555-4555-8555-555555555555", adminToken)
+	resp := env.del(t, "/api/v1/proxy/cache/55555555-5555-4555-8555-555555555555", platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
@@ -363,7 +363,7 @@ func TestProxyCacheEvict_NotFound(t *testing.T) {
 func TestProxyCacheList_GRPCInvalidArg(t *testing.T) {
 	env, fake := newProxyEnv(t)
 	fake.listErr = status.Error(codes.InvalidArgument, "bad page_token")
-	resp := env.get(t, "/api/v1/proxy/cache?page_token=garbage", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache?page_token=garbage", platformAdminToken)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
@@ -447,7 +447,7 @@ func TestProxyCacheDetail_ImageManifest_HappyPath(t *testing.T) {
 		Body: []byte(imageManifestBody),
 	}
 
-	resp := env.get(t, "/api/v1/proxy/cache/"+target, adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/"+target, platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -519,7 +519,7 @@ func TestProxyCacheDetail_Index_HappyPath(t *testing.T) {
 		},
 		Body: []byte(indexManifestBody),
 	}
-	resp := env.get(t, "/api/v1/proxy/cache/"+target, adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/"+target, platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -553,7 +553,7 @@ func TestProxyCacheDetail_Index_HappyPath(t *testing.T) {
 func TestProxyCacheDetail_NotFound(t *testing.T) {
 	env, fake := newProxyEnv(t)
 	fake.getErr = status.Error(codes.NotFound, "cached manifest not found")
-	resp := env.get(t, "/api/v1/proxy/cache/55555555-5555-4555-8555-555555555555", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/55555555-5555-4555-8555-555555555555", platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}

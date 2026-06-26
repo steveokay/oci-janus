@@ -27,19 +27,24 @@ import (
 )
 
 const (
-	bufSize        = 1 << 20 // 1 MiB
-	adminToken     = "admin-token"
-	writerToken    = "writer-token"
-	readerToken    = "reader-token"
+	bufSize     = 1 << 20 // 1 MiB
+	adminToken  = "admin-token"
+	writerToken = "writer-token"
+	readerToken = "reader-token"
 	// ownerToken is used by FE-API-037 tests to assert that owner role on the
 	// repo's parent org is sufficient for retention PUT/DELETE — matching the
 	// admin-level gating.
-	ownerToken     = "owner-token"
-	testTenantID   = "00000000-0000-0000-0000-000000000001"
-	testUserID     = "00000000-0000-0000-0000-000000000099"
-	testRepoID     = "00000000-0000-0000-0000-000000000010"
-	testOrgID      = "00000000-0000-0000-0000-000000000020"
+	ownerToken   = "owner-token"
+	testTenantID = "00000000-0000-0000-0000-000000000001"
+	testUserID   = "00000000-0000-0000-0000-000000000099"
+	testRepoID   = "00000000-0000-0000-0000-000000000010"
+	testOrgID    = "00000000-0000-0000-0000-000000000020"
 )
+
+// Note: platformAdminToken = "platform-admin-token" is declared in
+// admin_tenants_test.go (same package handler_test). The fakeAuthServer below
+// handles that token in ValidateToken / GetUserPermissions so the shared
+// newTestEnv path also recognises it for Phase 5.2 tenant-admin gate tests.
 
 // ---------------------------------------------------------------------------
 // Fake gRPC servers
@@ -64,6 +69,10 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 	// FUT-012 Phase B — tenant-admin caller for the new /tenant/users routes.
 	case "tenant-admin-token":
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "tenant-admin-user"}, nil
+	// Phase 5.2 — platform-admin marker. Carries (admin, org, "*") so it
+	// satisfies effectiveTenantAdmin via the legacy platform-admin path.
+	case platformAdminToken:
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "platform-admin-user"}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -102,6 +111,15 @@ func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUs
 			Roles: []string{"admin"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "tenant-admin-assign", UserId: "tenant-admin-user", Role: "admin", ScopeType: "tenant", ScopeValue: testTenantID},
+			},
+		}, nil
+	case "platform-admin-user":
+		// Phase 5.2 — platform-admin marker: (admin, org, "*"). Satisfies
+		// effectiveTenantAdmin via the legacy platform-admin path.
+		return &authv1.GetUserPermissionsResponse{
+			Roles: []string{"admin"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "platform-admin-assign", UserId: "platform-admin-user", Role: "admin", ScopeType: "org", ScopeValue: "*"},
 			},
 		}, nil
 	default:

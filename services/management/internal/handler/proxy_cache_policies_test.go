@@ -266,7 +266,7 @@ func TestProxyCachePolicies_Disabled_returns404(t *testing.T) {
 		"/api/v1/proxy/cache/scan-policies",
 		"/api/v1/proxy/cache/sign-policies",
 	} {
-		resp := env.get(t, path, adminToken)
+		resp := env.get(t, path, platformAdminToken)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: expected 404, got %d", path, resp.StatusCode)
 		}
@@ -292,7 +292,7 @@ func TestProxyCachePolicies_InvalidUpstreamName_returns400(t *testing.T) {
 	env, _, _ := newCachePoliciesEnv(t)
 	// Capital letters, slashes, and over-long names all rejected.
 	for _, bad := range []string{"UPPER", "with/slash", "with space", ""} {
-		resp := env.get(t, "/api/v1/proxy/upstreams/"+bad+"/scan-policy", adminToken)
+		resp := env.get(t, "/api/v1/proxy/upstreams/"+bad+"/scan-policy", platformAdminToken)
 		// Empty name routes don't match the pattern; net/http returns
 		// 404 for the no-match case. The other invalid forms 400.
 		if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound {
@@ -303,7 +303,7 @@ func TestProxyCachePolicies_InvalidUpstreamName_returns400(t *testing.T) {
 
 func TestScanPolicy_Get_returnsDefaultOnMiss(t *testing.T) {
 	env, _, _ := newCachePoliciesEnv(t)
-	resp := env.get(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", adminToken)
+	resp := env.get(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -321,7 +321,7 @@ func TestScanPolicy_Get_returnsDefaultOnMiss(t *testing.T) {
 func TestScanPolicy_Put_propagates(t *testing.T) {
 	env, fakeScanner, _ := newCachePoliciesEnv(t)
 	body := `{"auto_scan":true,"severity_threshold":"high"}`
-	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", adminToken, body)
+	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", platformAdminToken, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -335,7 +335,7 @@ func TestScanPolicy_Put_propagates(t *testing.T) {
 
 func TestScanPolicy_Put_invalidSeverity_returns400(t *testing.T) {
 	env, _, _ := newCachePoliciesEnv(t)
-	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", adminToken, `{"auto_scan":true,"severity_threshold":"banana"}`)
+	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/scan-policy", platformAdminToken, `{"auto_scan":true,"severity_threshold":"banana"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
@@ -343,7 +343,7 @@ func TestScanPolicy_Put_invalidSeverity_returns400(t *testing.T) {
 
 func TestSignPolicy_Put_autoSignWithoutKey_returns400(t *testing.T) {
 	env, _, _ := newCachePoliciesEnv(t)
-	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/sign-policy", adminToken, `{"auto_sign":true,"key_id":""}`)
+	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/sign-policy", platformAdminToken, `{"auto_sign":true,"key_id":""}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 when auto_sign=true with empty key_id, got %d", resp.StatusCode)
 	}
@@ -352,7 +352,7 @@ func TestSignPolicy_Put_autoSignWithoutKey_returns400(t *testing.T) {
 func TestSignPolicy_Put_happy(t *testing.T) {
 	env, _, fakeSigner := newCachePoliciesEnv(t)
 	body := `{"auto_sign":true,"key_id":"workspace-default"}`
-	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/sign-policy", adminToken, body)
+	resp := env.put(t, "/api/v1/proxy/upstreams/dockerhub/sign-policy", platformAdminToken, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -375,7 +375,7 @@ func TestScanPolicy_List_returnsRows(t *testing.T) {
 			TenantId: testTenantID, UpstreamName: "ghcr", AutoScan: false, SeverityThreshold: "",
 		},
 	}
-	resp := env.get(t, "/api/v1/proxy/cache/scan-policies", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/scan-policies", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -395,7 +395,7 @@ func TestSignPolicy_List_returnsRows(t *testing.T) {
 	fakeSigner.signList = []*signerv1.ProxyCacheSignPolicy{
 		{TenantId: testTenantID, UpstreamName: "dockerhub", AutoSign: true, KeyId: "workspace-default"},
 	}
-	resp := env.get(t, "/api/v1/proxy/cache/sign-policies", adminToken)
+	resp := env.get(t, "/api/v1/proxy/cache/sign-policies", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}

@@ -205,7 +205,7 @@ func newDomainsEnv(t *testing.T) *testEnv {
 // pattern as /workspace/me. newTestEnv intentionally does NOT call WithTenantClient.
 func TestWorkspaceDomains_TenantUnset_returns404(t *testing.T) {
 	env := newTestEnv(t)
-	resp := env.get(t, "/api/v1/workspace/me/domains", adminToken)
+	resp := env.get(t, "/api/v1/workspace/me/domains", platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
@@ -229,7 +229,7 @@ func TestListDomains_HappyPath_returnsList(t *testing.T) {
 	}
 
 	env := newDomainsEnv(t)
-	resp := env.get(t, "/api/v1/workspace/me/domains", adminToken)
+	resp := env.get(t, "/api/v1/workspace/me/domains", platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -283,7 +283,7 @@ func TestListDomains_ReaderRole_returns403(t *testing.T) {
 
 func TestRegisterDomain_HappyPath_returnsInstructions(t *testing.T) {
 	env := newDomainsEnv(t)
-	resp := env.post(t, "/api/v1/workspace/me/domains", adminToken,
+	resp := env.post(t, "/api/v1/workspace/me/domains", platformAdminToken,
 		`{"domain":"registry.acme.com"}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
@@ -311,7 +311,7 @@ func TestRegisterDomain_HappyPath_returnsInstructions(t *testing.T) {
 func TestRegisterDomain_InvalidRegex_returns400(t *testing.T) {
 	env := newDomainsEnv(t)
 	// Underscores not allowed by the FE-API-027 regex.
-	resp := env.post(t, "/api/v1/workspace/me/domains", adminToken,
+	resp := env.post(t, "/api/v1/workspace/me/domains", platformAdminToken,
 		`{"domain":"bad_domain.example.com"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -325,7 +325,7 @@ func TestRegisterDomain_PlatformWildcard_returns400(t *testing.T) {
 		"cannot register domain within the platform-managed wildcard space")
 
 	env := newDomainsEnv(t)
-	resp := env.post(t, "/api/v1/workspace/me/domains", adminToken,
+	resp := env.post(t, "/api/v1/workspace/me/domains", platformAdminToken,
 		`{"domain":"tenant-a.registry.example.com"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -341,7 +341,7 @@ func TestRegisterDomain_PlatformWildcard_returns400(t *testing.T) {
 func TestRegisterDomain_AlreadyExists_returns409(t *testing.T) {
 	dtsRegisterErr = status.Error(codes.AlreadyExists, "duplicate")
 	env := newDomainsEnv(t)
-	resp := env.post(t, "/api/v1/workspace/me/domains", adminToken,
+	resp := env.post(t, "/api/v1/workspace/me/domains", platformAdminToken,
 		`{"domain":"registry.acme.com"}`)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("expected 409, got %d", resp.StatusCode)
@@ -361,7 +361,7 @@ func TestRegisterDomain_ReaderRole_returns403(t *testing.T) {
 
 func TestVerifyDomain_HappyPath_returnsUpdatedEntry(t *testing.T) {
 	env := newDomainsEnv(t)
-	resp := env.post(t, "/api/v1/workspace/me/domains/registry.acme.com/verify", adminToken, "")
+	resp := env.post(t, "/api/v1/workspace/me/domains/registry.acme.com/verify", platformAdminToken, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -379,7 +379,7 @@ func TestVerifyDomain_HappyPath_returnsUpdatedEntry(t *testing.T) {
 func TestVerifyDomain_Unknown_returns404(t *testing.T) {
 	dtsVerifyErr = status.Error(codes.NotFound, "missing")
 	env := newDomainsEnv(t)
-	resp := env.post(t, "/api/v1/workspace/me/domains/missing.example.com/verify", adminToken, "")
+	resp := env.post(t, "/api/v1/workspace/me/domains/missing.example.com/verify", platformAdminToken, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
@@ -397,7 +397,7 @@ func TestVerifyDomain_ReaderRole_returns403(t *testing.T) {
 
 func TestPatchDomain_SetPrimary_HappyPath(t *testing.T) {
 	env := newDomainsEnv(t)
-	resp := env.patch(t, "/api/v1/workspace/me/domains/registry.acme.com", adminToken,
+	resp := env.patch(t, "/api/v1/workspace/me/domains/registry.acme.com", platformAdminToken,
 		`{"is_primary":true}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -414,7 +414,7 @@ func TestPatchDomain_Unverified_returns409(t *testing.T) {
 	dtsSetPrimaryErr = status.Error(codes.FailedPrecondition,
 		"cannot set unverified domain as primary")
 	env := newDomainsEnv(t)
-	resp := env.patch(t, "/api/v1/workspace/me/domains/pending.acme.com", adminToken,
+	resp := env.patch(t, "/api/v1/workspace/me/domains/pending.acme.com", platformAdminToken,
 		`{"is_primary":true}`)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("expected 409, got %d", resp.StatusCode)
@@ -424,7 +424,7 @@ func TestPatchDomain_Unverified_returns409(t *testing.T) {
 func TestPatchDomain_Unknown_returns404(t *testing.T) {
 	dtsSetPrimaryErr = status.Error(codes.NotFound, "missing")
 	env := newDomainsEnv(t)
-	resp := env.patch(t, "/api/v1/workspace/me/domains/missing.example.com", adminToken,
+	resp := env.patch(t, "/api/v1/workspace/me/domains/missing.example.com", platformAdminToken,
 		`{"is_primary":true}`)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
@@ -433,7 +433,7 @@ func TestPatchDomain_Unknown_returns404(t *testing.T) {
 
 func TestPatchDomain_IsPrimaryFalse_returns400(t *testing.T) {
 	env := newDomainsEnv(t)
-	resp := env.patch(t, "/api/v1/workspace/me/domains/registry.acme.com", adminToken,
+	resp := env.patch(t, "/api/v1/workspace/me/domains/registry.acme.com", platformAdminToken,
 		`{"is_primary":false}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -454,7 +454,7 @@ func TestPatchDomain_ReaderRole_returns403(t *testing.T) {
 func TestDeleteDomain_NonPrimary_returns204_noWarning(t *testing.T) {
 	dtsDeleteWasPrimary = false
 	env := newDomainsEnv(t)
-	resp := env.del(t, "/api/v1/workspace/me/domains/extra.acme.com", adminToken)
+	resp := env.del(t, "/api/v1/workspace/me/domains/extra.acme.com", platformAdminToken)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", resp.StatusCode)
 	}
@@ -466,7 +466,7 @@ func TestDeleteDomain_NonPrimary_returns204_noWarning(t *testing.T) {
 func TestDeleteDomain_Primary_setsWarningHeader(t *testing.T) {
 	dtsDeleteWasPrimary = true
 	env := newDomainsEnv(t)
-	resp := env.del(t, "/api/v1/workspace/me/domains/registry.acme.com", adminToken)
+	resp := env.del(t, "/api/v1/workspace/me/domains/registry.acme.com", platformAdminToken)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", resp.StatusCode)
 	}
@@ -481,7 +481,7 @@ func TestDeleteDomain_Primary_setsWarningHeader(t *testing.T) {
 func TestDeleteDomain_Unknown_returns404(t *testing.T) {
 	dtsDeleteErr = status.Error(codes.NotFound, "missing")
 	env := newDomainsEnv(t)
-	resp := env.del(t, "/api/v1/workspace/me/domains/missing.example.com", adminToken)
+	resp := env.del(t, "/api/v1/workspace/me/domains/missing.example.com", platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}

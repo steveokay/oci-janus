@@ -63,6 +63,28 @@ func hasScopedRole(assignments []*authv1.RoleAssignment, scopeType, scopeValue, 
 	return false
 }
 
+// effectiveTenantAdmin returns true if the caller has admin authority over
+// tenant-wide settings (webhooks, scan policies, audit export, etc.).
+//
+// Two paths qualify:
+//   - Platform-admin marker (admin, org, "*") — the legacy convention;
+//     Phase 5.1 will replace with users.is_global_admin column.
+//   - Tenant-scoped admin (admin, tenant, <tenant_id>) — introduced by
+//     migration 20260625000001.
+//
+// Critically: does NOT return true for org-scoped admins of any org in the
+// tenant. An org-A admin must NOT be able to configure tenant-wide settings
+// that affect org-B (Review §A1, Top-5 #2 fix).
+func effectiveTenantAdmin(assignments []*authv1.RoleAssignment, tenantID string) bool {
+	// Platform-admin marker: (admin, org, "*") — legacy convention.
+	if hasScopedRole(assignments, "org", "*", "admin") {
+		return true
+	}
+	// Tenant-scoped admin — the new scope_type introduced in migration
+	// 20260625000001_add_tenant_scope.sql.
+	return hasScopedRole(assignments, "tenant", tenantID, "admin")
+}
+
 // getUserAssignments fetches the caller's full role-assignment list for the
 // current tenant. Returns nil on error so the fail-closed behaviour in
 // hasScopedRole (returns false on empty list) holds.
