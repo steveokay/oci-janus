@@ -158,8 +158,12 @@ func TestWebhookTestDispatch_invalidArgument_doesNotLeakSSRFDetails(t *testing.T
 		err: status.Error(codes.InvalidArgument, sensitiveDetail),
 	})
 
+	// Phase 5.2: requireWebhookAdmin now requires tenant-admin or platform-admin.
+	// Switch to platformAdminToken so the test exercises the error-translation
+	// path it was designed for (gRPC InvalidArgument → 400) rather than hitting
+	// the new 403 gate.
 	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/webhooks/"+epID+"/test", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Authorization", "Bearer "+platformAdminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /api/v1/webhooks/%s/test: %v", epID, err)
@@ -205,7 +209,8 @@ func TestGetDelivery_admin_returns200(t *testing.T) {
 	env := newWebhookTestEnv(t, &canonWebhookServer{})
 	endpointID := "11111111-1111-1111-1111-111111111111"
 	deliveryID := "22222222-2222-2222-2222-222222222222"
-	resp := env.get(t, "/api/v1/webhooks/"+endpointID+"/deliveries/"+deliveryID, adminToken)
+	// Phase 5.2: webhook gate now requires tenant-admin or platform-admin.
+	resp := env.get(t, "/api/v1/webhooks/"+endpointID+"/deliveries/"+deliveryID, platformAdminToken)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -224,7 +229,8 @@ func TestGetDelivery_admin_returns200(t *testing.T) {
 
 func TestGetDelivery_invalidEndpointID_returns400(t *testing.T) {
 	env := newWebhookTestEnv(t, &canonWebhookServer{})
-	resp := env.get(t, "/api/v1/webhooks/not-a-uuid/deliveries/22222222-2222-2222-2222-222222222222", adminToken)
+	// Phase 5.2: validation fires after the auth gate — use platformAdminToken.
+	resp := env.get(t, "/api/v1/webhooks/not-a-uuid/deliveries/22222222-2222-2222-2222-222222222222", platformAdminToken)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
@@ -242,9 +248,10 @@ func TestGetDelivery_reader_returns403(t *testing.T) {
 
 func TestGetDelivery_notFound_returns404(t *testing.T) {
 	env := newWebhookTestEnv(t, &errWebhookServer{err: status.Error(codes.NotFound, "delivery not found")})
+	// Phase 5.2: webhook gate now requires tenant-admin or platform-admin.
 	resp := env.get(t,
 		"/api/v1/webhooks/11111111-1111-1111-1111-111111111111/deliveries/22222222-2222-2222-2222-222222222222",
-		adminToken)
+		platformAdminToken)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}

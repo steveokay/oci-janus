@@ -75,21 +75,19 @@ type updateWebhookBody struct {
 	Active *bool    `json:"active,omitempty"`
 }
 
-// requireWebhookAdmin gates webhook mutations. Tenant-scoped resources have
-// no single "admin of this tenant" role today, so we require the platform-admin
-// marker (`org=*` admin) OR any org-level admin grant in the tenant. Reads
-// (list, list-deliveries) are intentionally allowed for any authenticated
-// user — they only expose the tenant's own data.
+// requireWebhookAdmin gates webhook mutations and reads.
+//
+// Webhooks are tenant-wide resources — a single endpoint subscription fires
+// for events across ALL orgs in the tenant. An org-A admin must NOT be able
+// to configure webhooks that receive org-B's push events or exfiltrate
+// org-B's data via the delivery URL (Review §A1, Top-5 #2 fix).
+//
+// Valid callers:
+//   - Platform-admin marker (admin, org, "*")
+//   - Tenant-scoped admin (admin, tenant, <tenant_id>)
 func (h *Handler) requireWebhookAdmin(r *http.Request) bool {
-	for _, a := range h.getUserAssignments(r) {
-		if roleIndex(a.GetRole()) < roleIndex("admin") {
-			continue
-		}
-		if a.GetScopeType() == "org" {
-			return true
-		}
-	}
-	return false
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }
 
 // RegisterWebhooks mounts the FE-API-021..024 webhook routes onto mux under

@@ -292,6 +292,14 @@ func (h *Handler) handleSignByDigest(w http.ResponseWriter, r *http.Request) {
 // / writer grant on any org or repo in the tenant. Mirrors the per-tag
 // scan-trigger gate but collapsed because the digest doesn't tell us
 // which repo it belongs to.
+//
+// TODO Phase 5.4: This gate is intentionally left as a coarse writer-level
+// check for now (Review §A1 #4). Because digest-keyed sign-manifest
+// operations lack a repo anchor, scoping them to a specific org or repo is
+// a non-trivial design problem — it requires resolving the digest to its
+// repo(s) before checking the caller's scope on those repos. That
+// resolver + scope intersection is a separate task and out of scope for the
+// Phase 5.2 tenant-admin gate hardening PR.
 func (h *Handler) hasAnyWriterRole(r *http.Request) bool {
 	for _, a := range h.getUserAssignments(r) {
 		switch a.GetRole() {

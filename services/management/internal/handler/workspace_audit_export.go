@@ -4,21 +4,22 @@
 //
 // Four HTTP routes that wrap the AuditService audit-export RPCs
 // behind a workspace-admin gate. Mirrors the workspace_domains.go
-// shape: same `requireWorkspaceAdmin` posture (any admin/owner on
-// any org within the tenant), same opt-in-when-client-unwired
-// posture (returns 404 if h.audit is nil — although in practice
-// the audit gRPC dial is always present because Build History +
-// Activity ride on it too).
+// shape: same `requireDomainAdmin` posture (tenant-admin or
+// platform-admin only — Review §A1 Top-5 #2 fix), same
+// opt-in-when-client-unwired posture (returns 404 if h.audit is
+// nil — although in practice the audit gRPC dial is always present
+// because Build History + Activity ride on it too).
 //
 //   GET    /api/v1/workspace/me/audit-export        — fetch config
 //   PUT    /api/v1/workspace/me/audit-export        — upsert config
 //   DELETE /api/v1/workspace/me/audit-export        — clear config
 //   POST   /api/v1/workspace/me/audit-export/test   — fire synthetic event
 //
-// The PUT/DELETE/test paths require workspace-admin (admin/owner on
-// any org in the tenant) — sending audit events to an external
-// destination is a security-relevant policy decision, same shape
-// as adding a custom domain or rotating an SSO client_secret.
+// The PUT/DELETE/test paths require tenant-admin (or platform-admin)
+// — sending audit events to an external destination is a
+// security-relevant policy decision affecting the entire tenant's
+// audit trail, same shape as adding a custom domain or rotating an
+// SSO client_secret.
 package handler
 
 import (
@@ -97,10 +98,10 @@ func (h *Handler) RegisterWorkspaceAuditExport(mux *http.ServeMux, authMW func(h
 func (h *Handler) handleGetAuditExport(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if !h.requireDomainAdmin(r) {
-		// `requireDomainAdmin` happens to be exactly the workspace-admin
-		// gate we want — any admin/owner on any org in the tenant.
-		// Reusing it keeps the policy consistent across the workspace
-		// surfaces (domains + audit-export + future SSO admin UI).
+		// requireDomainAdmin is the tenant-wide admin gate shared across
+		// workspace surfaces (domains, audit-export, proxy-cache, etc.).
+		// Phase 5.2: now requires tenant-admin or platform-admin, not
+		// merely any org-level admin (Review §A1 Top-5 #2 fix).
 		writeError(w, http.StatusForbidden, "workspace admin role required")
 		return
 	}

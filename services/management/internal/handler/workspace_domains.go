@@ -122,19 +122,22 @@ type setPrimaryBody struct {
 	IsPrimary *bool `json:"is_primary"`
 }
 
-// requireDomainAdmin gates every domain mutation route. Mirrors
-// requireWebhookAdmin: admin/owner on any org grant within the tenant
-// (the platform-admin marker `org=*` admin also satisfies this).
+// requireDomainAdmin gates every domain mutation route.
+//
+// Custom domain registration is a tenant-wide operation — a domain bound to
+// the tenant resolves traffic for ALL orgs within it. An org-A admin must NOT
+// be able to register or delete custom domains that affect org-B's routing
+// (Review §A1, Top-5 #2 fix).
+//
+// Note: domains are slated for removal (Phase 0 RM-001, Phase 2.1). Until
+// the routes are removed this gate must remain correct.
+//
+// Valid callers:
+//   - Platform-admin marker (admin, org, "*")
+//   - Tenant-scoped admin (admin, tenant, <tenant_id>)
 func (h *Handler) requireDomainAdmin(r *http.Request) bool {
-	for _, a := range h.getUserAssignments(r) {
-		if roleIndex(a.GetRole()) < roleIndex("admin") {
-			continue
-		}
-		if a.GetScopeType() == "org" {
-			return true
-		}
-	}
-	return false
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }
 
 // RegisterWorkspaceDomains mounts the FE-API-027 routes onto mux. Called from

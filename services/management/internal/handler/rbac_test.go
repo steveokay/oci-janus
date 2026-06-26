@@ -119,6 +119,110 @@ func TestHasScopedRole_orgPrefixIsNotSubstring(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// effectiveTenantAdmin — Phase 5.2 unit tests (Review §A1, Top-5 #2)
+// ---------------------------------------------------------------------------
+
+// TestEffectiveTenantAdmin_OrgAdminOnly_ReturnsFalse verifies that an org-scoped
+// admin grant does NOT satisfy the tenant-admin gate introduced by Phase 5.2.
+// This is the core security regression test — it encodes the bug that existed
+// before the fix: any org admin could act as tenant admin.
+func TestEffectiveTenantAdmin_OrgAdminOnly_ReturnsFalse(t *testing.T) {
+	// org-A admin — the "broken" pre-Phase-5.2 state.
+	assignments := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "org", ScopeValue: "org-a"},
+	}
+	if effectiveTenantAdmin(assignments, "some-tenant-id") {
+		t.Fatal("org-scoped admin MUST NOT satisfy effectiveTenantAdmin (Review §A1 Top-5 #2)")
+	}
+}
+
+// TestEffectiveTenantAdmin_MultipleOrgAdmins_StillDenied confirms that holding
+// admin grants on several orgs in the tenant does not collectively equal
+// tenant-admin. The fix is about scope type, not accumulation.
+func TestEffectiveTenantAdmin_MultipleOrgAdmins_StillDenied(t *testing.T) {
+	// Admin on multiple orgs — still NOT tenant-admin.
+	assignments := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "org", ScopeValue: "org-a"},
+		{Role: "admin", ScopeType: "org", ScopeValue: "org-b"},
+		{Role: "admin", ScopeType: "org", ScopeValue: "org-c"},
+	}
+	if effectiveTenantAdmin(assignments, "tenant-xyz") {
+		t.Fatal("holding multiple org-admin grants must NOT satisfy effectiveTenantAdmin")
+	}
+}
+
+// TestEffectiveTenantAdmin_TenantAdmin_ReturnsTrue verifies the new
+// migration-20260625000001 scope_type='tenant' path is accepted.
+func TestEffectiveTenantAdmin_TenantAdmin_ReturnsTrue(t *testing.T) {
+	const tid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	assignments := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "tenant", ScopeValue: tid},
+	}
+	if !effectiveTenantAdmin(assignments, tid) {
+		t.Fatal("tenant-scoped admin MUST satisfy effectiveTenantAdmin (migration 20260625000001)")
+	}
+}
+
+// TestEffectiveTenantAdmin_TenantAdmin_WrongTenantID_Denied verifies cross-tenant
+// isolation: a tenant-admin grant on a different tenant must NOT pass.
+func TestEffectiveTenantAdmin_TenantAdmin_WrongTenantID_Denied(t *testing.T) {
+	const thisTenant = "11111111-1111-1111-1111-111111111111"
+	const otherTenant = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	assignments := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "tenant", ScopeValue: otherTenant},
+	}
+	if effectiveTenantAdmin(assignments, thisTenant) {
+		t.Fatal("tenant-admin on a DIFFERENT tenant must NOT satisfy effectiveTenantAdmin for this tenant")
+	}
+}
+
+// TestEffectiveTenantAdmin_PlatformAdmin_ReturnsTrue verifies the legacy
+// (admin, org, "*") marker is still accepted (backwards compat with
+// existing platform-admin grants before Phase 5.1 is complete).
+func TestEffectiveTenantAdmin_PlatformAdmin_ReturnsTrue(t *testing.T) {
+	assignments := []*authv1.RoleAssignment{
+		{Role: "admin", ScopeType: "org", ScopeValue: "*"},
+	}
+	if !effectiveTenantAdmin(assignments, "any-tenant") {
+		t.Fatal("platform-admin marker (admin, org, '*') MUST satisfy effectiveTenantAdmin")
+	}
+}
+
+// TestEffectiveTenantAdmin_EmptyAssignments_Denied is the fail-closed baseline.
+func TestEffectiveTenantAdmin_EmptyAssignments_Denied(t *testing.T) {
+	if effectiveTenantAdmin(nil, "any-tenant") {
+		t.Fatal("nil assignments must never grant effectiveTenantAdmin")
+	}
+	if effectiveTenantAdmin([]*authv1.RoleAssignment{}, "any-tenant") {
+		t.Fatal("empty assignment slice must never grant effectiveTenantAdmin")
+	}
+}
+
+// TestEffectiveTenantAdmin_TenantReader_Denied verifies that reader-level
+// grants at tenant scope do not qualify — admin minimum is required.
+func TestEffectiveTenantAdmin_TenantReader_Denied(t *testing.T) {
+	const tid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	assignments := []*authv1.RoleAssignment{
+		{Role: "reader", ScopeType: "tenant", ScopeValue: tid},
+	}
+	if effectiveTenantAdmin(assignments, tid) {
+		t.Fatal("tenant-scoped reader must NOT satisfy effectiveTenantAdmin (requires admin minimum)")
+	}
+}
+
+// TestEffectiveTenantAdmin_TenantWriter_Denied verifies writer-level grants at
+// tenant scope also do not qualify.
+func TestEffectiveTenantAdmin_TenantWriter_Denied(t *testing.T) {
+	const tid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	assignments := []*authv1.RoleAssignment{
+		{Role: "writer", ScopeType: "tenant", ScopeValue: tid},
+	}
+	if effectiveTenantAdmin(assignments, tid) {
+		t.Fatal("tenant-scoped writer must NOT satisfy effectiveTenantAdmin (requires admin minimum)")
+	}
+}
+
 // TestHasScopedRole_platformAdminMarker — PENTEST-024: the literal "*" scope
 // value is reserved for platform-admin grants. handleSetTenantQuota checks
 // hasScopedRole(assignments, "org", "*", "admin"). An admin of a regular org

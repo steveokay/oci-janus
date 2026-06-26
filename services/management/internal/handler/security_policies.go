@@ -92,19 +92,18 @@ var allowedScannerPlugins = map[string]struct{}{
 	"clair": {},
 }
 
-// requireScanPolicyAdmin gates PUT. Same shape as requireWebhookAdmin —
-// tenant-scoped resources have no "tenant admin" role today, so we accept
-// any admin/owner grant at org scope.
+// requireScanPolicyAdmin gates PUT /api/v1/security/policies.
+//
+// Scan policies are tenant-wide resources — they affect every org and repo in
+// the tenant. An org-A admin must NOT be able to alter policies that govern
+// org-B's image scanning (Review §A1, Top-5 #2 fix).
+//
+// Valid callers:
+//   - Platform-admin marker (admin, org, "*")
+//   - Tenant-scoped admin (admin, tenant, <tenant_id>)
 func (h *Handler) requireScanPolicyAdmin(r *http.Request) bool {
-	for _, a := range h.getUserAssignments(r) {
-		if roleIndex(a.GetRole()) < roleIndex("admin") {
-			continue
-		}
-		if a.GetScopeType() == "org" {
-			return true
-		}
-	}
-	return false
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }
 
 // RegisterSecurityPolicies mounts the FE-API-018 policy routes.
