@@ -569,6 +569,287 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// --- Phase 6.3: previously unmapped events ---
+
+	// scan.queued is emitted by registry-management when a user manually
+	// triggers a scan via the API. Auditing it closes the gap between
+	// "scan requested" and "scan.completed" in the activity feed.
+	case events.RoutingScanQueued:
+		var p events.ScanQueuedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		// Build the object from repo+tag when available, fall back to digest.
+		object := p.RepositoryName
+		if p.TagName != "" {
+			object = p.RepositoryName + ":" + p.TagName
+		} else if p.ManifestDigest != "" {
+			object = p.RepositoryName + "@" + p.ManifestDigest
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "scan.queue",
+			Resource:   object,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// webhook.queued is emitted when a delivery record is created. No
+	// explicit payload struct exists yet — the raw envelope is stored in
+	// metadata for operator inspection. Resource is the raw payload so the
+	// audit row is still identifiable without a typed field.
+	case events.RoutingWebhookQueued:
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "webhook.queue",
+			Resource:   string(event.Payload),
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// webhook.delivered records a successful HTTP delivery. No explicit
+	// payload struct exists yet — details (status code, latency) are
+	// carried in the raw envelope inside metadata.
+	case events.RoutingWebhookDelivered:
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "webhook.deliver",
+			Resource:   string(event.Payload),
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// gc.run.started / gc.run.completed — GC events are system-actor
+	// events. The event envelope ID serves as the run identifier since
+	// GCRunStartedPayload only carries the mode, not a run UUID.
+	case events.RoutingGCRunStarted:
+		var p events.GCRunStartedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "gc.start",
+			Resource:   event.ID, // event envelope ID is the run identifier
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingGCRunCompleted:
+		var p events.GCRunCompletedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		// Encode run stats (bytes_reclaimed, manifests_swept, blobs_swept)
+		// into a dedicated details JSON blob so operators can inspect them
+		// without re-parsing the full raw envelope.
+		details, _ := json.Marshal(map[string]any{
+			"mode":               p.Mode,
+			"manifests_deleted":  p.ManifestsDeleted,
+			"blobs_deleted":      p.BlobsDeleted,
+			"bytes_freed":        p.BytesFreed,
+			"dry_run":            p.DryRun,
+		})
+		gcMeta, _ := json.Marshal(map[string]any{
+			"event_id": event.ID,
+			"raw":      json.RawMessage(event.Payload),
+			"details":  json.RawMessage(details),
+		})
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "gc.complete",
+			Resource:   event.ID, // event envelope ID matches the gc.start row
+			Outcome:    "success",
+			Metadata:   gcMeta,
+			OccurredAt: now,
+		}
+
+	// tenant.deleted is high-impact — audit it with the actor id from the
+	// event payload (set by management's publishTenantEvent helper).
+	case events.RoutingTenantDeleted:
+		var raw struct {
+			TenantID string `json:"tenant_id"`
+			ActorID  string `json:"actor_id"`
+		}
+		_ = json.Unmarshal(event.Payload, &raw)
+		actor := raw.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "tenant.delete",
+			Resource:   raw.TenantID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// tenant.renamed — the payload carries {tenant_id, name, actor_id} from
+	// management's publishTenantEvent. "name" is the NEW name after the rename;
+	// the old name is not available in the current payload shape.
+	case events.RoutingTenantRenamed:
+		var raw struct {
+			TenantID string `json:"tenant_id"`
+			Name     string `json:"name"`
+			ActorID  string `json:"actor_id"`
+		}
+		_ = json.Unmarshal(event.Payload, &raw)
+		actor := raw.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "tenant.rename",
+			Resource:   raw.TenantID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// tenant.plan_changed — the payload carries {tenant_id, plan, actor_id}.
+	// "plan" is the NEW plan after the change.
+	case events.RoutingTenantPlanChanged:
+		var raw struct {
+			TenantID string `json:"tenant_id"`
+			Plan     string `json:"plan"`
+			ActorID  string `json:"actor_id"`
+		}
+		_ = json.Unmarshal(event.Payload, &raw)
+		actor := raw.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "tenant.plan_change",
+			Resource:   raw.TenantID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// tenant.domain.verified — keep mapped even though RM-001 plans to
+	// remove this event when Phase 2.1 ships. The audit table must remain
+	// valid until the routing key is removed from events.go.
+	case events.RoutingTenantDomainVerified:
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "tenant.domain.verify",
+			Resource:   string(event.Payload),
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// store.queued is emitted by registry-proxy when a background blob
+	// store fails and needs a retry. Auditing it gives operators a trail
+	// of proxy retry events. Resource is built from upstream + image when
+	// available, falling back to the raw payload.
+	case events.RoutingStoreQueued:
+		var p events.StoreQueuedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		object := p.UpstreamName
+		if p.Image != "" {
+			object = p.UpstreamName + "/" + p.Image
+		}
+		if object == "" {
+			object = string(event.Payload)
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "proxy.store.queue",
+			Resource:   object,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// cache.populated (FUT-017) — emitted by services/proxy after a
+	// successful pull-through cache write. Auditing it gives operators
+	// a trail of proxy cache population events.
+	case events.RoutingCachePopulated:
+		var p events.CachePopulatedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		object := p.UpstreamName + "/" + p.Image
+		if p.Reference != "" {
+			object = object + ":" + p.Reference
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "proxy.cache.populate",
+			Resource:   object,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// rbac.role_granted / rbac.role_revoked are SECURITY-CRITICAL — they
+	// record every privilege escalation and revocation in the system.
+	// Subject is the granter (the human admin who granted the role), object
+	// encodes the full assignment in a stable "<grantee>:<role>:<scope_type>:<scope_value>"
+	// key so the audit feed can group by assignee without JSON parsing.
+	case events.RoutingRBACRoleGranted:
+		var p events.RoleGrantedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		// Build a stable composite key for the granted assignment so it is
+		// identifiable at a glance in the audit feed.
+		object := p.UserID + ":" + p.Role + ":" + p.ScopeType + ":" + p.ScopeValue
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    p.GrantedBy,
+			ActorType:  "user",
+			Action:     "rbac.grant",
+			Resource:   object,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// rbac.role_revoked — the payload is leaner than RoleGrantedPayload
+	// (carries assignment_id + revoker) because the assignment row is gone
+	// by the time the event fires. The assignment_id is the resource.
+	case events.RoutingRBACRoleRevoked:
+		var p events.RoleRevokedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    p.RevokedBy,
+			ActorType:  "user",
+			Action:     "rbac.revoke",
+			Resource:   p.AssignmentID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil
