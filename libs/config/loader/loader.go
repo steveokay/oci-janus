@@ -255,3 +255,49 @@ func RequireFields(fields map[string]string) error {
 	}
 	return fmt.Errorf("required env vars not set: %v", missing)
 }
+
+// MTLSConfig is the shared mTLS configuration block.
+// Every service constructs this via LoadMTLSConfig() in main.go.
+type MTLSConfig struct {
+	// Required controls whether mTLS certificates must be present.
+	// Production deployments set this to true; dev deployments set it to false.
+	Required   bool
+	CACertPath string
+	CertPath   string
+	KeyPath    string
+}
+
+// LoadMTLSConfig reads MTLS_* env vars.
+// MTLS_REQUIRED defaults to "true" (fail-safe, production-safe).
+// Set MTLS_REQUIRED=false in local dev to skip cert enforcement.
+func LoadMTLSConfig() MTLSConfig {
+	return MTLSConfig{
+		Required:   strings.ToLower(os.Getenv("MTLS_REQUIRED")) != "false",
+		CACertPath: os.Getenv("MTLS_CA_CERT_PATH"),
+		CertPath:   os.Getenv("MTLS_CERT_PATH"),
+		KeyPath:    os.Getenv("MTLS_KEY_PATH"),
+	}
+}
+
+// ValidateMTLSConfig fails if MTLS is required but any cert path is empty.
+// Centralised here so adding a new service inherits the check automatically.
+// This replaces ad-hoc per-service validation (review §A3).
+func ValidateMTLSConfig(cfg MTLSConfig) error {
+	if !cfg.Required {
+		return nil
+	}
+	missing := []string{}
+	if cfg.CACertPath == "" {
+		missing = append(missing, "MTLS_CA_CERT_PATH")
+	}
+	if cfg.CertPath == "" {
+		missing = append(missing, "MTLS_CERT_PATH")
+	}
+	if cfg.KeyPath == "" {
+		missing = append(missing, "MTLS_KEY_PATH")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("MTLS_REQUIRED=true but missing: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
