@@ -88,10 +88,24 @@ type saRepo interface {
 	CountKeysAffectedByScopeShrink(ctx context.Context, saID uuid.UUID, proposed []string) (int64, error)
 }
 
+// redisClient is the minimal Redis interface the Service uses. Defining it as an
+// interface (rather than holding *redis.Client directly) lets tests supply a
+// targeted fake — in particular one that returns an error for specific key
+// prefixes — without mocking the entire redis.Cmdable surface.
+// *redis.Client satisfies this interface via the compile-time check below.
+type redisClient interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Pipeline() redis.Pipeliner
+	SMembers(ctx context.Context, key string) *redis.StringSliceCmd
+}
+
 // Ensure the concrete repository types satisfy the interfaces at compile time.
 var _ userRepo = (*repository.UserRepository)(nil)
 var _ apiKeyRepo = (*repository.APIKeyRepository)(nil)
 var _ saRepo = (*repository.ServiceAccountRepo)(nil)
+var _ redisClient = (*redis.Client)(nil)
 
 // UserRepo is the exported alias of the userRepo interface, so handler-package
 // tests can implement it without importing repository directly.
@@ -115,7 +129,7 @@ func NewWithFakes(
 	apiKeys apiKeyRepo,
 	sa saRepo,
 	audit AuditEmitter,
-	rdb *redis.Client,
+	rdb redisClient,
 	privKeyB64, pubKeyB64, keyID string,
 ) (*Service, error) {
 	privKey, err := parsePrivateKey(privKeyB64)

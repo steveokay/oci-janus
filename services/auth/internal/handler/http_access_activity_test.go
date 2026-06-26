@@ -84,6 +84,12 @@ func (f *fakeAuditClient) TestAuditExportConfig(_ context.Context, _ *auditv1.Te
 func (f *fakeAuditClient) DrainAuditExportDLX(_ context.Context, _ *auditv1.DrainAuditExportDLXRequest, _ ...grpc.CallOption) (*auditv1.DrainAuditExportDLXResponse, error) {
 	return nil, nil
 }
+func (f *fakeAuditClient) GetUserNotificationPreferences(_ context.Context, _ *auditv1.GetUserNotificationPreferencesRequest, _ ...grpc.CallOption) (*auditv1.GetUserNotificationPreferencesResponse, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) UpdateUserNotificationPreferences(_ context.Context, _ *auditv1.UpdateUserNotificationPreferencesRequest, _ ...grpc.CallOption) (*auditv1.UpdateUserNotificationPreferencesResponse, error) {
+	return nil, nil
+}
 
 // ── activityTestEnv ───────────────────────────────────────────────────────────
 
