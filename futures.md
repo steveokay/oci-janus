@@ -526,6 +526,8 @@ agent-style.
 - **Affects:** `services/management`, `frontend`, `docs/SIGNING.md`.
 
 ### DEPLOY-001: Self-hosted vs SaaS deployment-model docs — discussion + ~1 day
+
+> **SUBSUMED 2026-06-26** by REDESIGN-001 (`.claude/plans/2026-06-26-single-tenant-redesign.md`). The redesign's Phase 1.4 (`/api/v1/deployment-info` endpoint), Phase 4.1 (`useDeploymentInfo()` hook), and Phase 8.2 (README + landing-page rewrite) deliver the same outcome with code, not just docs. Do not pick up DEPLOY-001 independently; pick up the redesign instead.
 - **Why:** The platform is multi-tenant by design (every row has
   `tenant_id`; custom domains let a tenant white-label;
   platform-admin marker `(admin, org, *)` separates super-admin
@@ -805,6 +807,8 @@ via the join; both FE surfaces swap their text render for the existing
 **Effort:** ~half day.
 
 ### FUT-011 — Production new-user onboarding smoke test
+
+> **SUBSUMED 2026-06-26** by REDESIGN-001 (`.claude/plans/2026-06-26-single-tenant-redesign.md`). The redesign's Phase 3.1 (`registry-auth bootstrap` CLI) replaces the SQL-seeded admin path; Phase 4.3 (first-run onboarding wizard) walks the new admin through org creation, repo creation, first push, and API key creation. Do not pick up FUT-011 independently; pick up the redesign instead.
 
 **Surfaced:** 2026-06-24 (same testing session as REM-017 above).
 Walked through the FE/API path: admin creates user via

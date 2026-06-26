@@ -14,6 +14,11 @@ import (
 	"github.com/steveokay/oci-janus/services/management/internal/server"
 )
 
+// Version is the build-time version string injected via -ldflags.
+// Default "dev" is overridden in CI builds by:
+//   go build -ldflags="-X main.Version=v1.2.3"
+var Version = "dev"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -35,6 +40,9 @@ func main() {
 		slog.Error("mTLS configuration invalid", "err", err)
 		os.Exit(1)
 	}
+	// Inject the binary version (set via -ldflags at build time) into config
+	// so the deployment-info handler can serve it to the FE.
+	cfg.BuildVersion = Version
 
 	shutdown, err := otel.Bootstrap(ctx, otel.Config{
 		Exporter:     cfg.OTELExporter,

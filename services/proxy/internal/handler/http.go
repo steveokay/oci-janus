@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -338,11 +339,24 @@ func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *
 	}
 	w.WriteHeader(http.StatusOK)
 
-	// Pipe the upstream body to both the HTTP client and the background store goroutine.
-	// TeeReader splits the stream: io.Copy drives the read, tee writes each byte to pw,
-	// and the background goroutine reads from pr.
+	// Phase 6.1 (Review §A4 / Top-5 #4): Pipe the upstream body to THREE destinations:
+	//   (a) the HTTP response writer (client),
+	//   (b) the background store goroutine (via io.Pipe pr/pw), and
+	//   (c) a sha256.Hash for digest verification.
+	//
+	// Without digest verification a compromised or MITM'd upstream can serve arbitrary
+	// bytes under any digest string, and the proxy caches them indefinitely as
+	// "trustworthy" — silently breaking the OCI content-addressable trust property
+	// for every subsequent pull until the cache entry expires.
+	//
+	// After io.Copy completes we compare hasher.Sum(nil) to the requested digest.
+	// On mismatch: CloseWithError poisons the pipe so the storage goroutine returns
+	// an error before CloseAndRecv — the falsified bytes are NEVER committed.
+	// On match: pw.Close sends a clean EOF, allowing the commit to proceed normally.
 	pr, pw := io.Pipe()
-	tee := io.TeeReader(rc, pw)
+	hasher := sha256.New()
+	multi := io.MultiWriter(pw, hasher)
+	tee := io.TeeReader(rc, multi)
 
 	// SEC-028: Detach from request context intentionally — this goroutine caches the
 	// blob after the client response is complete. Using context.WithoutCancel ensures
@@ -362,16 +376,26 @@ func (h *HTTPHandler) handleGetBlob(w http.ResponseWriter, r *http.Request, up *
 	// Calling pw.CloseWithError signals the background goroutine via the pipe that
 	// the stream is broken and it must NOT call CloseAndRecv (which would commit a
 	// truncated blob under the correct digest key in storage).
-	// If the copy succeeds, pw.Close sends a clean EOF so the goroutine can finalise.
 	_, copyErr := io.Copy(w, tee)
 	if copyErr != nil {
 		// Client disconnected mid-stream: poison the pipe so storeBlobFromReader
 		// returns an error, logs it, and queues a retry rather than storing garbage.
 		slog.Debug("client connection closed during blob stream", "err", copyErr)
 		pw.CloseWithError(copyErr)
-	} else {
-		// Clean stream end: let the background goroutine drain the pipe and commit.
-		pw.Close()
+		return
+	}
+
+	// Phase 6.1: verify the upstream body matches the requested digest and
+	// close the pipe cleanly on match or with an error on mismatch.
+	if err := verifyBlobDigest(hasher, digest, pw); err != nil {
+		slog.Error("upstream blob digest mismatch — aborting cache commit",
+			"expected", digest,
+			"upstream", up.Name,
+			"image", image,
+		)
+		// pw was already poisoned by verifyBlobDigest; the storage goroutine
+		// will return an error and not commit. The client has already received
+		// the bytes — we cannot recall them, but we prevent permanent cache poisoning.
 	}
 }
 
@@ -493,6 +517,32 @@ func (h *HTTPHandler) storeBlobFromReader(ctx context.Context, key, tenantID, co
 	if _, err := stream.CloseAndRecv(); err != nil {
 		return fmt.Errorf("close put-blob stream: %w", err)
 	}
+	return nil
+}
+
+// verifyBlobDigest compares the sha256 bytes accumulated in hasher against the
+// OCI digest string (e.g. "sha256:abcdef..."). On match it closes pw cleanly
+// (nil error) so the storage goroutine can commit the blob. On mismatch it
+// closes pw with an error (poisoning the pipe) so the storage goroutine aborts
+// before CloseAndRecv — preventing false bytes from being cached.
+//
+// Phase 6.1 (Review §A4 / Top-5 #4): This is the guard that stops a
+// compromised or MITM'd upstream from permanently poisoning the blob cache. The
+// client has already received the bytes by the time we call this (we cannot
+// recall them), but the cache commit is cleanly prevented.
+//
+// The caller (handleGetBlob) must call this exactly once, after io.Copy
+// completes and only on a clean-EOF copy (copyErr == nil). The hasher must have
+// received every byte that was sent to the pipe writer (via io.MultiWriter).
+func verifyBlobDigest(hasher interface{ Sum([]byte) []byte }, digest string, pw *io.PipeWriter) error {
+	expectedHex := strings.TrimPrefix(digest, "sha256:")
+	computedHex := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(expectedHex, computedHex) {
+		err := fmt.Errorf("upstream digest mismatch: expected %s, got sha256:%s", digest, computedHex)
+		pw.CloseWithError(err)
+		return err
+	}
+	pw.Close()
 	return nil
 }
 

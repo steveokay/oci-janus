@@ -943,7 +943,16 @@ func buildAuthFakesService(svc *Service) *authFakes {
 	svc.serviceAccounts = sr
 	svc.audit = ae
 
-	return &authFakes{saRepo: sr, userRepo: ur, keyRepo: ar, audit: ae, redis: svc.redis}
+	// svc.redis is now typed as redisClient (interface) but in normal test setup
+	// it is always backed by a *redis.Client (via setupService / miniredis). The
+	// type assertion here is intentional: authFakes.redis must be *redis.Client
+	// so tests can seed Redis keys directly and so revokeUserErrRedis can embed
+	// it as a concrete type.
+	rdb, ok := svc.redis.(*redis.Client)
+	if !ok {
+		panic("buildAuthFakesService: svc.redis is not *redis.Client — was it already replaced with a fake?")
+	}
+	return &authFakes{saRepo: sr, userRepo: ur, keyRepo: ar, audit: ae, redis: rdb}
 }
 
 // newAuthService constructs a Service backed by in-memory fakes and miniredis
@@ -1208,7 +1217,70 @@ func TestValidateToken_NoRevokeKey_Succeeds(t *testing.T) {
 		"returned claims must carry the original subject")
 }
 
-// ── T10: benchmark ────────────────────────────────────────────────────────────
+// ── T12b: Redis fail-closed on principal-revocation check (Review §B) ────────
+
+// revokeUserErrRedis is a test-only redisClient implementation that wraps a
+// real *redis.Client (backed by miniredis) but injects a synthetic error for
+// any Get call whose key begins with "revoke:user:". This lets us isolate the
+// principal-revocation check in ValidateToken from the JTI-revocation check
+// (which uses a "jwt:revoked:" prefix) and observe that a Redis error on the
+// principal check causes ValidateToken to fail CLOSED with codes.Unavailable.
+//
+// All other methods (Set, Del, Pipeline, SMembers) delegate transparently to
+// the underlying *redis.Client so the rest of the Service remains functional.
+type revokeUserErrRedis struct {
+	*redis.Client
+}
+
+// Get returns an injected error for "revoke:user:*" keys and delegates to the
+// real client for all other keys (including the JTI revocation check).
+func (r *revokeUserErrRedis) Get(ctx context.Context, key string) *redis.StringCmd {
+	if len(key) > len("revoke:user:") && key[:len("revoke:user:")] == "revoke:user:" {
+		// Return a non-Nil error to exercise the fail-closed branch in ValidateToken.
+		return redis.NewStringResult("", errors.New("injected Redis unavailable error"))
+	}
+	return r.Client.Get(ctx, key)
+}
+
+// TestValidateToken_RedisError_FailsClosed verifies Review §B: when the Redis
+// call for the principal-revocation check returns a real error (not redis.Nil),
+// ValidateToken must fail CLOSED with codes.Unavailable rather than allowing
+// the token through.
+//
+// Human users have no second-layer DB check (only SA principals get a
+// ValidateAPIKey DB lookup), so failing open on a Redis error in the
+// principal-revocation check would silently allow a disabled human user to
+// continue using their JWT for up to the full JWT TTL (5 minutes).
+//
+// Technique: we swap in a revokeUserErrRedis wrapper that injects an error
+// only for "revoke:user:" key Gets, leaving JTI-revocation Gets (which use the
+// "jwt:revoked:" prefix) backed by the real miniredis. This isolates the exact
+// branch under test.
+func TestValidateToken_RedisError_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	// Build a normal service (backed by real miniredis and RSA keys).
+	svc, fakes := newAuthService(t, ctx)
+
+	// Swap the redis field for a wrapper that injects errors on "revoke:user:" Gets.
+	// Same-package access allows writing the unexported field directly.
+	svc.redis = &revokeUserErrRedis{Client: fakes.redis}
+
+	// Issue a valid JWT. IssueToken does not write to Redis, so the swap does
+	// not affect token issuance. The token is signed and structurally valid.
+	token, _ := fakes.issueJWT(svc, "human-user")
+
+	// ValidateToken must fail CLOSED with codes.Unavailable:
+	//   1. isRevoked (JTI check, "jwt:revoked:" prefix) → returns redis.Nil → not
+	//      revoked → continues normally.
+	//   2. principal-revocation check ("revoke:user:" prefix) → injected error →
+	//      must fail closed with codes.Unavailable.
+	_, validateErr := svc.ValidateToken(ctx, token)
+	require.Error(t, validateErr,
+		"injected Redis error on principal-revocation check must cause ValidateToken to return an error")
+	require.Equal(t, codes.Unavailable, status.Code(validateErr),
+		"Redis error on revoke:user: check must return codes.Unavailable (fail closed, Review §B)")
+}
 
 // newBenchService is the *testing.B counterpart of setupService. It shares
 // the same construction logic (miniredis + RSA) but accepts a *testing.B so

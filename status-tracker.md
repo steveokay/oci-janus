@@ -22,6 +22,20 @@
 
 ## Open remediation items
 
+### REDESIGN-001 — Single-tenant self-hosted redesign (planning phase)
+
+**Surfaced:** 2026-06-26 after a deep system review (`.claude/reviews/system-review-2026-06-26.md`) identified that the multi-tenant SaaS architecture was half-built and the security debt that flowed from that drift (Top-5 findings: RLS missing on 8 of 9 DBs, "any-org-admin = tenant-admin" gate flaw, custom-domain takeover via `ON CONFLICT DO UPDATE`, pull-through proxy missing digest verification, dev-seed admin shipped in prod image).
+
+**Decision:** Soft-hide multi-tenancy rather than fully drop or keep as-is. `DEPLOYMENT_MODE=single` becomes the default OSS posture; `=multi` preserves the SaaS capability. Drop the SaaS-only features (custom domains, per-tenant SSO, plan UI, tenant signup); keep schema-level `tenant_id` for forward compat; fix the security debt as part of the redesign.
+
+**Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated.
+
+**Status:** IN PROGRESS — Phase 0 ✅ COMPLETE (2026-06-26). All 9 RM-NNN approved for full removal (no soft preservation). All 6 HD-NNN confirmed (HD-006 N/A since RM-003 went full removal). All 5 Q-NNN answered. Phase 2 (SaaS removal) UNBLOCKED. Phases 1 (foundation) + 6 (security debt) safe to start in parallel.
+
+**Blocks:** FUT-019 Phase 3 (email channel design substantially simplifies under single-mode); FUT-010 (RBAC polish becomes part of Phase 5); FUT-011 (subsumed by Phase 3.1 bootstrap CLI + Phase 4.3 onboarding wizard); DEPLOY-001 (subsumed by Phase 1.4 deployment-info + Phase 8.2 README rewrite).
+
+---
+
 ### REM-013 — Retention surface backend gaps
 
 **Affects:** `services/metadata` (proto + repo + handler), `services/management` (BFF).
