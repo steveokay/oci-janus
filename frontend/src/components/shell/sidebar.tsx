@@ -158,6 +158,12 @@ export function SidebarBody({
   // deploymentInfo.data?.deployment_mode === "multi" to gate platform-only
   // items. Called here (result unused) so the hook is load-bearing and its
   // cache is primed before the Settings tab renders in the same shell.
+  //
+  // Phase 4.6 note: the desktop <Sidebar> and the mobile <MobileNav> both
+  // mount SidebarBody in parallel (CSS hides one, but both stay in the
+  // DOM). That means this hook is called twice. Intentional — TanStack
+  // Query dedupes by query key, so the second call is a cache hit, no
+  // extra network. Don't "optimise" by lifting state to a context.
   useDeploymentInfo();
 
   // FE-API-009 — sidebar header reflects the live workspace name once the BFF
