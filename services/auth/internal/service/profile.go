@@ -131,6 +131,24 @@ func (s *Service) UpdateUserProfile(
 	})
 }
 
+// MarkOnboardingComplete flips users.onboarding_complete to true for the given
+// user and returns the refreshed row. REDESIGN-001 Phase 4.3 — invoked by
+// POST /api/v1/users/me/onboarding/complete when the wizard concludes.
+//
+// This is a thin pass-through to the repository: there's no policy to enforce
+// here (the wizard is purely a UI affordance, not a security boundary) and no
+// side effects beyond the column flip and updated_at touch. The handler is the
+// only caller, but we still route through the service layer so future hooks
+// (audit emit, metrics, "first user completed onboarding" platform-level
+// notification) can land here without churning the handler.
+//
+// Idempotent: calling it on a user whose flag is already true succeeds.
+// Returns repository.ErrNotFound when the user id no longer exists so the
+// handler can map it to 401.
+func (s *Service) MarkOnboardingComplete(ctx context.Context, userID uuid.UUID) (*repository.User, error) {
+	return s.users.MarkOnboardingComplete(ctx, userID)
+}
+
 // ChangePassword verifies the supplied current password, enforces the password
 // policy on the new password, persists the new argon2id hash, and revokes all
 // of the user's currently active JTIs from Redis so any other sessions are

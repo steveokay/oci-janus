@@ -48,6 +48,12 @@ type User struct {
 	// IsGlobalAdmin reflects users.is_global_admin — typed platform-admin flag.
 	// Added by migration 20260629000001 (REDESIGN-001 Phase 5.1).
 	IsGlobalAdmin bool
+	// OnboardingComplete reflects users.onboarding_complete — true once the
+	// human has completed (or dismissed) the post-login onboarding wizard.
+	// Added by migration 20260629000002 (REDESIGN-001 Phase 4.3). Service
+	// accounts and pre-existing users are backfilled to true so the wizard
+	// only ever fires for genuinely-new humans.
+	OnboardingComplete bool
 }
 
 // CreateUserRequest carries the validated inputs for creating a new user.
@@ -107,7 +113,7 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -115,7 +121,7 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -134,7 +140,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
 		FROM   users -- allow-any-kind: username lookup is kind-agnostic; callers on the
 		             -- human login path must use GetHumanByUsername instead (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND username = $2`
@@ -204,7 +210,7 @@ func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserReq
 		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, 'human')
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -212,7 +218,7 @@ func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserReq
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -283,7 +289,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND kind = 'human'
 		ORDER  BY created_at DESC`
@@ -300,7 +306,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 		if err := rows.Scan(
 			&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 			&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
+			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
 		); err != nil {
 			return nil, fmt.Errorf("scan human user: %w", err)
 		}
@@ -324,7 +330,7 @@ func (r *UserRepository) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2) AND kind = 'human'`
 
@@ -339,7 +345,7 @@ func (r *UserRepository) GetHumanByID(ctx context.Context, id uuid.UUID) (*User,
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  id = $1 AND kind = 'human'`
 
@@ -368,7 +374,7 @@ func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*Use
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
 		FROM   users -- allow-any-kind: intentional — SA management handlers need shadow users
 		WHERE  id = $1`
 
@@ -441,16 +447,18 @@ func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) er
 }
 
 // scanOne executes query with args and scans a single User row.
-// Every SELECT that feeds into this helper must include 'kind' and
-// 'is_global_admin' as the last two columns in the select list
-// (migration 20260622000001 added kind; migration 20260629000001 added
-// is_global_admin — REDESIGN-001 Phase 5.1).
+// Every SELECT that feeds into this helper must include 'kind',
+// 'is_global_admin', and 'onboarding_complete' as the trailing columns
+// in the select list (migration 20260622000001 added kind; migration
+// 20260629000001 added is_global_admin — REDESIGN-001 Phase 5.1;
+// migration 20260629000002 added onboarding_complete — REDESIGN-001
+// Phase 4.3).
 func (r *UserRepository) scanOne(ctx context.Context, query string, args ...any) (*User, error) {
 	var u User
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -513,13 +521,13 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, req Up
 		WHERE  id = $1
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q, id, setName, nameVal, setEmail, emailVal).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -565,6 +573,42 @@ func (r *UserRepository) SetGlobalAdmin(ctx context.Context, userID uuid.UUID, g
 		return ErrNotFound
 	}
 	return nil
+}
+
+// MarkOnboardingComplete sets onboarding_complete = true for the given user.
+// REDESIGN-001 Phase 4.3 — backs POST /api/v1/users/me/onboarding/complete.
+//
+// Idempotent by design: calling it when the column is already true is not an
+// error — the wizard's "Done" button can be double-clicked, the page can be
+// reloaded, and clients may retry on network blips. updated_at is touched on
+// every call so the audit trail still shows the most recent interaction.
+//
+// Returns the refreshed row so the caller can surface the new value without a
+// follow-up SELECT. Maps pgx.ErrNoRows → ErrNotFound so the HTTP handler can
+// distinguish a vanished JWT subject (401) from a real database error (500).
+func (r *UserRepository) MarkOnboardingComplete(ctx context.Context, userID uuid.UUID) (*User, error) {
+	const q = `
+		UPDATE users
+		SET    onboarding_complete = true,
+		       updated_at          = NOW()
+		WHERE  id = $1
+		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
+		          password_hash, is_active, failed_logins, locked_until,
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
+
+	var u User
+	err := r.pool.QueryRow(ctx, q, userID).Scan(
+		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
+		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("mark onboarding complete: %w", err)
+	}
+	return &u, nil
 }
 
 // isUniqueViolation reports whether err is a PostgreSQL unique constraint violation (SQLSTATE 23505).
