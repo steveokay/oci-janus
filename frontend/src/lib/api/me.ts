@@ -53,6 +53,8 @@ export interface MeResponse {
   created_at?: string;
   last_login_at?: string | null;
   tenant_id: string;
+  // REDESIGN-001 Phase 4.3 — true means the user has dismissed or completed the wizard.
+  onboarding_complete?: boolean;
   roles: string[];
   memberships?: Membership[];
   // service_account is present only when type === "service_account".
@@ -103,6 +105,36 @@ export function useChangePassword() {
   return useMutation({
     mutationFn: async (body: ChangePasswordBody) => {
       await apiClient.post("/users/me/password", body);
+    },
+  });
+}
+
+// REDESIGN-001 Phase 4.3 — mark the first-run onboarding wizard complete.
+//
+// Backend:
+//   POST /api/v1/users/me/onboarding/complete  → 204 No Content
+//
+// Called by:
+//   - /getting-started "Open repositories" / "Skip for now" buttons.
+//   - (Future) a "Replay onboarding" link on Settings, once we wire one.
+//
+// The success handler patches the cached MeResponse so the very next render
+// of `useMe()` reflects truth without waiting for a refetch — important
+// because the post-wizard navigation lands on `/` which immediately reads
+// `me.onboarding_complete` to decide whether to re-route. We still
+// invalidate the key as a safety net in case the backend ever extends the
+// payload past what we patched here.
+export function useCompleteOnboarding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await apiClient.post("/users/me/onboarding/complete");
+    },
+    onSuccess: () => {
+      qc.setQueryData<MeResponse>(meKeys.all, (prev) =>
+        prev ? { ...prev, onboarding_complete: true } : prev,
+      );
+      void qc.invalidateQueries({ queryKey: meKeys.all });
     },
   });
 }
