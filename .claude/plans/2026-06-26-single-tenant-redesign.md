@@ -56,9 +56,9 @@
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
 | 4.2.c | Settings › Workspace tab content (Members, Orgs, SSO read-only, **Retention defaults**, Scan policies, Workspace webhooks) | ✅ DONE | #144 | 2026-06-27 |
-| 4.2.d | Settings › Platform tab + `/admin/*` migration + 301 redirects (Tenants, **Scanner adapters**, **GC schedule + run history**, Deployment info) | 🟡 IN PROGRESS | #145 | 2026-06-27 |
-| 4.2.e | Security page split (Overview, Vulnerabilities, Scans, Signing, Policies, Reports) | 🟡 IN PROGRESS | #146 | 2026-06-27 |
-| 4.3 | First-run onboarding wizard | ⬜ OPEN | — | — |
+| 4.2.d | Settings › Platform tab + `/admin/*` migration + 301 redirects (Tenants, **Scanner adapters**, **GC schedule + run history**, Deployment info) | ✅ DONE | #145 | 2026-06-27 |
+| 4.2.e | Security page split (Overview, Vulnerabilities, Scans, Signing, Policies, Reports) | ✅ DONE | #146 | 2026-06-27 |
+| 4.3 | First-run onboarding wizard | ✅ DONE | #148, #149 | 2026-06-27 |
 | 4.4 | `/me/abilities` BFF + `useAbility()` hook | ✅ DONE | #139 | 2026-06-27 |
 | 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
 | 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
