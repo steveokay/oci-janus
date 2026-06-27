@@ -164,6 +164,10 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/users/me", h.getCurrentUser)
 	mux.HandleFunc("PATCH /api/v1/users/me", h.updateCurrentUser)
 	mux.HandleFunc("POST /api/v1/users/me/password", h.changeCurrentUserPassword)
+	// REDESIGN-001 Phase 4.3 — post-login onboarding wizard completion.
+	// Flips users.onboarding_complete = true for the authenticated human user.
+	// Idempotent; service accounts get a 403.
+	mux.HandleFunc("POST /api/v1/users/me/onboarding/complete", h.completeOnboarding)
 	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.

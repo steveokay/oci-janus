@@ -22,10 +22,45 @@ export const Route = createFileRoute("/_authenticated/")({
 
 function DashboardHome(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
-  const { data: me } = useMe();
+  const { data: me, isLoading: meLoading } = useMe();
   const { data, isLoading, isError, error, refetch } = useStats();
   const { data: workspace } = useWorkspace();
   const navigate = useNavigate();
+
+  // REDESIGN-001 Phase 4.3 — first-run onboarding auto-redirect.
+  //
+  // WHAT: When the authenticated caller has `onboarding_complete === false`,
+  // bounce them to `/getting-started` instead of rendering the dashboard.
+  //
+  // WHY (render-time vs beforeLoad): a `beforeLoad` redirect would depend on
+  // the React-Query cache being warm at navigation time. For a freshly logged-
+  // in user (the exact audience for this redirect), the `me` cache is still
+  // cold on first dashboard hit, so `beforeLoad` would either miss the
+  // redirect or have to do its own fetch. Reading `useMe()` at render time
+  // and redirecting via `useNavigate` reliably waits for the value to arrive.
+  //
+  // WHY (skip rules):
+  //   - `type === "service_account"`: SA principals don't onboard (the BE
+  //     returns 403 from POST /users/me/onboarding/complete), and they're
+  //     CI bots that should land on the dashboard.
+  //   - `onboarding_complete === undefined`: defensive — a pre-rollout
+  //     backend without the column would omit the field. Treat undefined
+  //     as "done" so legacy users aren't trapped in a loop.
+  //
+  // WHY (replace: true): prevents the browser back button from bouncing the
+  // user back into the dashboard mid-onboarding, which would either re-trigger
+  // the redirect (infinite loop) or — worse — flash the dashboard briefly.
+  const isServiceAccountForOnboarding =
+    (me?.type ?? "user") === "service_account";
+  const shouldOnboard =
+    me !== undefined &&
+    !isServiceAccountForOnboarding &&
+    me.onboarding_complete === false;
+  React.useEffect(() => {
+    if (shouldOnboard) {
+      void navigate({ to: "/getting-started", replace: true });
+    }
+  }, [shouldOnboard, navigate]);
 
   const greeting = useGreeting();
   // Service-account principals fall back to a non-personal salutation
@@ -71,6 +106,21 @@ function DashboardHome(): React.ReactElement {
     }
     return;
   }, [totalRepos, navigate]);
+
+  // REDESIGN-001 Phase 4.3 — gate the render on the onboarding redirect.
+  //
+  // WHAT: While `useMe()` is still loading, or while a first-run redirect is
+  // in flight, return an empty container instead of the dashboard.
+  //
+  // WHY (placement after all hooks): the rules of hooks require every hook
+  // call to happen in the same order each render. This early return therefore
+  // sits AFTER every `useState` / `useRef` / `useEffect` above it, so we never
+  // skip a hook on the redirecting render. The cost is a single extra render
+  // pass for first-run users; the benefit is no dashboard flash before the
+  // wizard appears.
+  if (meLoading || shouldOnboard) {
+    return <div className="space-y-8" aria-busy="true" />;
+  }
 
   return (
     <div className="space-y-8">

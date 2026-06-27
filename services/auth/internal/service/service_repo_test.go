@@ -305,6 +305,19 @@ func (f *fakeUserRepo) SetGlobalAdmin(_ context.Context, userID uuid.UUID, grant
 	return repository.ErrNotFound
 }
 
+// MarkOnboardingComplete flips OnboardingComplete=true on the in-memory user
+// record. Satisfies the userRepo interface (REDESIGN-001 Phase 4.3).
+// Idempotent — re-calling returns the same row without an error.
+func (f *fakeUserRepo) MarkOnboardingComplete(_ context.Context, userID uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.OnboardingComplete = true
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
 	keys             map[uuid.UUID]*repository.APIKey

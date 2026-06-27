@@ -477,6 +477,180 @@ func TestChangePassword_rateLimit_returns429(t *testing.T) {
 	}
 }
 
+// ── REDESIGN-001 Phase 4.3 — onboarding-complete flag + endpoint ──────────────
+
+// TestGetCurrentUser_OnboardingFlagPresent verifies that the GET /users/me
+// response exposes the new onboarding_complete field. A fresh user has not
+// completed onboarding so the value must be false (and the field must be
+// present — never elided).
+//
+// REDESIGN-001 Phase 4.3 §1: this is the regression guard for the FE contract.
+func TestGetCurrentUser_OnboardingFlagPresent(t *testing.T) {
+	srv, tc := newTestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "owen", "Str0ng!Password123")
+
+	req := makeMeRequest(t, srv, tc, http.MethodGet, "/api/v1/users/me", nil, userID, tenantID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /users/me: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	// Decode into a generic map so we can assert presence (not just value)
+	// of the new field — a missing field would deserialise to the zero value
+	// in a typed struct, hiding the bug.
+	var got map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	flag, present := got["onboarding_complete"]
+	if !present {
+		t.Fatal("onboarding_complete: field must be present in /users/me response")
+	}
+	if flag != false {
+		t.Errorf("onboarding_complete: got %v, want false (new user)", flag)
+	}
+}
+
+// TestCompleteOnboarding_Human_204 verifies the happy path: a human user can
+// flip their onboarding flag, the endpoint returns 204, and the repo state is
+// updated. We then GET /users/me to confirm the flag is now true end-to-end.
+func TestCompleteOnboarding_Human_204(t *testing.T) {
+	srv, tc := newTestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "paula", "Str0ng!Password123")
+
+	req := makeMeRequest(t, srv, tc, http.MethodPost, "/api/v1/users/me/onboarding/complete", nil, userID, tenantID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST onboarding/complete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		buf, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d, want 204, body=%s", resp.StatusCode, string(buf))
+	}
+
+	// Re-fetch /users/me and assert the flag is now true. This double-checks
+	// that the handler+repo wiring actually persisted the change rather than
+	// returning 204 without mutating state.
+	getReq := makeMeRequest(t, srv, tc, http.MethodGet, "/api/v1/users/me", nil, userID, tenantID)
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET /users/me: %v", err)
+	}
+	defer getResp.Body.Close()
+	var got map[string]interface{}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["onboarding_complete"] != true {
+		t.Errorf("onboarding_complete after POST: got %v, want true", got["onboarding_complete"])
+	}
+}
+
+// TestCompleteOnboarding_Idempotent verifies that calling the endpoint twice
+// still returns 204. Wizard "Done" buttons can be double-clicked and clients
+// may retry on network blips; the second call MUST NOT error.
+func TestCompleteOnboarding_Idempotent(t *testing.T) {
+	srv, tc := newTestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "quinn", "Str0ng!Password123")
+
+	// First call — sets the flag.
+	req1 := makeMeRequest(t, srv, tc, http.MethodPost, "/api/v1/users/me/onboarding/complete", nil, userID, tenantID)
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("first POST onboarding/complete: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != http.StatusNoContent {
+		t.Fatalf("first call status: got %d, want 204", resp1.StatusCode)
+	}
+
+	// Second call — must also return 204, not an error.
+	req2 := makeMeRequest(t, srv, tc, http.MethodPost, "/api/v1/users/me/onboarding/complete", nil, userID, tenantID)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("second POST onboarding/complete: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNoContent {
+		buf, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("second call status: got %d, want 204, body=%s", resp2.StatusCode, string(buf))
+	}
+}
+
+// TestCompleteOnboarding_Unauthenticated_401 verifies that an unauthenticated
+// request (no Bearer header) returns 401. We test the no-header case rather
+// than a malformed token because the requireAuth path treats both the same.
+func TestCompleteOnboarding_Unauthenticated_401(t *testing.T) {
+	srv, _ := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users/me/onboarding/complete", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST onboarding/complete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestCompleteOnboarding_ServiceAccount_403 verifies that a service-account
+// shadow user attempting to complete onboarding is rejected with 403. SAs are
+// machine identities and the wizard is a human-only affordance — the handler
+// returns FORBIDDEN to signal "wrong principal kind" (the caller IS
+// authenticated, they just can't onboard).
+func TestCompleteOnboarding_ServiceAccount_403(t *testing.T) {
+	env := newSATestEnv(t)
+
+	// Seed an SA + its shadow user in the in-memory fakes, mirroring the
+	// existing SA test setup pattern.
+	saShadowUserID := uuid.New()
+	sa := &repository.ServiceAccount{
+		ID:            uuid.New(),
+		TenantID:      env.tenantID,
+		ShadowUserID:  saShadowUserID,
+		Name:          "ci-onboarding-test",
+		Description:   "must not be able to onboard",
+		AllowedScopes: []string{"pull"},
+		CreatedAt:     time.Now(),
+	}
+	env.saRepo.accounts[sa.ID] = sa
+	shadow := &repository.User{
+		ID:       saShadowUserID,
+		TenantID: env.tenantID,
+		Username: "sa-" + sa.ID.String()[:8],
+		Email:    "sa+" + sa.ID.String() + "@internal.invalid",
+		Kind:     "service_account",
+		IsActive: true,
+	}
+	env.tc.users.users[shadow.Username] = shadow
+
+	// Issue a JWT as the shadow user.
+	tok := issueTestToken(t, env.tc.svc, saShadowUserID.String(), env.tenantID.String(), nil)
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/users/me/onboarding/complete", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST onboarding/complete: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		buf, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d, want 403, body=%s", resp.StatusCode, string(buf))
+	}
+
+	// Confirm the shadow user's flag was NOT flipped — SA principals must
+	// not be able to mutate state through this endpoint even by accident.
+	if shadow.OnboardingComplete {
+		t.Error("shadow user OnboardingComplete was flipped despite 403")
+	}
+}
+
 // ── FE-API-048 T16: polymorphic principal envelope ────────────────────────────
 
 // TestUsersMe_HumanCallerKeepsExistingShape verifies that a human caller's

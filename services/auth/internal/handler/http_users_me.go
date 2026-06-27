@@ -43,6 +43,11 @@ type currentUserResponse struct {
 	TenantID    string       `json:"tenant_id"`
 	Roles       []string     `json:"roles"`
 	Memberships []membership `json:"memberships"`
+	// OnboardingComplete mirrors users.onboarding_complete (REDESIGN-001
+	// Phase 4.3). The frontend uses it to decide whether to open the
+	// post-login onboarding wizard. Always present so the dashboard can
+	// distinguish "false" from "field missing".
+	OnboardingComplete bool `json:"onboarding_complete"`
 }
 
 // membership describes one row from role_assignments as the dashboard needs it.
@@ -358,6 +363,75 @@ func (h *HTTPHandler) changeCurrentUserPassword(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// completeOnboarding implements REDESIGN-001 Phase 4.3 — POST
+// /api/v1/users/me/onboarding/complete. Marks the authenticated user's
+// onboarding_complete = true (idempotent) and returns 204 No Content.
+//
+// Auth model:
+//   - Unauthenticated → 401 (same generic body as other auth failures).
+//   - Service-account principal → 403. SAs are machine identities; the wizard
+//     is a human-only affordance. We choose 403 over 400 because the caller IS
+//     authenticated — just not of the right kind. The error code FORBIDDEN
+//     signals "your principal type can't do this" rather than "your input was
+//     malformed".
+//   - JWT subject that no longer exists → 401 (same handling as GET /users/me).
+//
+// Idempotency: the underlying SQL is `UPDATE … SET onboarding_complete = true`
+// with no condition on the prior value, so re-calling on an already-completed
+// user simply touches updated_at and returns 204 again. This protects against
+// double-clicks of the wizard's "Done" button and against retry-on-network-blip
+// clients.
+func (h *HTTPHandler) completeOnboarding(w http.ResponseWriter, r *http.Request) {
+	claims, err := h.requireAuth(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+		return
+	}
+	userID, _, err := parseUserAndTenant(claims)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "users/me/onboarding/complete: invalid claims", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// Reject service-account callers before mutating any state. We look up the
+	// user any-kind so we can inspect Kind without filtering out SA shadow
+	// rows. If the JWT subject vanished entirely we fall through to 401.
+	user, err := h.svc.GetUserByID(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// Same 401 mapping as GET /users/me: the frontend interceptor
+			// logs the user out rather than treating it as recoverable.
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+			return
+		}
+		slog.ErrorContext(r.Context(), "users/me/onboarding/complete: GetUserByID failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+	if user.Kind == "service_account" {
+		// SAs never onboard — the wizard is a UI affordance for humans only.
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "service accounts cannot complete onboarding")
+		return
+	}
+
+	if _, err := h.svc.MarkOnboardingComplete(r.Context(), userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// Race: the user was deleted between GetUserByID and now. Treat
+			// the same as a vanished JWT subject — 401, log the user out.
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
+			return
+		}
+		slog.ErrorContext(r.Context(), "users/me/onboarding/complete: mark failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	// 204 No Content — there's no response body for the wizard to consume.
+	// The frontend re-fetches GET /users/me to pick up the flipped flag.
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // parseUserAndTenant pulls the user UUID (from `sub`) and tenant UUID (from
@@ -437,5 +511,10 @@ func (h *HTTPHandler) buildCurrentUserResponse(r *http.Request, user *repository
 		TenantID:    user.TenantID.String(),
 		Roles:       roles,
 		Memberships: memberships,
+		// REDESIGN-001 Phase 4.3: surface the wizard-completion flag so the
+		// frontend knows whether to render the onboarding wizard on this
+		// session. Always present in the JSON (never elided) so the FE can
+		// trust the field exists.
+		OnboardingComplete: user.OnboardingComplete,
 	}, nil
 }

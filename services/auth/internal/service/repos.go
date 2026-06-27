@@ -62,6 +62,10 @@ type userRepo interface {
 	// SetGlobalAdmin updates users.is_global_admin for the given user.
 	// REDESIGN-001 Phase 5.1 — typed platform-admin primitive.
 	SetGlobalAdmin(ctx context.Context, userID uuid.UUID, granted bool) error
+	// MarkOnboardingComplete flips users.onboarding_complete to true for the
+	// given user. REDESIGN-001 Phase 4.3 — backs the post-login wizard's
+	// "Done" / "Skip" buttons. Idempotent so retries are safe.
+	MarkOnboardingComplete(ctx context.Context, userID uuid.UUID) (*repository.User, error)
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

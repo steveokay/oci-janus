@@ -1,5 +1,7 @@
 # Security Issues
 
+> Last updated: 2026-06-27 — SEC-037 logged (LOW, single-statement onboarding backfill could contend with login UPDATEs on large user tables) from Phase 4.3 §1 review of commit `ec43e05`.
+>
 > Last audited: 2026-06-21 — Round-3 PENTEST-029 / 031 / 032 verified RESOLVED in the codebase; PENTEST-033 verified PARTIAL (login password now `{{password}}` secret-typed env var, but `NewUser1234!` still inlined in createUser body and dev tenant UUID still defaulted in environment file). PENTEST-030 remains OPEN (no per-endpoint test-dispatch throttle yet).
 >
 > Last updated: 2026-06-19 (SEC-001..SEC-036 all resolved; PENTEST-001..026 all resolved. **Round 3 (2026-06-19):** post-merge review of FE-API-001/010/021..024 + the 00004 manifest backfill migration on branch `feat/frontend-rebuild` — 7 new findings (0 critical, 2 high, 3 medium, 2 low). **PENTEST-027 + PENTEST-028 (both HIGH) resolved same day** — webhook list/deliveries routes gated by `requireWebhookAdmin`; dispatcher errors sanitised so persisted `last_error` never carries URL-embedded tokens; manifest backfill split out of the migration into an idempotent `psql` runbook with a high-water-mark cursor + per-batch commits. PENTEST-029..033 (3 medium + 2 low) remain OPEN as follow-ups.)
@@ -545,3 +547,17 @@ under CLAUDE.md §7 "JWT Validation."
 | Secret rotation review | Quarterly | — | Never |
 | Audit log retention review | Quarterly | — | Never |
 | GC dry-run before production schedule change | Before each change | — | Never |
+
+---
+
+### SEC-037 — Onboarding-flag backfill UPDATE locks every users row in one statement
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-27
+- **Description:** `services/auth/migrations/20260629000002_users_onboarding_complete.sql:32-34` performs `UPDATE users SET onboarding_complete = true WHERE created_at < NOW()` — an unbounded single-statement UPDATE that targets every row in the table. Goose runs each migration in a single transaction so this holds a row-level lock on every users row simultaneously and a transaction-scoped UPDATE conflict with any concurrent writer. The same transaction also contains the `ALTER TABLE … ADD COLUMN`, which (although constant-default and non-rewriting on PG ≥ 11) takes an `AccessExclusiveLock` for its duration. Concurrent login traffic that touches the users table (`ResetFailedLogins`, `RecordFailedLogin`, `TouchLastLogin`, `UpdatePasswordHash`) will block until migration commit. For installs with ≤ tens of thousands of users this is sub-second and invisible; for a SaaS install with a large user table it can produce a noticeable login stall and (under saturation) lock-wait timeouts during the migration window. No data correctness issue — purely an availability concern during the deployment window.
+- **Remediation:**
+  1. For deployments with > ~100k humans, batch the backfill into chunks (e.g. `UPDATE users SET onboarding_complete = true WHERE id IN (SELECT id FROM users WHERE NOT onboarding_complete LIMIT 10000)` looped) and commit between batches via an out-of-band runbook, leaving the migration to only run the `ALTER TABLE … ADD COLUMN NOT NULL DEFAULT false` (which is metadata-only on PG ≥ 11).
+  2. Alternatively, drop the `WHERE created_at < NOW()` backfill entirely and rely on `NOT NULL DEFAULT false` for existing rows (this would re-show the wizard to pre-existing humans — a product choice, not a security one).
+  3. Document the deployment-window cost in `infra/runbooks/` so operators of large installs know to run the backfill out-of-band before the schema migration.
+- **References:** CLAUDE.md §11 (migration rules — "run migrations at startup in a separate step before serving traffic"); PENTEST-028 manifest-backfill precedent (split bulk UPDATE out of migration into idempotent runbook).
