@@ -254,6 +254,7 @@ export function ChannelToggleCell({
         disabled={isDisabled}
         aria-disabled={isDisabled}
         title={hint}
+        data-locked={locked ? "true" : "false"}
         className={cn(
           "size-4 rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
           locked
