@@ -41,6 +41,11 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScanPolicyEditor } from "@/components/security/scan-policy-editor";
+import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapters-section";
+import { GCCard } from "@/components/admin/gc-card";
+import { RetentionCard } from "@/components/admin/retention-card";
+import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
+import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings/workspace")({
@@ -48,6 +53,17 @@ export const Route = createFileRoute("/_authenticated/settings/workspace")({
 });
 
 function WorkspaceTab(): React.ReactElement {
+  // In single mode the Workspace tab absorbs everything Platform-tab in
+  // multi mode would carry (Scanner / GC / Retention / Deployment info)
+  // because there IS no Platform tab in single mode — the deployment is
+  // the workspace is the platform.
+  //
+  // We gate on the live deployment_mode rather than a build flag so an
+  // operator who flips DEPLOYMENT_MODE without restarting the dashboard
+  // sees the right surface on next page load.
+  const { data: deploymentInfo } = useDeploymentInfo();
+  const isSingleMode = deploymentInfo?.deployment_mode === "single";
+
   return (
     <div className="space-y-6">
       {/* Top row: Members/Orgs + Webhooks. Both are quick "go here" cards
@@ -122,6 +138,25 @@ function WorkspaceTab(): React.ReactElement {
           one org in the tenant. Non-admins see a disabled "Save" button
           rather than a 401 toast. */}
       <ScanPolicyEditor />
+
+      {/* Single-mode-only sections (Phase 4.2.d).
+          These also live on the Platform tab in multi mode; in single mode
+          there IS no Platform tab so they collapse here. Hidden in multi
+          mode to avoid duplicating the editable surface across two tabs —
+          the multi-mode Workspace tab stays scoped to per-workspace
+          concerns. */}
+      {isSingleMode ? (
+        <>
+          <ScannerAdaptersSection />
+          <section id="gc" className="space-y-4 scroll-mt-24">
+            <GCCard />
+          </section>
+          <section id="retention" className="space-y-4 scroll-mt-24">
+            <RetentionCard />
+          </section>
+          <DeploymentInfoCard />
+        </>
+      ) : null}
     </div>
   );
 }
