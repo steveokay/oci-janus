@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — ~50% shipped (17 PRs through 2026-06-28).
+**Status:** IN PROGRESS — Phase 4.2 sub-steps a/b/c shipped, d + e open (26 PRs through 2026-06-27, ~65% complete).
 
 **Phases shipped so far:**
 
@@ -54,6 +54,11 @@
 | 2.1 | Drop custom-domain CRUD end-to-end — **closes Top-5 #3** | #132 | 2026-06-27 |
 | 2.2 | Collapse per-tenant SSO to global config | #133 | 2026-06-28 |
 | futures align | Mark obsolete + subsumed items, add RED-FU-001..005 follow-ups | #135 | 2026-06-28 |
+| 4.1 | `useDeploymentInfo()` FE hook | #138 | 2026-06-27 |
+| 4.4 | `/me/abilities` BFF + `useAbility()` FE hook | #139 | 2026-06-27 |
+| 4.2.a | Sidebar IA restructure (operator mental model) | #141 | 2026-06-27 |
+| 4.2.b | /settings parent route + Account tab | #143 | 2026-06-27 |
+| 4.2.c | Settings › Workspace tab content | #144 | 2026-06-27 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
@@ -68,13 +73,12 @@
 - 2.5 — Login copy + tenant chrome (FE; depends on Phase 4.1 `useDeploymentInfo` hook)
 - 3.2 — Single-tenant guard in tenant gRPC `CreateTenant`
 - 3.3 — Tenant context middleware (single-mode injector)
-- 4.1 — `useDeploymentInfo()` FE hook + Provider
-- 4.2 — Sidebar + unified Settings IA
+- 4.2.d — Settings › Platform tab + `/admin/*` migration (🟡 PR #145 open)
+- 4.2.e — Security page split (🟡 PR #146 open)
 - 4.3 — First-run onboarding wizard
-- 4.4 — `/me/abilities` BFF + `useAbility()` FE hook (replaces FUT-010 FE half)
 - 4.5 — Strip placeholder "Coming Soon" surfaces
 - 4.6 — Mobile-responsive shell
-- 4.7 — Remove SSO admin FE (companion to 2.2)
+- 4.7 — Remove SSO admin FE — ⛔ N/A (no FE consumer ever existed)
 - 5.3 — Delegator-dominates-delegatee rule in `GrantRole`
 - 5.4 — `digest_keyed.go` writer-tier scope (see RED-FU-003 in futures.md)
 - 5.5 — SSO subject-id binding

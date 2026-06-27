@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-28 — 17 PRs shipped, ~50% complete, 4 of 5 Top-5 critical findings closed.
+> **As-of:** 2026-06-27 — 26 PRs shipped, Phase 4.2 sub-steps fully wrapped (a/b/c/d/e), 4 of 5 Top-5 critical findings closed.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -54,10 +54,10 @@
 | 3.3 | Tenant context middleware (single-mode injector) | ⬜ OPEN | — | — |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
-| 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ⬜ OPEN | — | — |
-| 4.2.c | Settings › Workspace tab content (Members, Orgs, SSO read-only, **Retention defaults**, Scan policies, Workspace webhooks) | ⬜ OPEN | — | — |
-| 4.2.d | Settings › Platform tab + `/admin/*` migration + 301 redirects (Tenants, **Scanner adapters**, **GC schedule + run history**, Deployment info) | ⬜ OPEN | — | — |
-| 4.2.e | Security page split (Overview, Vulnerabilities, Scans, Signing, Policies, Reports) | ⬜ OPEN | — | — |
+| 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
+| 4.2.c | Settings › Workspace tab content (Members, Orgs, SSO read-only, **Retention defaults**, Scan policies, Workspace webhooks) | ✅ DONE | #144 | 2026-06-27 |
+| 4.2.d | Settings › Platform tab + `/admin/*` migration + 301 redirects (Tenants, **Scanner adapters**, **GC schedule + run history**, Deployment info) | 🟡 IN PROGRESS | #145 | 2026-06-27 |
+| 4.2.e | Security page split (Overview, Vulnerabilities, Scans, Signing, Policies, Reports) | 🟡 IN PROGRESS | #146 | 2026-06-27 |
 | 4.3 | First-run onboarding wizard | ⬜ OPEN | — | — |
 | 4.4 | `/me/abilities` BFF + `useAbility()` hook | ✅ DONE | #139 | 2026-06-27 |
 | 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
