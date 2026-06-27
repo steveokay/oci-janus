@@ -11,9 +11,9 @@
 // audience focused. Workspace/Platform tabs are where role-gated config
 // lives; those split into their own tabs (4.2.c / 4.2.d).
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Bell, Shield } from "lucide-react";
+import { Bell, Compass, Shield } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -65,8 +65,46 @@ function AccountTab(): React.ReactElement {
           personal-account hardening; was the old Security tab. */}
       <SecuritySection />
 
+      {/* REDESIGN-001 Phase 4.3 §3 — replay onboarding link. The first-run
+          wizard auto-shows on the dashboard for users with
+          `onboarding_complete === false`, but once dismissed (Done / Skip)
+          the BE flips that flag and the wizard never re-triggers. This
+          footer row gives users a way back in from Settings — matches the
+          redesign plan's "Reachable from Settings > Help even after
+          dismissal" requirement. Not gated on `onboarding_complete`:
+          even users who finished should be allowed to replay. */}
+      <ReplayOnboardingFooter />
+
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </div>
+  );
+}
+
+// ── Replay onboarding footer (REDESIGN-001 Phase 4.3 §3) ────────────
+
+function ReplayOnboardingFooter(): React.ReactElement {
+  const navigate = useNavigate();
+  // Single click handler — navigate to the wizard route. The wizard owns its
+  // own dismiss/complete behaviour (calls useCompleteOnboarding on Done/Skip),
+  // so there's nothing else to do here. We don't pre-clear the flag because
+  // re-running the wizard while the flag is `true` is harmless — the BE
+  // endpoint is idempotent and the FE re-checks per session.
+  return (
+    <section className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-5 py-3 text-sm text-[var(--color-fg-muted)]">
+      <div className="flex items-center gap-2">
+        <Compass className="size-4" />
+        <span>
+          New here, or just want a refresher?
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => void navigate({ to: "/getting-started" })}
+        className="font-medium text-[var(--color-accent)] underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40 rounded"
+      >
+        Replay onboarding tour
+      </button>
+    </section>
   );
 }
 
