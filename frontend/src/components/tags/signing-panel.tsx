@@ -146,10 +146,9 @@ export function SigningPanel({
   );
 }
 
-// ActionRibbon — replaces the Sprint-7B `PendingCapabilities` ComingSoon
-// card now that both FE-API-025 and FE-API-026 are live backend-side.
-// Verify-now flips the parent's verifyOn state so the signature query
-// refetches with ?verify=true. Sign-with opens SignManifestDialog.
+// ActionRibbon — Verify-now flips the parent's verifyOn state so the
+// signature query refetches with ?verify=true. Sign-with opens
+// SignManifestDialog.
 interface ActionRibbonProps {
   signed: boolean;
   verifyOn: boolean;
