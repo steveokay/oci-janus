@@ -60,7 +60,7 @@
 | 4.2.e | Security page split (Overview, Vulnerabilities, Scans, Signing, Policies, Reports) | ✅ DONE | #146 | 2026-06-27 |
 | 4.3 | First-run onboarding wizard | ✅ DONE | #148, #149 | 2026-06-27 |
 | 4.4 | `/me/abilities` BFF + `useAbility()` hook | ✅ DONE | #139 | 2026-06-27 |
-| 4.5 | Strip placeholder "Coming Soon" surfaces | ⬜ OPEN | — | — |
+| 4.5 | Strip placeholder "Coming Soon" surfaces | ✅ DONE | #151 | 2026-06-28 |
 | 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
 | 4.7 | Remove SSO admin FE (companion to 2.2) | ⛔ N/A | — | 2026-06-27 |
 | 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |

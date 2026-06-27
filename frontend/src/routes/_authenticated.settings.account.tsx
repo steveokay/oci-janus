@@ -33,6 +33,7 @@ import {
   useUpdateNotificationPreferences,
   type NotificationPreferenceRow,
 } from "@/lib/api/notification-preferences";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings/account")({
   component: AccountTab,
@@ -224,7 +225,7 @@ function NotificationsSection(): React.ReactElement {
   );
 }
 
-function ChannelToggleCell({
+export function ChannelToggleCell({
   enabled,
   pending,
   onChange,
@@ -235,15 +236,31 @@ function ChannelToggleCell({
   onChange: (next: boolean) => void;
   hint?: string;
 }): React.ReactElement {
+  // REDESIGN-001 Phase 4.5 — channel-not-yet-shipped lockout.
+  //
+  // When a channel hasn't shipped (BFF silently drops Email/Webhook writes
+  // until FUT-019 Phase 3 lands), `hint` is set. Previously we only surfaced
+  // that via a tooltip on the live checkbox — the operator could still flip
+  // it, see no error, and walk away believing alerts were wired. Now we
+  // visibly disable the row and keep the hint as the explanation.
+  const locked = Boolean(hint);
+  const isDisabled = pending || locked;
   return (
     <TableCell className="text-center">
       <input
         type="checkbox"
         checked={enabled}
         onChange={(e) => onChange(e.target.checked)}
-        disabled={pending}
+        disabled={isDisabled}
+        aria-disabled={isDisabled}
         title={hint}
-        className="size-4 cursor-pointer rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
+        data-locked={locked ? "true" : "false"}
+        className={cn(
+          "size-4 rounded border-[var(--color-border-strong)] accent-[var(--color-accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
+          locked
+            ? "cursor-not-allowed opacity-50"
+            : "cursor-pointer",
+        )}
       />
     </TableCell>
   );
