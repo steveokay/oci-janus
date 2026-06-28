@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -136,6 +137,31 @@ func TestSingleTenantInjector_SingleMode_MatchingMD_PassesThrough(t *testing.T) 
 	}
 }
 
+func TestSingleTenantInjector_SingleMode_MultiValueMD_FirstWins(t *testing.T) {
+	// gRPC metadata is map[string][]string — a misconfigured caller could
+	// send the same key twice. The interceptor reads md.Get(...)[0] so the
+	// first value wins. Pin that contract so a future refactor that swaps
+	// to "last value" doesn't silently shift behaviour.
+	// Construct metadata directly so both values land under the same key.
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{
+		tenantIDMetadataKey: []string{testBootstrapID, otherTenantID},
+	})
+	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	rec := &recordingHandler{}
+	resp, err := SingleTenantInjector(testBootstrapID)(ctx, nil, info, rec.handle)
+
+	if err != nil {
+		t.Fatalf("first-value-match must pass through, got %v", err)
+	}
+	if resp != "ok" {
+		t.Fatalf("expected handler response, got %v", resp)
+	}
+	if rec.sawValue != testBootstrapID {
+		t.Errorf("handler saw %q, want first value %q (md.Get returns first)",
+			rec.sawValue, testBootstrapID)
+	}
+}
+
 func TestSingleTenantInjector_SingleMode_MismatchedMD_RejectsInvalidArgument(t *testing.T) {
 	rec, _, err := dispatch(t, testBootstrapID, tenantIDMetadataKey, otherTenantID)
 	if rec.called {
@@ -164,22 +190,7 @@ func errorContains(err error, s string) bool {
 	if err == nil {
 		return false
 	}
-	return strContains(err.Error(), s)
-}
-
-// strContains is a 6-line stdlib-free substring check used to keep the test
-// imports minimal — pulling in "strings" just for this would be cheaper but
-// the codebase prefers tight imports.
-func strContains(hay, needle string) bool {
-	if needle == "" {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		if hay[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(err.Error(), s)
 }
 
 // Sanity check: the interceptor signature matches the gRPC contract so a

@@ -33,6 +33,11 @@ const tenantIDMetadataKey = "x-tenant-id"
 // SingleTenantInjector returns a unary interceptor that enforces a single
 // canonical tenant_id when bootstrapTenantID is non-empty (single mode).
 //
+// Unary only by design: streams in this codebase carry tenant_id in the
+// first request message (not metadata), so a stream variant would be a
+// no-op. If a future RPC ships header-based stream tenant routing, add
+// a SingleTenantStreamInjector then — don't pre-add it here.
+//
 // Behaviour matrix:
 //
 //	bootstrapTenantID == ""  → no-op (multi mode); the interceptor passes
