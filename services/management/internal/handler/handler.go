@@ -486,13 +486,25 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Platform-admin: tenant CRUD. Gated by the platform-admin marker scope
 	// (admin / org / *) — see services/management/internal/handler/admin_tenants.go.
 	// Routes return 404 "route disabled" when TENANT_GRPC_ADDR is unset.
+	//
+	// REDESIGN-001 Phase 2.3 (RM-005) — POST + DELETE are also gated by
+	// deployment mode. In single-tenant deployments the BFF must not expose a
+	// way to create or delete tenants; the only tenant is the bootstrap tenant
+	// minted by `registry-auth bootstrap` (Phase 3.1). Calling either endpoint
+	// in single mode returns 404 "route disabled". The gRPC CreateTenant on
+	// services/tenant stays — the bootstrap CLI uses it directly.
+	//
+	// GET (list/detail) and PATCH (rename) remain available in single mode so
+	// the single tenant can still be inspected and renamed via the admin API.
 	mux.Handle("GET /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminListTenants)))
-	mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
 	mux.Handle("GET /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminGetTenant)))
-	mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
 	// FE-API-029: rename + plan change. Patch body accepts optional name/plan
 	// fields; emits tenant.renamed / tenant.plan_changed RabbitMQ events.
 	mux.Handle("PATCH /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminUpdateTenant)))
+	if h.deploymentMode == loader.DeploymentModeMulti {
+		mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
+		mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
+	}
 
 	// FE-API-032 — GC status visibility. Status + runs history are
 	// read-only; the trigger requires the platform-admin marker. All
