@@ -19,7 +19,6 @@
 // wrapper passes `onNavigate` so each link tap closes the drawer.
 import * as React from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Badge } from "@/components/ui/badge";
 import { useWorkspace } from "@/lib/api/workspace";
 import { useCacheStats } from "@/lib/api/proxy-cache";
 import { useDeploymentInfo } from "@/lib/api/deployment-info";
@@ -189,25 +188,17 @@ export function SidebarBody({
           </span>
         </span>
         <div className="flex min-w-0 flex-col leading-tight">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-sm font-semibold tracking-tight">
-              {workspaceName}
-            </span>
-            {workspace?.plan ? (
-              <Badge
-                tone={
-                  workspace.plan === "enterprise"
-                    ? "accent"
-                    : workspace.plan === "pro"
-                      ? "success"
-                      : "neutral"
-                }
-                className="!py-0 text-[9px] uppercase tracking-wider"
-              >
-                {workspace.plan}
-              </Badge>
-            ) : null}
-          </div>
+          {/* REDESIGN-001 Phase 2.4 (RM-006) — the plan badge that used to
+              live here was meaningful only in multi-tenant SaaS where each
+              tenant's plan drove billing surfaces. In the self-hosted
+              default posture there's no billing, so the badge was empty
+              chrome. The `plan` field is still served by the BFF
+              (HD-004 — keep the column for forward compat) and remains
+              on the multi-mode admin Tenants page; it just stops rendering
+              in the personal navigation chrome. */}
+          <span className="truncate text-sm font-semibold tracking-tight">
+            {workspaceName}
+          </span>
           <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
             {workspaceSubLabel}
           </span>
