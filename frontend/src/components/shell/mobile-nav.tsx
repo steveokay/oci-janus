@@ -49,9 +49,10 @@ export function MobileNav({
             "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left",
             "duration-200",
           )}
-          // a11y: Radix injects role=dialog + aria-modal automatically.
-          // We provide a title for screen readers (visually hidden).
-          aria-label="Workspace navigation"
+          // a11y: Radix injects role=dialog + aria-modal automatically and
+          // uses Dialog.Title (below) as the accessible name. We deliberately
+          // do NOT add aria-label here — that would override the Title and
+          // duplicate the same content. The sr-only Title is sufficient.
         >
           {/* VisuallyHidden title satisfies the Radix requirement that
               every Dialog has an accessible name without showing it. */}

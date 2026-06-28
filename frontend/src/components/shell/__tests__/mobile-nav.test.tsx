@@ -90,12 +90,13 @@ describe("MobileNav — Phase 4.6 drawer behaviour", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  test("open=true mounts a dialog with an accessible name", async () => {
+  test("open=true mounts a dialog with the Title as accessible name", async () => {
     await renderMobileNav({ open: true });
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
-    // Radix copies aria-label onto the underlying div.
-    expect(dialog.getAttribute("aria-label")).toBe("Workspace navigation");
+    // Radix wires aria-labelledby to Dialog.Title. The Title text is
+    // visually hidden via sr-only but available to assistive tech.
+    expect(dialog).toHaveAccessibleName("Navigation");
   });
 
   test("clicking a nav Link fires onOpenChange(false) for one-tap dismiss", async () => {
