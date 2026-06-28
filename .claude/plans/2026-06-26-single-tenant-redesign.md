@@ -50,8 +50,8 @@
 | 3.1.a | Tenant `deployment_metadata` table + repo | ✅ DONE | #126 | 2026-06-27 |
 | 3.1.b | `registry-auth bootstrap` CLI subcommand | ✅ DONE | #127 | 2026-06-27 |
 | 3.1.c | `make dev-bootstrap` + production runbook | ✅ DONE | #128 | 2026-06-27 |
-| 3.2 | Tenant gRPC single-tenant guard | ⬜ OPEN | — | — |
-| 3.3 | Tenant context middleware (single-mode injector) | ⬜ OPEN | — | — |
+| 3.2 | Tenant gRPC single-tenant guard | ✅ DONE | #155 | 2026-06-28 |
+| 3.3 | Tenant context middleware (single-mode injector) | ✅ DONE | #155 | 2026-06-28 |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
