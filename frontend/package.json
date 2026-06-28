@@ -11,7 +11,11 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,md,json}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,md,json}\"",
+    "routes:generate": "node scripts/generate-routes.mjs",
+    "prelint": "npm run routes:generate",
+    "pretypecheck": "npm run routes:generate",
+    "pretest": "npm run routes:generate"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.1.0",

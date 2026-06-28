@@ -48,18 +48,10 @@ function TenantUsersPage(): React.ReactElement {
   const [elevateTarget, setElevateTarget] = React.useState<TenantUser | null>(null);
   const [search, setSearch] = React.useState("");
 
-  if (isError) {
-    return (
-      <div className="space-y-5 p-6">
-        <ErrorState
-          title="Couldn't load tenant users"
-          description="The management API didn't answer or your role doesn't allow access. Retry, or contact a platform admin."
-          onRetry={() => void refetch()}
-        />
-      </div>
-    );
-  }
-
+  // Hooks must run in the same order every render, so `useMemo` has to come
+  // BEFORE the `if (isError) return ...` early-exit below. Previously the
+  // useMemo lived after the early return, which made it conditional and
+  // tripped eslint's react-hooks/rules-of-hooks. Compute first, branch after.
   const users = data?.users ?? [];
   const total = data?.total_count ?? 0;
   // Free-text filter — same shape as the proxy-cache + tags surfaces:
@@ -72,6 +64,18 @@ function TenantUsersPage(): React.ReactElement {
       return hay.includes(q);
     });
   }, [users, search]);
+
+  if (isError) {
+    return (
+      <div className="space-y-5 p-6">
+        <ErrorState
+          title="Couldn't load tenant users"
+          description="The management API didn't answer or your role doesn't allow access. Retry, or contact a platform admin."
+          onRetry={() => void refetch()}
+        />
+      </div>
+    );
+  }
 
   async function handleEnable(u: TenantUser): Promise<void> {
     try {

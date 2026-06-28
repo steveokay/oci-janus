@@ -153,7 +153,7 @@ function NotificationsSection(): React.ReactElement {
     try {
       await update.mutateAsync({ preferences: patched });
       toast.success(`${row.label}: ${channel} ${next ? "enabled" : "disabled"}.`);
-    } catch (_e) {
+    } catch {
       toast.error("Couldn't save preferences. Try again, or check the BFF logs.");
     }
   }
