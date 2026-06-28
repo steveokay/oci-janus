@@ -11,7 +11,11 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,md,json}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,md,json}\"",
+    "routes:generate": "node scripts/generate-routes.mjs",
+    "prelint": "npm run routes:generate",
+    "pretypecheck": "npm run routes:generate",
+    "pretest": "npm run routes:generate"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.1.0",
@@ -64,6 +68,7 @@
     "@typescript-eslint/eslint-plugin": "^8.19.0",
     "@typescript-eslint/parser": "^8.19.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",

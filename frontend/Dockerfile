@@ -22,6 +22,12 @@ RUN npm run build
 # -------- runtime --------
 FROM nginx:1.27-alpine
 
+# Patch base image packages to pick up CVE fixes that landed in the Alpine
+# repos after the nginx:1.27-alpine tag was last republished. Without this,
+# Trivy in CI flags CRITICAL OpenSSL CVEs (libcrypto3 / libssl3) on every
+# build until upstream rebuilds. Cheap: only the diff is layered in.
+RUN apk upgrade --no-cache
+
 # Replace the stock nginx config with ours (security headers, SPA fallback,
 # /api proxying to the backend services).
 COPY nginx.conf /etc/nginx/conf.d/default.conf

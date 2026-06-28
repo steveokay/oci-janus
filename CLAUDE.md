@@ -32,6 +32,7 @@
 12. [gRPC Conventions](#12-grpc-conventions)
 13. [Security Hardening Rules](#13-security-hardening-rules)
 14. [Decision Log](#14-decision-log)
+15. [Workflow Gates](#15-workflow-gates)
 
 External references:
 - [`docs/SERVICES.md`](docs/SERVICES.md) — per-service detail (endpoints, gRPC, schemas, env vars)
@@ -594,6 +595,47 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 22 | Service-account principal pattern: shadow users (FE-API-048) | Each service account auto-provisions a `users.kind='service_account'` row. `ValidateAPIKey`/`ValidateToken` return that id in `user_id`; downstream services treat it as an opaque actor. RBAC/audit/RLS/JWT machinery unchanged. Distinguishing principal kind is a read-path concern (`LEFT JOIN users ON kind`), not a write-path one. | 2026-06-22 |
 | 23 | Two-layer tag immutability — `repositories.immutable_tags` + `tags.immutable` (futures.md Tier 1 #2) | Repo-wide flag is the table-stakes posture; per-tag pin is the lighter alternative for repos that mix mutable dev tags + a small set of pinned releases. `services/core.checkTagImmutable` short-circuits on idempotent same-digest re-pushes (not a "move") and fails OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. Per-tag pin wins precedence — repo flag is the second RPC only when the same-digest fast path didn't fire | 2026-06-23 |
 | 24 | Unified Bearer dispatch in `requireAuth` — JWT + `key.<id>.<secret>` (FUT-006) | Picked option (a) over a parallel `/principal/me` route. One auth surface keeps the mental model simple; the `key.` literal prefix is a cheap structural discriminator that can't collide with a JWT (JWT segment 0 starts with `eyJ` after base64-encoding `{`). Synthesised `*Claims` set `Roles: []` deliberately — raw API keys aren't expected to carry RBAC, so role-gated handlers return a legible 403 instead of misrouting to a 401 | 2026-06-23 |
+
+---
+
+## 15. Workflow Gates
+
+These rules cover what you must run **before pushing a branch**. They exist so PR CI never surfaces a failure that a single local command would have caught.
+
+### 15.1 Frontend — run all 4 CI equivalents before push
+
+CI (`.github/workflows/ci-ui.yml`) runs four jobs: `lint`, `typecheck`, `test`, `build`. Every one of them must be green locally before pushing a frontend branch. The `cd frontend && tsc --noEmit && vitest run` shorthand is **not enough** — it skips lint and skips the route-tree generation that `build` relies on.
+
+```
+cd frontend
+npm run lint        # eslint, 0 errors required (warnings OK)
+npm run typecheck   # tsc -b --noEmit, 0 errors
+npm run test        # vitest run, all pass
+npm run build       # vite build + tsc -b, builds cleanly
+```
+
+**Why this exists:** Established 2026-06-28 after PR #152 failed every frontend CI stage despite local `tsc` + `vitest` coming back green. Two latent issues:
+
+- `frontend/src/routeTree.gen.ts` is gitignored — only Vite generates it. `tsc --noEmit` doesn't run Vite, so CI's typecheck/test jobs had no routeTree to import. Fixed by `npm run routes:generate` + `prelint`/`pretypecheck`/`pretest` hooks that produce the file from `@tanstack/router-generator`'s `Generator` class. The hooks run automatically on every `npm run lint`/`typecheck`/`test`.
+- Two pre-existing lint errors had been masked by never running `npm run lint`: `'_e' is defined but never used` in a catch clause, and `React.useMemo` called after an early-return.
+
+**How to apply:** Run all 4 commands listed above. If lint reports an error in code you didn't touch, fix it inline — the rule is "before push, CI is green," not "before push, my diff is clean."
+
+### 15.2 Backend — run the per-service Makefile target before push
+
+Each Go service has its own CI workflow (`.github/workflows/ci-<service>.yml`) that runs `go vet`, `golangci-lint`, `go test ./...`, and `go build ./...`. Run the matching service's `Makefile` target (or the root `Makefile` aggregate `make build && make test && make lint`) before pushing.
+
+If your branch touches `proto/`, also run `make proto` to regenerate the committed stubs in `proto/gen/go/`.
+
+### 15.3 Tracker hygiene
+
+Every redesign PR (REDESIGN-001 phases) must, in the same PR or in a `chore/...` follow-up:
+
+- tick the row in `.claude/plans/2026-06-26-single-tenant-redesign.md` Progress dashboard
+- prepend a row in `status.md`
+- move the entry out of `status-tracker.md`'s OPEN list and into the shipped table
+
+Pattern proven through Phases 4.1–4.6: bundling the tracker commit into the feature branch (rather than a separate chore branch) keeps the documentation and the diff that motivates it in lock-step.
 
 ---
 

@@ -15,6 +15,11 @@ export default defineConfig({
       routesDirectory: "./src/routes",
       generatedRouteTree: "./src/routeTree.gen.ts",
       autoCodeSplitting: true,
+      // Keep test files next to routes from being treated as routes. Mirrors
+      // the same setting in scripts/generate-routes.mjs — if you change one,
+      // change the other. Pattern is matched against the basename, not the
+      // full path, so we have to match the dir name AND `.test.` infix.
+      routeFileIgnorePattern: "__tests__|\\.test\\.",
     }),
     react(),
     tailwindcss(),
