@@ -26,9 +26,14 @@ import { Topbar } from "../topbar";
 // chip is gated by deployment mode (Phase 2.5 / RM-007). We override
 // useDeploymentInfo per test via the shared mockDeploymentInfo() factory
 // so each case can pick its mode.
-const mockDeploymentInfo = vi.fn(() => ({
-  data: { deployment_mode: "multi" as "single" | "multi", version: "test" },
-}));
+type DeploymentInfoResult = {
+  data: { deployment_mode: "single" | "multi"; version: string } | undefined;
+};
+const mockDeploymentInfo = vi.fn(
+  (): DeploymentInfoResult => ({
+    data: { deployment_mode: "multi", version: "test" },
+  }),
+);
 
 vi.mock("@/lib/auth/store", () => ({
   useAuthStore: (selector: (s: { claims: { sub?: string; tenant_id?: string; username?: string } | null }) => unknown) =>
@@ -45,6 +50,12 @@ vi.mock("@/lib/api/auth", () => ({
 
 vi.mock("@/lib/api/deployment-info", () => ({
   useDeploymentInfo: () => mockDeploymentInfo(),
+  // The component now also imports `isSingleMode` from this module. We
+  // re-implement the predicate against the mock state so the test sees
+  // the same behaviour as the real helper without having to remember to
+  // also mock it.
+  isSingleMode: (info: { deployment_mode: "single" | "multi" } | undefined) =>
+    info?.deployment_mode === "single",
 }));
 
 // NotificationsBell + ThemeToggle pull their own hooks; stub them so we
@@ -125,5 +136,20 @@ describe("Topbar — tenant UUID chip mode gate", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /alice/i }));
     expect(screen.queryByText("t-uuid-123")).not.toBeInTheDocument();
+  });
+
+  test("cold cache (data undefined) defaults to chip-visible", async () => {
+    // First render before useDeploymentInfo has resolved. isSingleMode()
+    // returns false for undefined input → chip renders. This pins the
+    // documented invariant: defer to multi-mode behaviour during cold
+    // load so single-mode-specific UI never flashes for a multi-mode
+    // operator. A future refactor that flipped the default to single
+    // would silently change operator-visible behaviour; this test
+    // catches it.
+    mockDeploymentInfo.mockReturnValue({ data: undefined });
+    await renderTopbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /alice/i }));
+    expect(screen.getByText("t-uuid-123")).toBeInTheDocument();
   });
 });

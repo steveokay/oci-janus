@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth/store";
 import { logout } from "@/lib/api/auth";
 import { useMe } from "@/lib/api/me";
-import { useDeploymentInfo } from "@/lib/api/deployment-info";
+import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
 
 // Beacon — Topbar. Slim 56px bar with breadcrumb area on the left and
 // account + theme on the right. The breadcrumb slot is intentionally a
@@ -76,7 +76,7 @@ export function Topbar({
   // load would cause a brief flash if the user signs in then immediately
   // opens the dropdown.
   const { data: deploymentInfo } = useDeploymentInfo();
-  const isSingleMode = deploymentInfo?.deployment_mode === "single";
+  const singleMode = isSingleMode(deploymentInfo);
 
   // Defensive default: treat missing or unrecognised type as "user" so the
   // human avatar path is always shown on pre-T16 backends.
@@ -157,7 +157,7 @@ export function Topbar({
                       </span>
                     )}
                   </div>
-                  {isSingleMode ? null : (
+                  {singleMode ? null : (
                     <div className="truncate font-mono text-[11px] text-[var(--color-fg-muted)]">
                       {claims?.tenant_id ?? "—"}
                     </div>

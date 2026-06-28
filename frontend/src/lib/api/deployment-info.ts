@@ -42,3 +42,17 @@ export function useDeploymentInfo() {
     retry: 1, // public endpoint; one retry is enough if the BFF blips
   });
 }
+
+// isSingleMode is a typed predicate for the literal `"single"` mode string
+// that's spreading across the codebase as the redesign phases land
+// (Phase 2.4 sidebar, Phase 2.5 login + topbar UUID chip, more coming).
+// Returns false when `info` is undefined (cold cache) — every call site
+// defaults to multi-mode behaviour during cold load because that's the
+// pre-redesign default and strictly safer than flashing single-mode UI
+// before the value resolves.
+//
+// Use this instead of `info?.deployment_mode === "single"` so a future
+// rename to e.g. `DeploymentMode.Single` only touches one file.
+export function isSingleMode(info: DeploymentInfo | undefined): boolean {
+  return info?.deployment_mode === "single";
+}

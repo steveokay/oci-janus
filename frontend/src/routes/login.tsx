@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
 import { SSOButtons } from "@/components/auth/sso-buttons";
-import { useDeploymentInfo } from "@/lib/api/deployment-info";
+import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
 
 // FE-SEC-005 — vague error messages on both the inline form error AND the
 // toast. Never reveal whether the username exists.
@@ -50,7 +50,7 @@ function LoginPage(): React.ReactElement {
   // undefined (cold cache) we fall back to the multi-mode copy — it's a
   // strictly safer message than a self-hoster-specific hint.
   const { data: deploymentInfo } = useDeploymentInfo();
-  const isSingleMode = deploymentInfo?.deployment_mode === "single";
+  const singleMode = isSingleMode(deploymentInfo);
 
   const {
     register,
@@ -201,13 +201,13 @@ function LoginPage(): React.ReactElement {
         </div>
 
         <div className="mt-6 flex flex-col items-center gap-1 text-center text-xs text-[var(--color-fg-subtle)]">
-          {isSingleMode ? (
+          {singleMode ? (
             <span>
               Lost access? See{" "}
               <a
                 href="https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/bootstrap-first-admin.md"
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="underline hover:text-[var(--color-fg)]"
               >
                 the bootstrap runbook
