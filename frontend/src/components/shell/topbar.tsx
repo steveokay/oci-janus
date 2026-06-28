@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { LogOut, User as UserIcon, ChevronDown, Bot } from "lucide-react";
+import { LogOut, User as UserIcon, ChevronDown, Bot, Menu } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { toast } from "sonner";
 import { ThemeToggle } from "./theme-toggle";
@@ -20,6 +20,11 @@ import { useMe } from "@/lib/api/me";
 
 interface TopbarProps {
   breadcrumb?: React.ReactNode;
+  // REDESIGN-001 Phase 4.6 — hamburger trigger callback. The drawer
+  // state is owned by AppShell; Topbar just signals the open intent.
+  // Optional so the bare Topbar can still mount in tests / Storybook
+  // without forcing every caller to wire the drawer.
+  onOpenMobileNav?: () => void;
 }
 
 // BotAvatar renders when the authenticated principal is a service account.
@@ -50,7 +55,10 @@ function BotAvatar({ name }: BotAvatarProps): React.ReactElement {
   );
 }
 
-export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
+export function Topbar({
+  breadcrumb,
+  onOpenMobileNav,
+}: TopbarProps): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const navigate = useNavigate();
   // Fetch the full /users/me response so we can branch on principal type.
@@ -82,7 +90,23 @@ export function Topbar({ breadcrumb }: TopbarProps): React.ReactElement {
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 px-6 backdrop-blur">
-      <div className="flex min-w-0 items-center gap-3">{breadcrumb}</div>
+      <div className="flex min-w-0 items-center gap-3">
+        {/* Phase 4.6 — hamburger that opens the mobile drawer. Hidden lg+
+            where the desktop sidebar is visible. Sits before the
+            breadcrumb so the visual order is: nav handle → location
+            context, matching native mobile patterns. */}
+        {onOpenMobileNav ? (
+          <button
+            type="button"
+            onClick={onOpenMobileNav}
+            aria-label="Open navigation"
+            className="grid size-9 place-items-center rounded-md text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40 lg:hidden"
+          >
+            <Menu className="size-4" />
+          </button>
+        ) : null}
+        {breadcrumb}
+      </div>
       <div className="flex items-center gap-1">
         <NotificationsBell />
         <ThemeToggle />

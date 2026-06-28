@@ -2,15 +2,21 @@
 // model (Registry / Security / Governance / Integrations / Access),
 // NOT microservice boundaries (per memory/feedback_sidebar_nav_grouping.md).
 //
-// Items moved/removed in this PR:
+// Items moved/removed in 4.2.a:
 //   - /admin/tenants  — route still works via URL; folds under
 //                       Settings › Platform in Phase 4.2.d
 //   - /admin/scanner  — same
 //   - /admin/gc       — same (was never in the sidebar)
 //
 // The Platform sidebar group was deleted entirely. Until Phase 4.2.d
-// migrates the /admin/* surfaces into Settings › Platform tab, platform
-// admins must bookmark or type the URLs directly.
+// migrated the /admin/* surfaces into Settings › Platform tab, platform
+// admins had to bookmark the URLs directly. 4.2.d ships the migration.
+//
+// REDESIGN-001 Phase 4.6 — the same nav body now also feeds the mobile
+// off-canvas drawer (MobileNav). All the rendering logic lives in
+// `SidebarBody`; the desktop `<Sidebar>` and `<MobileNav>` (in
+// mobile-nav.tsx) wrap it in their own container chrome. The mobile
+// wrapper passes `onNavigate` so each link tap closes the drawer.
 import * as React from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
@@ -124,7 +130,20 @@ const GROUPS: Array<{ title: string; items: NavItem[] }> = [
   },
 ];
 
-export function Sidebar(): React.ReactElement {
+// SidebarBody renders the shared nav column (brand + groups + Settings
+// footer + Beacon hint) for BOTH the desktop aside and the mobile drawer.
+// The only behavioural difference is `onNavigate`: the mobile wrapper
+// passes a close-drawer callback so tapping a link dismisses the
+// off-canvas. Desktop omits the prop and link clicks behave as plain nav.
+//
+// Exported so mobile-nav.tsx can mount it inside a Radix Dialog content.
+interface SidebarBodyProps {
+  onNavigate?: () => void;
+}
+
+export function SidebarBody({
+  onNavigate,
+}: SidebarBodyProps): React.ReactElement {
   const { location } = useRouterState();
   const { data: workspace } = useWorkspace();
   // FUT-013 probe: null ⇒ caller is not workspace-admin OR the BFF has no
@@ -135,10 +154,16 @@ export function Sidebar(): React.ReactElement {
   const { data: proxyCacheStats } = useCacheStats();
   const proxyCacheAvailable = proxyCacheStats != null;
 
-  // useDeploymentInfo called for future-proofing: Phase 4.2.b/c/d will use
-  // deploymentInfo.data?.deployment_mode === "multi" to gate platform-only items.
-  // Called here (result unused) so the hook is load-bearing and its cache is
-  // primed before the Settings tab renders in the same shell.
+  // useDeploymentInfo called for future-proofing: Phase 4.2.b/c/d uses
+  // deploymentInfo.data?.deployment_mode === "multi" to gate platform-only
+  // items. Called here (result unused) so the hook is load-bearing and its
+  // cache is primed before the Settings tab renders in the same shell.
+  //
+  // Phase 4.6 note: the desktop <Sidebar> and the mobile <MobileNav> both
+  // mount SidebarBody in parallel (CSS hides one, but both stay in the
+  // DOM). That means this hook is called twice. Intentional — TanStack
+  // Query dedupes by query key, so the second call is a cache hit, no
+  // extra network. Don't "optimise" by lifting state to a context.
   useDeploymentInfo();
 
   // FE-API-009 — sidebar header reflects the live workspace name once the BFF
@@ -148,14 +173,13 @@ export function Sidebar(): React.ReactElement {
   const workspaceSubLabel = workspace?.name ? "Workspace" : "Registry control";
 
   return (
-    <aside
-      className={cn(
-        "hidden h-full w-[248px] shrink-0 flex-col border-r border-[var(--color-border)]",
-        "bg-[var(--color-surface-2)] lg:flex",
-      )}
-    >
+    <>
       {/* Brand */}
-      <Link to="/" className="flex items-center gap-2.5 px-5 py-5">
+      <Link
+        to="/"
+        onClick={onNavigate}
+        className="flex items-center gap-2.5 px-5 py-5"
+      >
         <span
           className="grid size-8 place-items-center rounded-md bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
           aria-hidden
@@ -215,6 +239,7 @@ export function Sidebar(): React.ReactElement {
                     <li key={item.to}>
                       <Link
                         to={item.to}
+                        onClick={onNavigate}
                         className={cn(
                           "group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm",
                           "transition-colors",
@@ -251,6 +276,7 @@ export function Sidebar(): React.ReactElement {
       <div className="border-t border-[var(--color-border)] px-3 py-2">
         <Link
           to="/settings"
+          onClick={onNavigate}
           className={cn(
             "group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm",
             "transition-colors",
@@ -275,6 +301,23 @@ export function Sidebar(): React.ReactElement {
       <div className="border-t border-[var(--color-border)] px-5 py-3 text-[11px] text-[var(--color-fg-subtle)]">
         Beacon UI · v0.1
       </div>
+    </>
+  );
+}
+
+// Sidebar is the desktop wrapper — a fixed-width aside that's hidden below
+// the `lg` breakpoint. Mobile gets the same content through MobileNav
+// (see components/shell/mobile-nav.tsx) which mounts SidebarBody inside a
+// Radix Dialog.
+export function Sidebar(): React.ReactElement {
+  return (
+    <aside
+      className={cn(
+        "hidden h-full w-[248px] shrink-0 flex-col border-r border-[var(--color-border)]",
+        "bg-[var(--color-surface-2)] lg:flex",
+      )}
+    >
+      <SidebarBody />
     </aside>
   );
 }

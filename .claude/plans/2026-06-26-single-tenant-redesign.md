@@ -61,7 +61,7 @@
 | 4.3 | First-run onboarding wizard | ✅ DONE | #148, #149 | 2026-06-27 |
 | 4.4 | `/me/abilities` BFF + `useAbility()` hook | ✅ DONE | #139 | 2026-06-27 |
 | 4.5 | Strip placeholder "Coming Soon" surfaces | ✅ DONE | #151 | 2026-06-28 |
-| 4.6 | Mobile-responsive shell | ⬜ OPEN | — | — |
+| 4.6 | Mobile-responsive shell | ✅ DONE | #152 | 2026-06-28 |
 | 4.7 | Remove SSO admin FE (companion to 2.2) | ⛔ N/A | — | 2026-06-27 |
 | 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |
 | 5.2 | Scope-aware tenant-admin gates (**closes Top-5 #2**) | ✅ DONE | #131 | 2026-06-27 |
