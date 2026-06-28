@@ -26,11 +26,11 @@ const config = getConfig(
     routesDirectory: "./src/routes",
     generatedRouteTree: "./src/routeTree.gen.ts",
     autoCodeSplitting: true,
-    // Suppress the noisy "does not export a Route" warning for test files
-    // that live next to the routes (frontend/src/routes/__tests__/*.tsx).
-    // Without this, every CI / dev start logs 3+ warnings about test files
-    // that obviously aren't routes.
-    routeFileIgnorePattern: "/__tests__/",
+    // Skip the __tests__ directory and any `*.test.tsx` files sitting next
+    // to a route. router-generator applies this regex against each entry's
+    // BASENAME (not its full path), so we have to match `__tests__` as a
+    // directory name AND `.test.` as a filename infix, not `/__tests__/`.
+    routeFileIgnorePattern: "__tests__|\\.test\\.",
   },
   root,
 );
