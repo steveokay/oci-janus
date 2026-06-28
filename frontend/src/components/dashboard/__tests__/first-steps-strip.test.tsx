@@ -10,7 +10,9 @@ import type { Workspace } from "@/lib/api/workspace";
 // auto-navigate; this component is purely visual.
 //
 // Tests verify:
-//   - Endpoint host + plan + custom-host badges render in the eyebrow.
+//   - Endpoint host + custom-host badge render in the eyebrow.
+//     (Plan badge removed in Phase 2.4 / RM-006 — no billing in
+//     single-mode default. New case below pins the removal.)
 //   - "Create an API key" + "Read the docs" links surface.
 //   - All three commands (login / tag / push) render verbatim.
 //   - Replace-org-image hint renders.
@@ -54,7 +56,10 @@ describe("FirstStepsStrip", () => {
     // Eyebrow + endpoint identity.
     expect(screen.getByText("Get started")).toBeInTheDocument();
     expect(screen.getByText("registry.acme.com")).toBeInTheDocument();
-    expect(screen.getByText("pro")).toBeInTheDocument();
+    // Phase 2.4 / RM-006 — plan badge removed; assert it's gone even
+    // though the mock workspace still ships plan: "pro" (the BFF still
+    // serves the field per HD-004).
+    expect(screen.queryByText("pro")).not.toBeInTheDocument();
     expect(screen.getByText("custom host")).toBeInTheDocument();
 
     // Action links.

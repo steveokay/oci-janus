@@ -251,4 +251,20 @@ describe("Sidebar — REDESIGN-001 Phase 4.2.a operator IA", () => {
     const repoLink = screen.getByText("Repositories").closest("a");
     expect(repoLink?.className).toContain("text-[var(--color-accent)]");
   });
+
+  // ── Phase 2.4 (RM-006) — plan badge removed ───────────────────────────────
+
+  test("does NOT render workspace.plan badge in the brand block", async () => {
+    // The useWorkspace mock returns plan: "pro" — before Phase 2.4 the
+    // brand block would render an uppercase "PRO" badge next to the name.
+    // Phase 2.4 strips that chrome because self-hosted deployments have
+    // no billing surface; the BFF still serves `plan` for the multi-mode
+    // admin Tenants page but the personal nav chrome stops surfacing it.
+    await renderSidebar();
+    // The badge text was uppercased via CSS but the React child node is
+    // the raw lowercase string from workspace.plan. Match both forms to
+    // catch a regression that re-introduces it in either casing.
+    expect(screen.queryByText("pro")).not.toBeInTheDocument();
+    expect(screen.queryByText("PRO")).not.toBeInTheDocument();
+  });
 });

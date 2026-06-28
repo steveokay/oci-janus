@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 4 fully shipped (4.1, 4.2 a–e, 4.3, 4.4, 4.5, 4.6) except 4.7 N/A (31 PRs through 2026-06-28, ~74% complete).
+**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup batch (2.3 + 2.4 + 2.5) shipped + CI pipeline fixed. 33 PRs through 2026-06-28, ~80% complete.
 
 **Phases shipped so far:**
 
@@ -64,6 +64,8 @@
 | 4.3 | First-run onboarding wizard + auto-redirect + replay link + route-guard test | #148, #149 | 2026-06-27 |
 | 4.5 | Notification matrix lockout + delete dead ComingSoon components | #151 | 2026-06-28 |
 | 4.6 | Mobile-responsive shell — off-canvas drawer + hamburger + skip-link | #152 | 2026-06-28 |
+| CI fix | routeTree.gen.ts generator script + npm pre-hooks; @vitest/coverage-v8; pattern fix; apk upgrade; CLAUDE.md §15 workflow gates | #153 | 2026-06-28 |
+| 2.3 + 2.4 + 2.5 | Single-mode honest pass — gate tenant create/delete on multi mode + strip sidebar/FirstStepsStrip plan badge + mode-aware login footer + topbar UUID chip + typed isSingleMode() helper | #154 | 2026-06-28 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
@@ -73,9 +75,6 @@
 - #5 Dev-seed admin shipped in prod image — ✅ closed by Phase 2.6 (PR #129)
 
 **Phases still OPEN:**
-- 2.3 — Tenant signup BFF removal
-- 2.4 — Plan/billing UI strip (FE)
-- 2.5 — Login copy + tenant chrome (FE; depends on Phase 4.1 `useDeploymentInfo` hook)
 - 3.2 — Single-tenant guard in tenant gRPC `CreateTenant`
 - 3.3 — Tenant context middleware (single-mode injector)
 - 4.7 — Remove SSO admin FE — ⛔ N/A (no FE consumer ever existed)

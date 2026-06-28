@@ -9,7 +9,7 @@
 // proven by Chrome DevTools mobile emulation in manual QA, not unit tests.
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import {
   createRouter,
   createMemoryHistory,
@@ -21,9 +21,23 @@ import { Topbar } from "../topbar";
 
 // ── Module mocks — Topbar reaches useAuthStore + useMe + logout fn ───────
 
+// Topbar's tenant UUID chip lives inside the avatar dropdown. The dropdown
+// is rendered conditionally on `me.type !== "service_account"` AND the
+// chip is gated by deployment mode (Phase 2.5 / RM-007). We override
+// useDeploymentInfo per test via the shared mockDeploymentInfo() factory
+// so each case can pick its mode.
+type DeploymentInfoResult = {
+  data: { deployment_mode: "single" | "multi"; version: string } | undefined;
+};
+const mockDeploymentInfo = vi.fn(
+  (): DeploymentInfoResult => ({
+    data: { deployment_mode: "multi", version: "test" },
+  }),
+);
+
 vi.mock("@/lib/auth/store", () => ({
-  useAuthStore: (selector: (s: { claims: null }) => unknown) =>
-    selector({ claims: null }),
+  useAuthStore: (selector: (s: { claims: { sub?: string; tenant_id?: string; username?: string } | null }) => unknown) =>
+    selector({ claims: { sub: "u-1", tenant_id: "t-uuid-123", username: "alice" } }),
 }));
 
 vi.mock("@/lib/api/me", () => ({
@@ -32,6 +46,16 @@ vi.mock("@/lib/api/me", () => ({
 
 vi.mock("@/lib/api/auth", () => ({
   logout: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/api/deployment-info", () => ({
+  useDeploymentInfo: () => mockDeploymentInfo(),
+  // The component now also imports `isSingleMode` from this module. We
+  // re-implement the predicate against the mock state so the test sees
+  // the same behaviour as the real helper without having to remember to
+  // also mock it.
+  isSingleMode: (info: { deployment_mode: "single" | "multi" } | undefined) =>
+    info?.deployment_mode === "single",
 }));
 
 // NotificationsBell + ThemeToggle pull their own hooks; stub them so we
@@ -80,5 +104,52 @@ describe("Topbar — Phase 4.6 hamburger contract", () => {
     const user = userEvent.setup();
     await user.click(hamburger);
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Phase 2.5 / RM-007 — tenant UUID chip is gated on deployment mode.
+describe("Topbar — tenant UUID chip mode gate", () => {
+  // Each test resets the deployment-info mock and opens the avatar
+  // dropdown so the chip's container (and therefore the chip itself, if
+  // rendered) is in the DOM.
+  beforeEach(() => {
+    mockDeploymentInfo.mockReset();
+  });
+
+  test("multi mode shows the tenant UUID in the avatar dropdown", async () => {
+    mockDeploymentInfo.mockReturnValue({
+      data: { deployment_mode: "multi", version: "test" },
+    });
+    await renderTopbar();
+    const user = userEvent.setup();
+    // The dropdown trigger is the avatar button (the one without the
+    // hamburger label) — easiest selector is "alice" (the mocked username).
+    await user.click(screen.getByRole("button", { name: /alice/i }));
+    expect(screen.getByText("t-uuid-123")).toBeInTheDocument();
+  });
+
+  test("single mode hides the tenant UUID in the avatar dropdown", async () => {
+    mockDeploymentInfo.mockReturnValue({
+      data: { deployment_mode: "single", version: "test" },
+    });
+    await renderTopbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /alice/i }));
+    expect(screen.queryByText("t-uuid-123")).not.toBeInTheDocument();
+  });
+
+  test("cold cache (data undefined) defaults to chip-visible", async () => {
+    // First render before useDeploymentInfo has resolved. isSingleMode()
+    // returns false for undefined input → chip renders. This pins the
+    // documented invariant: defer to multi-mode behaviour during cold
+    // load so single-mode-specific UI never flashes for a multi-mode
+    // operator. A future refactor that flipped the default to single
+    // would silently change operator-visible behaviour; this test
+    // catches it.
+    mockDeploymentInfo.mockReturnValue({ data: undefined });
+    await renderTopbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /alice/i }));
+    expect(screen.getByText("t-uuid-123")).toBeInTheDocument();
   });
 });

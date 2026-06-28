@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
 import { SSOButtons } from "@/components/auth/sso-buttons";
+import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
 
 // FE-SEC-005 — vague error messages on both the inline form error AND the
 // toast. Never reveal whether the username exists.
@@ -41,6 +42,15 @@ function LoginPage(): React.ReactElement {
   const navigate = useNavigate();
   const [submitting, setSubmitting] = React.useState(false);
   const [rootError, setRootError] = React.useState<string | null>(null);
+  // REDESIGN-001 Phase 2.5 (RM-007) — gate hostile "ask your platform
+  // administrator" copy on multi mode. In single-tenant the user IS the
+  // platform administrator, so that copy is circular and unhelpful. The
+  // /api/v1/deployment-info endpoint is unauthenticated by design
+  // (Phase 1.4), so it's safe to call before login. While `data` is
+  // undefined (cold cache) we fall back to the multi-mode copy — it's a
+  // strictly safer message than a self-hoster-specific hint.
+  const { data: deploymentInfo } = useDeploymentInfo();
+  const singleMode = isSingleMode(deploymentInfo);
 
   const {
     register,
@@ -191,7 +201,22 @@ function LoginPage(): React.ReactElement {
         </div>
 
         <div className="mt-6 flex flex-col items-center gap-1 text-center text-xs text-[var(--color-fg-subtle)]">
-          <span>Trouble signing in? Ask your platform administrator.</span>
+          {singleMode ? (
+            <span>
+              Lost access? See{" "}
+              <a
+                href="https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/bootstrap-first-admin.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-[var(--color-fg)]"
+              >
+                the bootstrap runbook
+              </a>{" "}
+              to reset the first admin.
+            </span>
+          ) : (
+            <span>Trouble signing in? Ask your platform administrator.</span>
+          )}
         </div>
       </motion.div>
     </div>

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth/store";
 import { logout } from "@/lib/api/auth";
 import { useMe } from "@/lib/api/me";
+import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
 
 // Beacon — Topbar. Slim 56px bar with breadcrumb area on the left and
 // account + theme on the right. The breadcrumb slot is intentionally a
@@ -65,6 +66,17 @@ export function Topbar({
   // The query is already mounted by the app shell, so this is a cache-hit in
   // the common case (no extra network round-trip).
   const { data: me } = useMe();
+
+  // REDESIGN-001 Phase 2.5 (RM-007 + HD-001) — gate the tenant UUID chip
+  // shown in the avatar dropdown on multi mode. In single-tenant there's
+  // only one tenant and surfacing its UUID is meaningless chrome — and a
+  // small disclosure surface to anyone standing behind the operator. While
+  // the cache is cold we default to multi-mode behaviour (show the chip)
+  // because the existing UX already showed it; suppressing during cold
+  // load would cause a brief flash if the user signs in then immediately
+  // opens the dropdown.
+  const { data: deploymentInfo } = useDeploymentInfo();
+  const singleMode = isSingleMode(deploymentInfo);
 
   // Defensive default: treat missing or unrecognised type as "user" so the
   // human avatar path is always shown on pre-T16 backends.
@@ -145,9 +157,11 @@ export function Topbar({
                       </span>
                     )}
                   </div>
-                  <div className="truncate font-mono text-[11px] text-[var(--color-fg-muted)]">
-                    {claims?.tenant_id ?? "—"}
-                  </div>
+                  {singleMode ? null : (
+                    <div className="truncate font-mono text-[11px] text-[var(--color-fg-muted)]">
+                      {claims?.tenant_id ?? "—"}
+                    </div>
+                  )}
                 </div>
                 <DropdownMenu.Separator className="my-1 h-px bg-[var(--color-border)]" />
                 <DropdownMenu.Item
