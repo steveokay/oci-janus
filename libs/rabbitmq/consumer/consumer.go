@@ -109,7 +109,7 @@ func New(url string, cfg Config) (*Consumer, error) {
 	queueArgs := amqp.Table{
 		"x-dead-letter-exchange": cfg.DLX,
 		"x-message-ttl":          int64(7 * 24 * 60 * 60 * 1000), // 7 days in ms
-		"x-queue-type":           "quorum",                        // durable, replicated
+		"x-queue-type":           "quorum",                       // durable, replicated
 	}
 	if _, err := ch.QueueDeclare(cfg.Queue, true, false, false, false, queueArgs); err != nil {
 		_ = conn.Close()

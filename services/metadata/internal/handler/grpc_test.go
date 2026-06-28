@@ -118,18 +118,18 @@ type fakeRepo struct {
 	getScanResult *metadatav1.ScanResult
 	getScanErr    error
 	// SBOM (FE-API-033)
-	upsertSBOMErr      error
-	upsertSBOMCalls    []upsertSBOMCallArgs
-	getSBOMResult      *repository.SBOMResult
-	getSBOMErr         error
-	getSBOMCalls       []getSBOMCallArgs
-	vulnTotal     int64
-	vulnCritical  int64
-	vulnHigh      int64
-	vulnMedium    int64
-	vulnLow       int64
-	vulnNeg       int64
-	vulnErr       error
+	upsertSBOMErr   error
+	upsertSBOMCalls []upsertSBOMCallArgs
+	getSBOMResult   *repository.SBOMResult
+	getSBOMErr      error
+	getSBOMCalls    []getSBOMCallArgs
+	vulnTotal       int64
+	vulnCritical    int64
+	vulnHigh        int64
+	vulnMedium      int64
+	vulnLow         int64
+	vulnNeg         int64
+	vulnErr         error
 	// Security overview (FE-API-020)
 	securityOverview    *repository.SecurityOverview
 	securityOverviewErr error

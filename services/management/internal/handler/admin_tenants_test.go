@@ -99,7 +99,7 @@ type adminFakeTenantServer struct {
 }
 
 var (
-	adminTenantGet *tenantv1.Tenant
+	adminTenantGet    *tenantv1.Tenant
 	adminTenantGetErr error
 
 	// adminTenantUpdate is consulted on every UpdateTenant call. The function

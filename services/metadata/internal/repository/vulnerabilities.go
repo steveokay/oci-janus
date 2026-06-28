@@ -215,7 +215,7 @@ func (r *Repository) ListTenantVulnerabilities(
 				v = &VulnerabilityRow{
 					CVE:            f.CVE,
 					Severity:       strings.ToUpper(f.Severity),
-					Title:          f.CVE,           // scanner doesn't emit a separate title; fall back to CVE id
+					Title:          f.CVE, // scanner doesn't emit a separate title; fall back to CVE id
 					Description:    f.Description,
 					FixedIn:        f.FixedIn,
 					PackageName:    f.Package,
@@ -483,4 +483,3 @@ func (r *Repository) ListScanHistory(
 	}
 	return out, next, nil
 }
-

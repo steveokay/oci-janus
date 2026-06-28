@@ -33,12 +33,12 @@ func (f *fakeListProxyCacheStream) Send(p *scannerv1.ProxyCacheScanPolicy) error
 	f.sent = append(f.sent, p)
 	return nil
 }
-func (f *fakeListProxyCacheStream) Context() context.Context        { return f.ctx }
-func (f *fakeListProxyCacheStream) SetHeader(metadata.MD) error     { return nil }
-func (f *fakeListProxyCacheStream) SendHeader(metadata.MD) error    { return nil }
-func (f *fakeListProxyCacheStream) SetTrailer(metadata.MD)          {}
-func (f *fakeListProxyCacheStream) RecvMsg(m interface{}) error     { return nil }
-func (f *fakeListProxyCacheStream) SendMsg(m interface{}) error     { return nil }
+func (f *fakeListProxyCacheStream) Context() context.Context     { return f.ctx }
+func (f *fakeListProxyCacheStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeListProxyCacheStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeListProxyCacheStream) SetTrailer(metadata.MD)       {}
+func (f *fakeListProxyCacheStream) RecvMsg(m interface{}) error  { return nil }
+func (f *fakeListProxyCacheStream) SendMsg(m interface{}) error  { return nil }
 
 // TestGetProxyCacheScanPolicy_noRepo verifies the FailedPrecondition guard.
 func TestGetProxyCacheScanPolicy_noRepo(t *testing.T) {

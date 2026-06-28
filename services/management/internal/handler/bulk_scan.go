@@ -49,9 +49,12 @@ const bulkScanLimit = 500
 // RepositoriesCount: number of repos visited (1 for the repo route).
 // TagsCount: total tags considered across those repos before capping.
 // Capped: true when TagsCount exceeded the per-request limit and the
-//         tail of the listing was skipped.
+//
+//	tail of the listing was skipped.
+//
 // Limit: the bulkScanLimit constant in effect — surfaced so the FE
-//        can render "X of Y queued · cap is Z" with no magic numbers.
+//
+//	can render "X of Y queued · cap is Z" with no magic numbers.
 type BulkScanResponse struct {
 	ScansQueued       int  `json:"scans_queued"`
 	RepositoriesCount int  `json:"repositories_count"`

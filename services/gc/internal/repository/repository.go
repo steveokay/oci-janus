@@ -41,7 +41,7 @@ var ErrNotFound = errors.New("not found")
 // TriggerRetentionRun can record the target without inventing a separate
 // table.
 type GCRun struct {
-	RunID    uuid.UUID
+	RunID uuid.UUID
 	// TenantID is uuid.Nil for cross-tenant cron sweeps.
 	TenantID uuid.UUID
 	// RepoID is uuid.Nil for tenant-wide / cross-tenant sweeps. Populated

@@ -111,12 +111,12 @@ func TestDigestRE_ValidSHA256_Matches(t *testing.T) {
 
 func TestDigestRE_InvalidDigests_DoNotMatch(t *testing.T) {
 	invalid := []string{
-		"sha256:UPPER",    // uppercase hex
-		"md5:aabbccdd",   // wrong algorithm
-		"sha256:short",   // too short
-		"sha256:",        // empty hex part
-		"",               // empty
-		"aabbccddeeff",   // missing prefix
+		"sha256:UPPER", // uppercase hex
+		"md5:aabbccdd", // wrong algorithm
+		"sha256:short", // too short
+		"sha256:",      // empty hex part
+		"",             // empty
+		"aabbccddeeff", // missing prefix
 	}
 	for _, d := range invalid {
 		if digestRE.MatchString(d) {

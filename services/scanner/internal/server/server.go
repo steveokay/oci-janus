@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	"github.com/google/uuid"
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
@@ -30,14 +30,14 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/scanner/internal/config"
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
-	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
 	"github.com/steveokay/oci-janus/services/scanner/internal/policy"
 	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
-	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
+	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
 	"github.com/steveokay/oci-janus/services/scanner/internal/worker"
+	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"

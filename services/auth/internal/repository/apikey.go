@@ -20,10 +20,10 @@ import (
 // api_keys_owner_exactly_one (migration 20260622000003). Callers must branch on
 // whichever field is non-nil to determine the key owner type.
 type APIKey struct {
-	ID               uuid.UUID
-	TenantID         uuid.UUID
+	ID       uuid.UUID
+	TenantID uuid.UUID
 	// UserID is non-nil for human-owned keys, nil for SA-owned keys.
-	UserID           *uuid.UUID
+	UserID *uuid.UUID
 	// ServiceAccountID is non-nil for SA-owned keys, nil for human-owned keys.
 	ServiceAccountID *uuid.UUID
 	Name             string
@@ -42,9 +42,9 @@ type APIKey struct {
 // database CHECK constraint so callers get a descriptive error rather than a
 // raw PG violation.
 type CreateAPIKeyRequest struct {
-	TenantID         uuid.UUID
+	TenantID uuid.UUID
 	// UserID must be non-nil for human-owned keys; nil for SA-owned keys.
-	UserID           *uuid.UUID
+	UserID *uuid.UUID
 	// ServiceAccountID must be non-nil for SA-owned keys; nil for human-owned keys.
 	ServiceAccountID *uuid.UUID
 	Name             string

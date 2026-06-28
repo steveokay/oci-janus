@@ -25,8 +25,8 @@ const (
 	RoutingImageSigned          = "image.signed"
 	RoutingTenantCreated        = "tenant.created"
 	RoutingTenantDeleted        = "tenant.deleted"
-	RoutingTenantRenamed        = "tenant.renamed"       // FE-API-029
-	RoutingTenantPlanChanged    = "tenant.plan_changed"  // FE-API-029
+	RoutingTenantRenamed        = "tenant.renamed"      // FE-API-029
+	RoutingTenantPlanChanged    = "tenant.plan_changed" // FE-API-029
 	RoutingTenantDomainVerified = "tenant.domain.verified"
 	RoutingStoreQueued          = "store.queued" // proxy background store
 
@@ -155,12 +155,12 @@ type CachePopulatedPayload struct {
 // Published by registry-proxy when a background blob store fails so the
 // consumer can retry with a fresh upstream fetch — no in-memory state needed.
 type StoreQueuedPayload struct {
-	TenantID       string `json:"tenant_id"`
-	UpstreamName   string `json:"upstream_name"`
+	TenantID     string `json:"tenant_id"`
+	UpstreamName string `json:"upstream_name"`
 	// BlobDigest is the content-addressed sha256:... digest of the blob to (re-)store.
-	BlobDigest     string `json:"blob_digest,omitempty"`
+	BlobDigest string `json:"blob_digest,omitempty"`
 	// Image is the upstream image name (e.g. "library/ubuntu") used to re-fetch the blob.
-	Image          string `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
 	// The following fields are retained for manifest-level store events.
 	ManifestDigest string `json:"manifest_digest,omitempty"`
 	RepositoryName string `json:"repository_name,omitempty"`
@@ -245,7 +245,7 @@ type RetentionEvaluatedPayload struct {
 	RunID              string     `json:"run_id"`
 	TenantID           string     `json:"tenant_id"`
 	RepositoryID       string     `json:"repository_id"`
-	Mode               string     `json:"mode"`        // "retention" | "retention_grace"
+	Mode               string     `json:"mode"` // "retention" | "retention_grace"
 	EvaluatedAt        time.Time  `json:"evaluated_at"`
 	WouldDeleteCount   int64      `json:"would_delete_count"`
 	WouldDeleteBytes   int64      `json:"would_delete_bytes"`

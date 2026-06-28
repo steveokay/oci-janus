@@ -104,10 +104,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// FailedPrecondition. This keeps backwards compatibility with the
 	// pre-FE-API-032 deployment model where gc was purely cron-driven.
 	var (
-		dbPool   *pgxpool.Pool
-		repo     *repository.Repository
+		dbPool      *pgxpool.Pool
+		repo        *repository.Repository
 		runRequests chan uuid.UUID
-		persisted *runner.PersistedRunner
+		persisted   *runner.PersistedRunner
 	)
 	if cfg.DBDSN != "" {
 		tmpDB := &loader.DBConfig{

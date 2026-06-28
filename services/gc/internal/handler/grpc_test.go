@@ -32,8 +32,8 @@ type fakeRepo struct {
 	createErr      error
 	createOverride func(mode string, tenantID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	// captured arguments for assertion.
-	lastListLimit  int
-	lastListToken  string
+	lastListLimit int
+	lastListToken string
 	// REM-013 gap 2 — new ListRuns filter params.
 	lastListRepoID uuid.UUID
 	lastListModes  []string
@@ -41,8 +41,8 @@ type fakeRepo struct {
 	lastListTriggeredBy string
 	lastListDateFrom    *time.Time
 	lastListDateTo      *time.Time
-	lastCreateMode string
-	lastCreateBy   string
+	lastCreateMode      string
+	lastCreateBy        string
 
 	// FE-API-040 retention executor fakes.
 	retentionCreateErr      error

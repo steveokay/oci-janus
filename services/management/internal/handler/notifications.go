@@ -25,8 +25,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 

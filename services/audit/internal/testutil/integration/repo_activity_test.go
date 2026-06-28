@@ -18,8 +18,8 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
-	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
+	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 )
 
 // newRepo spins up a PostgreSQL 16 container, runs every audit migration, and
@@ -114,7 +114,7 @@ func TestRepoActivity_filtersByTenantAndRepo(t *testing.T) {
 	seed(t, repo, tenantA, "scan.completed", "myorg/myrepo", "", "sha256:222", now.Add(-time.Minute), "success")
 	seed(t, repo, tenantA, "image.signed", "myorg/myrepo", "v1", "sha256:111", now.Add(-2*time.Minute), "success")
 
-	seed(t, repo, tenantA, "push.image", "myorg/other", "v1", "sha256:abc", now, "success") // sibling repo
+	seed(t, repo, tenantA, "push.image", "myorg/other", "v1", "sha256:abc", now, "success")  // sibling repo
 	seed(t, repo, tenantB, "push.image", "myorg/myrepo", "v1", "sha256:def", now, "success") // wrong tenant
 
 	defaults := []string{

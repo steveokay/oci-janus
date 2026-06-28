@@ -9,7 +9,7 @@
 //
 // This route closes the gap: a platform admin POSTs to
 //
-//     POST /api/v1/admin/orgs/{org}/claim
+//	POST /api/v1/admin/orgs/{org}/claim
 //
 // and the BFF grants them admin on the specified org. From there they can use
 // the existing /api/v1/repositories flow. The org row in metadata is created

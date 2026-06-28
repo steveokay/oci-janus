@@ -31,9 +31,9 @@ type Driver interface {
 
 // BlobInfo holds metadata returned by StatBlob.
 type BlobInfo struct {
-	Key         string
-	Size        int64
-	ContentType string
+	Key          string
+	Size         int64
+	ContentType  string
 	LastModified time.Time
 }
 

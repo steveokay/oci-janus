@@ -114,11 +114,11 @@ func (r *Repository) Query(ctx context.Context, f QueryFilter) ([]*AuditEvent, e
 
 // BuildHistoryRow is a single row returned by GetBuildHistory.
 type BuildHistoryRow struct {
-	ID          uuid.UUID
-	ActorID     string
-	Outcome     string
-	Metadata    json.RawMessage
-	OccurredAt  time.Time
+	ID         uuid.UUID
+	ActorID    string
+	Outcome    string
+	Metadata   json.RawMessage
+	OccurredAt time.Time
 }
 
 // GetBuildHistory returns push/build audit events for a repository and tag,

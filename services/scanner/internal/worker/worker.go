@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/grpc"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/libs/scanner/plugin"
 	"github.com/steveokay/oci-janus/services/scanner/internal/blobfetcher"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
+	"google.golang.org/grpc"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 )
@@ -481,12 +481,12 @@ func (p *Pool) runJob(ctx context.Context, job scanJob) {
 func (p *Pool) applyQuarantine(ctx context.Context, job scanJob, result *plugin.ScanResult) {
 	reason := buildQuarantineReason(result, job.policy.BlockOnSeverity)
 	if _, err := p.metaClient.UpdateManifestQuarantine(ctx, &metadatav1.UpdateManifestQuarantineRequest{
-		TenantId:        job.tenantID,
-		RepoId:          job.repoID,
-		ManifestDigest:  job.manifestDigest,
-		Quarantined:     true,
-		Reason:          reason,
-		QuarantinedBy:   "scanner",
+		TenantId:       job.tenantID,
+		RepoId:         job.repoID,
+		ManifestDigest: job.manifestDigest,
+		Quarantined:    true,
+		Reason:         reason,
+		QuarantinedBy:  "scanner",
 	}); err != nil {
 		slog.WarnContext(ctx, "UpdateManifestQuarantine failed",
 			"scan_id", job.scanID,
@@ -507,7 +507,7 @@ func (p *Pool) applyQuarantine(ctx context.Context, job scanJob, result *plugin.
 // 451 banner shows the operator EXACTLY what the scanner saw, with
 // the scanner's vocabulary. Format:
 //
-//   "scan blocked by policy block_on_severity=HIGH: 3 CRITICAL, 5 HIGH, 2 MEDIUM"
+//	"scan blocked by policy block_on_severity=HIGH: 3 CRITICAL, 5 HIGH, 2 MEDIUM"
 func buildQuarantineReason(result *plugin.ScanResult, blockOn string) string {
 	parts := []string{}
 	for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
@@ -820,21 +820,21 @@ const cachePopulatedDedupWindow = 30 * time.Minute
 // HandleCachePopulated is the consumer.Handler for cache.populated
 // events (FUT-017). Flow:
 //
-//   1. Parse the payload (events.CachePopulatedPayload).
-//   2. Look up the (tenant_id, upstream_name) policy via the resolver.
-//      No policy → ACK + no-op. Resolver error → return the error so
-//      the broker NACKs (defence-in-depth: don't silently auto-scan
-//      every cached image when the DB is unreachable).
-//   3. auto_scan=false → ACK + no-op.
-//   4. Idempotency: if scanStore.HasRecentScan reports the same
-//      (tenant, digest) is in flight or completed within
-//      cachePopulatedDedupWindow, skip enqueue. We log this at info
-//      so the operator can see the dedup in action without it looking
-//      like an error.
-//   5. Enqueue a scanJob just like HandlePushCompleted does. The job
-//      goes through the same worker pool / plugin / persist /
-//      scan.completed publish path — proxy-cached images are first-
-//      class scan inputs.
+//  1. Parse the payload (events.CachePopulatedPayload).
+//  2. Look up the (tenant_id, upstream_name) policy via the resolver.
+//     No policy → ACK + no-op. Resolver error → return the error so
+//     the broker NACKs (defence-in-depth: don't silently auto-scan
+//     every cached image when the DB is unreachable).
+//  3. auto_scan=false → ACK + no-op.
+//  4. Idempotency: if scanStore.HasRecentScan reports the same
+//     (tenant, digest) is in flight or completed within
+//     cachePopulatedDedupWindow, skip enqueue. We log this at info
+//     so the operator can see the dedup in action without it looking
+//     like an error.
+//  5. Enqueue a scanJob just like HandlePushCompleted does. The job
+//     goes through the same worker pool / plugin / persist /
+//     scan.completed publish path — proxy-cached images are first-
+//     class scan inputs.
 //
 // repoID is intentionally left empty on the enqueued job. cached
 // manifests are stored under the proxy schema and the scanner's GetManifest
@@ -938,4 +938,3 @@ func (p *Pool) TriggerScanJob(tenantID, repoID, repoName, manifestDigest string)
 	})
 	return scanID
 }
-

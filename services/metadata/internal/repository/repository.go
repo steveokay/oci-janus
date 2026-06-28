@@ -521,7 +521,7 @@ func (r *Repository) LookupOrgIDByName(ctx context.Context, tenantID, orgName st
 // also covers the transient "tag exists, manifest row missing" state
 // during deletes — the coalesce ensures the column scans as false
 // rather than NULL.
-// S-MAINT-1 Batch 5: COALESCE config_media_type to '' so NULL legacy
+// S-MAINT-1 Batch 5: COALESCE config_media_type to ” so NULL legacy
 // rows scan as empty string (artifact_type is then derived in Go and
 // left empty so the FE renders the "Unknown" pill tone).
 //
@@ -1013,9 +1013,15 @@ func parseImageSize(rawJSON []byte) int64 {
 		return 0
 	}
 	var doc struct {
-		Config    *struct{ Size int64 `json:"size"` } `json:"config"`
-		Layers    []struct{ Size int64 `json:"size"` } `json:"layers"`
-		Manifests []struct{ Size int64 `json:"size"` } `json:"manifests"`
+		Config *struct {
+			Size int64 `json:"size"`
+		} `json:"config"`
+		Layers []struct {
+			Size int64 `json:"size"`
+		} `json:"layers"`
+		Manifests []struct {
+			Size int64 `json:"size"`
+		} `json:"manifests"`
 	}
 	if err := json.Unmarshal(rawJSON, &doc); err != nil {
 		return 0

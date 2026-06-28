@@ -4,8 +4,8 @@
 // wrap the auditv1 RPCs the FE /settings → Notifications matrix
 // drives:
 //
-//   GET   /api/v1/users/me/notification-preferences
-//   PATCH /api/v1/users/me/notification-preferences
+//	GET   /api/v1/users/me/notification-preferences
+//	PATCH /api/v1/users/me/notification-preferences
 //
 // Auth posture: the caller's user_id + tenant_id are pulled from the
 // JWT (middleware), never from the request body. The gRPC handler

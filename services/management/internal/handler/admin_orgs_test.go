@@ -35,6 +35,7 @@ import (
 // recognises:
 //   - platformAdminToken: holds the (org=*, admin) marker grant
 //   - readerToken: holds only a reader grant on "myorg" — must be rejected
+//
 // GrantRole calls are captured into grantRoleCaptured so tests can assert
 // that the right tuple was forwarded.
 type claimFakeAuthServer struct {

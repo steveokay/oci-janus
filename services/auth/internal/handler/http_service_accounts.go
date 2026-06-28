@@ -28,36 +28,36 @@ import (
 // saNameRe matches the service-account name allowlist: lowercase alphanumeric
 // with optional single separators (., -, _), max 64 characters.
 var (
-	saNameRe  = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*$`)
-	saScpRe   = regexp.MustCompile(`^[a-z][a-z0-9_:]{0,63}$`)
+	saNameRe = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*$`)
+	saScpRe  = regexp.MustCompile(`^[a-z][a-z0-9_:]{0,63}$`)
 )
 
 // saMaxNameLen is the maximum length for a service-account name (CLAUDE.md §7).
 const (
-	saMaxNameLen  = 64
-	saMaxDescLen  = 280
+	saMaxNameLen = 64
+	saMaxDescLen = 280
 )
 
 // serviceAccountResponse is the JSON shape returned by all SA CRUD endpoints.
 // Nullable fields (created_by, disabled_at) use omitempty so they are absent
 // rather than null in the JSON output, matching the spec §5 shape.
 type serviceAccountResponse struct {
-	ID             string     `json:"id"`
-	TenantID       string     `json:"tenant_id"`
-	Name           string     `json:"name"`
-	Description    string     `json:"description"`
-	AllowedScopes  []string   `json:"allowed_scopes"`
-	ShadowUserID   string     `json:"shadow_user_id"`
+	ID            string   `json:"id"`
+	TenantID      string   `json:"tenant_id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	AllowedScopes []string `json:"allowed_scopes"`
+	ShadowUserID  string   `json:"shadow_user_id"`
 	// CreatedBy is the UUID of the human who created the SA, or empty when
 	// the creator's account has been deleted (ON DELETE SET NULL).
-	CreatedBy      string     `json:"created_by,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	CreatedBy string    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 	// DisabledAt is absent while the account is active.
-	DisabledAt     *time.Time `json:"disabled_at,omitempty"`
+	DisabledAt *time.Time `json:"disabled_at,omitempty"`
 	// ActiveKeyCount carries the live key count from ServiceAccountWithStats.
 	// It is 0 on create/get/update responses (no stats join on single-row
 	// fetches); T14 enriches the list path.
-	ActiveKeyCount int32      `json:"active_key_count"`
+	ActiveKeyCount int32 `json:"active_key_count"`
 }
 
 // saToResponse converts a repository.ServiceAccount to the wire response.
@@ -643,7 +643,7 @@ func (h *HTTPHandler) saListKeys(w http.ResponseWriter, r *http.Request) {
 type issueKeyBody struct {
 	// Name is required; must be unique within the SA (partial unique index on
 	// (service_account_id, name) in the api_keys table).
-	Name   string   `json:"name"`
+	Name string `json:"name"`
 	// Scopes must be a non-empty subset of the SA's AllowedScopes. The handler
 	// enforces the subset constraint before calling the service layer.
 	Scopes []string `json:"scopes"`

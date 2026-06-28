@@ -73,11 +73,11 @@ const affectedCap = 10
 // every cursor field can be compared lexicographically with the same "after"
 // predicate.
 type remediationCursor struct {
-	SeverityRank   int
-	NegCVECount    int // negated cves_fixed_count so DESC becomes ASC
-	PackageName    string
-	FromVersion    string
-	ToVersion      string
+	SeverityRank int
+	NegCVECount  int // negated cves_fixed_count so DESC becomes ASC
+	PackageName  string
+	FromVersion  string
+	ToVersion    string
 }
 
 // encodeRemediationCursor base64-encodes the cursor as
@@ -125,7 +125,9 @@ func decodeRemediationCursor(s string) (remediationCursor, error) {
 
 // sortRemediationRows orders rows in-place by
 // (max_severity_rank ASC, cves_fixed_count DESC, package_name ASC,
-//  from_version ASC, to_version ASC). Extracted so the test can exercise it
+//
+//	from_version ASC, to_version ASC). Extracted so the test can exercise it
+//
 // directly without seeding Postgres.
 func sortRemediationRows(rows []RemediationRow) {
 	sort.SliceStable(rows, func(i, j int) bool {

@@ -11,9 +11,9 @@
 //	GET  /api/v1/proxy/cache/sign-policies            → list all
 //
 // Route shape:
-//   • The single-policy routes are /upstreams/{name}/<kind>-policy because
+//   - The single-policy routes are /upstreams/{name}/<kind>-policy because
 //     a policy is one-per-upstream and named in the URL path.
-//   • The list routes are /cache/<kind>-policies because they're a
+//   - The list routes are /cache/<kind>-policies because they're a
 //     tenant-wide read, not scoped to one upstream.
 //
 // Each route 404s with "route disabled" when its backing gRPC client is
@@ -75,11 +75,11 @@ func (h *Handler) RegisterProxyCachePolicies(mux *http.ServeMux, authMW func(htt
 // scan-policy routes. Field names mirror the proto in snake_case so the
 // frontend doesn't need a translation layer.
 type proxyCacheScanPolicyResponse struct {
-	UpstreamName       string  `json:"upstream_name"`
-	AutoScan           bool    `json:"auto_scan"`
-	SeverityThreshold  string  `json:"severity_threshold"`
-	UpdatedAt          *string `json:"updated_at,omitempty"`
-	UpdatedBy          string  `json:"updated_by,omitempty"`
+	UpstreamName      string  `json:"upstream_name"`
+	AutoScan          bool    `json:"auto_scan"`
+	SeverityThreshold string  `json:"severity_threshold"`
+	UpdatedAt         *string `json:"updated_at,omitempty"`
+	UpdatedBy         string  `json:"updated_by,omitempty"`
 }
 
 type proxyCacheScanPolicyPutBody struct {

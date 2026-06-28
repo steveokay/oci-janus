@@ -24,8 +24,8 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
-	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
+	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 )
 

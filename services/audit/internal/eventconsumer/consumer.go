@@ -31,8 +31,8 @@ type Consumer struct {
 	// Both paths still go through this Consumer — the choice is
 	// determined by `publisher` below. When neither is wired, the
 	// audit INSERT happens as usual and SIEM streaming is disabled.
-	exporter  *exportDispatcher        // Phase 1 fallback (inline retry, no DLX)
-	publisher *exportworker.Publisher  // Phase 2 (durable queue + real DLX)
+	exporter  *exportDispatcher       // Phase 1 fallback (inline retry, no DLX)
+	publisher *exportworker.Publisher // Phase 2 (durable queue + real DLX)
 }
 
 // New creates a Consumer.
@@ -651,11 +651,11 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 		// into a dedicated details JSON blob so operators can inspect them
 		// without re-parsing the full raw envelope.
 		details, _ := json.Marshal(map[string]any{
-			"mode":               p.Mode,
-			"manifests_deleted":  p.ManifestsDeleted,
-			"blobs_deleted":      p.BlobsDeleted,
-			"bytes_freed":        p.BytesFreed,
-			"dry_run":            p.DryRun,
+			"mode":              p.Mode,
+			"manifests_deleted": p.ManifestsDeleted,
+			"blobs_deleted":     p.BlobsDeleted,
+			"bytes_freed":       p.BytesFreed,
+			"dry_run":           p.DryRun,
 		})
 		gcMeta, _ := json.Marshal(map[string]any{
 			"event_id": event.ID,

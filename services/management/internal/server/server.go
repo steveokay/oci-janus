@@ -14,6 +14,8 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
@@ -23,8 +25,6 @@ import (
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/config"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -229,4 +229,3 @@ func buildGRPCCreds(cfg *config.Config) (credentials.TransportCredentials, error
 	}
 	return credentials.NewTLS(tlsCfg), nil
 }
-

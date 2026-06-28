@@ -47,17 +47,17 @@ func (h *Handler) RegisterProxyCache(mux *http.ServeMux, authMW func(http.Handle
 // /api/v1/proxy/cache. Field names mirror the proto field names in
 // snake_case so the frontend doesn't need a translation layer.
 type cachedManifestResponse struct {
-	ID            string  `json:"id"`
-	UpstreamID    string  `json:"upstream_id"`
-	UpstreamName  string  `json:"upstream_name"`
-	Image         string  `json:"image"`
-	Reference     string  `json:"reference"`
-	Digest        string  `json:"digest"`
-	MediaType     string  `json:"media_type"`
-	SizeBytes     int64   `json:"size_bytes"`
-	FetchedAt     string  `json:"fetched_at"`               // RFC3339Nano; never empty
-	LastPulledAt  *string `json:"last_pulled_at,omitempty"` // omitted when never pulled
-	PullCount     int64   `json:"pull_count"`
+	ID           string  `json:"id"`
+	UpstreamID   string  `json:"upstream_id"`
+	UpstreamName string  `json:"upstream_name"`
+	Image        string  `json:"image"`
+	Reference    string  `json:"reference"`
+	Digest       string  `json:"digest"`
+	MediaType    string  `json:"media_type"`
+	SizeBytes    int64   `json:"size_bytes"`
+	FetchedAt    string  `json:"fetched_at"`               // RFC3339Nano; never empty
+	LastPulledAt *string `json:"last_pulled_at,omitempty"` // omitted when never pulled
+	PullCount    int64   `json:"pull_count"`
 }
 
 type listProxyCacheResponse struct {
@@ -101,14 +101,14 @@ type proxyCacheManifestRef struct {
 // Embeds the list-row fields verbatim + adds:
 //
 //   - kind         — "image" (single-arch) or "index" (multi-platform). Lets
-//                    the FE branch on a single string instead of sniffing
-//                    media types client-side.
+//     the FE branch on a single string instead of sniffing
+//     media types client-side.
 //   - body_base64  — the manifest body bytes, base64-encoded, for the
-//                    "Manifest" tab raw-JSON viewer.
+//     "Manifest" tab raw-JSON viewer.
 //   - layers / manifests — parsed projection. One of the two is populated
-//                          based on `kind`; the other is an empty slice
-//                          (we never emit `null` — stable shape for the
-//                          FE means no `?.length` dance).
+//     based on `kind`; the other is an empty slice
+//     (we never emit `null` — stable shape for the
+//     FE means no `?.length` dance).
 type proxyCacheDetailResponse struct {
 	cachedManifestResponse
 	Kind       string                  `json:"kind"`
@@ -151,10 +151,11 @@ type rawProxyManifest struct {
 // GET /api/v1/proxy/cache
 //
 // Query params:
-//   upstream_id     — optional UUID, filters to a single upstream
-//   image_contains  — optional substring filter (case-insensitive)
-//   page_token      — caller-opaque cursor returned by the previous page
-//   page_size       — 1..100; defaults to 50
+//
+//	upstream_id     — optional UUID, filters to a single upstream
+//	image_contains  — optional substring filter (case-insensitive)
+//	page_token      — caller-opaque cursor returned by the previous page
+//	page_size       — 1..100; defaults to 50
 func (h *Handler) handleListProxyCache(w http.ResponseWriter, r *http.Request) {
 	if h.proxy == nil {
 		writeError(w, http.StatusNotFound, "route disabled")

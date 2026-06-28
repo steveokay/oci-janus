@@ -57,10 +57,10 @@ type AuthProvider struct {
 	Enabled     bool
 
 	// OAuth — nil/empty for SAML providers.
-	OAuthClientID         string
-	OAuthClientSecretEnc  []byte
-	OAuthIssuerURL        string
-	OAuthScopes           []string
+	OAuthClientID        string
+	OAuthClientSecretEnc []byte
+	OAuthIssuerURL       string
+	OAuthScopes          []string
 
 	// SAML — empty for OAuth providers.
 	SAMLIdpMetadataXML string
@@ -288,11 +288,11 @@ type rowScanner interface {
 // scanAuthProvider reads one provider row using the canonical column list.
 func scanAuthProvider(s rowScanner) (*AuthProvider, error) {
 	var (
-		p        AuthProvider
-		typeStr  string
-		scopes   []string
-		secret   []byte
-		updated  *uuid.UUID
+		p       AuthProvider
+		typeStr string
+		scopes  []string
+		secret  []byte
+		updated *uuid.UUID
 	)
 	if err := s.Scan(
 		&p.ID, &p.TenantID, &typeStr, &p.DisplayName, &p.Enabled,

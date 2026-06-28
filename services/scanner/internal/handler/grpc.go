@@ -29,9 +29,9 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/steveokay/oci-janus/libs/scanner/plugin"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
-	"github.com/steveokay/oci-janus/libs/scanner/plugin"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
 	"github.com/steveokay/oci-janus/services/scanner/internal/policy"
 	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"

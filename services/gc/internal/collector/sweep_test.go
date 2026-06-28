@@ -191,8 +191,8 @@ func buildCollector(metaConn, storageConn *grpc.ClientConn, mode string) *Collec
 		pub:            nil, // nil publisher — tests don't assert on events
 		locker:         nil, // no advisory locking in unit tests
 		mode:           mode,
-		blobMinAge:     0,                // no age gate in unit tests
-		manifestMinAge: 0,                // no age gate
+		blobMinAge:     0, // no age gate in unit tests
+		manifestMinAge: 0, // no age gate
 	}
 }
 
@@ -206,7 +206,6 @@ func manifestOldEnough(repoID, tenantID, digest string) *metadatav1.Manifest {
 		CreatedAt: timestamppb.New(time.Now().Add(-365 * 24 * time.Hour)),
 	}
 }
-
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 

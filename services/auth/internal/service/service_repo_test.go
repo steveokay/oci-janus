@@ -160,6 +160,7 @@ func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) 
 func (f *fakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
 	return int64(len(f.users)), nil
 }
+
 // FUT-012 Phase A: service-layer fakes get the same minimal stubs.
 // Tests that exercise the new tenant-user methods build dedicated
 // fixtures rather than wiring in-memory state into these existing
@@ -320,9 +321,9 @@ func (f *fakeUserRepo) MarkOnboardingComplete(_ context.Context, userID uuid.UUI
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
-	keys             map[uuid.UUID]*repository.APIKey
-	createErr        error
-	getByIDErr       error // if set, GetByID returns this instead of looking up
+	keys       map[uuid.UUID]*repository.APIKey
+	createErr  error
+	getByIDErr error // if set, GetByID returns this instead of looking up
 	// poisonTouchLastUsed, when true, makes TouchLastUsed return an error so
 	// T7 (TestValidateAPIKey_LastUsedWritebackFailureIsolated) can assert that
 	// a writeback failure does not propagate to the caller.
@@ -1075,13 +1076,13 @@ func (f *authFakes) issueHumanKey(username string) (uuid.UUID, string) {
 		panic("issueHumanKey: argon2pkg.Hash: " + err.Error())
 	}
 	k := &repository.APIKey{
-		ID:       uuid.New(),
-		TenantID: tenantID,
-		UserID:   &userID,
-		Name:     "human-key",
-		KeyHash:  hash,
-		Scopes:   []string{"pull"},
-		IsActive: true,
+		ID:        uuid.New(),
+		TenantID:  tenantID,
+		UserID:    &userID,
+		Name:      "human-key",
+		KeyHash:   hash,
+		Scopes:    []string{"pull"},
+		IsActive:  true,
 		CreatedAt: time.Now(),
 	}
 	f.keyRepo.keys[k.ID] = k

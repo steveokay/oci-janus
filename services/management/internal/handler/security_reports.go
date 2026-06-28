@@ -341,4 +341,3 @@ func reportProtoToResponse(p *scannerv1.ComplianceReport) ComplianceReportRespon
 	}
 	return out
 }
-

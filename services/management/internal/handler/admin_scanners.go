@@ -6,21 +6,21 @@
 //
 // FE-API numbering:
 //
-//   FE-API-044  GET    /api/v1/admin/scanners            ListInstalledAdapters
-//   FE-API-044  GET    /api/v1/admin/scanners/active     GetActiveAdapter
-//   FE-API-045  PATCH  /api/v1/admin/scanners/active     SetActiveAdapter
-//   FE-API-046  POST   /api/v1/admin/scanners/test       RunTestScan
-//   FE-API-047  GET    /api/v1/admin/scanners/health     GetScannerHealth
+//	FE-API-044  GET    /api/v1/admin/scanners            ListInstalledAdapters
+//	FE-API-044  GET    /api/v1/admin/scanners/active     GetActiveAdapter
+//	FE-API-045  PATCH  /api/v1/admin/scanners/active     SetActiveAdapter
+//	FE-API-046  POST   /api/v1/admin/scanners/test       RunTestScan
+//	FE-API-047  GET    /api/v1/admin/scanners/health     GetScannerHealth
 //
 // Authorization model — same as admin_tenants.go / admin_gc.go:
 //
-//   1. h.scanner must be non-nil (SCANNER_GRPC_ADDR was set at startup),
-//      otherwise return 404 "route disabled".
-//   2. The caller holds the platform-admin marker grant —
-//      hasScopedRole(_, "org", "*", "admin"). Picking the active scanner
-//      adapter is a deployment-wide choice (it affects every tenant's
-//      scans), so tenant-scoped admin grants are intentionally not
-//      enough.
+//  1. h.scanner must be non-nil (SCANNER_GRPC_ADDR was set at startup),
+//     otherwise return 404 "route disabled".
+//  2. The caller holds the platform-admin marker grant —
+//     hasScopedRole(_, "org", "*", "admin"). Picking the active scanner
+//     adapter is a deployment-wide choice (it affects every tenant's
+//     scans), so tenant-scoped admin grants are intentionally not
+//     enough.
 package handler
 
 import (

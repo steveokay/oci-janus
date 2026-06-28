@@ -7,8 +7,8 @@
 // services/core (PutManifest preflight); these routes only flip the
 // per-tag `immutable` flag.
 //
-//   POST   /api/v1/repositories/{org}/{repo}/tags/{tag}/pin   — set true
-//   DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin   — set false
+//	POST   /api/v1/repositories/{org}/{repo}/tags/{tag}/pin   — set true
+//	DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin   — set false
 //
 // Permissions mirror the retention + scan policy editors: repo admin
 // or above. A writer can push to existing mutable tags but can't

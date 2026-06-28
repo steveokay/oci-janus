@@ -42,10 +42,10 @@ type Config struct {
 	VaultCosignPath string `mapstructure:"VAULT_COSIGN_PATH"`
 
 	// KMS backends (awskms / gcpkms / azurekms)
-	KMSKeyARN       string `mapstructure:"SIGNER_KMS_ARN"`
-	KMSResourceID   string `mapstructure:"SIGNER_KMS_RESOURCE_ID"`
-	KMSVaultURL     string `mapstructure:"SIGNER_KMS_VAULT_URL"`
-	KMSKeyName      string `mapstructure:"SIGNER_KMS_KEY_NAME"`
+	KMSKeyARN     string `mapstructure:"SIGNER_KMS_ARN"`
+	KMSResourceID string `mapstructure:"SIGNER_KMS_RESOURCE_ID"`
+	KMSVaultURL   string `mapstructure:"SIGNER_KMS_VAULT_URL"`
+	KMSKeyName    string `mapstructure:"SIGNER_KMS_KEY_NAME"`
 
 	// Database — required in production for durable signature persistence (SEC-015).
 	// When empty the service falls back to an in-memory store with a startup warning;

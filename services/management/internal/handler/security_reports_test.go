@@ -283,4 +283,3 @@ func TestReports_List_invalidStatus_returns400(t *testing.T) {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }
-

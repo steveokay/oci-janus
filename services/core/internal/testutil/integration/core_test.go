@@ -31,9 +31,9 @@ import (
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 
-	"github.com/steveokay/oci-janus/libs/testutil/containers"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	"github.com/steveokay/oci-janus/libs/testutil/containers"
 	"github.com/steveokay/oci-janus/services/core/internal/handler"
 	"github.com/steveokay/oci-janus/services/core/internal/service"
 )
@@ -70,10 +70,10 @@ func (s *mockAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 type mockMetadataServer struct {
 	metadatav1.UnimplementedMetadataServiceServer
 
-	mu         sync.Mutex
-	repos      map[string]*metadatav1.Repository // key: tenantID+":"+repoName
-	manifests  map[string]*metadatav1.Manifest   // key: repoID+":"+digest
-	tagToDigest map[string]string                // key: repoID+":"+tagName
+	mu          sync.Mutex
+	repos       map[string]*metadatav1.Repository // key: tenantID+":"+repoName
+	manifests   map[string]*metadatav1.Manifest   // key: repoID+":"+digest
+	tagToDigest map[string]string                 // key: repoID+":"+tagName
 }
 
 func newMockMetadataServer() *mockMetadataServer {

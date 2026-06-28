@@ -206,10 +206,10 @@ func TestPublisher_DrainStaleConfirm(t *testing.T) {
 
 // TestPublisher_CloseReturnsErrPublisherClosedToConcurrentPublish covers
 // QA-002a. Concurrent Publish + Close must:
-//   1. Allow the in-flight Publish to finish (Close waits on mu).
-//   2. Return ErrPublisherClosed to any subsequent Publish, instead of
-//      surfacing the underlying amqp091 "channel closed" error that
-//      callers can't reliably distinguish from a broker outage.
+//  1. Allow the in-flight Publish to finish (Close waits on mu).
+//  2. Return ErrPublisherClosed to any subsequent Publish, instead of
+//     surfacing the underlying amqp091 "channel closed" error that
+//     callers can't reliably distinguish from a broker outage.
 func TestPublisher_CloseReturnsErrPublisherClosedToConcurrentPublish(t *testing.T) {
 	fake := newFakeChannel()
 	confirms := make(chan amqp.Confirmation, 4)

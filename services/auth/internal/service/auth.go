@@ -437,12 +437,12 @@ type ValidateAPIKeyOpts struct {
 // hash, and returns a ValidatedKey describing the authenticated principal.
 //
 // For service-account keys it additionally:
-//  - rejects the request when the SA is disabled (spec §5.5);
-//  - enforces a cross-tenant guard: if RequestTenantID is set and does not
-//    match the SA's tenant, it emits a best-effort audit event and returns
-//    codes.Unauthenticated (spec §5.4, security finding H1);
-//  - intersects the key's scopes with the SA's AllowedScopes and rejects the
-//    key when the intersection is empty (spec §5.4).
+//   - rejects the request when the SA is disabled (spec §5.5);
+//   - enforces a cross-tenant guard: if RequestTenantID is set and does not
+//     match the SA's tenant, it emits a best-effort audit event and returns
+//     codes.Unauthenticated (spec §5.4, security finding H1);
+//   - intersects the key's scopes with the SA's AllowedScopes and rejects the
+//     key when the intersection is empty (spec §5.4).
 //
 // For human keys the behaviour is unchanged from the pre-T9 path.
 //

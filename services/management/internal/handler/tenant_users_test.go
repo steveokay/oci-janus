@@ -319,7 +319,7 @@ func (s *fakeAuthServer) ListTenantUsers(_ context.Context, _ *authv1.ListTenant
 	return &authv1.ListTenantUsersResponse{
 		Users: []*authv1.TenantUser{
 			{
-				UserId:   "u1", Username: "tenant-admin-user", DisplayName: "Tenant Admin", Email: "ta@example.com",
+				UserId: "u1", Username: "tenant-admin-user", DisplayName: "Tenant Admin", Email: "ta@example.com",
 				Kind: "human", Status: "active",
 				CreatedAt: timestamppb.Now(),
 				Roles:     &authv1.RoleSummary{TenantAdmin: true},

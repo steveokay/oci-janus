@@ -336,12 +336,12 @@ func (h *GRPCHandler) TestDispatch(ctx context.Context, req *webhookv1.TestDispa
 	}
 
 	payload, _ := json.Marshal(map[string]any{
-		"id":           uuid.New().String(),
-		"type":         "webhook.test",
-		"tenant_id":    req.TenantId,
-		"occurred_at":  time.Now().UTC().Format(time.RFC3339),
-		"version":      "1.0",
-		"payload":      map[string]string{"message": "test dispatch from registry-webhook"},
+		"id":          uuid.New().String(),
+		"type":        "webhook.test",
+		"tenant_id":   req.TenantId,
+		"occurred_at": time.Now().UTC().Format(time.RFC3339),
+		"version":     "1.0",
+		"payload":     map[string]string{"message": "test dispatch from registry-webhook"},
 	})
 
 	// Bound the synchronous test send so a dead endpoint can't hold the gRPC

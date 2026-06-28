@@ -279,13 +279,13 @@ func (h *HTTPHandler) jwks(w http.ResponseWriter, r *http.Request) {
 // accepted any `tenant_id` from the request body. That permitted unauthenticated
 // account squatting, cross-tenant user injection, and a username-enumeration
 // oracle via the 409 conflict response. The endpoint now:
-//   1. Requires a valid Bearer token (requireAuth).
-//   2. Uses the caller's tenant_id from the JWT — body.tenant_id is ignored
-//      (or, if supplied, must match the caller's tenant).
-//   3. Requires the caller to hold an `admin` or `owner` role somewhere in
-//      that tenant. New users always start with zero role assignments, so
-//      bootstrapping the very first admin must happen through a seed migration
-//      or out-of-band tooling, never through this endpoint.
+//  1. Requires a valid Bearer token (requireAuth).
+//  2. Uses the caller's tenant_id from the JWT — body.tenant_id is ignored
+//     (or, if supplied, must match the caller's tenant).
+//  3. Requires the caller to hold an `admin` or `owner` role somewhere in
+//     that tenant. New users always start with zero role assignments, so
+//     bootstrapping the very first admin must happen through a seed migration
+//     or out-of-band tooling, never through this endpoint.
 func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	caller, err := h.requireAuth(r)
 	if err != nil {
@@ -518,9 +518,9 @@ func (h *HTTPHandler) refreshToken(w http.ResponseWriter, r *http.Request) {
 // ServiceAccountID is optional; when set the request is routed to the
 // SA-key issuance path (admin-gated) instead of the human-user path.
 type createAPIKeyBody struct {
-	Name             string     `json:"name"`
-	Scopes           []string   `json:"scopes"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	Name      string     `json:"name"`
+	Scopes    []string   `json:"scopes"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// ServiceAccountID, when non-empty, must be a valid UUID. The caller must
 	// hold an admin role in the SA's tenant. The key will be owned by the SA
 	// (ServiceAccountID column set, UserID nil) instead of the calling user.

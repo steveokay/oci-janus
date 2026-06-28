@@ -22,11 +22,11 @@ import (
 // fakeSigner records each SignPayload call so tests can assert on what
 // was (and was not) signed.
 type fakeSigner struct {
-	mu       sync.Mutex
-	calls    []signCall
-	sigB64   string
-	signErr  error
-	keyID    string
+	mu      sync.Mutex
+	calls   []signCall
+	sigB64  string
+	signErr error
+	keyID   string
 }
 
 type signCall struct {

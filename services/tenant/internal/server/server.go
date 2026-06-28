@@ -17,16 +17,16 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
-	tenantmigrations "github.com/steveokay/oci-janus/services/tenant/migrations"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/tenant/internal/config"
 	"github.com/steveokay/oci-janus/services/tenant/internal/handler"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
+	tenantmigrations "github.com/steveokay/oci-janus/services/tenant/migrations"
 )
 
 // Run initialises all dependencies and starts the tenant service.

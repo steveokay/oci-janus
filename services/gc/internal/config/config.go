@@ -10,10 +10,10 @@ import (
 
 // Config holds all runtime configuration for the GC service.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	LogLevel  string `mapstructure:"LOG_LEVEL"`
+	LogFormat string `mapstructure:"LOG_FORMAT"`
+	GRPCAddr  string `mapstructure:"GRPC_ADDR"`
+	HTTPAddr  string `mapstructure:"HTTP_ADDR"`
 	// MetricsAddr is the dedicated Prometheus scrape port (SEC-025).
 	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 

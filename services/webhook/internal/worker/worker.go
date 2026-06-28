@@ -36,10 +36,10 @@ type workerDispatcher interface {
 
 // Worker drives RabbitMQ event ingestion and the HTTP delivery retry loop.
 type Worker struct {
-	repo             workerRepo
-	dispatcher       workerDispatcher
-	credentialKey    []byte
-	pollInterval     time.Duration
+	repo          workerRepo
+	dispatcher    workerDispatcher
+	credentialKey []byte
+	pollInterval  time.Duration
 }
 
 // New creates a Worker. credentialKeyHex is the hex-encoded 32-byte AES key used

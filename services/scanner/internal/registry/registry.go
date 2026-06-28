@@ -3,20 +3,20 @@
 //
 // Why this exists (REM-011 Phase 2):
 //
-//   Phase 1 baked two adapter binaries (dev-stub, trivy-adapter) into the
-//   scanner image and selected one via the SCANNER_PLUGIN_PATH env var.
-//   Changing the active adapter required a container restart with a new
-//   env value. Phase 2 lifts that to a runtime selection: this package
-//   enumerates every executable scanner-* binary under a known directory,
-//   tracks which one is currently active, and lets the gRPC layer swap
-//   between them without a process restart.
+//	Phase 1 baked two adapter binaries (dev-stub, trivy-adapter) into the
+//	scanner image and selected one via the SCANNER_PLUGIN_PATH env var.
+//	Changing the active adapter required a container restart with a new
+//	env value. Phase 2 lifts that to a runtime selection: this package
+//	enumerates every executable scanner-* binary under a known directory,
+//	tracks which one is currently active, and lets the gRPC layer swap
+//	between them without a process restart.
 //
 // Concurrency:
 //
-//   The struct is safe for concurrent reads via List/Active/findByPath.
-//   Writes (SetActive, RecordVersion) take a write lock — they happen
-//   only from the SetActiveAdapter RPC handler and from the worker pool
-//   after each successful scan, both low-frequency callers.
+//	The struct is safe for concurrent reads via List/Active/findByPath.
+//	Writes (SetActive, RecordVersion) take a write lock — they happen
+//	only from the SetActiveAdapter RPC handler and from the worker pool
+//	after each successful scan, both low-frequency callers.
 package registry
 
 import (

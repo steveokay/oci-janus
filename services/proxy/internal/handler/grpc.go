@@ -25,8 +25,8 @@ import (
 // GRPCHandler implements proxyv1.ProxyServiceServer.
 type GRPCHandler struct {
 	proxyv1.UnimplementedProxyServiceServer
-	repo  *repository.Repository
-	key   []byte // 32-byte AES-256 key for credential encryption
+	repo *repository.Repository
+	key  []byte // 32-byte AES-256 key for credential encryption
 }
 
 // NewGRPCHandler constructs a GRPCHandler.

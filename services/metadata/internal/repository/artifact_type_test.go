@@ -71,10 +71,10 @@ func TestParseConfigMediaType(t *testing.T) {
 
 func TestDeriveArtifactType(t *testing.T) {
 	cases := []struct {
-		name             string
-		configMediaType  string
-		mediaType        string
-		want             string
+		name            string
+		configMediaType string
+		mediaType       string
+		want            string
 	}{
 		// Container images — both docker + oci variants land on "image".
 		{"docker image config", "application/vnd.docker.container.image.v1+json", "", "image"},

@@ -5,11 +5,11 @@
 //
 // Routes (all gated on tenant-admin OR platform-admin):
 //
-//   GET    /api/v1/tenant/users
-//   POST   /api/v1/tenant/users/invite
-//   POST   /api/v1/tenant/users/{user_id}/disable
-//   DELETE /api/v1/tenant/users/{user_id}/disable
-//   POST   /api/v1/tenant/users/{user_id}/elevate/{org}
+//	GET    /api/v1/tenant/users
+//	POST   /api/v1/tenant/users/invite
+//	POST   /api/v1/tenant/users/{user_id}/disable
+//	DELETE /api/v1/tenant/users/{user_id}/disable
+//	POST   /api/v1/tenant/users/{user_id}/elevate/{org}
 //
 // The disable POST/DELETE pair mirrors the existing /pin pattern on
 // tag immutability — same code path with a boolean flip, two routes
@@ -82,11 +82,11 @@ type TenantUsersListResponse struct {
 // neither. expires_in_secs is optional; the BFF clamps it server-side
 // before forwarding so the FE doesn't need to know the limit.
 type InviteUserRequestBody struct {
-	Email            string `json:"email"`
-	DisplayName      string `json:"display_name"`
-	InitialOrgRole   string `json:"initial_org_role,omitempty"`
-	InitialOrgName   string `json:"initial_org_name,omitempty"`
-	ExpiresInSecs    int64  `json:"expires_in_secs,omitempty"`
+	Email          string `json:"email"`
+	DisplayName    string `json:"display_name"`
+	InitialOrgRole string `json:"initial_org_role,omitempty"`
+	InitialOrgName string `json:"initial_org_name,omitempty"`
+	ExpiresInSecs  int64  `json:"expires_in_secs,omitempty"`
 }
 
 // InviteUserResponseBody surfaces the new user_id + the raw single-use
@@ -214,13 +214,13 @@ func (h *Handler) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.auth.InviteUser(r.Context(), &authv1.InviteUserRequest{
-		TenantId:        tenantID,
-		Email:           body.Email,
-		DisplayName:     body.DisplayName,
-		InvitedBy:       callerID,
-		InitialOrgRole:  body.InitialOrgRole,
-		InitialOrgName:  body.InitialOrgName,
-		ExpiresInSecs:   body.ExpiresInSecs,
+		TenantId:       tenantID,
+		Email:          body.Email,
+		DisplayName:    body.DisplayName,
+		InvitedBy:      callerID,
+		InitialOrgRole: body.InitialOrgRole,
+		InitialOrgName: body.InitialOrgName,
+		ExpiresInSecs:  body.ExpiresInSecs,
 	})
 	if err != nil {
 		mapTenantUserGRPCError(w, "invite user", err)

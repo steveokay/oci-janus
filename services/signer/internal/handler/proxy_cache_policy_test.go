@@ -30,11 +30,11 @@ import (
 // map. Production code uses a *repository.Repository (real PG); these tests
 // just need a stub that records writes + serves reads consistently.
 type memPolicyRepo struct {
-	mu       sync.Mutex
-	rows     map[string]*repository.ProxyCacheSignPolicy // keyed by tenant|upstream
-	getErr   error
-	upErr    error
-	listErr  error
+	mu      sync.Mutex
+	rows    map[string]*repository.ProxyCacheSignPolicy // keyed by tenant|upstream
+	getErr  error
+	upErr   error
+	listErr error
 }
 
 func newMemPolicyRepo() *memPolicyRepo {

@@ -212,12 +212,12 @@ func (r *UserRepository) ListTenantUsers(
 // token (32 bytes of crypto/rand), hashed it via argon2id, and
 // computed the absolute expiry. No defaults are applied here.
 type CreateInvitedUserRequest struct {
-	TenantID         uuid.UUID
-	Username         string
-	Email            string
-	DisplayName      string
-	InviteTokenHash  string
-	InviteExpiresAt  time.Time
+	TenantID        uuid.UUID
+	Username        string
+	Email           string
+	DisplayName     string
+	InviteTokenHash string
+	InviteExpiresAt time.Time
 }
 
 // CreateInvitedUser inserts a users row in status='invited'. The user

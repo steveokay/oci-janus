@@ -33,7 +33,7 @@ func ServerTLSConfig(caCertPath, certPath, keyPath string) (*tls.Config, error) 
 		// renegotiation. There are no external clients on these gRPC ports
 		// (all calls are service-to-service inside the cluster), so backwards
 		// compatibility with TLS 1.2-only clients is a non-issue.
-		MinVersion:   tls.VersionTLS13,
+		MinVersion: tls.VersionTLS13,
 	}, nil
 }
 
@@ -60,6 +60,6 @@ func ClientTLSConfig(caCertPath, certPath, keyPath, serverName string) (*tls.Con
 		// renegotiation. There are no external clients on these gRPC ports
 		// (all calls are service-to-service inside the cluster), so backwards
 		// compatibility with TLS 1.2-only clients is a non-issue.
-		MinVersion:   tls.VersionTLS13,
+		MinVersion: tls.VersionTLS13,
 	}, nil
 }

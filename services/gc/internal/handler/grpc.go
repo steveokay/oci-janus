@@ -4,7 +4,7 @@
 //
 //   - GetStatus  — `last_run_*` snapshot + best-effort next_scheduled_at.
 //   - RunNow     — INSERTs a queued row and signals the dispatcher
-//                  channel; never blocks on the sweep itself.
+//     channel; never blocks on the sweep itself.
 //   - ListRuns   — paginated history with base64url keyset cursor.
 //
 // The repository handle and the dispatch channel are both optional on
@@ -59,7 +59,7 @@ var validModes = map[string]bool{
 type GRPCHandler struct {
 	gcv1.UnimplementedGCServiceServer
 
-	repo            Repository
+	repo Repository
 	// runRequests carries run_ids freshly inserted by RunNow to the
 	// dispatcher goroutine that consumes them between cron ticks. nil
 	// means "RunNow disabled" — the handler still serves GetStatus /

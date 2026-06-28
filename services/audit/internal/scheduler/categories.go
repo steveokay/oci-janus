@@ -6,11 +6,11 @@
 //
 // Each category implements the Category interface:
 //
-//   Name      stable wire-key the FE preferences matrix targets
-//   Cadence   how often to schedule for an active tenant
-//   Build     builds the payload for ScheduleNotification
-//   Render    turns a delivered scheduled_notifications row into the
-//             title/summary/link the bell renders
+//	Name      stable wire-key the FE preferences matrix targets
+//	Cadence   how often to schedule for an active tenant
+//	Build     builds the payload for ScheduleNotification
+//	Render    turns a delivered scheduled_notifications row into the
+//	          title/summary/link the bell renders
 //
 // New categories add an entry to the Registry slice below. No other
 // code needs to change.

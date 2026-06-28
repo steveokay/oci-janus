@@ -10,10 +10,10 @@
 // nil — although in practice the audit gRPC dial is always present
 // because Build History + Activity ride on it too).
 //
-//   GET    /api/v1/workspace/me/audit-export        — fetch config
-//   PUT    /api/v1/workspace/me/audit-export        — upsert config
-//   DELETE /api/v1/workspace/me/audit-export        — clear config
-//   POST   /api/v1/workspace/me/audit-export/test   — fire synthetic event
+//	GET    /api/v1/workspace/me/audit-export        — fetch config
+//	PUT    /api/v1/workspace/me/audit-export        — upsert config
+//	DELETE /api/v1/workspace/me/audit-export        — clear config
+//	POST   /api/v1/workspace/me/audit-export/test   — fire synthetic event
 //
 // The PUT/DELETE/test paths require tenant-admin (or platform-admin)
 // — sending audit events to an external destination is a
@@ -50,13 +50,13 @@ type AuditExportConfigResponse struct {
 	LastAttemptAt    *string `json:"last_attempt_at,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`
 	// DLXDepth is the cumulative monotonic counter (Phase 1 metric).
-	DLXDepth         int32   `json:"dlx_depth"`
+	DLXDepth int32 `json:"dlx_depth"`
 	// DLXQueueDepth is the live count of currently-parked messages in
 	// dlx.audit-export (Phase 2). `-1` signals the Mgmt API is
 	// unreachable so the FE can render "depth unknown" distinct from
 	// "empty."
-	DLXQueueDepth    int32   `json:"dlx_queue_depth"`
-	UpdatedAt        string  `json:"updated_at"`
+	DLXQueueDepth int32  `json:"dlx_queue_depth"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 // auditExportPutBody is the PUT body. `hmac_secret` / `bearer_token`
