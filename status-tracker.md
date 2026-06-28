@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup batch (2.3 + 2.4 + 2.5) shipped + CI pipeline fixed. 33 PRs through 2026-06-28, ~80% complete.
+**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup batch (2.3 + 2.4 + 2.5) shipped + Phase 3 fully shipped (3.1.a/b/c, 3.2, 3.3) + CI pipeline fixed. 34 PRs through 2026-06-28, ~85% complete.
 
 **Phases shipped so far:**
 
@@ -66,6 +66,7 @@
 | 4.6 | Mobile-responsive shell — off-canvas drawer + hamburger + skip-link | #152 | 2026-06-28 |
 | CI fix | routeTree.gen.ts generator script + npm pre-hooks; @vitest/coverage-v8; pattern fix; apk upgrade; CLAUDE.md §15 workflow gates | #153 | 2026-06-28 |
 | 2.3 + 2.4 + 2.5 | Single-mode honest pass — gate tenant create/delete on multi mode + strip sidebar/FirstStepsStrip plan badge + mode-aware login footer + topbar UUID chip + typed isSingleMode() helper | #154 | 2026-06-28 |
+| 3.2 + 3.3 | services/tenant.CreateTenant single-tenant guard (FailedPrecondition on 2nd insert, fail-closed on zero-value mode) + libs/middleware/grpc.SingleTenantInjector unary interceptor (defence-in-depth: inject bootstrap tenant_id on absent md, reject mismatched md with InvalidArgument). Per-service adoption deferred as REDESIGN-001 Phase 3.4 follow-ups | #155 | 2026-06-28 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
@@ -75,7 +76,19 @@
 - #5 Dev-seed admin shipped in prod image — ✅ closed by Phase 2.6 (PR #129)
 
 **Phases still OPEN:**
-- 3.2 — Single-tenant guard in tenant gRPC `CreateTenant`
+- 3.4 (NEW) — Wire `libs/middleware/grpc.SingleTenantInjector` into each service's interceptor chain (per-service follow-ups; checklist below). Until adopted, single-mode defence still rests on the application-layer tenant_id filter + RLS.
+  - [ ] services/management
+  - [ ] services/auth
+  - [ ] services/metadata
+  - [ ] services/core
+  - [ ] services/storage
+  - [ ] services/scanner
+  - [ ] services/signer
+  - [ ] services/webhook
+  - [ ] services/audit
+  - [ ] services/gc
+  - [ ] services/proxy
+  - [ ] services/tenant
 - 3.3 — Tenant context middleware (single-mode injector)
 - 4.7 — Remove SSO admin FE — ⛔ N/A (no FE consumer ever existed)
 - 5.3 — Delegator-dominates-delegatee rule in `GrantRole`

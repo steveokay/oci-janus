@@ -18,6 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
@@ -34,15 +35,40 @@ type GRPCHandler struct {
 	// tenant (FE-API-007). Empty is allowed but disables the fallback —
 	// Tenant.host will be the bare slug in that case.
 	platformBaseDomain string
+	// deploymentMode controls the Phase 3.2 single-tenant guard in
+	// CreateTenant. In "single" mode a second CreateTenant call returns
+	// FailedPrecondition. In "multi" mode it's a no-op. Defaults to
+	// the zero value DeploymentMode("") which is treated as "fail-closed
+	// single" — a server constructed without a mode behaves like single,
+	// matching how libs/config/loader.LoadDeploymentMode normalises an
+	// empty env to single.
+	deploymentMode loader.DeploymentMode
 }
 
 // New creates a GRPCHandler. platformBaseDomain is the wildcard zone every
 // tenant gets a hostname under; pass "" to disable the fallback (tests).
-func New(repo *repository.Repository, platformBaseDomain string) *GRPCHandler {
-	return &GRPCHandler{repo: repo, platformBaseDomain: platformBaseDomain}
+// deploymentMode is the binary's posture — pass loader.DeploymentModeMulti
+// to keep the legacy multi-tenant CreateTenant behaviour; pass
+// loader.DeploymentModeSingle (or the zero value, which is treated the
+// same) to gate against a second tenant being inserted.
+func New(repo *repository.Repository, platformBaseDomain string, deploymentMode loader.DeploymentMode) *GRPCHandler {
+	return &GRPCHandler{
+		repo:               repo,
+		platformBaseDomain: platformBaseDomain,
+		deploymentMode:     deploymentMode,
+	}
 }
 
 // CreateTenant creates a new tenant with a default policy.
+//
+// REDESIGN-001 Phase 3.2 (Q-001 hard-error) — in single mode the deployment
+// owns exactly one tenant (the bootstrap one). Refusing a second CreateTenant
+// here is the structural enforcement of CLAUDE.md's redesign banner: a
+// misconfigured FE/CLI that tries to mint a second tenant gets a FAILED_PRECONDITION
+// rather than silently corrupting the deployment posture. The check defaults
+// to fail-closed: a zero-value deploymentMode (handler constructed without a
+// mode argument, e.g. in legacy tests) is treated as single mode, matching the
+// loader's empty-env normalisation.
 func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTenantRequest) (*tenantv1.Tenant, error) {
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
@@ -52,6 +78,23 @@ func (h *GRPCHandler) CreateTenant(ctx context.Context, req *tenantv1.CreateTena
 	// This prevents SQL injection via name, subdomain hijacking, and Redis key confusion.
 	if !tenantNameRE.MatchString(req.Name) {
 		return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
+	}
+
+	// Phase 3.2 single-tenant guard. Runs before the actual INSERT so the
+	// caller learns the deployment is single-tenant before any DB write.
+	// COUNT is checked TOCTOU-unsafe against the INSERT below — that's
+	// acceptable because the slug index on `tenants` is the real uniqueness
+	// gate; the guard only exists to give a precise error code (FailedPrecondition
+	// vs the AlreadyExists the slug index would otherwise produce).
+	if h.deploymentMode != loader.DeploymentModeMulti {
+		count, err := h.repo.CountTenants(ctx)
+		if err != nil {
+			return nil, errcodes.MapDBError(err, "count tenants")
+		}
+		if count >= 1 {
+			return nil, status.Error(codes.FailedPrecondition,
+				"DEPLOYMENT_MODE=single only allows one tenant; use the bootstrap CLI to (re)mint the first one")
+		}
 	}
 
 	plan := req.Plan

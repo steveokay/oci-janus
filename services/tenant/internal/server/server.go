@@ -53,8 +53,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	repo := repository.New(pool)
 
 	// Pass the configured platform base domain so handler.GetTenant can build
-	// the wildcard host `<slug>.<base>` (FE-API-007).
-	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain)
+	// the wildcard host `<slug>.<base>` (FE-API-007). Deployment mode is read
+	// at config-load time and feeds the Phase 3.2 single-tenant guard in
+	// CreateTenant.
+	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain, cfg.DeploymentMode)
 
 	grpcOpts, err := buildGRPCOptions(cfg)
 	if err != nil {

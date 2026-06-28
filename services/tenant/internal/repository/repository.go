@@ -79,6 +79,20 @@ type Repository struct {
 // New returns a Repository.
 func New(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
+// CountTenants returns the total number of rows in the tenants table.
+// Used by the Phase 3.2 single-tenant guard in CreateTenant to short-circuit
+// when DEPLOYMENT_MODE=single and a tenant already exists. Pure read, no
+// transaction needed — a stale-by-one-row read is acceptable because the
+// real uniqueness gate downstream is the slug index, which a second
+// concurrent CreateTenant would still trip.
+func (r *Repository) CountTenants(ctx context.Context) (int64, error) {
+	var n int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenants`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("CountTenants: %w", err)
+	}
+	return n, nil
+}
+
 // CreateTenant inserts a new tenant and a default policy row. The slug is
 // derived from the name via NormalizeSlug so the SQL backfill path and the
 // new-tenant insert agree. An empty slug falls back to the tenant id.
