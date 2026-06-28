@@ -42,9 +42,9 @@
 | 1.4 | `/api/v1/deployment-info` BFF endpoint | ✅ DONE | #124 | 2026-06-26 |
 | 2.1 | Drop custom-domain CRUD (**closes Top-5 #3**) | ✅ DONE | #132 | 2026-06-27 |
 | 2.2 | Per-tenant SSO → global config | ✅ DONE | #133 | 2026-06-28 |
-| 2.3 | Tenant signup BFF removal | ⬜ OPEN | — | — |
-| 2.4 | Plan/billing UI strip (FE) | ⬜ OPEN | — | — |
-| 2.5 | Login copy + tenant chrome (FE) | ⬜ OPEN | — | — |
+| 2.3 | Tenant signup BFF removal | ✅ DONE | #154 | 2026-06-28 |
+| 2.4 | Plan/billing UI strip (FE) | ✅ DONE | #154 | 2026-06-28 |
+| 2.5 | Login copy + tenant chrome (FE) | ✅ DONE | #154 | 2026-06-28 |
 | 2.6 | Delete dev-seed admin (**closes Top-5 #5**) | ✅ DONE | #129 | 2026-06-27 |
 | 2.7 | Helm dead config cleanup | ⛔ N/A | — | 2026-06-26 |
 | 3.1.a | Tenant `deployment_metadata` table + repo | ✅ DONE | #126 | 2026-06-27 |
