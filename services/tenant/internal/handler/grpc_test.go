@@ -819,6 +819,29 @@ func TestCreateTenant_MultiMode_AllowsMultipleTenants(t *testing.T) {
 	}
 }
 
+// TestCreateTenant_ZeroValueMode_FailsClosedAsSingle pins the documented
+// fail-closed default — a Handler constructed without an explicit mode
+// (zero value `DeploymentMode("")`) refuses a second CreateTenant, same
+// as explicit "single". Cheap insurance against a future refactor that
+// rebrands `DeploymentModeMulti` and accidentally inverts the default.
+func TestCreateTenant_ZeroValueMode_FailsClosedAsSingle(t *testing.T) {
+	repo := newFakeTenantRepo()
+	if _, err := repo.CreateTenant(context.Background(), "bootstrap", "free"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	h := newTestableWithMode(repo, loader.DeploymentMode(""))
+
+	_, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: "second", Plan: "free"})
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("zero-value mode must fail-closed: got %v, want FailedPrecondition", st.Code())
+	}
+}
+
 // TestCreateTenant_SingleMode_CountErr_MapsToInternal covers the count-RPC-
 // failure branch: if CountTenants errors out, the request must fail (not
 // fall through to the INSERT). Pins the fail-closed contract.
