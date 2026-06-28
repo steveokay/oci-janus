@@ -21,8 +21,10 @@ import type { Workspace } from "@/lib/api/workspace";
 // 4-card FirstSteps stack carried, in a vertical-dense layout that
 // keeps the dashboard stats visible above. Holds:
 //
-//   1. Header — eyebrow + endpoint + plan + platform/custom-host badge
-//      + copy-host + "Create API key" + "Read the docs" + tagline.
+//   1. Header — eyebrow + endpoint + platform/custom-host badge +
+//      copy-host + "Create API key" + "Read the docs" + tagline.
+//      (Plan badge removed per Phase 2.4 / RM-006 — same rationale as
+//      the sidebar brand block: no billing in single-mode default.)
 //   2. Terminal block — three single-line commands (login / tag /
 //      push), each individually copyable. Same dark surface +
 //      traffic-light chrome as PullCommandCard so the visual language
@@ -49,7 +51,6 @@ export function FirstStepsStrip({
   // commands sensible when /workspace/me is unwired (TENANT_GRPC_ADDR
   // unset on management).
   const host = workspace?.host ?? "registry.localhost";
-  const plan = workspace?.plan;
   const customHost = !!workspace?.host_is_custom;
   const insecureNote = looksLocalHost(host) ? " # dev stack: HTTP" : "";
   const imageRef = `${host}/your-org/your-image:1.0.0`;
@@ -71,20 +72,6 @@ export function FirstStepsStrip({
               {host}
             </span>
             <CopyHostButton host={host} />
-            {plan ? (
-              <Badge
-                tone={
-                  plan === "enterprise"
-                    ? "accent"
-                    : plan === "pro"
-                      ? "success"
-                      : "neutral"
-                }
-                className="!py-0 text-[10px] uppercase tracking-wider"
-              >
-                {plan}
-              </Badge>
-            ) : null}
             <Badge
               tone={customHost ? "accent" : "neutral"}
               className="!py-0 font-mono text-[10px] normal-case tracking-normal"
