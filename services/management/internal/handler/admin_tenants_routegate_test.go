@@ -49,19 +49,57 @@ func TestAdminTenantsRoutes_SingleMode_NoCreateOrDelete(t *testing.T) {
 func TestAdminTenantsRoutes_MultiMode_AllRoutesRegistered(t *testing.T) {
 	mux := mustRegisterMinimalHandler(t, loader.DeploymentModeMulti)
 
+	// Pin the EXACT pattern strings the mux registers, not just non-empty —
+	// that way an accidental rename (e.g. `/admin/tenant`) would be caught
+	// here rather than only by an integration test much further down.
+	for _, tc := range []struct {
+		method      string
+		path        string
+		wantPattern string
+	}{
+		{"GET", "/api/v1/admin/tenants", "GET /api/v1/admin/tenants"},
+		{"POST", "/api/v1/admin/tenants", "POST /api/v1/admin/tenants"},
+		{"GET", "/api/v1/admin/tenants/abc", "GET /api/v1/admin/tenants/{tenantID}"},
+		{"PATCH", "/api/v1/admin/tenants/abc", "PATCH /api/v1/admin/tenants/{tenantID}"},
+		{"DELETE", "/api/v1/admin/tenants/abc", "DELETE /api/v1/admin/tenants/{tenantID}"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		_, pattern := mux.Handler(req)
+		require.Equal(t, tc.wantPattern, pattern, "%s %s pattern mismatch", tc.method, tc.path)
+	}
+}
+
+// TestAdminTenantsRoutes_SingleMode_Returns405 closes the loop between
+// "no pattern registered for this method" (the gate's mux-level invariant)
+// and "client sees an error" (what the operator actually experiences).
+//
+// Note: 405, not 404. GET and PATCH on the same paths remain registered
+// in single mode, so net/http's ServeMux returns Method Not Allowed
+// (with an Allow: header listing the registered methods) rather than a
+// plain 404. That's still strictly better than returning a handler-level
+// 403/JSON response: the body never confirms platform-admin gating
+// existed and the response shape is indistinguishable from any other
+// route that doesn't support POST/DELETE.
+func TestAdminTenantsRoutes_SingleMode_Returns405(t *testing.T) {
+	mux := mustRegisterMinimalHandler(t, loader.DeploymentModeSingle)
+
 	for _, tc := range []struct {
 		method string
 		path   string
 	}{
-		{"GET", "/api/v1/admin/tenants"},
 		{"POST", "/api/v1/admin/tenants"},
-		{"GET", "/api/v1/admin/tenants/abc"},
-		{"PATCH", "/api/v1/admin/tenants/abc"},
 		{"DELETE", "/api/v1/admin/tenants/abc"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
-		_, pattern := mux.Handler(req)
-		require.NotEmpty(t, pattern, "%s %s must be registered in multi mode", tc.method, tc.path)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rr.Code,
+			"%s %s expected 405", tc.method, tc.path)
+		// Allow header must NOT advertise the gated method.
+		allow := rr.Header().Get("Allow")
+		require.NotContains(t, allow, tc.method,
+			"%s %s Allow header must not advertise the gated method (got %q)",
+			tc.method, tc.path, allow)
 	}
 }
 

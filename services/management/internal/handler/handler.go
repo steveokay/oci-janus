@@ -485,14 +485,24 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Platform-admin: tenant CRUD. Gated by the platform-admin marker scope
 	// (admin / org / *) — see services/management/internal/handler/admin_tenants.go.
-	// Routes return 404 "route disabled" when TENANT_GRPC_ADDR is unset.
+	// Handlers return 404 "route disabled" (JSON body) when TENANT_GRPC_ADDR
+	// is unset — that's a handler-level gate that runs after registration.
 	//
 	// REDESIGN-001 Phase 2.3 (RM-005) — POST + DELETE are also gated by
-	// deployment mode. In single-tenant deployments the BFF must not expose a
-	// way to create or delete tenants; the only tenant is the bootstrap tenant
-	// minted by `registry-auth bootstrap` (Phase 3.1). Calling either endpoint
-	// in single mode returns 404 "route disabled". The gRPC CreateTenant on
-	// services/tenant stays — the bootstrap CLI uses it directly.
+	// deployment mode, but at REGISTRATION time. In single-tenant deployments
+	// the BFF must not expose a way to create or delete tenants; the only
+	// tenant is the bootstrap tenant minted by `registry-auth bootstrap`
+	// (Phase 3.1).
+	//
+	// Response shape in single mode: because GET + PATCH on the same paths
+	// stay registered, ServeMux returns 405 Method Not Allowed (with an
+	// Allow header listing only GET / PATCH) rather than a flat 404. That's
+	// still strictly better than letting the handler return a 403 — the
+	// 405 body never confirms platform-admin gating existed and looks
+	// identical to any other route that doesn't support POST/DELETE.
+	//
+	// The gRPC CreateTenant on services/tenant stays — the bootstrap CLI
+	// uses it directly.
 	//
 	// GET (list/detail) and PATCH (rename) remain available in single mode so
 	// the single tenant can still be inspected and renamed via the admin API.
