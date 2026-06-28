@@ -271,9 +271,9 @@ func (p *PersistedRunner) RunRetentionGrace(ctx context.Context, run *repository
 	}
 
 	resp, err := p.metaClient.ListPendingDeleteManifests(ctx, &metadatav1.ListPendingDeleteManifestsRequest{
-		TenantId:         tenantID,
-		GraceWindowSecs:  int64(p.retention.GraceWindow / time.Second),
-		Limit:            int32(p.retention.MaxGraceCandidatesPerRun),
+		TenantId:        tenantID,
+		GraceWindowSecs: int64(p.retention.GraceWindow / time.Second),
+		Limit:           int32(p.retention.MaxGraceCandidatesPerRun),
 	})
 	if err != nil {
 		return p.fail(ctx, run.RunID, fmt.Sprintf("list pending: %v", err))

@@ -166,9 +166,9 @@ func (h *testableSignerHandler) ListSignatures(ctx context.Context, req *signerv
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
 const (
-	testDigest   = "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
-	testTenantID = "tenant-001"
-	testRepoName = "myorg/myimage"
+	testDigest    = "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	testTenantID  = "tenant-001"
+	testRepoName  = "myorg/myimage"
 	testSignerKey = "key-001"
 	// validSigB64 is a valid base64 string (not real ECDSA, but valid for SignatureDigest).
 	validSigB64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

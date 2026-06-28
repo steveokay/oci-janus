@@ -65,10 +65,10 @@ func (f *fakeSSOSessionRepo) DeleteExpired(_ context.Context) (int64, error) { r
 // ssoFakes bundles the fakes needed by SSO tests and exposes helper methods
 // for seeding providers and service accounts.
 type ssoFakes struct {
-	*authFakes                               // embeds userRepo, keyRepo, saRepo, audit fakes
-	globalRepo  *fakeGlobalSSOConfigRepo    // fake global SSO config store
-	sessionRepo *fakeSSOSessionRepo          // no-op login-session store
-	tenantID    uuid.UUID                    // default tenant used for EnsureSSOUser
+	*authFakes                                // embeds userRepo, keyRepo, saRepo, audit fakes
+	globalRepo  *fakeGlobalSSOConfigRepo      // fake global SSO config store
+	sessionRepo *fakeSSOSessionRepo           // no-op login-session store
+	tenantID    uuid.UUID                     // default tenant used for EnsureSSOUser
 	provider    *repository.GlobalSSOProvider // convenience: the default seeded provider
 }
 

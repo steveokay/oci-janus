@@ -15,7 +15,7 @@ import (
 //
 // Email is stored as a nullable column (see migration 20260619000001) but the
 // Go struct keeps it as string for backwards-compatibility with existing
-// callers; SELECTs use COALESCE(email, '') so NULL becomes "" at the
+// callers; SELECTs use COALESCE(email, ”) so NULL becomes "" at the
 // application boundary. DisplayName is genuinely optional — callers must
 // check for nil rather than treating empty-string as "unset" so they can
 // distinguish "user set name to empty" (impossible — handler enforces 1..128)

@@ -26,11 +26,11 @@ type Config struct {
 	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
 	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 
-	DBDSN              string `mapstructure:"DB_DSN"`
-	DBMaxConns         int32  `mapstructure:"DB_MAX_CONNS"`
-	RabbitMQURL        string `mapstructure:"RABBITMQ_URL"`
-	RetentionDays      int    `mapstructure:"AUDIT_RETENTION_DAYS"`
-	TrustedGatewayIP   string `mapstructure:"TRUSTED_GATEWAY_IP"`
+	DBDSN            string `mapstructure:"DB_DSN"`
+	DBMaxConns       int32  `mapstructure:"DB_MAX_CONNS"`
+	RabbitMQURL      string `mapstructure:"RABBITMQ_URL"`
+	RetentionDays    int    `mapstructure:"AUDIT_RETENTION_DAYS"`
+	TrustedGatewayIP string `mapstructure:"TRUSTED_GATEWAY_IP"`
 
 	// ExportSecretsKeyHex (futures.md Tier 1 #4) is the 64-char hex
 	// AES-256-GCM key used to seal hmac_secret + bearer_token on

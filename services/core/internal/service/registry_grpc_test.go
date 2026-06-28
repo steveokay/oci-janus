@@ -23,9 +23,9 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 )
 
 const bufSize = 1 << 20 // 1 MiB
@@ -269,11 +269,11 @@ func (s *fakeStorageServer) DeleteBlob(_ context.Context, req *storagev1.DeleteB
 
 // testRegistry bundles a Registry with its fake dependencies for tests.
 type testRegistry struct {
-	reg      *Registry
-	meta     *fakeMetadataServer
-	storage  *fakeStorageServer
-	rdb      *redis.Client
-	uploads  *UploadStore
+	reg       *Registry
+	meta      *fakeMetadataServer
+	storage   *fakeStorageServer
+	rdb       *redis.Client
+	uploads   *UploadStore
 	referrers *ReferrerStore
 }
 
@@ -332,11 +332,11 @@ func buildTestRegistry(t *testing.T) (*testRegistry, func()) {
 	)
 
 	tr := &testRegistry{
-		reg:      reg,
-		meta:     fakeMeta,
-		storage:  fakeStorage,
-		rdb:      rdb,
-		uploads:  uploads,
+		reg:       reg,
+		meta:      fakeMeta,
+		storage:   fakeStorage,
+		rdb:       rdb,
+		uploads:   uploads,
 		referrers: refs,
 	}
 	cleanup := func() {

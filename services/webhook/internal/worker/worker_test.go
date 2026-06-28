@@ -36,8 +36,8 @@ type fakeWorkerRepo struct {
 	mu sync.Mutex
 
 	// FindEndpointsForEvent
-	endpoints    []*repository.EndpointRecord
-	findErr      error
+	endpoints []*repository.EndpointRecord
+	findErr   error
 
 	// CreateDelivery
 	deliveryRec *repository.DeliveryRecord

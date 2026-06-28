@@ -24,11 +24,11 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
 
@@ -37,8 +37,8 @@ import (
 const (
 	// pga5Token is used to represent a user whose is_global_admin=true.
 	// The "pga5" prefix signals "platform-global-admin Phase-5.1".
-	pga5Token   = "pga5-global-admin-token"
-	pga5UserID  = "00000000-aaaa-aaaa-aaaa-000000000001"
+	pga5Token  = "pga5-global-admin-token"
+	pga5UserID = "00000000-aaaa-aaaa-aaaa-000000000001"
 
 	// legacyMarkerToken represents a user whose GetUserPermissions returns the
 	// legacy (admin, org, '*') marker but is_global_admin=false. After Phase 5.1

@@ -50,6 +50,7 @@ var dashCollapseRE = regexp.MustCompile(`-+`)
 //  2. Replace any non-[a-z0-9] run with `-`
 //  3. Collapse runs of `-`
 //  4. Trim leading/trailing `-`
+//
 // Returns "" if the input contains no alphanumerics — callers should fall
 // back to the tenant id in that case (the migration does the same).
 func NormalizeSlug(name string) string {
@@ -61,14 +62,14 @@ func NormalizeSlug(name string) string {
 
 // PolicyRecord is a row from tenant_policies.
 type PolicyRecord struct {
-	TenantID             uuid.UUID
-	ScanOnPush           bool
-	BlockOnSeverity      string
-	AllowUnscanned       bool
-	ProxyCacheEnabled    bool
-	SigningRequired       bool
-	ExemptRepositories   []string
-	StorageQuotaBytes    int64
+	TenantID           uuid.UUID
+	ScanOnPush         bool
+	BlockOnSeverity    string
+	AllowUnscanned     bool
+	ProxyCacheEnabled  bool
+	SigningRequired    bool
+	ExemptRepositories []string
+	StorageQuotaBytes  int64
 }
 
 // Repository wraps the pgxpool and owns all SQL.
@@ -302,4 +303,3 @@ func (r *Repository) SetDeploymentMetadata(ctx context.Context, key string, valu
 	}
 	return nil
 }
-

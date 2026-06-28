@@ -6,10 +6,10 @@
 // plus the BFF-orchestrated "recent signers" helper that powers the
 // dashboard's "Pick from recent signers" Approve dialog:
 //
-//   GET    /api/v1/repositories/{org}/{repo}/trusted-keys             — list approved keys
-//   POST   /api/v1/repositories/{org}/{repo}/trusted-keys             — add   (body: {key_id, display_name})
-//   DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}    — remove
-//   GET    /api/v1/repositories/{org}/{repo}/recent-signers           — picker-source: distinct key_ids that recently signed in this repo
+//	GET    /api/v1/repositories/{org}/{repo}/trusted-keys             — list approved keys
+//	POST   /api/v1/repositories/{org}/{repo}/trusted-keys             — add   (body: {key_id, display_name})
+//	DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}    — remove
+//	GET    /api/v1/repositories/{org}/{repo}/recent-signers           — picker-source: distinct key_ids that recently signed in this repo
 //
 // The allowlist itself isn't sensitive (it's the set of public-key
 // identifiers the operator chose to trust — anyone with reader access

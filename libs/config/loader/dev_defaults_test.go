@@ -46,8 +46,8 @@ func TestCheckDevDefaults_allowsDefaultsInDevelopment(t *testing.T) {
 // TestCheckDevDefaults_allowsStrongCredsInProduction confirms the happy path.
 func TestCheckDevDefaults_allowsStrongCredsInProduction(t *testing.T) {
 	err := CheckDevDefaults("production", map[string]string{
-		"POSTGRES_PASSWORD":    "Tg!9rN@2pK*4xQwLs7vBz#mF",
-		"VAULT_TOKEN":          "hvs.AbCdEfGh1234ZyXwVuTsRq",
+		"POSTGRES_PASSWORD":        "Tg!9rN@2pK*4xQwLs7vBz#mF",
+		"VAULT_TOKEN":              "hvs.AbCdEfGh1234ZyXwVuTsRq",
 		"STORAGE_MINIO_SECRET_KEY": "Y3qK!7nB^4xLpD@9rTfA*2vM",
 	})
 	if err != nil {
@@ -83,10 +83,10 @@ func TestCheckDevDefaults_unknownCredNameIgnored(t *testing.T) {
 // uses in compose; key=value is just for completeness.
 func TestExtractPasswordFromDSN(t *testing.T) {
 	cases := []struct {
-		name    string
-		dsn     string
-		wantPw  string
-		wantOK  bool
+		name   string
+		dsn    string
+		wantPw string
+		wantOK bool
 	}{
 		{"postgres URL", "postgres://registry:registry@postgres:5432/db?sslmode=require", "registry", true},
 		{"amqp URL", "amqp://registry:registry@rabbitmq:5672/", "registry", true},

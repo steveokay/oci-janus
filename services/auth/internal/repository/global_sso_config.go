@@ -28,10 +28,10 @@ type GlobalSSOProvider struct {
 	Enabled     bool
 
 	// OAuth fields (zero-value for SAML).
-	OAuthClientID         string
-	OAuthClientSecretEnc  []byte // AES-256-GCM ciphertext; never returned over the wire
-	OAuthIssuerURL        string // required only for Kind='oauth_generic'
-	OAuthScopes           []string
+	OAuthClientID        string
+	OAuthClientSecretEnc []byte // AES-256-GCM ciphertext; never returned over the wire
+	OAuthIssuerURL       string // required only for Kind='oauth_generic'
+	OAuthScopes          []string
 
 	// SAML fields (zero-value for OAuth).
 	SAMLMetadataURL string
@@ -182,10 +182,10 @@ func (r *GlobalSSOConfigRepository) Delete(ctx context.Context, providerID strin
 // in auth_providers.go.
 func scanGlobalSSOProvider(s rowScanner) (*GlobalSSOProvider, error) {
 	var (
-		p              GlobalSSOProvider
-		secretEnc      []byte
-		metadataXML    []byte
-		scopes         []string
+		p           GlobalSSOProvider
+		secretEnc   []byte
+		metadataXML []byte
+		scopes      []string
 	)
 	if err := s.Scan(
 		&p.ProviderID,

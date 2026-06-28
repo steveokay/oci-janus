@@ -102,10 +102,10 @@ func (s *vaultSigner) SignPayload(tenantID, repositoryName, manifestDigest strin
 	digest := sha256.Sum256(payload)
 
 	body, _ := json.Marshal(map[string]any{
-		"input":          base64.StdEncoding.EncodeToString(digest[:]),
-		"prehashed":      true,
-		"hash_algorithm": "sha2-256",
-		"signature_algorithm": "pkcs1v15", // ignored for ECDSA keys; harmless
+		"input":                base64.StdEncoding.EncodeToString(digest[:]),
+		"prehashed":            true,
+		"hash_algorithm":       "sha2-256",
+		"signature_algorithm":  "pkcs1v15", // ignored for ECDSA keys; harmless
 		"marshaling_algorithm": "asn1",
 	})
 

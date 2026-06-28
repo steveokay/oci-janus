@@ -18,9 +18,9 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
+	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	authtestutil "github.com/steveokay/oci-janus/services/auth/internal/testutil"
 	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
-	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
 // newAuthPool spins up an auth PostgreSQL container, runs all auth migrations,

@@ -25,12 +25,12 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
-	webhookmigrations "github.com/steveokay/oci-janus/services/webhook/migrations"
 	"github.com/steveokay/oci-janus/services/webhook/internal/config"
 	"github.com/steveokay/oci-janus/services/webhook/internal/delivery"
 	"github.com/steveokay/oci-janus/services/webhook/internal/handler"
 	"github.com/steveokay/oci-janus/services/webhook/internal/repository"
 	"github.com/steveokay/oci-janus/services/webhook/internal/worker"
+	webhookmigrations "github.com/steveokay/oci-janus/services/webhook/migrations"
 
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 )

@@ -56,8 +56,8 @@ type fakeMeta struct {
 	evaluateResp *metadatav1.EvaluateRetentionResponse
 	evaluateErr  error
 
-	markErr       error
-	markCalls     []string // manifest_ids passed to Mark.
+	markErr   error
+	markCalls []string // manifest_ids passed to Mark.
 
 	listPendingResp *metadatav1.ListPendingDeleteManifestsResponse
 	listPendingErr  error

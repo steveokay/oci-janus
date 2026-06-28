@@ -23,20 +23,20 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/google/uuid"
-	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/config"
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
-	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	authsaml "github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
+	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 )
 
 // Run starts the gRPC and HTTP servers and blocks until ctx is cancelled or a server error occurs.

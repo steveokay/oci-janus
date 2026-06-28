@@ -72,13 +72,13 @@ func (s *Service) ListTenantUsers(
 // validated against the auth-service rules; this method runs the same
 // checks the user-create + profile paths use.
 type InviteUserInput struct {
-	TenantID        uuid.UUID
-	Email           string
-	DisplayName     string
-	InvitedBy       uuid.UUID
-	InitialOrgRole  string // optional; "" = no initial grant
-	InitialOrgName  string // optional; required iff InitialOrgRole != ""
-	ExpiresIn       time.Duration
+	TenantID       uuid.UUID
+	Email          string
+	DisplayName    string
+	InvitedBy      uuid.UUID
+	InitialOrgRole string // optional; "" = no initial grant
+	InitialOrgName string // optional; required iff InitialOrgRole != ""
+	ExpiresIn      time.Duration
 }
 
 // InviteUserResult carries the new user_id, the raw single-use token

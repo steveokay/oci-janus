@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/libs/config/loader"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 

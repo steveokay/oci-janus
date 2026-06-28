@@ -20,18 +20,18 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
 	"github.com/steveokay/oci-janus/libs/testutil/fixtures"
-	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
+	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 )
 
 const devTenantID = "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
 
 // testEnv holds the shared HTTP server, a pre-created test user, and tenant ID.
 type testEnv struct {
-	srv          *httptest.Server
-	tenantID     uuid.UUID
+	srv      *httptest.Server
+	tenantID uuid.UUID
 	// testUsername and testPassword are a freshly created user for each test run.
 	testUsername string
 	testPassword string

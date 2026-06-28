@@ -693,10 +693,10 @@ func (s *fakeMetaServer) EvaluateRetention(_ context.Context, req *metadatav1.Ev
 				MatchedPattern: "latest",
 			},
 		},
-		TotalCount:   47,
-		TotalBytes:   1_234_567_890,
-		EvaluatedAt:  timestamppb.Now(),
-		Truncated:    false,
+		TotalCount:  47,
+		TotalBytes:  1_234_567_890,
+		EvaluatedAt: timestamppb.Now(),
+		Truncated:   false,
 	}, nil
 }
 
@@ -1820,7 +1820,6 @@ func TestNotifications_sinceForwardedToAudit(t *testing.T) {
 		t.Errorf("since: got unix=%d, want unix=%d", lastNotificationCall.sinceUnix, since.Unix())
 	}
 }
-
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/security/vulnerabilities   (FE-API-014)

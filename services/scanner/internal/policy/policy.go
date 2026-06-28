@@ -5,17 +5,17 @@
 //
 // The chain semantics:
 //
-//   1. Per-repo override wins when present AND enabled.
-//   2. Org default applies when no per-repo override exists OR the
-//      per-repo override is explicitly disabled. The org default ITSELF
-//      must be enabled to propagate (mirrors FE-API-039 retention).
-//   3. Tenant policy is the bottom-of-chain persisted fallback. The
-//      pre-FE-API-049 scan_policies table has no `enabled` column, so
-//      tenant rows are treated as always-enabled (backward compatible).
-//   4. The synthesised default (auto_scan_on_push=true) is returned
-//      when nothing is persisted anywhere — same shape the pre-existing
-//      GetScanPolicy cache-miss path returns so callers never have to
-//      branch on "no policy".
+//  1. Per-repo override wins when present AND enabled.
+//  2. Org default applies when no per-repo override exists OR the
+//     per-repo override is explicitly disabled. The org default ITSELF
+//     must be enabled to propagate (mirrors FE-API-039 retention).
+//  3. Tenant policy is the bottom-of-chain persisted fallback. The
+//     pre-FE-API-049 scan_policies table has no `enabled` column, so
+//     tenant rows are treated as always-enabled (backward compatible).
+//  4. The synthesised default (auto_scan_on_push=true) is returned
+//     when nothing is persisted anywhere — same shape the pre-existing
+//     GetScanPolicy cache-miss path returns so callers never have to
+//     branch on "no policy".
 //
 // Resolve never returns ErrNotFound — the synthesised default makes the
 // chain total.

@@ -80,7 +80,8 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 }
 
 // dispatch routes /v2/cache/<upstream>/<image.../manifests/<ref>
-//                  and /v2/cache/<upstream>/<image.../blobs/<digest>
+//
+//	and /v2/cache/<upstream>/<image.../blobs/<digest>
 func (h *HTTPHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 

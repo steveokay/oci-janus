@@ -40,11 +40,11 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
-	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	authtestutil "github.com/steveokay/oci-janus/services/auth/internal/testutil"
+	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 )
 
 // ── Inline audit migrations ───────────────────────────────────────────────────

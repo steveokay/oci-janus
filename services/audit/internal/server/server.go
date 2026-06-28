@@ -29,14 +29,14 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
-	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/audit/internal/export"
 	"github.com/steveokay/oci-janus/services/audit/internal/exportworker"
-	"github.com/steveokay/oci-janus/services/audit/internal/scheduler"
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
+	"github.com/steveokay/oci-janus/services/audit/internal/scheduler"
+	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 )
 
 // Run initialises all audit service components and blocks until ctx is cancelled.

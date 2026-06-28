@@ -15,8 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
+	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
@@ -726,12 +726,12 @@ func (h *MetadataHandler) GetTenantVulnerabilityCount(ctx context.Context, req *
 		return nil, mapErr(err)
 	}
 	return &metadatav1.VulnerabilityCountResponse{
-		Total:            total,
-		CriticalCount:    critical,
-		HighCount:        high,
-		MediumCount:      medium,
-		LowCount:         low,
-		NegligibleCount:  negligible,
+		Total:           total,
+		CriticalCount:   critical,
+		HighCount:       high,
+		MediumCount:     medium,
+		LowCount:        low,
+		NegligibleCount: negligible,
 	}, nil
 }
 
@@ -764,8 +764,8 @@ func (h *MetadataHandler) GetSecurityOverview(ctx context.Context, req *metadata
 			TagsScanned: ov.TagsScanned,
 			Percent:     pct,
 		},
-		RecentScans_24H:    ov.RecentScans24h,
-		DaysSinceLastScan:  ov.DaysSinceLastScan,
+		RecentScans_24H:   ov.RecentScans24h,
+		DaysSinceLastScan: ov.DaysSinceLastScan,
 	}, nil
 }
 

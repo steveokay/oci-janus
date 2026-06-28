@@ -95,11 +95,11 @@ func TestParseAPIKeyBearer_secretMayContainDots(t *testing.T) {
 // ── /users/me via Bearer key ──────────────────────────────────────────────────
 
 // TestUsersMe_AcceptsAPIKeyBearer verifies the end-to-end FUT-006 path:
-//   1. Seed a human user.
-//   2. Seed an API key for that user in the fake repo (with a real
-//      argon2 hash so ValidateAPIKey accepts the secret).
-//   3. GET /users/me with `Authorization: Bearer key.<id>.<secret>`.
-//   4. Assert 200 + the human-caller response envelope ("type":"user").
+//  1. Seed a human user.
+//  2. Seed an API key for that user in the fake repo (with a real
+//     argon2 hash so ValidateAPIKey accepts the secret).
+//  3. GET /users/me with `Authorization: Bearer key.<id>.<secret>`.
+//  4. Assert 200 + the human-caller response envelope ("type":"user").
 //
 // This is the simpler half of FUT-006 — the SA-key path uses the same
 // requireAuth -> ValidateAPIKey -> synthClaimsFromAPIKey -> /users/me

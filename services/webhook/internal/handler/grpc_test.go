@@ -94,9 +94,9 @@ func (f *fakeRepo) GetDelivery(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uu
 
 // fakeDispatcher implements testDispatcher with a configurable result.
 type fakeDispatcher struct {
-	code   int
-	durMs  int64
-	err    error
+	code  int
+	durMs int64
+	err   error
 }
 
 func (d *fakeDispatcher) DeliverWithResult(_ context.Context, _ string, _ []byte, _ []byte) (int, int64, error) {

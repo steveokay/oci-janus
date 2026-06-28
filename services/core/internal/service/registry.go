@@ -17,11 +17,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 )
 
 var (
@@ -690,10 +690,10 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 // rejection so the HTTP layer can map to 403 DENIED.
 //
 // Allows the pull in four "no policy / no service" scenarios:
-//   1. Repo fetch fails (metadata blip) → warn + allow.
-//   2. Repo.require_signature is false (the default) → allow.
-//   3. Signer not wired (CORE_SIGNER_GRPC_ADDR unset in dev) → warn + allow.
-//   4. Trusted-keys fetch fails (metadata blip on a separate read) → warn + allow.
+//  1. Repo fetch fails (metadata blip) → warn + allow.
+//  2. Repo.require_signature is false (the default) → allow.
+//  3. Signer not wired (CORE_SIGNER_GRPC_ADDR unset in dev) → warn + allow.
+//  4. Trusted-keys fetch fails (metadata blip on a separate read) → warn + allow.
 //
 // Phase 2 contract (empty allowlist = Phase 1 fallback):
 //   - allowlist=[]                  → any signature passes

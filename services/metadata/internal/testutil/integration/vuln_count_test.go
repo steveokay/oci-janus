@@ -65,10 +65,10 @@ func TestGetTenantVulnerabilityCount_dedupsRepeatScans(t *testing.T) {
 		// dedicated insert path with a known id.
 		if err := repo.UpsertScanResult(
 			ctx,
-			s.id,           // scan_id (the ON CONFLICT key)
+			s.id, // scan_id (the ON CONFLICT key)
 			devTenantID,
 			"complete",
-			[]byte(`[]`),   // findings (unused by the count aggregate)
+			[]byte(`[]`), // findings (unused by the count aggregate)
 			map[string]int32{
 				"CRITICAL": s.critical,
 				"HIGH":     s.high,

@@ -37,10 +37,10 @@ func validUpsertReq() *metadatav1.UpsertRepoRetentionPolicyRequest {
 // repo's response untouched.
 func TestGetRetention_happyPath_returnsPolicy(t *testing.T) {
 	want := &metadatav1.RetentionPolicy{
-		RepoId:   "r1",
-		TenantId: "t1",
-		Enabled:  true,
-		Rules:    []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
+		RepoId:       "r1",
+		TenantId:     "t1",
+		Enabled:      true,
+		Rules:        []*metadatav1.RetentionRule{{Kind: "max_age_days", Value: 30}},
 		PreviewUntil: timestamppb.New(time.Now().Add(24 * time.Hour)),
 	}
 	h := newHandler(&fakeRepo{getRetentionResult: want})

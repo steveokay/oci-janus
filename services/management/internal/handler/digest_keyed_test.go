@@ -27,12 +27,12 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
 
@@ -42,10 +42,10 @@ import (
 // its own bufconn for the FUT-018 tests.
 type fakeMetaServerForDigest struct {
 	metadatav1.UnimplementedMetadataServiceServer
-	mu               sync.Mutex
-	scanResult       *metadatav1.ScanResult
-	scanResultErr    error
-	lastScanLookup   *metadatav1.GetScanResultRequest
+	mu             sync.Mutex
+	scanResult     *metadatav1.ScanResult
+	scanResultErr  error
+	lastScanLookup *metadatav1.GetScanResultRequest
 }
 
 func (m *fakeMetaServerForDigest) GetScanResult(_ context.Context, req *metadatav1.GetScanResultRequest) (*metadatav1.ScanResult, error) {

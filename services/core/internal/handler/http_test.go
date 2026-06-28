@@ -29,10 +29,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/core/internal/service"
 )
 
@@ -58,19 +58,19 @@ func (s *handlerFakeAuthServer) ValidateToken(_ context.Context, req *authv1.Val
 	case "pull-only-token":
 		// Token with only pull access — push/delete endpoints should reject this.
 		return &authv1.ValidateTokenResponse{
-			Valid:    true,
-			UserId:   "readonly-user",
-			TenantId: "tenant-test",
-			Access:   []*authv1.RepositoryAccess{{Type: "repository", Name: "*", Actions: []string{"pull"}}},
+			Valid:     true,
+			UserId:    "readonly-user",
+			TenantId:  "tenant-test",
+			Access:    []*authv1.RepositoryAccess{{Type: "repository", Name: "*", Actions: []string{"pull"}}},
 			ExpiresAt: timestamppb.New(time.Now().Add(5 * time.Minute)),
 		}, nil
 	case "no-access-token":
 		// Token with no access grants — all resource endpoints should reject this.
 		return &authv1.ValidateTokenResponse{
 			Valid:     true,
-			UserId:   "nobody",
-			TenantId: "tenant-test",
-			Access:   nil,
+			UserId:    "nobody",
+			TenantId:  "tenant-test",
+			Access:    nil,
 			ExpiresAt: timestamppb.New(time.Now().Add(5 * time.Minute)),
 		}, nil
 	default:
@@ -1010,9 +1010,9 @@ func TestReferrers_noAuth_returns401(t *testing.T) {
 
 func TestParseContentRange_validRange_succeeds(t *testing.T) {
 	tests := []struct {
-		input      string
-		wantStart  int64
-		wantEnd    int64
+		input     string
+		wantStart int64
+		wantEnd   int64
 	}{
 		{"0-100", 0, 100},
 		{"bytes 0-100/101", 0, 100},

@@ -9,19 +9,19 @@
 //
 // Phase 2 promotes dispatch to a real RabbitMQ queue with proper DLX:
 //
-//   eventconsumer (after INSERT audit_events)
-//      │  Publish(AuditExportTask{tenant_id, event}) → audit.export
-//      ▼
-//   audit.export queue (durable, quorum)        ─┬─ NACK → x-death++ → retry
-//      │                                          │
-//      │ exportworker.Consumer                     │ ≥ MaxRetries
-//      ├─ load config + filter + render            ▼
-//      ├─ ship via export.Deliver              dlx.audit-export queue
-//      │  success → ACK + TouchSuccess              (parked)
-//      │  failure → NACK (broker handles retry)     │
-//      ▼                                            │ admin Drain action
-//   SIEM                                            ▼
-//                                            re-publish onto audit.export
+//	eventconsumer (after INSERT audit_events)
+//	   │  Publish(AuditExportTask{tenant_id, event}) → audit.export
+//	   ▼
+//	audit.export queue (durable, quorum)        ─┬─ NACK → x-death++ → retry
+//	   │                                          │
+//	   │ exportworker.Consumer                     │ ≥ MaxRetries
+//	   ├─ load config + filter + render            ▼
+//	   ├─ ship via export.Deliver              dlx.audit-export queue
+//	   │  success → ACK + TouchSuccess              (parked)
+//	   │  failure → NACK (broker handles retry)     │
+//	   ▼                                            │ admin Drain action
+//	SIEM                                            ▼
+//	                                         re-publish onto audit.export
 //
 // The producer side becomes near-instant — the publish is a synchronous
 // RabbitMQ confirm but doesn't wait for SIEM ACK. A downstream outage
@@ -33,12 +33,12 @@
 //   - Publisher.Enqueue(task) — used by eventconsumer's dispatcher.
 //   - Consumer.Run(ctx)        — main worker loop, blocks until ctx done.
 //   - Drain(ctx)              — admin one-shot that drains dlx.audit-export
-//                                back onto audit.export.
+//     back onto audit.export.
 //   - DLXDepth(ctx)           — real-time queue depth via the RabbitMQ
-//                                Management HTTP API (the Phase 1 row
-//                                counter is now treated as a cumulative
-//                                "events ever parked" rather than a
-//                                live depth).
+//     Management HTTP API (the Phase 1 row
+//     counter is now treated as a cumulative
+//     "events ever parked" rather than a
+//     live depth).
 package exportworker
 
 import (
@@ -64,7 +64,7 @@ import (
 // Queue + exchange names. Kept as package constants so callers (drain
 // RPC, FE depth fetcher) can refer to the same strings without typos.
 const (
-	ExchangeAuditExport    = "audit.export"      // topic exchange
+	ExchangeAuditExport    = "audit.export"       // topic exchange
 	QueueAuditExport       = "audit.export.tasks" // primary worker queue
 	QueueAuditExportDLX    = "audit.export.dlx"   // park-on-exhaustion queue
 	ExchangeAuditExportDLX = "dlx.audit-export"   // dead-letter exchange
@@ -78,12 +78,12 @@ const (
 // look up the config (filter + secrets) but the event itself is
 // self-contained.
 type AuditExportTask struct {
-	TenantID string         `json:"tenant_id"`
-	Event    export.Event   `json:"event"`
+	TenantID string       `json:"tenant_id"`
+	Event    export.Event `json:"event"`
 	// EnqueuedAt is set by the producer at publish time; the consumer
 	// emits it in observability logs so the operator can spot how
 	// long a parked event sat in DLX before drain.
-	EnqueuedAt time.Time     `json:"enqueued_at"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
 }
 
 // ─── Publisher ─────────────────────────────────────────────────────────────

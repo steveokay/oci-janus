@@ -16,7 +16,8 @@ import (
 
 // Version is the build-time version string injected via -ldflags.
 // Default "dev" is overridden in CI builds by:
-//   go build -ldflags="-X main.Version=v1.2.3"
+//
+//	go build -ldflags="-X main.Version=v1.2.3"
 var Version = "dev"
 
 func main() {

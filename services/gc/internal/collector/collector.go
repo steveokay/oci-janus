@@ -16,10 +16,10 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
-	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	storagev1 "github.com/steveokay/oci-janus/proto/gen/go/storage/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 )
 
 // Result summarises a completed GC run.

@@ -10,16 +10,16 @@ import (
 
 // Config holds all runtime configuration for the service, loaded from environment variables.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
+	LogLevel  string `mapstructure:"LOG_LEVEL"`
+	LogFormat string `mapstructure:"LOG_FORMAT"`
+	GRPCAddr  string `mapstructure:"GRPC_ADDR"`
+	HTTPAddr  string `mapstructure:"HTTP_ADDR"`
 	// MetricsAddr is the dedicated Prometheus scrape port (SEC-025).
 	MetricsAddr string `mapstructure:"METRICS_ADDR"`
 
-	MTLSCACertPath  string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath    string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath     string `mapstructure:"MTLS_KEY_PATH"`
+	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
+	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
+	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
 
 	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
 	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`

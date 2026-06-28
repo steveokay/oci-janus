@@ -11,14 +11,14 @@
 // These four routes wrap the same gRPC RPCs the per-tag routes use but
 // take the digest directly:
 //
-//   GET   /api/v1/scan-by-digest/{digest}        → metadata.GetScanResult
-//   POST  /api/v1/scan-by-digest/{digest}        → scanner.TriggerScan
-//   GET   /api/v1/signatures-by-digest/{digest}  → signer.ListSignatures
-//   POST  /api/v1/sign-by-digest/{digest}        → signer.SignManifest
+//	GET   /api/v1/scan-by-digest/{digest}        → metadata.GetScanResult
+//	POST  /api/v1/scan-by-digest/{digest}        → scanner.TriggerScan
+//	GET   /api/v1/signatures-by-digest/{digest}  → signer.ListSignatures
+//	POST  /api/v1/sign-by-digest/{digest}        → signer.SignManifest
 //
 // Auth:
-//   • GET routes: any authenticated caller in the tenant (read).
-//   • POST routes: writer or above on at least one org in the tenant
+//   - GET routes: any authenticated caller in the tenant (read).
+//   - POST routes: writer or above on at least one org in the tenant
 //     (mirrors handleTriggerScan's writer-on-repo gate; we can't check
 //     repo-level access for a bare digest, so we collapse to
 //     workspace-writer).
@@ -40,9 +40,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 

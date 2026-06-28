@@ -127,4 +127,3 @@ func (h *Handler) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, out)
 }
-

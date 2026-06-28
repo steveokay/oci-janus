@@ -58,12 +58,12 @@ type fakeGCServer struct {
 	lastRunNowReq *gcv1.RunNowRequest
 
 	// FE-API-040 — retention executor RPCs.
-	triggerRetentionErr    error
-	triggerRetentionReturn *gcv1.TriggerRetentionRunResponse
+	triggerRetentionErr     error
+	triggerRetentionReturn  *gcv1.TriggerRetentionRunResponse
 	lastTriggerRetentionReq *gcv1.TriggerRetentionRunRequest
 
-	getRetentionStatusErr    error
-	getRetentionStatusReturn *gcv1.RetentionRunSummary
+	getRetentionStatusErr     error
+	getRetentionStatusReturn  *gcv1.RetentionRunSummary
 	lastGetRetentionStatusReq *gcv1.GetRetentionRunStatusRequest
 }
 

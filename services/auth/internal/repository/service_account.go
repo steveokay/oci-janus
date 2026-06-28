@@ -278,11 +278,11 @@ func (r *ServiceAccountRepo) List(
 	// All conditional logic is encoded as typed sentinel parameters (see listSQL
 	// above) — no fmt.Sprintf is used to construct the query text.
 	rows, err := r.pool.Query(ctx, listSQL,
-		tenantID,      // $1
+		tenantID,        // $1
 		includeDisabled, // $2 — true skips the disabled_at IS NULL guard
-		cursorAt,      // $3 — nil skips the keyset clause
-		cursorID,      // $4 — companion to $3
-		pageSize+1,    // $5 — fetch one extra row to detect "has next page"
+		cursorAt,        // $3 — nil skips the keyset clause
+		cursorID,        // $4 — companion to $3
+		pageSize+1,      // $5 — fetch one extra row to detect "has next page"
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("service_account list: %w", err)
@@ -331,8 +331,8 @@ func (r *ServiceAccountRepo) Update(ctx context.Context, in UpdateServiceAccount
 		setScopes bool
 		scopesVal []string
 
-		setDisabled    bool
-		disabledAtVal  *time.Time
+		setDisabled   bool
+		disabledAtVal *time.Time
 	)
 	if in.AllowedScopes != nil {
 		setScopes = true

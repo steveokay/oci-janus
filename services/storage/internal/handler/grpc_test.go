@@ -43,8 +43,8 @@ type fakeDriver struct {
 	listErr  error
 
 	// InitiateMultipart
-	uploadID     string
-	initiateErr  error
+	uploadID    string
+	initiateErr error
 
 	// CompleteMultipart
 	completeErr error

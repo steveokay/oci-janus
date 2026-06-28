@@ -57,21 +57,21 @@ type Document struct {
 // extension at any time.
 func RenderSBOM(doc Document) ([]byte, error) {
 	type extRef struct {
-		Category       string `json:"referenceCategory"`
-		Type           string `json:"referenceType"`
+		Category         string `json:"referenceCategory"`
+		Type             string `json:"referenceType"`
 		ReferenceLocator string `json:"referenceLocator"`
 	}
 	type pkg struct {
-		SPDXID             string   `json:"SPDXID"`
-		Name               string   `json:"name"`
-		VersionInfo        string   `json:"versionInfo,omitempty"`
-		DownloadLocation   string   `json:"downloadLocation"`
-		FilesAnalyzed      bool     `json:"filesAnalyzed"`
-		ExternalRefs       []extRef `json:"externalRefs,omitempty"`
-		LicenseConcluded   string   `json:"licenseConcluded"`
-		LicenseDeclared    string   `json:"licenseDeclared"`
-		CopyrightText      string   `json:"copyrightText"`
-		PrimaryPackagePurpose string  `json:"primaryPackagePurpose,omitempty"`
+		SPDXID                string   `json:"SPDXID"`
+		Name                  string   `json:"name"`
+		VersionInfo           string   `json:"versionInfo,omitempty"`
+		DownloadLocation      string   `json:"downloadLocation"`
+		FilesAnalyzed         bool     `json:"filesAnalyzed"`
+		ExternalRefs          []extRef `json:"externalRefs,omitempty"`
+		LicenseConcluded      string   `json:"licenseConcluded"`
+		LicenseDeclared       string   `json:"licenseDeclared"`
+		CopyrightText         string   `json:"copyrightText"`
+		PrimaryPackagePurpose string   `json:"primaryPackagePurpose,omitempty"`
 	}
 	type creationInfo struct {
 		Created  string   `json:"created"`
@@ -102,13 +102,13 @@ func RenderSBOM(doc Document) ([]byte, error) {
 	// Emit at least one synthetic "summary" package so the SBOM is never
 	// completely empty for a tenant with no findings.
 	d.Packages = append(d.Packages, pkg{
-		SPDXID:           "SPDXRef-Tenant-" + sanitizeSPDXID(doc.TenantID),
-		Name:             "tenant-" + doc.TenantID,
-		DownloadLocation: "NOASSERTION",
-		FilesAnalyzed:    false,
-		LicenseConcluded: "NOASSERTION",
-		LicenseDeclared:  "NOASSERTION",
-		CopyrightText:    "NOASSERTION",
+		SPDXID:                "SPDXRef-Tenant-" + sanitizeSPDXID(doc.TenantID),
+		Name:                  "tenant-" + doc.TenantID,
+		DownloadLocation:      "NOASSERTION",
+		FilesAnalyzed:         false,
+		LicenseConcluded:      "NOASSERTION",
+		LicenseDeclared:       "NOASSERTION",
+		CopyrightText:         "NOASSERTION",
 		PrimaryPackagePurpose: "CONTAINER",
 	})
 

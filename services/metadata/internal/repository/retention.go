@@ -67,13 +67,13 @@ func (r *Repository) GetRepoRetentionPolicy(ctx context.Context, tenantID, repoI
 		WHERE  repo_id = $1 AND tenant_id = $2`
 
 	var (
-		policy        metadatav1.RetentionPolicy
-		rulesJSON     []byte
-		patterns      []string
-		previewUntil  *time.Time
-		createdAt     time.Time
-		updatedAt     time.Time
-		updatedByPtr  *string
+		policy       metadatav1.RetentionPolicy
+		rulesJSON    []byte
+		patterns     []string
+		previewUntil *time.Time
+		createdAt    time.Time
+		updatedAt    time.Time
+		updatedByPtr *string
 	)
 	err := r.pool.QueryRow(ctx, q, repoID, tenantID).Scan(
 		&policy.RepoId,
@@ -146,10 +146,10 @@ func (r *Repository) UpsertRepoRetentionPolicy(
 	// Fetch the prior row (if any) inside the transaction so the preview_until
 	// decision is based on a consistent snapshot. ErrNoRows is a fresh insert.
 	var (
-		priorEnabled       bool
-		priorRulesJSON     []byte
-		priorPreviewUntil  *time.Time
-		priorExists        bool
+		priorEnabled      bool
+		priorRulesJSON    []byte
+		priorPreviewUntil *time.Time
+		priorExists       bool
 	)
 	const selectPrior = `
 		SELECT enabled, rules, preview_until
@@ -213,13 +213,13 @@ func (r *Repository) UpsertRepoRetentionPolicy(
 		          updated_at, updated_by::text`
 
 	var (
-		policy        metadatav1.RetentionPolicy
-		outRulesJSON  []byte
-		outPatterns   []string
-		outPreview    *time.Time
-		createdAt     time.Time
-		updatedAt     time.Time
-		outUpdatedBy  *string
+		policy       metadatav1.RetentionPolicy
+		outRulesJSON []byte
+		outPatterns  []string
+		outPreview   *time.Time
+		createdAt    time.Time
+		updatedAt    time.Time
+		outUpdatedBy *string
 	)
 	err = tx.QueryRow(ctx, upsertQ,
 		repoID, tenantID, enabled, rulesJSON, patterns, newPreviewUntil, updatedByArg,

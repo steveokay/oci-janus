@@ -741,14 +741,14 @@ func TestBuildTenantProto_EmptyBaseDomain_UsesBareSlug(t *testing.T) {
 // shared between the SQL backfill and CreateTenant.
 func TestNormalizeSlug_TableDriven(t *testing.T) {
 	cases := map[string]string{
-		"Acme":          "acme",
-		"Acme Corp":     "acme-corp",
-		"Acme  Corp":    "acme-corp",   // collapse multi-space
-		"acme--corp":    "acme-corp",   // collapse multi-dash
-		"  Acme  ":      "acme",        // trim leading/trailing
-		"Acme/Corp_Inc": "acme-corp-inc",
-		"":              "",            // empty → empty (caller falls back to id)
-		"!@#$":          "",            // no alphanumerics → empty
+		"Acme":           "acme",
+		"Acme Corp":      "acme-corp",
+		"Acme  Corp":     "acme-corp", // collapse multi-space
+		"acme--corp":     "acme-corp", // collapse multi-dash
+		"  Acme  ":       "acme",      // trim leading/trailing
+		"Acme/Corp_Inc":  "acme-corp-inc",
+		"":               "", // empty → empty (caller falls back to id)
+		"!@#$":           "", // no alphanumerics → empty
 		"AlreadySlug123": "alreadyslug123",
 		"-leading-dash":  "leading-dash",
 		"trailing-dash-": "trailing-dash",

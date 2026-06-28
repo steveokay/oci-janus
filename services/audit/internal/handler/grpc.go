@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 

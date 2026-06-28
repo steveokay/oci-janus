@@ -14,10 +14,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
@@ -91,10 +91,10 @@ func (h *GRPCHandler) ValidateAPIKey(ctx context.Context, req *authv1.ValidateAP
 	}
 
 	return &authv1.ValidateAPIKeyResponse{
-		Valid:     true,
-		UserId:    vk.UserID.String(),
-		TenantId:  vk.TenantID.String(),
-		Access:    scopesToProto(vk.EffectiveScopes),
+		Valid:    true,
+		UserId:   vk.UserID.String(),
+		TenantId: vk.TenantID.String(),
+		Access:   scopesToProto(vk.EffectiveScopes),
 	}, nil
 }
 

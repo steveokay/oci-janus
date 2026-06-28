@@ -6,8 +6,9 @@
 // the isolation guarantee from CLAUDE.md §9.
 //
 // Handler methods are grouped by resource in the following order:
-//   /healthz → stats → repositories (CRUD) → tags (list/delete)
-//   → scan (get/trigger) → builds (list)
+//
+//	/healthz → stats → repositories (CRUD) → tags (list/delete)
+//	→ scan (get/trigger) → builds (list)
 package handler
 
 import (
@@ -24,6 +25,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/steveokay/oci-janus/libs/config/loader"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
@@ -33,9 +37,6 @@ import (
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
-	"github.com/steveokay/oci-janus/libs/config/loader"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
-	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -1109,7 +1110,7 @@ func (h *Handler) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 // ScanResponse is the JSON representation of the latest scan result for a tag.
 type ScanResponse struct {
 	ScanID         string           `json:"scan_id"`
-	Status         string           `json:"status"`          // pending|running|complete|failed
+	Status         string           `json:"status"` // pending|running|complete|failed
 	ScannerName    string           `json:"scanner_name"`
 	ScannerVersion string           `json:"scanner_version"`
 	SeverityCounts map[string]int32 `json:"severity_counts"` // CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE → count
@@ -1276,7 +1277,7 @@ func (h *Handler) handleTriggerScan(w http.ResponseWriter, r *http.Request) {
 // Fields align with the BuildRow type used in the frontend builds.tsx screen.
 type BuildResponse struct {
 	BuildID     string `json:"build_id"`
-	Status      string `json:"status"`       // "in_progress" | "success" | "failed"
+	Status      string `json:"status"` // "in_progress" | "success" | "failed"
 	CommitHash  string `json:"commit_hash"`
 	TriggeredBy string `json:"triggered_by"` // actor login or CI system name
 	Duration    string `json:"duration"`     // formatted, e.g. "3m 45s" or "--" when running
@@ -1391,15 +1392,15 @@ func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*me
 // repoToResponse converts a proto Repository message to its JSON wire form.
 func repoToResponse(r *metadatav1.Repository) RepoResponse {
 	return RepoResponse{
-		RepoID:        r.GetRepoId(),
-		OrgID:         r.GetOrgId(),
-		Org:           r.GetOrg(),
-		Name:          r.GetName(),
-		IsPublic:      r.GetIsPublic(),
-		StorageUsed:   r.GetStorageUsed(),
-		StorageQuota:  r.GetStorageQuota(),
-		CreatedAt:     r.GetCreatedAt().AsTime(),
-		Description:   r.GetDescription(),
+		RepoID:           r.GetRepoId(),
+		OrgID:            r.GetOrgId(),
+		Org:              r.GetOrg(),
+		Name:             r.GetName(),
+		IsPublic:         r.GetIsPublic(),
+		StorageUsed:      r.GetStorageUsed(),
+		StorageQuota:     r.GetStorageQuota(),
+		CreatedAt:        r.GetCreatedAt().AsTime(),
+		Description:      r.GetDescription(),
 		ImmutableTags:    r.GetImmutableTags(),
 		RequireSignature: r.GetRequireSignature(),
 	}
@@ -1530,10 +1531,10 @@ type ManifestResponse struct {
 	// quarantined + when, and the "Lift quarantine" button. All four
 	// fields are omitted on the wire when the manifest is not
 	// quarantined (the common case).
-	Quarantined       bool       `json:"quarantined,omitempty"`
-	QuarantineReason  string     `json:"quarantine_reason,omitempty"`
-	QuarantinedAt     *time.Time `json:"quarantined_at,omitempty"`
-	QuarantinedBy     string     `json:"quarantined_by,omitempty"`
+	Quarantined      bool       `json:"quarantined,omitempty"`
+	QuarantineReason string     `json:"quarantine_reason,omitempty"`
+	QuarantinedAt    *time.Time `json:"quarantined_at,omitempty"`
+	QuarantinedBy    string     `json:"quarantined_by,omitempty"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
@@ -1772,10 +1773,10 @@ type setTenantQuotaResponse struct {
 // handleSetTenantQuota bumps (or lowers) the tenant-level storage quota.
 //
 // Authorization model (defense in depth):
-//   1. PLATFORM_ADMIN_TENANT_ID must be configured (route disabled otherwise).
-//   2. The caller's JWT tenant must equal PLATFORM_ADMIN_TENANT_ID — preventing
-//      tenants from setting their own quotas (which would defeat the purpose).
-//   3. The caller must hold admin or owner role.
+//  1. PLATFORM_ADMIN_TENANT_ID must be configured (route disabled otherwise).
+//  2. The caller's JWT tenant must equal PLATFORM_ADMIN_TENANT_ID — preventing
+//     tenants from setting their own quotas (which would defeat the purpose).
+//  3. The caller must hold admin or owner role.
 //
 // The target tenant comes from the URL, not the JWT, so a platform operator can
 // adjust any tenant's quota. The endpoint never returns gRPC error detail to the

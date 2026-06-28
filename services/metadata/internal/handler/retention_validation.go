@@ -54,8 +54,8 @@ var validRetentionRuleKinds = map[string]bool{
 // overflow surprises in the executor and clamp pathological inputs at the
 // API boundary.
 var retentionMaxValues = map[string]int64{
-	"max_age_days":        36500,                          // 100 years
-	"max_count":           10_000_000,                     // 10M manifests
+	"max_age_days":        36500,                           // 100 years
+	"max_count":           10_000_000,                      // 10M manifests
 	"max_size_bytes":      100 * 1024 * 1024 * 1024 * 1024, // 100 TiB
 	"dangling_grace_days": 365,
 	"max_idle_days":       36500, // 100 years

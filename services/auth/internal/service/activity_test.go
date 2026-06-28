@@ -175,14 +175,14 @@ func makeNotif(actorID, action string, meta map[string]string) *auditv1.Notifica
 		meta = map[string]string{}
 	}
 	return &auditv1.NotificationEvent{
-		EventId:     uuid.New().String(),
-		EventType:   action,
-		OccurredAt:  timestamppb.New(time.Now()),
-		ActorId:     actorID,
+		EventId:       uuid.New().String(),
+		EventType:     action,
+		OccurredAt:    timestamppb.New(time.Now()),
+		ActorId:       actorID,
 		ActorUsername: actorID,
-		Title:       action,
-		Summary:     action,
-		Metadata:    meta,
+		Title:         action,
+		Summary:       action,
+		Metadata:      meta,
 	}
 }
 

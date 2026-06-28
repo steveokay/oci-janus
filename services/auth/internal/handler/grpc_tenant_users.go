@@ -2,12 +2,12 @@
 //
 // Three new RPCs that back the tenant-user lifecycle management UI:
 //
-//   ListTenantUsers  — paginated tenant member list with role summary.
-//   InviteUser       — create users row in 'invited' status, return
-//                      the raw single-use token ONCE.
-//   SetUserDisabled  — flip status between 'active' and 'disabled',
-//                      revoke active JWTs + disable API keys on the
-//                      disable path.
+//	ListTenantUsers  — paginated tenant member list with role summary.
+//	InviteUser       — create users row in 'invited' status, return
+//	                   the raw single-use token ONCE.
+//	SetUserDisabled  — flip status between 'active' and 'disabled',
+//	                   revoke active JWTs + disable API keys on the
+//	                   disable path.
 //
 // Per the existing pattern (CountTenantUsers / ListMembers), the
 // gRPC layer trusts its caller — RBAC gates land in services/management's
@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
@@ -128,9 +128,9 @@ func (h *GRPCHandler) InviteUser(ctx context.Context, req *authv1.InviteUserRequ
 	}
 
 	return &authv1.InviteUserResponse{
-		UserId:           result.UserID.String(),
-		InviteToken:      result.InviteToken,
-		InviteExpiresAt:  timestamppb.New(result.InviteExpiresAt),
+		UserId:          result.UserID.String(),
+		InviteToken:     result.InviteToken,
+		InviteExpiresAt: timestamppb.New(result.InviteExpiresAt),
 	}, nil
 }
 
