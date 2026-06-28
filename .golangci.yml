@@ -25,7 +25,10 @@ linters:
     - exhaustive
     - unparam
     - dupl
-    - godot
+    # godot — requires every comment to end in a period. Real bugs it catches:
+    # zero. Noise it generates: every block-level comment in the codebase.
+    # Disabled until/unless we run a one-time `gofumpt` style sweep.
+    # - godot
 
 linters-settings:
   goimports:

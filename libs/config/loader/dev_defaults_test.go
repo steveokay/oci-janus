@@ -44,11 +44,17 @@ func TestCheckDevDefaults_allowsDefaultsInDevelopment(t *testing.T) {
 }
 
 // TestCheckDevDefaults_allowsStrongCredsInProduction confirms the happy path.
+//
+// Fixture values are deliberately obvious-test-string shape so secret
+// scanners (gitleaks / GitGuardian) don't flag them. `CheckDevDefaults`
+// only checks against a fixed list of known dev defaults — the value's
+// entropy is irrelevant to whether the test passes, only that it isn't
+// one of the registered defaults.
 func TestCheckDevDefaults_allowsStrongCredsInProduction(t *testing.T) {
 	err := CheckDevDefaults("production", map[string]string{
-		"POSTGRES_PASSWORD":        "Tg!9rN@2pK*4xQwLs7vBz#mF",
-		"VAULT_TOKEN":              "hvs.AbCdEfGh1234ZyXwVuTsRq",
-		"STORAGE_MINIO_SECRET_KEY": "Y3qK!7nB^4xLpD@9rTfA*2vM",
+		"POSTGRES_PASSWORD":        "fixture-not-a-real-password-1",
+		"VAULT_TOKEN":              "fixture-not-a-real-token-2",
+		"STORAGE_MINIO_SECRET_KEY": "fixture-not-a-real-secret-3",
 	})
 	if err != nil {
 		t.Errorf("strong creds in prod should not error, got: %v", err)
