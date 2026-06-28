@@ -17,6 +17,12 @@ jobs:
         with:
           working-directory: services/gc
           config: ../../.golangci.yml
+          # Pin to use the Go toolchain installed by setup-go (1.25.7).
+          # The action's bundled golangci-lint binary trails the codebase's
+          # required toolchain; install-mode: goinstall builds it from source
+          # with the toolchain setup-go just installed.
+          version: latest
+          install-mode: goinstall
 
   test:
     runs-on: ubuntu-latest
