@@ -9,9 +9,12 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    # Lint backlog (REM-014) is still being chipped through. Non-blocking
-    # so individual cleanups land per-PR without blocking unrelated work.
-    continue-on-error: true
+    # REM-014 closed for tenant: gofmt/goimports drift in
+    # services/tenant/internal/handler/{grpc,grpc_test}.go was the only
+    # finding. Lint is now blocking for tenant — the other 12 services
+    # keep continue-on-error: true until their own per-service cleanup
+    # PRs ship (per memory/feedback_review_pace.md: small focused PRs,
+    # one service at a time).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

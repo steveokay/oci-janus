@@ -10,12 +10,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ── Fake repository ──────────────────────────────────────────────────────────
