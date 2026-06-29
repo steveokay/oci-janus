@@ -1,6 +1,7 @@
 # Security Issues
 
 > Last updated: 2026-06-29 — SEC-038 (MEDIUM) RESOLVED in commit `329c63b` on branch `fix/sec-038-gc-clientcreds` (per-target serverName pinning + fail-closed mTLS load in `services/gc`). SEC-039 (MEDIUM) logged — same `clientCreds(cfg)` shape (empty serverName + insecure fallback on TLS error) still present in `services/core`, `services/scanner`, `services/proxy`, and `services/management`.
+> Last updated: 2026-06-29 — SEC-038 logged (MEDIUM, services/gc reuses a shared mTLS client without pinning the `registry-tenant` server name when dialling for Phase 3.4 bootstrap fetch; client-side TLS load failure also silently downgrades to plaintext) from Phase 3.4 SingleTenantInjector rollout review (PRs #170–#179).
 >
 > Last updated: 2026-06-27 — SEC-037 logged (LOW, single-statement onboarding backfill could contend with login UPDATEs on large user tables) from Phase 4.3 §1 review of commit `ec43e05`.
 >
@@ -593,3 +594,15 @@ under CLAUDE.md §7 "JWT Validation."
   4. For `services/management`, replace the "follow-up" comment in `buildGRPCCreds` with a per-target env var (or hardcoded constant matching the cert convention used by services/auth/metadata in their own helpers).
 - **References:** CLAUDE.md §7 (mTLS Between Services), §13 (fail-closed posture), CWE-295, CWE-636. Tracking parent: SEC-038.
 - **References:** CLAUDE.md §11 (migration rules — "run migrations at startup in a separate step before serving traffic"); PENTEST-028 manifest-backfill precedent (split bulk UPDATE out of migration into idempotent runbook).
+
+### SEC-038 — services/gc client mTLS misses server-name pin and fails open on TLS load error
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/gc`
+- **Raised:** 2026-06-29
+- **Description:** During the REDESIGN-001 Phase 3.4 rollout (PR #177) `services/gc` reused its existing `tenantConn` for the bootstrap-tenant-id fetch (the variant called out in the PR description) instead of opening a second connection. The shared dial helper at `services/gc/internal/server/server.go:315-326` (`clientCreds`) builds its `tls.Config` via `mtls.ClientTLSConfig(..., "")` — an EMPTY `serverName`, so the TLS handshake against `registry-tenant` does NOT verify the server's SAN/CN matches `registry-tenant`. The other ten services in this rollout (auth/metadata/core/storage/signer/webhook/scanner/audit/proxy/tenant) all pass the literal `"registry-tenant"` to `mtls.ClientCreds` (e.g. `services/core/internal/server/server.go:240`), so gc is the only one missing the SNI/CN pin. Additionally, lines 318-321 catch a `mtls.ClientTLSConfig` error and fall back to `insecure.NewCredentials()` with a warning — i.e. a corrupted/unreadable cert silently downgrades every gc → tenant/metadata/storage dial to plaintext at startup, which directly violates CLAUDE.md §7 ("fail closed (deny all)"). Net impact: an attacker who can interpose on the `registry-tenant` gRPC port (or impersonate it with a CA-signed cert for a *different* internal service) can serve a bogus `bootstrap_tenant_id` to gc, and gc will then pin every inbound RPC to the attacker-chosen tenant for the rest of the process lifetime — pointing GC sweeps at the wrong tenant's blob/manifest set. The downgrade path additionally turns a cert-load misconfiguration into plaintext mTLS for the entire service.
+- **Remediation:**
+  1. Replace `services/gc/internal/server/server.go:315-326`'s body with `mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")` so server-name verification matches the other ten services. Note: `tenantConn` is dialled with the same shared `creds` as `metaConn` / `storageConn`; either parameterise the helper per-target (preferred) or split the tenant dial out so it can pass `"registry-tenant"` while the others stay on `""`.
+  2. Remove the `slog.Warn ... falling back to insecure` branch — propagate the error so the service fails to start. This matches every other service's pattern (cert-load error returns from `Run()`).
+  3. Add a regression test in `services/gc/internal/server/server_test.go` that asserts `clientCreds` returns an error (not insecure creds) when only some cert paths are set.
+- **References:** CLAUDE.md §7 ("Client cert CN must match expected service name (enforce in server-side interceptor)" + "fail closed (deny all)"); CLAUDE.md §13 ("No secrets in URL parameters" / fail-loud secrets posture); CWE-295 (Improper Certificate Validation); CWE-757 (Selection of Less-Secure Algorithm).
