@@ -87,6 +87,14 @@ type HTTPHandler struct {
 	// samlConfig is the optional SAML SP signing keypair (FE-API-034). nil
 	// disables SAML support — the /auth/saml/... routes return 501.
 	samlConfig *saml.SPConfig
+	// samlTrustEmail controls whether the SAML ACS handler treats the
+	// IdP-asserted email as already verified (REDESIGN-001 Phase 5.6).
+	// Default false (fail-safe); operators opt in via SSO_SAML_TRUST_EMAIL=true
+	// after confirming their IdP verifies emails before asserting them. When
+	// false, the SAML ACS handler refuses to provision new users and refuses
+	// to log in existing users, because every assertion email is treated as
+	// untrusted until the post-login email-verification flow ships.
+	samlTrustEmail bool
 	// saService is the optional ServiceAccountService (FE-API-048, T13). nil
 	// causes all /api/v1/service-accounts routes to return 501 NOT_IMPLEMENTED.
 	// Set via WithServiceAccountService.
@@ -128,6 +136,14 @@ func (h *HTTPHandler) WithSSO(sso *service.SSO, baseURL string) *HTTPHandler {
 // handler so callers can chain.
 func (h *HTTPHandler) WithSAMLConfig(cfg *saml.SPConfig) *HTTPHandler {
 	h.samlConfig = cfg
+	return h
+}
+
+// WithSAMLTrustEmail wires the SSO_SAML_TRUST_EMAIL flag into the SAML ACS
+// handler (REDESIGN-001 Phase 5.6). Defaults to false (fail-safe) when never
+// called. Returns the handler so callers can chain.
+func (h *HTTPHandler) WithSAMLTrustEmail(trust bool) *HTTPHandler {
+	h.samlTrustEmail = trust
 	return h
 }
 

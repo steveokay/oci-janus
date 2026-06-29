@@ -279,17 +279,35 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SAML doesn't carry an explicit email_verified claim. We treat the IdP
-	// having authenticated the user as proof — passing false would refuse
-	// every SAML login since EnsureSSOUser's OAuth path enforces verified.
-	// This is documented in CLAUDE.md §7 and matches the way Auth0, Okta,
-	// and Azure AD treat SAML claims.
+	// REDESIGN-001 Phase 5.6 — SAML email-trust flag.
+	//
+	// SAML 2.0 doesn't carry a standard `email_verified` attribute. Whether
+	// the IdP actually verified the asserted email before issuing the
+	// assertion is deployment-specific: Okta / Azure AD / Google Workspace /
+	// Auth0 typically guarantee it; raw ADFS and many custom IdPs do not.
+	// SSO_SAML_TRUST_EMAIL lets the operator opt into trust after auditing
+	// their IdP — the default is false (fail-safe).
+	//
+	// When the flag is false, EnsureSSOUser will return ErrEmailNotVerified
+	// (its existing OAuth-path gate) and we surface a clear 403. This blocks
+	// both new auto-provisioning AND existing-user login because we can't
+	// distinguish the two without trusting the assertion's email in the
+	// first place. The follow-up is a one-time email-verification flow on
+	// the SAML provisioning path so unverified assertions can still be
+	// accepted safely.
+	//
+	// TODO(REDESIGN-001 Phase 5.6 follow-up): when SSO_SAML_TRUST_EMAIL=false
+	// and the assertion is otherwise valid, route the user through a one-time
+	// email-verification step (send a token to ident.Email, gate JWT issuance
+	// on confirmation) instead of refusing the request. Tracked separately
+	// because it requires a verification-token table + email transport
+	// plumbing that's out of scope for the trust-flag flip itself.
 	//
 	// RM-004: devDefaultTenant is passed as the fallback; EnsureSSOUser
 	// resolves the final tenant from the user row or s.defaultTenantID.
 	user, roles, err := h.sso.EnsureSSOUser(r.Context(), p, service.SSOIdentity{
 		Email:         email,
-		EmailVerified: true,
+		EmailVerified: h.samlTrustEmail,
 		DisplayName:   name,
 		Subject:       samlSubject(assertion),
 	}, h.devDefaultTenant)
@@ -300,6 +318,15 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 			return
 		case errors.Is(err, service.ErrAccountDisabled):
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "account is disabled")
+			return
+		case errors.Is(err, service.ErrEmailNotVerified):
+			// REDESIGN-001 Phase 5.6 — SSO_SAML_TRUST_EMAIL is false. Log at
+			// warn so operators can see the rejection in the dashboard and
+			// decide whether to flip the flag after auditing their IdP.
+			slog.WarnContext(r.Context(), "saml: refusing login because SSO_SAML_TRUST_EMAIL=false; set it to true after confirming your IdP verifies emails before asserting them, or wait for the post-login email-verification flow follow-up",
+				"provider_id", providerID,
+				"email", email)
+			writeError(w, http.StatusForbidden, "EMAILNOTVERIFIED", "SAML email cannot be trusted on this deployment; ask your administrator to set SSO_SAML_TRUST_EMAIL=true after confirming the IdP verifies emails")
 			return
 		}
 		slog.ErrorContext(r.Context(), "saml: EnsureSSOUser", "err", err, "provider_id", providerID)

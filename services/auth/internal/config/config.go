@@ -64,6 +64,31 @@ type Config struct {
 	// (CLAUDE.md §7 — Cert key file permissions).
 	SAMLSPKeyPath string `mapstructure:"SAML_SP_KEY_PATH"`
 
+	// REDESIGN-001 Phase 5.6 — SAML email-trust flag.
+	//
+	// SSOSAMLTrustEmail tells the SAML ACS handler whether to treat the
+	// IdP-asserted email as already verified. SAML 2.0 does not carry a
+	// standard `email_verified` claim; for many deployments (legacy ADFS,
+	// custom IdPs, IdPs where the email attribute is operator-supplied at
+	// federation time) the assertion email is NOT verified by the IdP, and
+	// trusting it would expose an email-takeover vector — an attacker who
+	// can get an unverified IdP account with victim@example.com would be
+	// auto-provisioned as the legitimate victim.
+	//
+	// Default is false (fail-safe). Operators must opt in after confirming
+	// their IdP actually verifies email addresses before issuing assertions
+	// (Okta, Azure AD, Google Workspace, Auth0 typically do; raw ADFS does
+	// not without explicit attribute-source configuration).
+	//
+	// When false, the SAML callback refuses login with a clear error and
+	// the operator is expected either to set this flag to true or to wait
+	// for the post-login email-verification flow (follow-up task).
+	//
+	// The Go zero value is false, which matches the documented default —
+	// no viper.SetDefault call is required because libs/config/loader.Load
+	// produces the zero value for any unset env var.
+	SSOSAMLTrustEmail bool `mapstructure:"SSO_SAML_TRUST_EMAIL"`
+
 	// FE-API-048 FUT-005 — audit gRPC client.
 	//
 	// AuditGRPCAddr is the host:port of registry-audit's gRPC server. When

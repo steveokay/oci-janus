@@ -249,8 +249,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 			if err != nil {
 				return fmt.Errorf("load SAML SP config: %w", err)
 			}
-			httpH = httpH.WithSAMLConfig(spCfg)
-			slog.Info("SAML SP keypair loaded — /auth/saml/... routes active")
+			httpH = httpH.WithSAMLConfig(spCfg).WithSAMLTrustEmail(cfg.SSOSAMLTrustEmail)
+			// REDESIGN-001 Phase 5.6 — surface the email-trust posture at
+			// startup so operators can spot a misconfigured deployment from
+			// the boot log alone.
+			slog.Info("SAML SP keypair loaded — /auth/saml/... routes active",
+				"sso_saml_trust_email", cfg.SSOSAMLTrustEmail)
+			if !cfg.SSOSAMLTrustEmail {
+				slog.Warn("SSO_SAML_TRUST_EMAIL is false (default, fail-safe) — SAML logins will be refused with 403 until the flag is set or the post-login email-verification flow lands")
+			}
 		case cfg.SAMLSPCertPath != "" || cfg.SAMLSPKeyPath != "":
 			return fmt.Errorf("SAML_SP_CERT_PATH and SAML_SP_KEY_PATH must both be set or both empty")
 		default:
