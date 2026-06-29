@@ -9,8 +9,9 @@ import (
 
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 
-	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 )
 
 // FUT-012 Phase B — BFF bufconn tests for the 5 new routes.

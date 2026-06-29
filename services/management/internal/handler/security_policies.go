@@ -17,10 +17,11 @@ import (
 	"net/http"
 	"regexp"
 
-	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
-	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
+	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
 // ScanPolicyResponse is the JSON wire form of a scan policy.

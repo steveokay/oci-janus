@@ -175,7 +175,7 @@ func (h *Handler) handleListProxyCache(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "page_size must be 1..100")
 			return
 		}
-		pageSize = int32(n)
+		pageSize = int32(n) //nolint:gosec // bounded above
 	}
 
 	req := &proxyv1.ListCachedManifestsRequest{

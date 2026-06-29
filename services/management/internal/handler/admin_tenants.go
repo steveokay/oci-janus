@@ -465,6 +465,8 @@ func (h *Handler) publishTenantEvent(r *http.Request, routingKey, tenantID, name
 // stays free of a top-level fmt import (the rest of this file doesn't need fmt).
 // Returning errors is intentional but unused here — pagination treats malformed
 // page_size as "use server default".
+//
+//nolint:unparam // int return preserved for stdlib-mimicking signature.
 func fmtSscan(s string, v *int32) (int, error) {
 	// Inline the standard library call rather than a real wrapper so this file
 	// remains self-contained; importing fmt for one Sscan elsewhere is fine.

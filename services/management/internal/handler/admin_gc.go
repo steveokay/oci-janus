@@ -262,6 +262,11 @@ func (h *Handler) handleAdminGCRun(w http.ResponseWriter, r *http.Request) {
 // gcStatusToResponse converts the proto status message to the REST
 // shape. Empty fields (no runs yet) propagate as empty strings so the
 // JSON omitempty tags hide them from the wire.
+//
+// similar but proto field names differ (LastRun* vs Retention*); collapsing
+// them would require a typed wrapper that defeats the proto contract.
+//
+//nolint:dupl // Sibling retentionStatusToResponse below is structurally
 func gcStatusToResponse(s *gcv1.GCStatus) GCStatusResponse {
 	out := GCStatusResponse{
 		LastRunID:               s.GetLastRunId(),
@@ -287,6 +292,10 @@ func gcStatusToResponse(s *gcv1.GCStatus) GCStatusResponse {
 }
 
 // gcRunToResponse converts a single GCRun proto to its REST shape.
+//
+// pattern; collapsing requires a typed wrapper.
+//
+//nolint:dupl // See gcStatusToResponse above — same proto-to-REST mapping
 func gcRunToResponse(r *gcv1.GCRun) GCRunResponse {
 	out := GCRunResponse{
 		RunID:            r.GetRunId(),

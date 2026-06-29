@@ -138,6 +138,13 @@ func (r *APIKeyRepository) GetByID(ctx context.Context, id uuid.UUID) (*APIKey, 
 // ListByUser returns all active API keys owned by the given human user.
 // Rows with service_account_id set are excluded by the WHERE clause so this
 // method only returns human-owned keys.
+//
+// Structurally similar to ListByServiceAccount below but scopes to user_id
+// vs service_account_id — different RBAC contracts make the duplication
+// intentional; collapsing them via a shared helper that takes a column name
+// would let a caller accidentally swap scopes.
+//
+//nolint:dupl // intentional — see comment above
 func (r *APIKeyRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]*APIKey, error) {
 	const q = `
 		SELECT id, tenant_id, user_id, service_account_id, name, key_hash, key_prefix,
@@ -169,6 +176,8 @@ func (r *APIKeyRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]
 // ListByServiceAccount returns all active API keys owned by the given service
 // account. Rows with user_id set are excluded by the WHERE clause so this
 // method only returns SA-owned keys.
+//
+//nolint:dupl // See sibling ListByUser above — duplication is intentional.
 func (r *APIKeyRepository) ListByServiceAccount(ctx context.Context, saID uuid.UUID) ([]*APIKey, error) {
 	const q = `
 		SELECT id, tenant_id, user_id, service_account_id, name, key_hash, key_prefix,

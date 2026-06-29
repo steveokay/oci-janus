@@ -90,7 +90,7 @@ func (h *Handler) handleListVulnerabilities(w http.ResponseWriter, r *http.Reque
 			if n > 200 {
 				n = 200
 			}
-			limit = int32(n)
+			limit = int32(n) //nolint:gosec // bounded above
 		}
 	}
 

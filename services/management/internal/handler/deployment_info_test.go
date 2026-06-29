@@ -7,8 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/stretchr/testify/require"
+
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
 // TestHandleDeploymentInfo verifies the public read-only endpoint that

@@ -23,10 +23,11 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )

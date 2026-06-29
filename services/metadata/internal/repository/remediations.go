@@ -209,11 +209,9 @@ func rollupRemediations(scanRows []remediationScanRow) []RemediationRow {
 				byGroup[k] = row
 				cveSeen[k] = map[string]struct{}{}
 				affectedSeen[k] = map[RemediationAffectedRow]struct{}{}
-			} else {
+			} else if severityRank(f.Severity) < severityRank(row.MaxSeverity) {
 				// Update max severity (lower rank == higher severity).
-				if severityRank(f.Severity) < severityRank(row.MaxSeverity) {
-					row.MaxSeverity = strings.ToUpper(f.Severity)
-				}
+				row.MaxSeverity = strings.ToUpper(f.Severity)
 			}
 			// Deduplicate CVE ids — the same CVE can appear in multiple
 			// scans for the same package/version pair.

@@ -37,11 +37,12 @@ import (
 	"strconv"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // trustedKeyResponse is the JSON wire form of one allowed key. Mirrors

@@ -227,35 +227,6 @@ func NewConsumer(rabbitURL string, repo *repository.Repository, secretsKey []byt
 	return &Consumer{conn: conn, ch: ch, repo: repo, secretsKey: secretsKey}, nil
 }
 
-// declareDLX makes sure the audit.export.dlx queue exists and is
-// bound to the dlx.audit-export topic exchange on `#`. Called once
-// per server boot. Idempotent — uses RabbitMQ's "declare with same
-// args = no-op" semantic.
-func declareDLX(rabbitURL string) error {
-	conn, err := amqp.Dial(rabbitURL)
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-	defer conn.Close()
-	ch, err := conn.Channel()
-	if err != nil {
-		return fmt.Errorf("channel: %w", err)
-	}
-	defer ch.Close()
-	if err := ch.ExchangeDeclare(ExchangeAuditExportDLX, "topic", true, false, false, false, nil); err != nil {
-		return fmt.Errorf("declare dlx exchange: %w", err)
-	}
-	if _, err := ch.QueueDeclare(QueueAuditExportDLX, true, false, false, false, amqp.Table{
-		"x-queue-type": "quorum",
-	}); err != nil {
-		return fmt.Errorf("declare dlx queue: %w", err)
-	}
-	if err := ch.QueueBind(QueueAuditExportDLX, "#", ExchangeAuditExportDLX, false, nil); err != nil {
-		return fmt.Errorf("bind dlx queue: %w", err)
-	}
-	return nil
-}
-
 // Run blocks on the consume loop until ctx is cancelled. Closes the
 // AMQP channel + connection on exit.
 func (c *Consumer) Run(ctx context.Context) error {

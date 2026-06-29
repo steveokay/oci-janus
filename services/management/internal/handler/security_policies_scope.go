@@ -26,11 +26,12 @@ import (
 	"log/slog"
 	"net/http"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // upsertScopedScanPolicyBody is the PUT body for org and repo scopes.

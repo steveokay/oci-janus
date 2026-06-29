@@ -8,8 +8,6 @@ package integration
 import (
 	"context"
 	"testing"
-
-	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 )
 
 // TestScannerSettings_GetWhenMissing_returnsEmptyString verifies the

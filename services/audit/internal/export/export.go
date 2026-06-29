@@ -150,7 +150,7 @@ func renderSyslog(evt Event) string {
 	// the platform identifier `oci-janus@53430` (53430 = arbitrary
 	// private enterprise number — replace with a real PEN when one
 	// is registered).
-	sd := fmt.Sprintf(`[oci-janus@53430 tenant_id="%s" actor_id="%s" actor_type="%s" actor_ip="%s" resource="%s" outcome="%s" event_id="%s"]`,
+	sd := fmt.Sprintf(`[oci-janus@53430 tenant_id=%q actor_id=%q actor_type=%q actor_ip=%q resource=%q outcome=%q event_id=%q]`,
 		escapeSDValue(evt.TenantID),
 		escapeSDValue(evt.ActorID),
 		escapeSDValue(evt.ActorType),

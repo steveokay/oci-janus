@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
-	"github.com/steveokay/oci-janus/services/proxy/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
+	"github.com/steveokay/oci-janus/services/proxy/internal/repository"
 )
 
 // ── Fake repository ──────────────────────────────────────────────────────────

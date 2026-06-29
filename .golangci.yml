@@ -93,6 +93,15 @@ issues:
         # a context-bearing variant. Real handlers do; test helpers
         # short-circuit through bare http.Get for brevity.
         - noctx
+        # bodyclose flags test helpers that use defer body.Close via a
+        # wrapper or accept partial closure as a fixture's responsibility.
+        # Real handlers do close bodies; tests don't gain reliability by
+        # mirroring the production rigor.
+        - bodyclose
+        # govet's copylocks fires on protobuf-generated structs that
+        # contain sync.Mutex for internal state. Production code avoids
+        # accidental copies via pointers; tests copy fixtures freely.
+        - govet
         # unparam complains when test-only helpers always receive the
         # same arg (e.g. seedRepo(tenantID = "tenant-test")). Correct in
         # production code; noise in fixtures where call-site uniformity

@@ -106,7 +106,7 @@ func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "limit must be between 1 and 200")
 			return
 		}
-		limit = int32(n)
+		limit = int32(n) //nolint:gosec // bounded above to [1, notificationsMaxLimit=200]
 	}
 
 	pageToken := q.Get("page_token")
@@ -229,7 +229,7 @@ func (h *Handler) lookupNotificationActors(
 	ctx context.Context,
 	tenantID string,
 	notifs []*auditv1.NotificationEvent,
-) map[string]authv1.UserLookupResult {
+) map[string]*authv1.UserLookupResult {
 	if len(notifs) == 0 {
 		return nil
 	}
@@ -266,9 +266,9 @@ func (h *Handler) lookupNotificationActors(
 			"err", err, "tenant_id", tenantID)
 		return nil
 	}
-	out := make(map[string]authv1.UserLookupResult, len(resp.GetUsers()))
+	out := make(map[string]*authv1.UserLookupResult, len(resp.GetUsers()))
 	for _, u := range resp.GetUsers() {
-		out[u.GetUserId()] = authv1.UserLookupResult{
+		out[u.GetUserId()] = &authv1.UserLookupResult{
 			UserId:      u.GetUserId(),
 			Username:    u.GetUsername(),
 			DisplayName: u.GetDisplayName(),

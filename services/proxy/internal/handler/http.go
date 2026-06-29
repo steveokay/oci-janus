@@ -923,7 +923,7 @@ func (h *HTTPHandler) authenticate(r *http.Request) (*tokenClaims, error) {
 	return nil, errUnauthorized
 }
 
-func (h *HTTPHandler) challengeAuth(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPHandler) challengeAuth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="registry-proxy"`, h.authRealm))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)

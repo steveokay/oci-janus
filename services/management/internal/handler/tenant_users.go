@@ -138,7 +138,7 @@ func (h *Handler) handleListTenantUsers(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, "page_size must be 1..200")
 			return
 		}
-		pageSize = int32(n)
+		pageSize = int32(n) //nolint:gosec // bounded above
 	}
 	pageToken := q.Get("page_token")
 

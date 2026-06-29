@@ -24,11 +24,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
-	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
+	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
 // EndpointResponse is the JSON wire form of a webhook endpoint.
@@ -293,7 +294,7 @@ func (h *Handler) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Req
 	limit := int32(50)
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 200 {
-			limit = int32(n)
+			limit = int32(n) //nolint:gosec // bounded above
 		}
 	}
 

@@ -26,10 +26,11 @@ import (
 	"log/slog"
 	"net/http"
 
-	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
-	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
 // RegisterManifestQuarantine mounts the FE-API-050 lift route.

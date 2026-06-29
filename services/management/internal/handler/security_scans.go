@@ -11,9 +11,10 @@ import (
 	"strconv"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ScanHistoryEntryResponse is the JSON representation of one scan row.
@@ -76,7 +77,7 @@ func (h *Handler) handleListScanHistory(w http.ResponseWriter, r *http.Request) 
 			if n > 200 {
 				n = 200
 			}
-			limit = int32(n)
+			limit = int32(n) //nolint:gosec // bounded above
 		}
 	}
 	req.PageSize = limit

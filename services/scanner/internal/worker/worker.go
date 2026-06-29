@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
+
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	"github.com/steveokay/oci-janus/libs/scanner/plugin"
 	"github.com/steveokay/oci-janus/services/scanner/internal/blobfetcher"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
-	"google.golang.org/grpc"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 )
@@ -926,15 +927,24 @@ func (p *Pool) HandleCachePopulated(ctx context.Context, event events.Event) err
 
 // TriggerScanJob creates a scan_id, registers it, and enqueues a job without
 // waiting for a RabbitMQ event. Used by the TriggerScan gRPC handler.
+//
+// Enqueue errors are intentionally surfaced via slog only — the caller
+// (TriggerScan gRPC handler) already has the scan_id and proceeds to track
+// the scan in scanStore. A drop here means the job never runs and the scan
+// eventually expires; the operator sees the warning + the missing scan
+// transition in the audit pipeline.
 func (p *Pool) TriggerScanJob(tenantID, repoID, repoName, manifestDigest string) string {
 	scanID := uuid.New().String()
 	p.scanStore.Create(scanID, tenantID, manifestDigest, repoName)
-	p.Enqueue(scanJob{
+	if err := p.Enqueue(scanJob{
 		tenantID:       tenantID,
 		repoID:         repoID,
 		repositoryName: repoName,
 		manifestDigest: manifestDigest,
 		scanID:         scanID,
-	})
+	}); err != nil {
+		slog.Warn("scanner: TriggerScanJob enqueue failed",
+			"scan_id", scanID, "tenant_id", tenantID, "err", err)
+	}
 	return scanID
 }

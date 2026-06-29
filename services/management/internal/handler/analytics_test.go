@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // resetAnalyticsCall clears the package-level fake recorder before and after

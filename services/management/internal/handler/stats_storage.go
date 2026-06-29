@@ -19,9 +19,10 @@ import (
 	"net/http"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	"google.golang.org/grpc/codes"
 )
 
 // RepositoryStorageEntry is one row in the StorageBreakdownResponse.

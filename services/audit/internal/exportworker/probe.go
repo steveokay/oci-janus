@@ -49,7 +49,10 @@ func (p *Probe) QueueDepth(ctx context.Context) (int32, error) {
 	}
 	d, err := p.mgmt.QueueDepth(ctx, QueueAuditExportDLX)
 	if err != nil {
-		return -1, nil
+		// Intentional: return -1 sentinel (not the error) so the gauge metric
+		// reports an obvious "unknown" value without breaking the probe loop.
+		// The mgmt-API failure is logged at the caller via the slog warn path.
+		return -1, nil //nolint:nilerr
 	}
 	if d > 2_000_000_000 {
 		d = 2_000_000_000
