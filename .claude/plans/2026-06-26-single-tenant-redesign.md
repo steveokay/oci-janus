@@ -64,6 +64,8 @@
 | 3.4 #8 | services/audit injector wiring | 🟡 IN REVIEW | #176 | — |
 | 3.4 #10 | services/proxy injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #178 | — |
 | 3.4 #9, #11 | gc / tenant | ⬜ OPEN | — | — |
+| 3.4 #9 | services/gc injector wiring (reuses existing tenant conn) | 🟡 IN REVIEW | #177 | — |
+| 3.4 #10–11 | proxy / tenant | ⬜ OPEN | — | — |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |

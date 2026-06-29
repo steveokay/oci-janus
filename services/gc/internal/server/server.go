@@ -32,8 +32,10 @@ import (
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/gc/internal/advisory"
 	"github.com/steveokay/oci-janus/services/gc/internal/collector"
 	"github.com/steveokay/oci-janus/services/gc/internal/config"
@@ -59,17 +61,40 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer storageConn.Close()
 
-	// Tenant directory dial — optional. When TENANT_GRPC_ADDR is set the
-	// collector uses tenant.ListTenants to enumerate sweep targets. When
-	// unset the collector falls back to scanning metadata, which fails in
-	// production but keeps the legacy unit tests green.
-	var tenantConn *grpc.ClientConn
+	// Tenant directory dial — optional in multi mode (legacy code path),
+	// mandatory in single mode (REDESIGN-001 Phase 3.4 reuses this conn
+	// for the bootstrap-tenant-id fetch wired into the gRPC server
+	// interceptor below). When unset in multi the collector falls back
+	// to scanning metadata, which fails in production but keeps the
+	// legacy unit tests green.
+	var (
+		tenantConn        *grpc.ClientConn
+		bootstrapTenantID string
+	)
 	if cfg.TenantGRPCAddr != "" {
 		tenantConn, err = grpc.NewClient(cfg.TenantGRPCAddr, creds)
 		if err != nil {
 			return fmt.Errorf("dial tenant: %w", err)
 		}
 		defer tenantConn.Close()
+	}
+	// REDESIGN-001 Phase 3.4 — fetch the bootstrap tenant once at boot
+	// and pin every inbound RPC to it via SingleTenantInjector. The fetch
+	// reuses tenantConn so the gc service does not open a second TCP
+	// stream to registry-tenant. Fail-loud on missing TENANT_GRPC_ADDR in
+	// single mode because the alternative — silently routing every sweep
+	// to the wrong tenant — is far worse than a clean startup error.
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		if tenantConn == nil {
+			return fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+		}
+		bootstrapTenantID, err = tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr)
 	}
 
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
@@ -169,7 +194,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		go runLoop(ctx, col, interval)
 	}
 
-	grpcOpts, err := buildGRPCOptions(cfg)
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if bootstrapTenantID != "" {
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+	}
+	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -255,10 +284,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 }
 
 // buildGRPCOptions returns server options with interceptors and optional mTLS.
-func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+//
+// extraUnary, when non-nil, is chained after libs/middleware/grpc.ServerInterceptors
+// so the SingleTenantInjector (REDESIGN-001 Phase 3.4) runs after auth/tenant
+// extraction but before reaching handlers.
+func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainUnaryInterceptor(chain...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
 	}
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
