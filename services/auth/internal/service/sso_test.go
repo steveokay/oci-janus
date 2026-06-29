@@ -10,6 +10,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -239,4 +240,193 @@ func TestSSO_UnverifiedEmailRefused(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrEmailNotVerified,
 		"unverified email must still return ErrEmailNotVerified")
+}
+
+// ── REDESIGN-001 Phase 5.5: SSO subject-id binding ─────────────────────────────
+
+// TestSSO_AutoProvision_PersistsSubject verifies that a first-time SSO login
+// auto-provisions the user and persists the IdP's stable subject identifier
+// onto the new row. Without this, the next login would fall back to the email
+// path and lose the recycled-email defence.
+func TestSSO_AutoProvision_PersistsSubject(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	const subject = "google-sub-NEW-001"
+	user, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         "newhire@example.com",
+		EmailVerified: true,
+		DisplayName:   "New Hire",
+		Subject:       subject,
+	}, fakes.tenantID)
+
+	require.NoError(t, err, "auto-provision must succeed on first login")
+	require.NotNil(t, user)
+	require.Equal(t, subject, user.SSOSubject,
+		"provisioned user must record the IdP subject for future subject-keyed lookups")
+}
+
+// TestSSO_ReturningUser_MatchedBySubject verifies that the second login for an
+// already-provisioned account is matched on (provider, subject) rather than
+// email. The test changes the user's email to something unrelated and asserts
+// the lookup still resolves to the same row — proving the subject path is
+// primary.
+func TestSSO_ReturningUser_MatchedBySubject(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	const subject = "google-sub-RETURNING-001"
+	const provisioningEmail = "alice@example.com"
+
+	// First login: provision the account.
+	first, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         provisioningEmail,
+		EmailVerified: true,
+		Subject:       subject,
+	}, fakes.tenantID)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	// Mutate the persisted email to simulate the user updating their primary
+	// IdP address — the subject must still uniquely identify them.
+	first.Email = "alice-new@example.com"
+
+	// Second login: same provider/subject pair but with an updated email
+	// claim. Must resolve to the same user row via the subject lookup.
+	second, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         "alice-renamed@example.com", // intentionally different
+		EmailVerified: true,
+		Subject:       subject,
+	}, fakes.tenantID)
+	require.NoError(t, err, "returning subject must resolve regardless of email")
+	require.NotNil(t, second)
+	require.Equal(t, first.ID, second.ID,
+		"subject-keyed lookup must return the originally provisioned user")
+}
+
+// TestSSO_RecycledEmail_Rejected is the core regression test for the bug
+// described in the REDESIGN-001 Phase 5.5 plan: an existing account is bound
+// to subject A, but a new IdP login claims the same email with subject B
+// (e.g. the email was reassigned to a new hire after the original owner
+// left). The login MUST be rejected with an operator-actionable message
+// rather than silently rebinding the existing account.
+func TestSSO_RecycledEmail_Rejected(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	const originalSubject = "google-sub-ORIGINAL"
+	const recycledEmail = "recycled@example.com"
+
+	// First login: provision the account with the original subject.
+	first, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         recycledEmail,
+		EmailVerified: true,
+		Subject:       originalSubject,
+	}, fakes.tenantID)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	// Second login: same email, but the IdP asserts a different subject —
+	// the new hire's IdP account. Must be refused.
+	_, _, err = sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         recycledEmail,
+		EmailVerified: true,
+		Subject:       "google-sub-NEW-HIRE",
+	}, fakes.tenantID)
+	require.Error(t, err, "subject mismatch on same email must be rejected")
+	require.ErrorIs(t, err, ErrSSOSubjectMismatch,
+		"must surface as ErrSSOSubjectMismatch so handlers can map to a clean 401")
+	require.Contains(t, err.Error(), "Ask your admin",
+		"error must be operator-actionable")
+}
+
+// TestSSO_PreMigrationUser_BackfillsSubject verifies that an existing user
+// row with NULL sso_subject (i.e. provisioned before this migration) is
+// transparently back-filled on first SSO login. The login succeeds and the
+// next call routes through the subject-keyed fast path.
+func TestSSO_PreMigrationUser_BackfillsSubject(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	// Seed a user directly — no SSOSubject set, mirroring a pre-Phase-5.5 row.
+	const email = "legacy@example.com"
+	const subject = "google-sub-BACKFILL"
+	legacy := &repository.User{
+		ID:        uuid.New(),
+		TenantID:  fakes.tenantID,
+		Username:  "legacy",
+		Email:     email,
+		IsActive:  true,
+		Kind:      "human",
+		CreatedAt: time.Now(),
+	}
+	fakes.userRepo.users[legacy.Username] = legacy
+
+	// First SSO login post-migration. Should match by email, back-fill the
+	// subject, and succeed.
+	matched, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         email,
+		EmailVerified: true,
+		Subject:       subject,
+	}, fakes.tenantID)
+	require.NoError(t, err, "back-fill path must succeed without surfacing an error")
+	require.Equal(t, legacy.ID, matched.ID, "must match the existing legacy row")
+	require.Equal(t, subject, legacy.SSOSubject,
+		"sso_subject must be back-filled on the in-memory row after first login")
+
+	// The next login must take the subject-keyed fast path. Pair the binding
+	// in the side map so GetUserBySSOSubject can find it (the fake's SetSSOSubject
+	// only writes the column; the real index update is implicit in production).
+	fakes.userRepo.bindSSOSubject(legacy, fakes.provider.ProviderID, subject)
+
+	again, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         "doesnt-matter@example.com",
+		EmailVerified: true,
+		Subject:       subject,
+	}, fakes.tenantID)
+	require.NoError(t, err)
+	require.Equal(t, legacy.ID, again.ID,
+		"post-backfill login must resolve via subject regardless of email")
+}
+
+// TestSSO_DifferentProvider_SameSubject_Distinct verifies that the composite
+// key (provider, subject) treats the same subject value across two providers
+// as distinct identities. Subject strings are only unique within a single
+// IdP; two IdPs may both happen to assign `sub=12345` to unrelated accounts.
+func TestSSO_DifferentProvider_SameSubject_Distinct(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	// Seed a second provider so we can route a login through a non-default
+	// provider id and confirm the subject lookup is provider-scoped.
+	const otherProviderID = "okta_saml"
+	otherProvider := &repository.GlobalSSOProvider{
+		ProviderID:    otherProviderID,
+		Kind:          "saml",
+		DisplayName:   "Okta (test)",
+		Enabled:       true,
+		AutoProvision: true,
+	}
+	fakes.globalRepo.Providers[otherProviderID] = otherProvider
+
+	const sharedSubject = "12345"
+
+	// First login on provider A (Google) — provisions one account.
+	a, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         "a@example.com",
+		EmailVerified: true,
+		Subject:       sharedSubject,
+	}, fakes.tenantID)
+	require.NoError(t, err)
+
+	// First login on provider B (Okta) with the same subject value — must
+	// auto-provision a new distinct account, not rebind the Google one.
+	b, _, err := sso.EnsureSSOUser(ctx, otherProvider, SSOIdentity{
+		Email:         "b@example.com",
+		EmailVerified: true,
+		Subject:       sharedSubject,
+	}, fakes.tenantID)
+	require.NoError(t, err)
+	require.NotEqual(t, a.ID, b.ID,
+		"same subject value from a different provider must produce a different account")
 }
