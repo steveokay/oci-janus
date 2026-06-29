@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-29 — 47 PRs shipped through #179. **Phase 3.4 service rollout ✅ COMPLETE — all 11 backend services with a gRPC server now wire `libs/middleware/grpc.SingleTenantInjector` in single mode.** 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening + RED-FU-007 conformance compose-stack bootstrap follow-up.
+> **As-of:** 2026-06-29 — 54 PRs shipped through #186. **Phase 3.4 service rollout ✅ COMPLETE** + Phase 3.4 close-out sweep done (SEC-038 #181, SEC-039 #182, RED-FU-007 conformance bootstrap #184, RED-FU-010 Docker go.sum gate #183, RED-FU-011 helper tests #185, RED-FU-012 mTLS unify #186). 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening + RED-FU-013 (scanner buildGRPCOptions extract) + RED-FU-014 (BaseConfig migration for 7 services).
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|

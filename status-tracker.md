@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158) + **Phase 3.4 ✅ COMPLETE — all 11 backend services with a gRPC server wire `libs/middleware/grpc.SingleTenantInjector` in single mode (#162, #164, #170, #171, #173–#179)**. 47 PRs through 2026-06-29, ~93% complete. Remaining: Phase 5/6/7 hardening + RED-FU-007 conformance compose-stack bootstrap follow-up.
+**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158) + **Phase 3.4 ✅ COMPLETE — all 11 backend services with a gRPC server wire `libs/middleware/grpc.SingleTenantInjector` in single mode (#162, #164, #170, #171, #173–#179)** + Phase 3.4 close-out sweep (SEC-038 #181, SEC-039 #182, RED-FU-007 conformance bootstrap #184, RED-FU-010 Docker go.sum gate #183, RED-FU-011 helper tests #185, RED-FU-012 mTLS unify #186). 54 PRs through 2026-06-29, ~94% complete. Remaining: Phase 5/6/7 hardening + RED-FU-013 (scanner buildGRPCOptions extract) + RED-FU-014 (loader.BaseConfig migration for 7 services).
 
 **Phases shipped so far:**
 
@@ -88,6 +88,13 @@
 | 3.4 #10 | services/proxy SingleTenantInjector wiring + compose env wire-in + **added missing standard interceptor chain** (recovery/OTEL/logging) — pre-existing gap same as scanner | #178 | 2026-06-29 |
 | 3.4 #9 | services/gc SingleTenantInjector wiring — **reuses the existing TenantGRPCAddr conn** (gc already dialled tenant for ListTenants), so no second TCP stream; compose adds registry-tenant to depends_on chain | #177 | 2026-06-29 |
 | 3.4 #11 | services/tenant SingleTenantInjector wiring — **closes the rollout**. Special case: tenant *is* the source of GetDeploymentMetadata, can't self-dial; reads bootstrap_tenant_id directly from local repo. Pre-bootstrap deployments log a warning + skip wiring (Phase 3.2 CreateTenant guard already covers the same invariant); once bootstrap CLI writes the key, the next restart wires the interceptor | #179 | 2026-06-29 |
+| 3.4 close-out docs | trackers + sprint memory sync after Phase 3.4 rollout complete | #180 | 2026-06-29 |
+| SEC-038 | gc `clientCreds` per-target serverName pin + fail-closed on mTLS load (replaces local helper with inline `mtls.ClientCreds(..., "registry-<X>")` for metadata/storage/tenant dials) | #181 | 2026-06-29 |
+| SEC-039 | sweep core/scanner/proxy/management for the same empty-serverName + insecure-fallback shape — 17 dial sites pinned, two pre-existing zero-interceptor gaps closed (scanner #175, proxy #178 were already done; this PR finalised the remaining client-creds gap) | #182 | 2026-06-29 |
+| RED-FU-010 | scanner `go.sum` drift after #167 libs/middleware/grpc extraction — added `go-redis/v9`, `otelgrpc`, `atomic` transitive entries; CI tidy-check workflow now runs `GOWORK=off` to match the Docker invariant | #183 | 2026-06-29 |
+| RED-FU-007 | conformance compose-stack bootstrap — new `registry-bootstrap` one-shot container (postgres:16-alpine + psql) seeds tenant DB with first tenant + tenant_policies + deployment_metadata.bootstrap_tenant_id before Phase 3.4 services start; 10 Phase 3.4 services gain `depends_on: registry-bootstrap: condition: service_completed_successfully` | #184 | 2026-06-29 |
+| RED-FU-011 | smoke tests for Phase 3.4 `buildGRPCOptions(cfg, extraUnary)` chain — 10 services × 3 tests each (nil extraUnary / non-nil extraUnary / bad mTLS paths); scanner deferred (inline chain in `Run()`, filed as RED-FU-013) | #185 | 2026-06-29 |
+| RED-FU-012 | lift `mtls.ClientCreds(cfg.MTLSCACertPath, ...)` one-liner to `loader.BaseConfig.MTLSClientCreds(serverName)`; auth/metadata/storage/proxy/management drop their local helper (5 services × 1–9 call sites = 16 sites unified); remaining 7 services without BaseConfig embed filed as RED-FU-014 | #186 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
@@ -291,7 +298,6 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 
 | ID | Severity | Title | Status | Notes |
 |---|---|---|---|---|
-| **SEC-038** | MEDIUM | gc client mTLS misses server-name pin and fails open on TLS load error | OPEN | `services/gc/internal/server/server.go:315-326` — `clientCreds` calls `mtls.ClientTLSConfig(..., "")` (empty serverName, no CN/SAN pin to `registry-tenant`) and falls back to `insecure.NewCredentials()` on cert-load failure. Every other Phase 3.4 PR uses `mtls.ClientCreds(..., "registry-tenant")` + returns the error. MITM/impersonation of `registry-tenant`'s gRPC port can pin gc to an attacker-chosen tenant for the process lifetime. Surfaced by security-agent batch on the Phase 3.4 rollout review (2026-06-29). Fix before any non-local single-mode deploy. |
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
 
