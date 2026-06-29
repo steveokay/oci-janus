@@ -1,5 +1,6 @@
 # Security Issues
 
+> Last updated: 2026-06-29 — SEC-039 logged + RESOLVED (HIGH, same shape as SEC-038 across services/core, scanner, proxy, management — 17 dial sites missing serverName pin + silent insecure fallback on TLS load error; fixed by commit `41e9a72` on branch `fix/sec-039-clientcreds-sweep`, PR pending).
 > Last updated: 2026-06-29 — SEC-038 logged (MEDIUM, services/gc reuses a shared mTLS client without pinning the `registry-tenant` server name when dialling for Phase 3.4 bootstrap fetch; client-side TLS load failure also silently downgrades to plaintext) from Phase 3.4 SingleTenantInjector rollout review (PRs #170–#179).
 >
 > Last updated: 2026-06-27 — SEC-037 logged (LOW, single-statement onboarding backfill could contend with login UPDATEs on large user tables) from Phase 4.3 §1 review of commit `ec43e05`.
@@ -575,3 +576,17 @@ under CLAUDE.md §7 "JWT Validation."
   2. Remove the `slog.Warn ... falling back to insecure` branch — propagate the error so the service fails to start. This matches every other service's pattern (cert-load error returns from `Run()`).
   3. Add a regression test in `services/gc/internal/server/server_test.go` that asserts `clientCreds` returns an error (not insecure creds) when only some cert paths are set.
 - **References:** CLAUDE.md §7 ("Client cert CN must match expected service name (enforce in server-side interceptor)" + "fail closed (deny all)"); CLAUDE.md §13 ("No secrets in URL parameters" / fail-loud secrets posture); CWE-295 (Improper Certificate Validation); CWE-757 (Selection of Less-Secure Algorithm).
+
+### SEC-039 — services/core, scanner, proxy, management client mTLS misses server-name pin and fails open on TLS load error
+- **Severity:** HIGH
+- **Status:** RESOLVED
+- **Service:** `services/core`, `services/scanner`, `services/proxy`, `services/management`
+- **Raised:** 2026-06-29
+- **Description:** Same shape as SEC-038, broader blast radius. Four service entrypoints (`services/core/internal/server/server.go`, `services/scanner/internal/server/server.go`, `services/proxy/internal/server/server.go`, `services/management/internal/server/server.go`) each defined a local `clientCreds(cfg)` / `buildGRPCCreds(cfg)` helper that called `mtls.ClientTLSConfig(..., "")` — empty `serverName`, so the TLS handshake against any downstream gRPC peer did not verify the SAN/CN matched the expected service name. Combined effect: 17 dial sites total (4 in core: auth/metadata/storage/signer; 2 in scanner: metadata/storage; 2 in proxy: auth/storage; 9 in management: auth/metadata/audit/tenant/webhook/signer/scanner/gc/proxy) accepted any CA-signed cert as proof of identity. An attacker holding any leaf cert from the cluster CA could impersonate any backend service over these channels. core, scanner, and proxy additionally caught the `mtls.ClientTLSConfig` load error and fell back to `insecure.NewCredentials()` with only a `slog.Warn` — i.e. a corrupted/unreadable cert silently downgraded every downstream dial to plaintext at startup, violating CLAUDE.md §7 fail-closed posture.
+- **Remediation:**
+  1. Update each helper to take a `serverName` argument and delegate to `libs/auth/mtls.ClientCreds(...)`. ✅
+  2. Update every dial site to pass the remote's expected CN (e.g. `"registry-auth"`, `"registry-metadata"`). ✅
+  3. Drop the insecure-fallback branch on TLS load error — error propagates from `Run()`. ✅
+  4. Sweep the codebase for `ClientTLSConfig(..., "")` and `ClientCreds(..., "")` to ensure no remaining empty serverName. ✅ (zero matches in production code)
+- **References:** CLAUDE.md §7 ("Client cert CN must match expected service name") + fail-closed rule; CWE-295 (Improper Certificate Validation); CWE-757 (Selection of Less-Secure Algorithm); SEC-038 (same shape, gc).
+- **Resolved:** 2026-06-29 — commit `41e9a72` on branch `fix/sec-039-clientcreds-sweep` (PR pending). Per-target serverName pinned at all 17 dial sites; `mtls.ClientCreds` fail-closed semantics enforced (insecure returned only when ALL cert paths empty); dev cert SANs in `scripts/gen-dev-certs.sh` line 55 already emit `DNS:registry-<svc>` for every required service so no dev-stack regression.
