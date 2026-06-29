@@ -24,11 +24,14 @@ import (
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/scanner/internal/config"
 	"github.com/steveokay/oci-janus/services/scanner/internal/handler"
 	internalPlugin "github.com/steveokay/oci-janus/services/scanner/internal/plugin"
@@ -317,7 +320,37 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// surface, so plaintext silently breaks the admin scanner routes
 	// with a "first record does not look like a TLS handshake" error
 	// at the management → scanner edge — make TLS the default.
-	var grpcOpts []grpc.ServerOption
+	// REDESIGN-001 Phase 3.4 — Single-tenant injector wiring. In
+	// DEPLOYMENT_MODE=single scanner dials services/tenant at startup,
+	// fetches bootstrap_tenant_id, and wires SingleTenantInjector into
+	// its gRPC unary chain. Fail-loud on lookup error; multi mode skips.
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr,
+		)
+	}
+
+	// Build the gRPC interceptor chain. Pre-Phase 3.4 scanner had no
+	// interceptors at all (missed in earlier rollouts); adding the
+	// standard ServerInterceptors set (recovery + OTEL + logging) brings
+	// it in line with the rest of the platform. The injector slot stays
+	// at the end so it sees a fully-decorated context.
+	chain := grpcmw.ServerInterceptors()
+	if singleTenantInterceptor != nil {
+		chain = append(chain, singleTenantInterceptor)
+	}
+	grpcOpts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(chain...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
 		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
 		if err != nil {
@@ -464,4 +497,22 @@ func runMigrations(ctx context.Context, dsn string) error {
 		return err
 	}
 	return goose.Up(db, ".")
+}
+
+// fetchBootstrapTenantID dials services/tenant and delegates the post-dial
+// RPC + parse to libs/tenant/bootstrap.FetchTenantID (REDESIGN-001 Phase 3.4).
+func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.TenantGRPCAddr == "" {
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+	}
+	tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+	if err != nil {
+		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
+	}
+	tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
+	if err != nil {
+		return "", fmt.Errorf("dial tenant gRPC: %w", err)
+	}
+	defer tenantConn.Close()
+	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
