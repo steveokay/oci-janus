@@ -146,6 +146,13 @@
 
 **Owner:** TBD. Per-service cleanup PRs welcome; mark each finding nolint+REM-014 if intentional.
 
+**Progress:**
+
+| Service | Status | PR | Notes |
+|---|---|---|---|
+| `services/tenant` | ✅ CLOSED | (this branch's PR) | gofmt/goimports drift in `internal/handler/{grpc,grpc_test}.go`; `continue-on-error: true` dropped on `ci-tenant.yml` `lint:` as proof. |
+| Remaining 12 services | OPEN | — | Each gets its own per-service cleanup PR + flag drop, per `feedback_review_pace.md` cadence. |
+
 ---
 
 ### REM-015 — `services/management` test stage "Lint user queries" fails
