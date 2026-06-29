@@ -1013,6 +1013,24 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/auth/migrations/20260610000001_seed_dev_tenant.sql`
   (strip the second INSERT), `services/core/Makefile`, new GH Action step.
 
+### RED-FU-006 — `tenant.GetDeploymentMetadata` RPC hardening + test symmetry
+- **Why:** Surfaced by the 3-agent review on PR #160 (Phase 3.4 prep). The
+  RPC ships clean but two should-fixes round out the surface before more
+  keys land in `deployment_metadata`.
+- **Scope (≤1h total):**
+  - Add server-side key allowlist (`var allowedDeploymentMetadataKeys = map[string]bool{"bootstrap_tenant_id": true}`); reject unknown keys with `PermissionDenied`. Future-proofs against accidentally exposing a KEK/secret key via the same generic RPC.
+  - Cap `req.GetKey()` length (≤128) and restrict charset (`^[a-z0-9_]+$`) per CLAUDE.md §7. One-liner.
+  - Add `TestGetDeploymentMetadata_WrappedErrNotFound_ReturnsNotFound` —
+    symmetry with `TestIsDuplicateKeyError_WrappedError_ReturnsTrue`. Pins
+    the `errors.Is` chain through wrappers.
+  - Add `TestGetDeploymentMetadata_EmptyJSONValue_RoundTrips` — pins the
+    "raw verbatim, no whitespace stripping" contract documented in
+    `proto/tenant/v1/tenant.proto`.
+  - Optional NIT: fold the now-6 GetDeploymentMetadata tests into a single
+    `t.Run` table.
+- **Affects:** `services/tenant/internal/handler/grpc.go`,
+  `services/tenant/internal/handler/grpc_test.go`.
+
 ### RED-FU-005 — Phase 7.1 CLAUDE.md / docs/SERVICES.md rewrite
 - **Why:** REDESIGN-001 Phase 7.1 is the catch-all "make CLAUDE.md and
   docs/SERVICES.md match the new reality." Once enough phases ship, the
