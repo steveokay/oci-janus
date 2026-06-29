@@ -270,6 +270,9 @@ services:
       DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_tenant?sslmode=disable
       BOOTSTRAP_TENANT_ID: "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
       BOOTSTRAP_TENANT_NAME: "Development"
+      # Slug must satisfy the slug regex (`^[a-z0-9-]{2,64}$`) and the
+      # NOT NULL constraint added by tenant migration 20260620000001.
+      BOOTSTRAP_TENANT_SLUG: "development"
     command:
       - sh
       - -ec
@@ -280,8 +283,8 @@ services:
         done
         echo "seeding bootstrap_tenant_id=$$BOOTSTRAP_TENANT_ID..."
         psql "$$DSN" -v ON_ERROR_STOP=1 <<SQL
-          INSERT INTO tenants (id, name)
-            VALUES ('$$BOOTSTRAP_TENANT_ID', '$$BOOTSTRAP_TENANT_NAME')
+          INSERT INTO tenants (id, name, slug)
+            VALUES ('$$BOOTSTRAP_TENANT_ID', '$$BOOTSTRAP_TENANT_NAME', '$$BOOTSTRAP_TENANT_SLUG')
             ON CONFLICT (id) DO NOTHING;
           INSERT INTO tenant_policies (tenant_id)
             VALUES ('$$BOOTSTRAP_TENANT_ID')

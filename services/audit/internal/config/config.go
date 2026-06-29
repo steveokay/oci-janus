@@ -11,22 +11,13 @@ import (
 )
 
 // Config holds all runtime configuration for the audit service.
+//
+// RED-FU-014 — the standard BaseConfig fields (LogLevel/LogFormat/
+// GRPCAddr/HTTPAddr/MetricsAddr/MTLS_*/OTEL_*) are inherited via the
+// squashed loader.BaseConfig embed so they live in one canonical place
+// and gain the cfg.MTLSClientCreds(serverName) method from RED-FU-012.
 type Config struct {
-	LogLevel    string `mapstructure:"LOG_LEVEL"`
-	LogFormat   string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr    string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr    string `mapstructure:"HTTP_ADDR"`
-	MetricsAddr string `mapstructure:"METRICS_ADDR"`
-
-	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
-
-	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
-	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
+	loader.BaseConfig `mapstructure:",squash"`
 
 	DBDSN            string `mapstructure:"DB_DSN"`
 	DBMaxConns       int32  `mapstructure:"DB_MAX_CONNS"`

@@ -13,17 +13,13 @@ import (
 )
 
 // Config holds all runtime configuration for registry-core.
+//
+// RED-FU-014 — the standard BaseConfig fields (LogLevel/LogFormat/
+// GRPCAddr/HTTPAddr/MetricsAddr/MTLS_*/OTEL_*) are inherited via the
+// squashed loader.BaseConfig embed so they live in one canonical place
+// and gain the cfg.MTLSClientCreds(serverName) method from RED-FU-012.
 type Config struct {
-	LogLevel  string `mapstructure:"LOG_LEVEL"`
-	LogFormat string `mapstructure:"LOG_FORMAT"`
-	GRPCAddr  string `mapstructure:"GRPC_ADDR"`
-	HTTPAddr  string `mapstructure:"HTTP_ADDR"`
-	// MetricsAddr is the dedicated Prometheus scrape port (SEC-025).
-	MetricsAddr string `mapstructure:"METRICS_ADDR"`
-
-	MTLSCACertPath string `mapstructure:"MTLS_CA_CERT_PATH"`
-	MTLSCertPath   string `mapstructure:"MTLS_CERT_PATH"`
-	MTLSKeyPath    string `mapstructure:"MTLS_KEY_PATH"`
+	loader.BaseConfig `mapstructure:",squash"`
 
 	AuthGRPCAddr     string `mapstructure:"AUTH_GRPC_ADDR"`
 	AuthRealm        string `mapstructure:"AUTH_REALM"`
@@ -67,12 +63,6 @@ type Config struct {
 	// is preserved as long as sample rate is > 0. Set to 0.0 to disable the
 	// publish entirely (analytics returns zeros + max_idle_days stops working).
 	PullEventSampleRate float64 `mapstructure:"PULL_EVENT_SAMPLE_RATE"`
-
-	OTELExporter     string  `mapstructure:"OTEL_EXPORTER"`
-	OTELEndpoint     string  `mapstructure:"OTEL_ENDPOINT"`
-	OTELServiceName  string  `mapstructure:"OTEL_SERVICE_NAME"`
-	OTELEnvironment  string  `mapstructure:"OTEL_ENVIRONMENT"`
-	OTELSamplingRate float64 `mapstructure:"OTEL_SAMPLING_RATE"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
