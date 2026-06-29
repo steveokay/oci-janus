@@ -480,7 +480,10 @@ func TestSAMLCallback_HappyPath(t *testing.T) {
 
 	tenantID := uuid.New()
 	mux := http.NewServeMux()
-	httpH := NewHTTPHandler(tc.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg)
+	// WithSAMLTrustEmail(true) — this test predates Phase 5.6 and exercises
+	// the post-trust happy path. The trust-flag behaviour itself is covered
+	// by TestSAMLCallback_TrustEmailFlag.
+	httpH := NewHTTPHandler(tc.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg).WithSAMLTrustEmail(true)
 	httpH.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -566,7 +569,9 @@ func TestSAMLCallback_RejectsReplayedRelayState(t *testing.T) {
 
 	tenantID := uuid.New()
 	mux := http.NewServeMux()
-	httpH := NewHTTPHandler(tc.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg)
+	// WithSAMLTrustEmail(true) — this test predates Phase 5.6; trust-flag
+	// coverage lives in TestSAMLCallback_TrustEmailFlag.
+	httpH := NewHTTPHandler(tc.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg).WithSAMLTrustEmail(true)
 	httpH.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -737,6 +742,146 @@ func TestSAMLCallback_NotConfiguredReturns501(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Errorf("want 501 when SAML not configured, got %d", resp.StatusCode)
+	}
+}
+
+// ── Phase 5.6 — SSO_SAML_TRUST_EMAIL flag ───────────────────────────────────
+
+// TestSAMLCallback_TrustEmailFlag covers REDESIGN-001 Phase 5.6 — the
+// SSO_SAML_TRUST_EMAIL config flag. The cases are:
+//
+//   - trust=true  → new user auto-provisioned, 302 with sso_token (existing
+//     happy-path semantics preserved).
+//   - trust=false → SAML callback refused with 403 EMAILNOTVERIFIED (because
+//     EnsureSSOUser's existing gate kicks in for SSOIdentity.EmailVerified=false).
+//   - default (handler never sees WithSAMLTrustEmail) → same as trust=false;
+//     verifies the fail-safe zero value matches the documented default.
+func TestSAMLCallback_TrustEmailFlag(t *testing.T) {
+	cases := []struct {
+		name       string
+		applyFlag  func(h *HTTPHandler) *HTTPHandler
+		wantStatus int
+		// wantSSOToken is true when the redirect should carry an sso_token
+		// query param; only the trust=true branch reaches IssueSSOToken.
+		wantSSOToken bool
+	}{
+		{
+			name:         "trust_true_provisions_and_issues_jwt",
+			applyFlag:    func(h *HTTPHandler) *HTTPHandler { return h.WithSAMLTrustEmail(true) },
+			wantStatus:   http.StatusFound,
+			wantSSOToken: true,
+		},
+		{
+			name:         "trust_false_refuses_with_403",
+			applyFlag:    func(h *HTTPHandler) *HTTPHandler { return h.WithSAMLTrustEmail(false) },
+			wantStatus:   http.StatusForbidden,
+			wantSSOToken: false,
+		},
+		{
+			name:         "default_unset_matches_trust_false_failsafe",
+			applyFlag:    func(h *HTTPHandler) *HTTPHandler { return h }, // never call WithSAMLTrustEmail
+			wantStatus:   http.StatusForbidden,
+			wantSSOToken: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spKey, spCert, certPEM, keyPEM := genTestKeypair(t, "test-sp")
+			ts, cleanup := buildTestService(t)
+			t.Cleanup(cleanup)
+
+			globalProviders := newFakeGlobalSSORepo()
+			sessions := newFakeSessionRepo()
+			credKey := make([]byte, 32)
+			for i := range credKey {
+				credKey[i] = byte(i)
+			}
+			sso, err := service.NewSSO(ts.svc, globalProviders, sessions, credKey)
+			if err != nil {
+				t.Fatalf("NewSSO: %v", err)
+			}
+			spCfg, err := authsaml.LoadSPConfig(certPEM, keyPEM)
+			if err != nil {
+				t.Fatalf("LoadSPConfig: %v", err)
+			}
+
+			tenantID := uuid.New()
+			mux := http.NewServeMux()
+			httpH := NewHTTPHandler(ts.svc, tenantID).WithSSO(sso, "").WithSAMLConfig(spCfg)
+			httpH = tc.applyFlag(httpH)
+			httpH.Register(mux)
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			httpH.WithSSO(sso, srv.URL)
+
+			const providerID = "saml"
+			entityID := srv.URL + "/auth/saml/metadata"
+			spMetadataXML := buildSPMetadataForProvider(t, srv.URL, providerID, spKey, spCert, entityID)
+			// Use a per-case email so the trust=true subtest can't collide
+			// with a row left by a sibling subtest sharing the in-memory
+			// store. (buildTestService rebuilds the DB per call, but be
+			// defensive.)
+			idp := newTestIDP(t, spMetadataXML, "bob+"+tc.name+"@example.com", "Bob")
+			idpMD := idpMetadataXML(t, idp.idp)
+
+			globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+				ProviderID:      providerID,
+				Kind:            "saml",
+				DisplayName:     "Corp SAML",
+				Enabled:         true,
+				SAMLMetadataXML: idpMD,
+				AutoProvision:   true,
+			}
+
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			resp, err := client.Get(srv.URL + "/auth/saml/" + providerID + "/start?next=/dashboard")
+			if err != nil {
+				t.Fatalf("GET start: %v", err)
+			}
+			if resp.StatusCode != http.StatusFound {
+				body, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				t.Fatalf("start status: got %d, body=%s", resp.StatusCode, string(body))
+			}
+			_ = resp.Body.Close()
+			authnURL := resp.Header.Get("Location")
+
+			samlResponse, relayState := idp.produceSignedResponse(t, authnURL)
+			if samlResponse == "" || relayState == "" {
+				t.Fatal("IdP did not produce SAMLResponse + RelayState")
+			}
+
+			form := url.Values{}
+			form.Set("SAMLResponse", samlResponse)
+			form.Set("RelayState", relayState)
+			cbResp, err := client.PostForm(srv.URL+"/auth/saml/"+providerID+"/acs", form)
+			if err != nil {
+				t.Fatalf("POST acs: %v", err)
+			}
+			defer cbResp.Body.Close()
+			if cbResp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(cbResp.Body)
+				t.Fatalf("acs status: got %d, want %d; body=%s", cbResp.StatusCode, tc.wantStatus, string(body))
+			}
+
+			if tc.wantSSOToken {
+				dest := cbResp.Header.Get("Location")
+				if !strings.HasPrefix(dest, "/dashboard") {
+					t.Errorf("trust=true: wrong dest: %s", dest)
+				}
+				du, _ := url.Parse(dest)
+				if du.Query().Get("sso_token") == "" {
+					t.Error("trust=true: missing sso_token in callback redirect")
+				}
+			} else {
+				// Refused branch — make sure no sso_token leaks via redirect
+				// (writeError returns a JSON body, not a redirect).
+				if loc := cbResp.Header.Get("Location"); loc != "" {
+					t.Errorf("refused branch should not redirect; got Location=%s", loc)
+				}
+			}
+		})
 	}
 }
 
