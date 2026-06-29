@@ -24,6 +24,19 @@ type Config struct {
 
 	// Filesystem (dev only)
 	StorageFilesystemRoot string `mapstructure:"STORAGE_FILESYSTEM_ROOT"`
+
+	// REDESIGN-001 Phase 3.4 — tenant gRPC client for SingleTenantInjector.
+	// See services/auth + services/core for the rollout pattern. In single
+	// mode storage dials services/tenant at startup and wires
+	// libs/middleware/grpc.SingleTenantInjector; in multi mode the dial is
+	// skipped (the injector is a no-op for empty bootstrap id anyway).
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+
+	// DeploymentMode is the binary's posture, normalised by
+	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
+	// Read in Load() — not via Viper bindings — to keep the validated/typed
+	// value isolated from raw env string handling.
+	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load binds environment variables into Config and validates required fields.
@@ -33,6 +46,13 @@ func Load() (*Config, error) {
 	if err := loader.Load("registry-storage", cfg); err != nil {
 		return nil, err
 	}
+	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper so
+	// invalid values fail at startup. Defaults to single per the OSS posture.
+	mode, err := loader.LoadDeploymentMode()
+	if err != nil {
+		return nil, fmt.Errorf("load deployment mode: %w", err)
+	}
+	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
