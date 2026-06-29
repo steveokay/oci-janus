@@ -29,7 +29,13 @@ jobs:
         with: { version: "1.34.0" }
       # Run from the repo root so the `.git` directory is resolvable. The
       # previous `cd proto && buf breaking --against '.git#branch=main'`
-      # form looked for `.git` inside `proto/`, which never existed —
-      # exit 128 "not a git repository". The `subdir=proto` qualifier
-      # scopes the diff to the proto/ subtree.
-      - run: buf breaking proto --against '.git#branch=main,subdir=proto'
+      # form looked for `.git` inside `proto/`, which never existed.
+      #
+      # `branch=origin/main` (not `branch=main`): actions/checkout populates
+      # only the remote-tracking ref, not a local `main` branch — so
+      # `branch=main` fails with "couldn't find remote ref main." Using the
+      # remote-tracking ref is the standard CI pattern for buf breaking.
+      #
+      # `subdir=proto` scopes the diff to the proto/ subtree, matching the
+      # target arg.
+      - run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'
