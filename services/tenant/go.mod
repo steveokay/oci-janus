@@ -6,7 +6,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.1
-	github.com/redis/go-redis/v9 v9.20.0
 	github.com/spf13/viper v1.19.0
 	github.com/steveokay/oci-janus/libs v0.0.0
 	github.com/steveokay/oci-janus/proto/gen/go v0.0.0
@@ -65,6 +64,7 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
+	github.com/redis/go-redis/v9 v9.20.0 // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect

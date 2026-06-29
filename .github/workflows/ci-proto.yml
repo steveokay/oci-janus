@@ -19,7 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
+      # fetch-depth: 0 is required so the `.git#branch=main` ref below can
+      # find the main-branch tip — actions/checkout default is a shallow
+      # clone of the PR head only, which doesn't include main.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: bufbuild/buf-setup-action@v1
         with: { version: "1.34.0" }
-      - run: cd proto && buf breaking --against '.git#branch=main'
+      # Run from the repo root so the `.git` directory is resolvable. The
+      # previous `cd proto && buf breaking --against '.git#branch=main'`
+      # form looked for `.git` inside `proto/`, which never existed.
+      #
+      # `branch=origin/main` (not `branch=main`): actions/checkout populates
+      # only the remote-tracking ref, not a local `main` branch — so
+      # `branch=main` fails with "couldn't find remote ref main." Using the
+      # remote-tracking ref is the standard CI pattern for buf breaking.
+      #
+      # `subdir=proto` scopes the diff to the proto/ subtree, matching the
+      # target arg.
+      - run: buf breaking proto --against '.git#branch=origin/main,subdir=proto'

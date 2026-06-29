@@ -6,9 +6,6 @@ bin/
 *.so
 *.dylib
 
-# Go workspace sum (auto-generated)
-go.work.sum
-
 # Test output
 *.out
 coverage.html

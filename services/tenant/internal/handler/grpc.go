@@ -272,6 +272,36 @@ func (h *GRPCHandler) GetTenantPolicy(ctx context.Context, req *tenantv1.GetTena
 	return policyToProto(p), nil
 }
 
+// GetDeploymentMetadata reads a deployment-scoped fact from the tenant DB's
+// deployment_metadata table (REDESIGN-001 Phase 3.1.a).
+//
+// Phase 3.4 first consumer: every service calls this once at startup with
+// key="bootstrap_tenant_id" so it can wire libs/middleware/grpc.SingleTenantInjector
+// without per-service env var sprawl.
+//
+// Error mapping:
+//   - empty key → InvalidArgument (callers should always supply a key; an
+//     empty string indicates a wiring bug, not a "give me everything" sentinel).
+//   - row missing → NotFound (the key has never been Set on this deployment).
+//   - any other DB error → mapped via errcodes.MapDBError so pool exhaustion
+//     surfaces as ResourceExhausted (SEC-006).
+//
+// The raw JSONB bytes are returned verbatim — each consumer knows the shape
+// of the keys it reads (e.g. bootstrap_tenant_id is a JSON-string UUID).
+func (h *GRPCHandler) GetDeploymentMetadata(ctx context.Context, req *tenantv1.GetDeploymentMetadataRequest) (*tenantv1.GetDeploymentMetadataResponse, error) {
+	if req.GetKey() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	value, err := h.repo.GetDeploymentMetadata(ctx, req.GetKey())
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "deployment_metadata key %q not found", req.GetKey())
+		}
+		return nil, errcodes.MapDBError(err, "get deployment_metadata")
+	}
+	return &tenantv1.GetDeploymentMetadataResponse{Value: []byte(value)}, nil
+}
+
 // UpdateTenantPolicy upserts a tenant's policy.
 func (h *GRPCHandler) UpdateTenantPolicy(ctx context.Context, req *tenantv1.UpdateTenantPolicyRequest) (*tenantv1.TenantPolicy, error) {
 	tenantID, err := uuid.Parse(req.TenantId)
