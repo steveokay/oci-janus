@@ -25,20 +25,35 @@
 ALTER TABLE auth_login_sessions
     DROP CONSTRAINT IF EXISTS auth_login_sessions_provider_id_fkey;
 
--- Change provider_id from UUID to TEXT. Existing rows are mapped using the
--- backfill: the string provider_id in global_sso_config matches the enum
--- value that was stored in auth_providers.type. A subquery converts
--- existing UUID provider_id values to the corresponding type string.
--- Rows whose provider_id no longer exists in auth_providers are set to NULL
--- so the migration is never blocked by orphaned session rows (sessions are
--- short-lived; any active sessions expire within 10 minutes anyway).
+-- Change provider_id from UUID to TEXT. The original migration tried
+-- to use a subquery in `ALTER COLUMN ... TYPE TEXT USING (SELECT ...)`,
+-- but Postgres rejects that with SQLSTATE 0A000 ("cannot use subquery
+-- in transform expression"). The standard pattern is to add a new
+-- column, backfill it with a JOIN-based UPDATE, then drop+rename:
+--
+--   1. Add `provider_id_text` (nullable TEXT).
+--   2. UPDATE … FROM auth_providers — sets the text type for every
+--      session whose old UUID still matches an auth_providers row.
+--      Sessions with orphaned provider_id end up NULL, which is fine
+--      (sessions are short-lived; any active ones expire within 10
+--      minutes anyway).
+--   3. DROP the old `provider_id` column, then RENAME the temp column.
+--
+-- This is the canonical "change column type with a cross-table data
+-- transform" recipe and works on every supported Postgres version.
 ALTER TABLE auth_login_sessions
-    ALTER COLUMN provider_id TYPE TEXT
-    USING (
-        SELECT type::TEXT
-        FROM auth_providers
-        WHERE auth_providers.id = auth_login_sessions.provider_id
-    );
+    ADD COLUMN IF NOT EXISTS provider_id_text TEXT;
+
+UPDATE auth_login_sessions als
+SET provider_id_text = ap.type::TEXT
+FROM auth_providers ap
+WHERE ap.id = als.provider_id;
+
+ALTER TABLE auth_login_sessions
+    DROP COLUMN provider_id;
+
+ALTER TABLE auth_login_sessions
+    RENAME COLUMN provider_id_text TO provider_id;
 
 -- RM-004: drop the tenant_id column. Sessions are now global/deployment-wide.
 ALTER TABLE auth_login_sessions
@@ -55,20 +70,13 @@ ALTER TABLE users DROP COLUMN IF EXISTS sso_provider_id;
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS sso_provider_id TEXT NULL;
 
--- Re-populate from the UUID in the old provider rows where possible.
--- This is best-effort: the UUID-to-string mapping goes through auth_providers
--- which still exists at this point in the migration.
-UPDATE users u
-SET sso_provider_id = ap.type::TEXT
-FROM auth_providers ap
-WHERE ap.id::TEXT = (
-    -- auth_providers.id was stored as the original sso_provider_id UUID.
-    -- We cannot read the old UUID value anymore because we just DROPped the
-    -- column, so this UPDATE is intentionally a no-op. The column will be NULL
-    -- for existing SSO users; they will have their sso_provider_id populated on
-    -- next SSO login when EnsureSSOUser calls CreateSSOUser or TouchLastLogin.
-    NULL
-);
+-- Note: we deliberately do NOT attempt to backfill the new TEXT column
+-- from the old UUID values — those were destroyed by the DROP COLUMN
+-- above. Existing SSO users will have NULL sso_provider_id until their
+-- next login, at which point EnsureSSOUser / CreateSSOUser / TouchLastLogin
+-- populates it from the global_sso_config provider_id string. The column
+-- is informational only (login still works via the email match path), so
+-- a brief NULL window is acceptable.
 
 CREATE INDEX IF NOT EXISTS idx_users_sso_provider
     ON users (sso_provider_id)
