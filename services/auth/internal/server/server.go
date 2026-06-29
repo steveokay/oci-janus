@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -31,6 +32,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/config"
 	"github.com/steveokay/oci-janus/services/auth/internal/handler"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -95,7 +97,29 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// ── 4. gRPC server ────────────────────────────────────────────────────────
-	grpcOpts, err := buildGRPCOptions(cfg)
+	//
+	// REDESIGN-001 Phase 3.4 — Single-tenant injector wiring (pilot service).
+	//
+	// In DEPLOYMENT_MODE=single we look up the bootstrap tenant id from
+	// services/tenant.deployment_metadata at startup so the server-side
+	// interceptor can reject mismatched x-tenant-id metadata. Fail-loud:
+	// if the lookup errors, auth exits — silently degrading this defence-in-
+	// depth layer is worse than failing to start. In multi mode we skip the
+	// dial entirely (the injector is a no-op for empty bootstrap id anyway).
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr,
+		)
+	}
+
+	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -325,6 +349,77 @@ func runMigrations(cfg *config.Config) error {
 	return nil
 }
 
+// fetchBootstrapTenantID dials the tenant gRPC server, calls
+// GetDeploymentMetadata(key="bootstrap_tenant_id"), and returns the UUID
+// string ready to hand to SingleTenantInjector.
+//
+// REDESIGN-001 Phase 3.4 (services/auth pilot). Every backend service will
+// follow this same pattern once the rollout fans out — the helper lives in
+// each service rather than libs/ so the tenant client dial keeps the existing
+// "per-service config var" idiom (TENANT_GRPC_ADDR alongside AUDIT_GRPC_ADDR).
+//
+// Behaviour:
+//   - TENANT_GRPC_ADDR empty in single mode → error. Operators must wire it.
+//   - tenant RPC returns NotFound → error ("not bootstrapped yet"). Operators
+//     run the bootstrap CLI before starting auth.
+//   - any other RPC error → propagated. Caller in Run() converts to a fatal
+//     startup failure.
+//   - JSONB value parse failure → error. The deployment_metadata schema
+//     guarantees this is JSON-encoded; a parse failure means corruption.
+//
+// The dial uses the same mTLS material as the audit client (buildClientCreds);
+// in dev (cert paths unset) it falls back to plaintext with a slog.Warn from
+// the credentials helper itself.
+//
+// The call is bounded by a 5-second context timeout — the tenant service must
+// be reachable for auth to start in single mode anyway, so blocking startup
+// longer than that just hides the misconfiguration.
+func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.TenantGRPCAddr == "" {
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+	}
+	tenantCreds, err := buildClientCreds(cfg, "registry-tenant")
+	if err != nil {
+		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
+	}
+	tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
+	if err != nil {
+		return "", fmt.Errorf("dial tenant gRPC: %w", err)
+	}
+	defer tenantConn.Close()
+
+	return getBootstrapTenantIDFromClient(ctx, tenantv1.NewTenantServiceClient(tenantConn))
+}
+
+// getBootstrapTenantIDFromClient is the post-dial half of
+// fetchBootstrapTenantID, split out so tests can inject a bufconn-backed
+// client without going through the cfg → mTLS → dial path. Behaviour
+// contract identical to the wrapping function for the RPC + parse stages.
+func getBootstrapTenantIDFromClient(ctx context.Context, client tenantv1.TenantServiceClient) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := client.GetDeploymentMetadata(callCtx, &tenantv1.GetDeploymentMetadataRequest{
+		Key: "bootstrap_tenant_id",
+	})
+	if err != nil {
+		return "", fmt.Errorf("GetDeploymentMetadata(bootstrap_tenant_id): %w", err)
+	}
+
+	// The value is JSONB-encoded — for bootstrap_tenant_id specifically a
+	// JSON string ("\"<uuid>\""). Unmarshal into a string then validate the
+	// UUID format so a typo'd value fails here rather than silently becoming
+	// a constant interceptor input.
+	var idStr string
+	if err := json.Unmarshal(resp.GetValue(), &idStr); err != nil {
+		return "", fmt.Errorf("parse bootstrap_tenant_id JSON: %w", err)
+	}
+	if _, err := uuid.Parse(idStr); err != nil {
+		return "", fmt.Errorf("bootstrap_tenant_id %q is not a valid UUID: %w", idStr, err)
+	}
+	return idStr, nil
+}
+
 // buildClientCreds returns mTLS credentials for outbound gRPC dials when all
 // three cert paths are configured, or plaintext insecure credentials
 // otherwise (dev only). config.validate() ensures the plaintext path is
@@ -349,11 +444,22 @@ func buildClientCreds(cfg *config.Config, serverName string) (credentials.Transp
 	return credentials.NewTLS(tlsCfg), nil
 }
 
-// buildGRPCOptions returns the server options list, including mTLS credentials if configured.
-func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+// buildGRPCOptions returns the server options list, including mTLS credentials
+// if configured.
+//
+// extraUnary is an optional additional unary interceptor appended to the end of
+// the shared chain. REDESIGN-001 Phase 3.4 uses it to slot the
+// SingleTenantInjector into the chain when DEPLOYMENT_MODE=single, so the
+// "normalise the inbound x-tenant-id" defence runs after auth + tracing.
+// Pass nil in multi mode (or when no extra interceptor is required).
+func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainUnaryInterceptor(chain...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
 	}
 
