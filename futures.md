@@ -1031,6 +1031,59 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/tenant/internal/handler/grpc.go`,
   `services/tenant/internal/handler/grpc_test.go`.
 
+### RED-FU-007 — Conformance compose-stack bootstrap fix (REM-020 #10 finisher)
+- **Why:** REM-020 #10 conformance failures since 2026-06-25 traced to
+  the Phase 3.4 fail-loud bootstrap lookup tripping in compose (auth +
+  metadata + core + storage call `tenant.GetDeploymentMetadata` at
+  startup; deployment_metadata is empty because the bootstrap CLI never
+  runs in the dev compose stack). PRs #170 + #171 wired
+  `TENANT_GRPC_ADDR` + `depends_on: registry-tenant` so services can
+  *reach* tenant, but tenant returns NotFound and services exit
+  fail-loud per design.
+- **Scope (~half day):** pick one of three and ship:
+  - (a) Set `DEPLOYMENT_MODE=multi` on the compose stack — multi mode
+    skips the lookup. Cleanest for conformance + dev; production stays
+    single mode by default.
+  - (b) Add a `bootstrap` init container to compose that runs
+    `registry-auth bootstrap --admin-email ... --tenant-name ...` once
+    after postgres + registry-tenant are healthy. Auth/metadata/core
+    wait on it completing. Correctly exercises single mode end-to-end
+    in dev too.
+  - (c) Add a goose migration to services/tenant that inserts a known
+    UUID into deployment_metadata at startup. Compose works in single
+    mode without the CLI. Tradeoff: dev tenant has a fixed UUID.
+- **Affects:** `infra/docker-compose/docker-compose.yml`, possibly
+  `services/tenant/migrations/`, possibly Makefile + runbook.
+
+### RED-FU-008 — Defensive 5s timeout at `fetchBootstrapTenantID` call sites
+- **Why:** Code-review on PR #170 (services/core) suggested a
+  defensive `context.WithTimeout(ctx, 5*time.Second)` at the call site
+  in each service. `libs/tenant/bootstrap.FetchTenantID` already wraps
+  internally with `LookupTimeout`, but per CLAUDE.md §6 ("Always set
+  deadlines on outgoing gRPC calls") a call-site deadline is the
+  belt-and-braces invariant. Worth applying uniformly across the 11
+  service rollouts.
+- **Scope (~1h):** one cross-cutting commit that updates each
+  service's `fetchBootstrapTenantID` to wrap its call to
+  `tenantbootstrap.FetchTenantID` in `context.WithTimeout`. Net ~3
+  lines per service × 11 = ~33 lines + 11 services touched.
+- **Affects:** every `services/<svc>/internal/server/server.go` that
+  has the Phase 3.4 helper.
+
+### RED-FU-009 — Scanner Debian-slim → distroless audit
+- **Why:** REM-020 #10 root-cause companion. Scanner image base layer
+  ships perl-base + zlib1g + other Debian transitive deps that
+  generate CVEs we have to `.trivyignore` because no upstream fix is
+  available. A leaner base image (distroless or scratch + scratch
+  scanner adapter binary) would eliminate the entire allowlist.
+- **Scope:** audit which Debian-base deps the scanner adapter actually
+  needs at runtime, then design a multi-stage Dockerfile that ships
+  only those. Distroless `cc` or `static` base candidate. Sized at a
+  day; not urgent because skip-files on the bundled trivy/grype
+  already cleared the build gate.
+- **Affects:** `services/scanner/Dockerfile`,
+  `services/scanner/.trivyignore` (slim down once the base is leaner).
+
 ### RED-FU-005 — Phase 7.1 CLAUDE.md / docs/SERVICES.md rewrite
 - **Why:** REDESIGN-001 Phase 7.1 is the catch-all "make CLAUDE.md and
   docs/SERVICES.md match the new reality." Once enough phases ship, the

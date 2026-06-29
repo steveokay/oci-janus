@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-27 — 26 PRs shipped, Phase 4.2 sub-steps fully wrapped (a/b/c/d/e), 4 of 5 Top-5 critical findings closed.
+> **As-of:** 2026-06-29 — 37 PRs shipped through #169, Phase 3.4 service rollout in flight (4 of 11 services consume the libs lift from #167). 4 of 5 Top-5 critical findings closed.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -52,6 +52,13 @@
 | 3.1.c | `make dev-bootstrap` + production runbook | ✅ DONE | #128 | 2026-06-27 |
 | 3.2 | Tenant gRPC single-tenant guard | ✅ DONE | #155 | 2026-06-28 |
 | 3.3 | Tenant context middleware (single-mode injector) | ✅ DONE | #155 | 2026-06-28 |
+| 3.4 prep | `tenant.GetDeploymentMetadata` RPC | ✅ DONE | #160 | 2026-06-29 |
+| 3.4 pilot | services/auth injector wiring | ✅ DONE | #162 | 2026-06-29 |
+| 3.4 #2 | services/metadata injector wiring | ✅ DONE | #164 | 2026-06-29 |
+| 3.4 libs | `libs/tenant/bootstrap` + `mtls.ClientCreds` extraction (rule-of-three) | ✅ DONE | #167 | 2026-06-29 |
+| 3.4 #3 | services/core injector wiring (1st libs consumer) | 🟡 IN REVIEW | #170 | — |
+| 3.4 #4 | services/storage injector wiring | 🟡 IN REVIEW | #171 | — |
+| 3.4 #5–11 | scanner / signer / webhook / audit / gc / proxy / tenant | ⬜ OPEN | — | — |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
