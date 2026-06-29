@@ -18,9 +18,10 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ActivityEventResponse is the JSON wire form of one audit event for the
@@ -108,7 +109,7 @@ func (h *Handler) handleListRepoActivity(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "limit must be between 1 and 200")
 			return
 		}
-		limit = int32(n)
+		limit = int32(n) //nolint:gosec // bounded above
 	}
 
 	pageToken := q.Get("page_token")

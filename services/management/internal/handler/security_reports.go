@@ -27,10 +27,11 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
-	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
+	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
 // ComplianceReportResponse is the JSON wire form for a single report row.
@@ -99,7 +100,7 @@ func (h *Handler) handleListReports(w http.ResponseWriter, r *http.Request) {
 	pageSize := int32(50)
 	if s := r.URL.Query().Get("per_page"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 200 {
-			pageSize = int32(n)
+			pageSize = int32(n) //nolint:gosec // bounded above
 		}
 	}
 	pageToken := r.URL.Query().Get("page_token")

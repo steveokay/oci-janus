@@ -71,6 +71,11 @@ type PersistedRunner struct {
 // finalize is the indirection layer the retention executor uses so tests can
 // capture FinalizeRetentionRun without a real pool. Production callers
 // (nil hook) fall through to the repository.
+//
+// the future "GC swept N blobs as part of retention" rollup; keeping the
+// param means callers don't change when that lands.
+//
+//nolint:unparam // `blobs` is always 0 today but the schema reserves it for
 func (p *PersistedRunner) finalize(ctx context.Context, runID uuid.UUID, count, blobs, bytes int64, errMsg string) error {
 	if p.finalizeHook != nil {
 		return p.finalizeHook(ctx, runID, count, blobs, bytes, errMsg)

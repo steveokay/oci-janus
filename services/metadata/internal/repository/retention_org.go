@@ -57,6 +57,8 @@ type EffectivePolicyResult struct {
 // or ErrNotFound. Mirrors GetRepoRetentionPolicy but reads from
 // retention_policy_defaults; the response message reuses RetentionPolicy
 // (repo_id empty, org_id populated) so the handler can return it unchanged.
+//
+//nolint:dupl // See sibling in retention.go — duplication is intentional.
 func (r *Repository) GetOrgRetentionPolicy(ctx context.Context, tenantID, orgID string) (*metadatav1.RetentionPolicy, error) {
 	const q = `
 		SELECT org_id::text,

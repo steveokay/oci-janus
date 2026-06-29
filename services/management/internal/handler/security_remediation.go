@@ -73,7 +73,7 @@ func (h *Handler) handleListRemediations(w http.ResponseWriter, r *http.Request)
 			if n > 200 {
 				n = 200
 			}
-			limit = int32(n)
+			limit = int32(n) //nolint:gosec // bounded above
 		}
 	}
 

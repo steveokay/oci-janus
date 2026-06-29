@@ -25,6 +25,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
@@ -38,7 +40,6 @@ import (
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	webhookv1 "github.com/steveokay/oci-janus/proto/gen/go/webhook/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 // maxBodyBytes caps incoming JSON request bodies to prevent large-payload attacks.
@@ -707,7 +708,7 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 	pageSize := int32(25)
 	if s := r.URL.Query().Get("per_page"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
-			pageSize = int32(n)
+			pageSize = int32(n) //nolint:gosec // bounded above to [1, 100]
 		}
 	}
 
@@ -1315,7 +1316,7 @@ func (h *Handler) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 	limit := int32(25)
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if n, parseErr := strconv.Atoi(s); parseErr == nil && n > 0 && n <= 100 {
-			limit = int32(n)
+			limit = int32(n) //nolint:gosec // bounded above to [1, 100]
 		}
 	}
 

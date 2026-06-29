@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/signer/internal/signing"
 	"github.com/steveokay/oci-janus/services/signer/internal/sigstore"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // ── Sentinel errors ──────────────────────────────────────────────────────────

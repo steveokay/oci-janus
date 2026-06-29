@@ -24,15 +24,15 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
-	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
-	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
 // AuditExportConfigResponse is the JSON wire form. Mirrors the proto
@@ -193,12 +193,9 @@ func (h *Handler) handleDrainAuditExport(w http.ResponseWriter, r *http.Request)
 	}
 	resp, err := h.audit.DrainAuditExportDLX(r.Context(), &auditv1.DrainAuditExportDLXRequest{TenantId: tenantID})
 	if err != nil {
-		if s, ok := status.FromError(err); ok {
-			switch s.Code() {
-			case codes.Unavailable:
-				writeError(w, http.StatusServiceUnavailable, "audit-export DLX probe not wired on the audit service")
-				return
-			}
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
+			writeError(w, http.StatusServiceUnavailable, "audit-export DLX probe not wired on the audit service")
+			return
 		}
 		slog.Error("DrainAuditExportDLX", "err", err, "tenant_id", tenantID)
 		writeError(w, http.StatusInternalServerError, "failed to drain audit-export DLX")
@@ -263,9 +260,3 @@ func toAuditExportResponse(c *auditv1.AuditExportConfig) AuditExportConfigRespon
 	}
 	return out
 }
-
-// errAuditExportUnconfigured is exported in case any test code wants
-// to assert on the "no config" branch — the handler itself returns
-// the empty `{"config": null}` shape rather than an error, but
-// callers downstream may want to detect the boundary.
-var errAuditExportUnconfigured = errors.New("audit export not configured")

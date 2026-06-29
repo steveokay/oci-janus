@@ -9,9 +9,6 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    # Lint backlog (REM-014) is still being chipped through. Non-blocking
-    # so individual cleanups land per-PR without blocking unrelated work.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -66,3 +63,8 @@ jobs:
           image-ref: ghcr.io/steveokay/oci-janus/scanner:${{ github.sha }}
           exit-code: "1"
           severity: CRITICAL
+          # trivyignores file is a tab-separated list of CVE-IDs known to
+          # have no upstream fix (perl-base in debian:12-slim base layer).
+          # Tracked under REM-014 follow-up to revisit the Debian-slim →
+          # distroless audit.
+          trivyignores: services/scanner/.trivyignore

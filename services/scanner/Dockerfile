@@ -45,7 +45,11 @@ WORKDIR /build/infra/scanner-plugins/clair-adapter
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/clair-adapter .
 
 # ── Stage 2: Trivy binary ─────────────────────────────────────────
-FROM aquasec/trivy:0.52.0 AS trivy
+# Pinned to 0.65.0 — bumped from 0.52.0 to pick up newer grpc + docker
+# transitive deps (CVE-2026-33186 grpc < v1.79.3, CVE-2024-41110
+# docker < v27.1.1 — both bundled inside Trivy's own binary). The Trivy
+# DB schema is stable across these versions; no adapter changes needed.
+FROM aquasec/trivy:0.65.0 AS trivy
 
 # ── Stage 2b: Grype binary ────────────────────────────────────────
 # Anchore publishes grype as a single static binary inside the

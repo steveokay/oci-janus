@@ -264,6 +264,13 @@ func policyToProto(p *repository.ScanPolicy) *scannerv1.ScanPolicy {
 // caller — unlike the per-tenant GetScanPolicy which synthesises a
 // default, the org route lets the BFF render an explicit "no org default
 // yet" empty state so the dashboard can distinguish inherited vs absent.
+//
+// + GetComplianceReport is intentional — each scopes by a different ID column
+// and the linter's similarity threshold catches the shared "validate + repo
+// call + map error" frame. Collapsing requires a generic wrapper that defeats
+// the explicit gRPC-error mapping per-scope.
+//
+//nolint:dupl // CRUD-handler symmetry across {Get,Delete}{Org,Repo}ScanPolicy
 func (h *GRPCHandler) GetOrgScanPolicy(ctx context.Context, req *scannerv1.GetOrgScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
@@ -330,6 +337,8 @@ func (h *GRPCHandler) UpsertOrgScanPolicy(ctx context.Context, req *scannerv1.Up
 // DeleteOrgScanPolicy removes the org-default row. NotFound when nothing
 // existed — caller (the BFF) maps that to 404 so the operator gets a
 // clear "nothing to remove" rather than a misleading 200.
+//
+//nolint:dupl // See GetOrgScanPolicy note above — CRUD-handler symmetry.
 func (h *GRPCHandler) DeleteOrgScanPolicy(ctx context.Context, req *scannerv1.DeleteOrgScanPolicyRequest) (*emptypb.Empty, error) {
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
@@ -354,6 +363,8 @@ func (h *GRPCHandler) DeleteOrgScanPolicy(ctx context.Context, req *scannerv1.De
 // GetRepoScanPolicy returns a per-repo override row, NotFound when none.
 // Mirrors the org route — explicit absence so the dashboard can render
 // "inheriting from org" vs "no override yet".
+//
+//nolint:dupl // See GetOrgScanPolicy note above — CRUD-handler symmetry.
 func (h *GRPCHandler) GetRepoScanPolicy(ctx context.Context, req *scannerv1.GetRepoScanPolicyRequest) (*scannerv1.ScanPolicy, error) {
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
@@ -442,6 +453,8 @@ func parseOrgIDOptional(_ string, _ uuid.UUID) (uuid.UUID, error) {
 }
 
 // DeleteRepoScanPolicy removes a per-repo override.
+//
+//nolint:dupl // See GetOrgScanPolicy note above — CRUD-handler symmetry.
 func (h *GRPCHandler) DeleteRepoScanPolicy(ctx context.Context, req *scannerv1.DeleteRepoScanPolicyRequest) (*emptypb.Empty, error) {
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")
@@ -686,6 +699,8 @@ func (h *GRPCHandler) GenerateComplianceReport(ctx context.Context, req *scanner
 }
 
 // GetComplianceReport returns one report row scoped by tenant.
+//
+//nolint:dupl // See GetOrgScanPolicy note above — CRUD-handler symmetry.
 func (h *GRPCHandler) GetComplianceReport(ctx context.Context, req *scannerv1.GetComplianceReportRequest) (*scannerv1.ComplianceReport, error) {
 	if h.repo == nil {
 		return nil, status.Error(codes.FailedPrecondition, "scanner repository not configured")

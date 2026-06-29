@@ -52,6 +52,11 @@ type retentionRule struct {
 // ErrNotFound when the row does not exist. The handler maps ErrNotFound to
 // gRPC NotFound; the management BFF then falls back to the org default
 // (FE-API-039, separate ticket).
+//
+// but reads a different table (repo vs org defaults) and a different scoping
+// column; intentional duplication for type-safe scope handling.
+//
+//nolint:dupl // Structurally similar to GetOrgRetentionPolicy in retention_org.go
 func (r *Repository) GetRepoRetentionPolicy(ctx context.Context, tenantID, repoID string) (*metadatav1.RetentionPolicy, error) {
 	const q = `
 		SELECT repo_id::text,

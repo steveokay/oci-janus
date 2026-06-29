@@ -93,7 +93,10 @@ func (c *Consumer) HandleEvent(ctx context.Context, event events.Event) error {
 	tenantID, err := uuid.Parse(event.TenantID)
 	if err != nil {
 		slog.WarnContext(ctx, "audit: invalid tenant_id in event, skipping", "event_id", event.ID, "type", event.Type)
-		return nil // don't NACK — unparseable tenant is a permanent error
+		// Intentional: return nil (not err) so RabbitMQ ACKs the message and
+		// drops it rather than NACK + requeue, which would loop forever on
+		// a permanent parse error.
+		return nil //nolint:nilerr
 	}
 
 	ae := mapEvent(tenantID, event)

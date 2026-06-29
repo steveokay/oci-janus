@@ -10,10 +10,11 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
-	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 
 // fakeRepo is a test double for auditRepo.

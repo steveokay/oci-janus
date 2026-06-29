@@ -70,16 +70,17 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 // processOne attempts to claim and render exactly one pending report.
-// Returns true if a row was processed (success or failure); false when no
-// pending row was available.
-func (w *Worker) processOne(ctx context.Context) bool {
+// Errors are logged + the row's status updated; no return value because
+// neither caller (Run loop tick + tick-after-poke) acts on success vs
+// no-row-available — both just loop and try again.
+func (w *Worker) processOne(ctx context.Context) {
 	rec, err := w.repo.ClaimPendingReport(ctx)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return false
+			return
 		}
 		slog.Warn("ClaimPendingReport failed", "err", err)
-		return false
+		return
 	}
 
 	if err := w.renderAndPersist(ctx, rec); err != nil {
@@ -89,9 +90,7 @@ func (w *Worker) processOne(ctx context.Context) bool {
 		if failErr := w.repo.FailReport(ctx, rec.ReportID, err.Error()); failErr != nil {
 			slog.Error("FailReport", "report_id", rec.ReportID, "err", failErr)
 		}
-		return true
 	}
-	return true
 }
 
 // renderAndPersist writes PDF + SBOM bytes under OutputDir and marks the

@@ -374,7 +374,10 @@ func TestSSOCallback_RejectsReplayedState(t *testing.T) {
 		t.Fatalf("first callback: want 302, got %d", r1.StatusCode)
 	}
 	// Replay must fail (state is single-use).
-	r2, _ := client.Get(cb)
+	r2, err := client.Get(cb)
+	if err != nil {
+		t.Fatalf("replay GET: %v", err)
+	}
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusBadRequest {
 		t.Errorf("replay: want 400, got %d", r2.StatusCode)
@@ -403,7 +406,10 @@ func TestSSOCallback_RejectsUnverifiedEmail(t *testing.T) {
 	_ = r1.Body.Close()
 
 	cb := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s", srv.URL, providerID, state)
-	resp, _ := client.Get(cb)
+	resp, err := client.Get(cb)
+	if err != nil {
+		t.Fatalf("callback GET: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		body, _ := io.ReadAll(resp.Body)
