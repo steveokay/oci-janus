@@ -398,9 +398,22 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 
 // callerIsTenantAdmin reports whether the user holds an `admin` or `owner` role
 // at any scope within the tenant. Used as the gate for tenant-wide privileged
-// operations (currently: user creation) where there is no narrower target scope
-// to check. Returns false on lookup error — fail-closed.
+// operations (user creation, service account creation, /me/abilities) where
+// there is no narrower target scope to check. Returns false on lookup error —
+// fail-closed.
+//
+// Phase 5.1 tail (2026-06-29): users.is_global_admin is a fast-path. The
+// Phase 5.1 backfill deleted the legacy (admin, org, "*") marker without
+// granting an equivalent (admin, tenant, <id>) row, so a brand-new bootstrap
+// admin (is_global_admin=true, no role assignments) was failing every gate
+// that funnels through this helper — users, service accounts, audit-export
+// abilities and so on. The user lookup is fail-open: if the GetUserByID call
+// errors, we still try the role-assignment path so a transient DB blip
+// doesn't lock everyone out.
 func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID) bool {
+	if user, err := svc.GetUserByID(ctx, userID); err == nil && user != nil && user.IsGlobalAdmin {
+		return true
+	}
 	assignments, err := svc.GetUserRoles(ctx, userID, tenantID)
 	if err != nil {
 		slog.WarnContext(ctx, "callerIsTenantAdmin: GetUserRoles failed", "error", err)
