@@ -573,6 +573,141 @@ func TestGrantRole_non_star_scope_succeeds(t *testing.T) {
 	}
 }
 
+// ── GrantRole: delegator-dominates-delegatee (REDESIGN-001 Phase 5.3) ────────
+//
+// The four tests below match the four canonical cases for the rule:
+//
+//   1. owner-of-org-A grants admin on org-A repos → allowed (rank ok, scope ok)
+//   2. admin-of-org-A grants owner on org-A      → denied (rank promotion)
+//   3. admin-of-org-A grants admin on org-B      → denied (scope mismatch)
+//   4. (the SA-side case lives in service_account_test.go — see
+//      TestServiceAccount_Create_DelegationGuard_*)
+//
+// All three tests seed a real human user in the fake user repo so the handler
+// can resolve granted_by → GetUserByID → GetUserRoles; the seeded user is
+// NOT a global admin so the delegation check is not bypassed.
+
+// TestGrantRole_owner_of_orgA_can_grant_admin_on_orgA_repo verifies the
+// happy path: an org-owner has rank 4, granting "admin" (rank 3) on a repo
+// inside the same org passes both the scope-dominance and rank checks.
+func TestGrantRole_owner_of_orgA_can_grant_admin_on_orgA_repo(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	// Seed the actor as a real user so GetUserByID succeeds (otherwise the
+	// handler falls through to the strict "unknown actor" branch).
+	actorID := registerTestUser(t, tc.svc, tenantID, "owneractor", "Str0ng!Password123")
+	tc.users.seedRole(actorID, tenantID, "owner", "org", "org-a")
+
+	target := uuid.New().String()
+	_, err := h.GrantRole(ctx, &authv1.GrantRoleRequest{
+		TenantId:   tenantID.String(),
+		UserId:     target,
+		Role:       "admin",
+		ScopeType:  "repo",
+		ScopeValue: "org-a/payments", // child of org-a → dominated by the owner assignment
+		GrantedBy:  actorID.String(),
+	})
+	if err != nil {
+		t.Fatalf("GrantRole (owner of org-a granting admin on org-a/payments): unexpected error: %v", err)
+	}
+}
+
+// TestGrantRole_admin_of_orgA_cannot_grant_owner_on_orgA verifies the
+// rank-promotion guard: an admin (rank 3) cannot mint an owner (rank 4) even
+// at the same scope. Expected status code: PermissionDenied.
+func TestGrantRole_admin_of_orgA_cannot_grant_owner_on_orgA(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	actorID := registerTestUser(t, tc.svc, tenantID, "adminactor1", "Str0ng!Password123")
+	tc.users.seedRole(actorID, tenantID, "admin", "org", "org-a")
+
+	target := uuid.New().String()
+	_, err := h.GrantRole(ctx, &authv1.GrantRoleRequest{
+		TenantId:   tenantID.String(),
+		UserId:     target,
+		Role:       "owner", // rank 4 > caller's rank 3 → forbidden
+		ScopeType:  "org",
+		ScopeValue: "org-a",
+		GrantedBy:  actorID.String(),
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for admin→owner promotion, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("code: got %v, want PermissionDenied (admin cannot promote to owner)", st.Code())
+	}
+}
+
+// TestGrantRole_admin_of_orgA_cannot_grant_admin_on_orgB verifies the
+// scope-isolation guard: an admin in org-a cannot grant any role in org-b,
+// even at the same rank, because no assignment of theirs dominates org-b.
+// Expected status code: PermissionDenied.
+func TestGrantRole_admin_of_orgA_cannot_grant_admin_on_orgB(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	actorID := registerTestUser(t, tc.svc, tenantID, "adminactor2", "Str0ng!Password123")
+	tc.users.seedRole(actorID, tenantID, "admin", "org", "org-a")
+
+	target := uuid.New().String()
+	_, err := h.GrantRole(ctx, &authv1.GrantRoleRequest{
+		TenantId:   tenantID.String(),
+		UserId:     target,
+		Role:       "admin",
+		ScopeType:  "org",
+		ScopeValue: "org-b", // different org → no assignment dominates
+		GrantedBy:  actorID.String(),
+	})
+	if err == nil {
+		t.Fatal("expected PermissionDenied for cross-scope grant, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.PermissionDenied {
+		t.Errorf("code: got %v, want PermissionDenied (no assignment dominates org-b)", st.Code())
+	}
+}
+
+// TestGrantRole_globalAdmin_bypasses_delegation_check verifies that a user
+// marked is_global_admin=true can grant any role at any scope without holding
+// an explicit role_assignments row that would otherwise dominate the target.
+// This is the documented escape hatch for platform admins.
+func TestGrantRole_globalAdmin_bypasses_delegation_check(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	actorID := registerTestUser(t, tc.svc, tenantID, "platformroot", "Str0ng!Password123")
+	if err := tc.users.SetGlobalAdmin(ctx, actorID, true); err != nil {
+		t.Fatalf("SetGlobalAdmin: %v", err)
+	}
+	// Deliberately no role assignments — the global-admin flag alone must
+	// be enough to satisfy the delegation guard.
+
+	_, err := h.GrantRole(ctx, &authv1.GrantRoleRequest{
+		TenantId:   tenantID.String(),
+		UserId:     uuid.New().String(),
+		Role:       "owner",
+		ScopeType:  "org",
+		ScopeValue: "any-org",
+		GrantedBy:  actorID.String(),
+	})
+	if err != nil {
+		t.Fatalf("global admin should bypass delegation guard, got: %v", err)
+	}
+}
+
 // TestScopesToProto_withScopes_wrapsAsWildcardAccess verifies that a non-empty
 // scope list is wrapped as a single wildcard RepositoryAccess entry.
 func TestScopesToProto_withScopes_wrapsAsWildcardAccess(t *testing.T) {

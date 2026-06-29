@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
@@ -221,18 +223,24 @@ func newSAService(t *testing.T) (*ServiceAccountService, *saFakes) {
 }
 
 // seedHuman seeds a fresh tenant + human admin user and returns (tenantID, userID).
+//
+// The seeded user is marked IsGlobalAdmin=true so SA-creation tests that
+// don't care about the Phase 5.3 delegation guard can proceed unhindered.
+// Tests that need to exercise the delegation guard with a non-global-admin
+// caller should seed their own user via seedHumanWithRole / seedHumanNonAdmin.
 func (f *saFakes) seedHuman(email string) (uuid.UUID, uuid.UUID) {
 	tenantID := uuid.New()
 	userID := uuid.New()
 	displayName := "Admin User"
 	f.userRepo.users[email] = &repository.User{
-		ID:          userID,
-		TenantID:    tenantID,
-		Username:    email,
-		Email:       email,
-		DisplayName: &displayName,
-		IsActive:    true,
-		Kind:        "human",
+		ID:            userID,
+		TenantID:      tenantID,
+		Username:      email,
+		Email:         email,
+		DisplayName:   &displayName,
+		IsActive:      true,
+		Kind:          "human",
+		IsGlobalAdmin: true,
 	}
 	return tenantID, userID
 }
@@ -356,6 +364,87 @@ func TestServiceAccount_Create_NameSnapshotInAudit(t *testing.T) {
 	require.Equal(t, sa.ID.String(), ev.Fields["service_account_id"])
 	require.Equal(t, "deploy-bot", ev.Fields["name"])
 	require.Equal(t, "CI deploy key", ev.Fields["description"])
+}
+
+// ── Phase 5.3 delegation guard (REDESIGN-001) ────────────────────────────────
+
+// TestServiceAccount_Create_DelegationGuard_ReaderCannotMintWriterScope is the
+// canonical "delegator dominates delegatee" case for CreateServiceAccount: a
+// reader-of-repo-X holds an effective action set of {pull}; requesting an SA
+// with AllowedScopes=["push"] exceeds that grant and must be denied with
+// codes.PermissionDenied. Without the Phase 5.3 guard, a low-privilege user
+// could launder authority through a machine identity.
+func TestServiceAccount_Create_DelegationGuard_ReaderCannotMintWriterScope(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newSAService(t)
+
+	// Seed a non-global-admin reader of a single repo. seedHuman marks the
+	// user IsGlobalAdmin so we cannot reuse it; build the user inline.
+	tenantID := uuid.New()
+	readerID := uuid.New()
+	dn := "Read Only"
+	fakes.userRepo.users["reader@example.com"] = &repository.User{
+		ID:          readerID,
+		TenantID:    tenantID,
+		Username:    "reader@example.com",
+		Email:       "reader@example.com",
+		DisplayName: &dn,
+		IsActive:    true,
+		Kind:        "human",
+		// IsGlobalAdmin deliberately left false so the delegation guard runs.
+	}
+	// Reader on repo-X → effective action set is {pull}.
+	fakes.userRepo.grantRoleInFake(readerID, tenantID, "reader", "repo", "org-a/repo-x")
+
+	_, err := svc.Create(ctx, ServiceAccountInput{
+		TenantID:      tenantID,
+		Name:          "rogue-bot",
+		AllowedScopes: []string{"push"}, // exceeds {pull} → must be denied
+		ActorUserID:   readerID,
+	})
+	require.Error(t, err, "reader must not be able to mint an SA with push scope")
+	require.Equal(t, codes.PermissionDenied, status.Code(err),
+		"delegation guard must surface as codes.PermissionDenied")
+
+	// Defence-in-depth: no SA row should have been created.
+	require.Empty(t, fakes.saRepo.accounts,
+		"failed delegation must not persist a service account")
+	// And no audit event either — the guard runs before audit emission.
+	require.Empty(t, fakes.audit.Events,
+		"failed delegation must not emit an audit event")
+}
+
+// TestServiceAccount_Create_DelegationGuard_AllowsSubsetScopes is the positive
+// counterpart: a reader CAN mint an SA whose AllowedScopes are a subset of
+// their effective grant ({pull} ⊆ {pull}). Asserting the positive path ensures
+// the guard isn't accidentally over-strict.
+func TestServiceAccount_Create_DelegationGuard_AllowsSubsetScopes(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newSAService(t)
+
+	tenantID := uuid.New()
+	readerID := uuid.New()
+	dn := "Read Only Two"
+	fakes.userRepo.users["reader2@example.com"] = &repository.User{
+		ID:          readerID,
+		TenantID:    tenantID,
+		Username:    "reader2@example.com",
+		Email:       "reader2@example.com",
+		DisplayName: &dn,
+		IsActive:    true,
+		Kind:        "human",
+	}
+	fakes.userRepo.grantRoleInFake(readerID, tenantID, "reader", "repo", "org-a/repo-x")
+
+	sa, err := svc.Create(ctx, ServiceAccountInput{
+		TenantID:      tenantID,
+		Name:          "readonly-bot",
+		AllowedScopes: []string{"pull"}, // within the caller's effective grant
+		ActorUserID:   readerID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sa)
+	require.Equal(t, []string{"pull"}, sa.AllowedScopes)
 }
 
 // TestServiceAccount_Disable_SetsRedisRevoke verifies that disabling an SA

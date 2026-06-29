@@ -48,6 +48,10 @@ type fakeUserRepo struct {
 	// returning login without scanning the whole user store. Seeded by
 	// CreateSSOUser and by the bindSSOSubject test helper.
 	bySSOSubject map[ssoKey]*repository.User
+	// roles maps userID → role assignments (REDESIGN-001 Phase 5.3
+	// delegation tests). GetUserRoles returns the slice associated with
+	// (userID, tenantID); tests seed it via grantRoleInFake.
+	roles map[uuid.UUID][]repository.RoleAssignment
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -55,6 +59,7 @@ func newFakeUserRepo() *fakeUserRepo {
 		users:        make(map[string]*repository.User),
 		failedLogins: make(map[uuid.UUID]int),
 		bySSOSubject: make(map[ssoKey]*repository.User),
+		roles:        make(map[uuid.UUID][]repository.RoleAssignment),
 	}
 }
 
@@ -68,6 +73,20 @@ func (f *fakeUserRepo) bindSSOSubject(u *repository.User, providerID, subject st
 	}
 	u.SSOSubject = subject
 	f.bySSOSubject[ssoKey{provider: providerID, subject: subject}] = u
+}
+
+// grantRoleInFake seeds a role assignment directly in the in-memory map so
+// Phase 5.3 delegation tests can exercise non-global-admin callers with a
+// known role posture. Mirrors what a real GrantRole would have persisted.
+func (f *fakeUserRepo) grantRoleInFake(userID, tenantID uuid.UUID, role, scopeType, scopeValue string) {
+	f.roles[userID] = append(f.roles[userID], repository.RoleAssignment{
+		ID:         uuid.New(),
+		TenantID:   tenantID,
+		UserID:     userID,
+		RoleName:   role,
+		ScopeType:  scopeType,
+		ScopeValue: scopeValue,
+	})
 }
 
 // addUser inserts a user into the fake store. The password must already be hashed.
@@ -173,8 +192,16 @@ func (f *fakeUserRepo) UpdatePasswordHash(_ context.Context, id uuid.UUID, newHa
 	return repository.ErrNotFound
 }
 
-func (f *fakeUserRepo) GetUserRoles(_ context.Context, _, _ uuid.UUID) ([]repository.RoleAssignment, error) {
-	return nil, nil
+func (f *fakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
+	// Filter by tenant so cross-tenant role assignments leak through neither
+	// the production path nor the test fake.
+	var out []repository.RoleAssignment
+	for _, a := range f.roles[userID] {
+		if a.TenantID == tenantID {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 func (f *fakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error { return nil }
 func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }

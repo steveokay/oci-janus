@@ -230,6 +230,44 @@ func (h *GRPCHandler) GrantRole(ctx context.Context, req *authv1.GrantRoleReques
 			"scope_value '*' is no longer a valid platform-admin marker; use SetGlobalAdmin instead (REDESIGN-001 Phase 5.1)")
 	}
 
+	// REDESIGN-001 Phase 5.3 — enforce delegator dominates delegatee.
+	// A non-nil granted_by means a human (or service principal) is the actor
+	// behind this grant; we load their role assignments in the tenant and
+	// require at least one assignment whose scope dominates the target AND
+	// whose rank is >= the rank of the role being granted.
+	//
+	// granted_by == uuid.Nil is reserved for system/bootstrap grants (initial
+	// seed, the bootstrap CLI). Those callers bypass the check on purpose —
+	// they predate any role_assignments rows that could authorise them.
+	// Global admins (users.is_global_admin) also bypass: they are the
+	// platform's effective "root" and can grant any role at any scope.
+	if grantedBy != uuid.Nil {
+		actor, gErr := h.svc.GetUserByID(ctx, grantedBy)
+		if gErr != nil && !errors.Is(gErr, repository.ErrNotFound) {
+			return nil, errcodes.MapDBError(gErr, "internal error")
+		}
+		// A global admin short-circuits the delegation check. We still
+		// require the actor row to exist when granted_by is non-nil — an
+		// unknown actor cannot delegate (NotFound from GetUserByID would
+		// have been swallowed above by the errors.Is guard, so on the
+		// ErrNotFound branch `actor` is nil and we fall through to the
+		// dominance check, which will deny).
+		if actor == nil || !actor.IsGlobalAdmin {
+			callerAssignments, aErr := h.svc.GetUserRoles(ctx, grantedBy, tenantID)
+			if aErr != nil {
+				return nil, errcodes.MapDBError(aErr, "internal error")
+			}
+			if dErr := service.VerifyDelegationBound(
+				callerAssignments,
+				req.GetRole(),
+				req.GetScopeType(),
+				req.GetScopeValue(),
+			); dErr != nil {
+				return nil, dErr
+			}
+		}
+	}
+
 	err = h.svc.GrantRole(ctx, repository.RoleAssignment{
 		TenantID:   tenantID,
 		UserID:     userID,
