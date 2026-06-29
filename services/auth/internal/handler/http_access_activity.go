@@ -100,8 +100,10 @@ func (h *HTTPHandler) getAccessActivity(w http.ResponseWriter, r *http.Request) 
 	pageToken := r.URL.Query().Get("page_token")
 
 	// Determine admin status. callerIsTenantAdmin is fail-closed (returns false
-	// on lookup error) which is the correct security posture here.
-	isAdmin := callerIsTenantAdmin(r.Context(), h.svc, callerID, callerTenant)
+	// on lookup error) which is the correct security posture here. SA bearers
+	// (claims.PrincipalKind == "service_account") are also denied admin
+	// authority — only attestable human identities clear the gate.
+	isAdmin := callerIsTenantAdmin(r.Context(), h.svc, callerID, callerTenant, claims.PrincipalKind)
 
 	// Delegate to the service layer. The service enforces the ordering-of-checks
 	// from spec §5.3: (1) resolve target, (2) tenant check, (3) non-admin check.

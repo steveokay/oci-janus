@@ -63,6 +63,10 @@ func (s *adminFakeAuthServer) ValidateToken(_ context.Context, req *authv1.Valid
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: platformAdminUser}, nil
 	case readerToken:
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "reader-user"}, nil
+	case saBearerToken:
+		// Phase 5.4 — SA principal whose shadow user inherits full admin
+		// grants. The deny must fire on principal_kind, not on roles.
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: saAdminUserID}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -79,6 +83,17 @@ func (s *adminFakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.
 			Roles:         []string{"admin"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "r-admin", UserId: platformAdminUser, Role: "admin", ScopeType: "org", ScopeValue: "myorg"},
+			},
+		}, nil
+	case saAdminUserID:
+		// Phase 5.4: SA shadow user that has inherited admin roles from a
+		// human owner. is_global_admin=true so the role-based gate would
+		// pass; the principal-kind deny must fire first.
+		return &authv1.GetUserPermissionsResponse{
+			IsGlobalAdmin: true,
+			Roles:         []string{"admin"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "sa-admin", UserId: saAdminUserID, Role: "admin", ScopeType: "tenant", ScopeValue: testTenantID},
 			},
 		}, nil
 	default:

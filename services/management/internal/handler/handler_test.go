@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -46,6 +47,48 @@ const (
 // handles that token in ValidateToken / GetUserPermissions so the shared
 // newTestEnv path also recognises it for Phase 5.2 tenant-admin gate tests.
 
+// saBearerToken is a JWT-shaped Bearer token used by REDESIGN-001 Phase 5.4
+// tests to drive the principal-kind-based admin gate. RequireAuth decodes
+// the payload segment and treats the caller as a service-account principal,
+// even though GetUserPermissions returns an admin grant. saAdminUserID owns
+// the same RoleAssignment as testUserID so the only thing keeping the gate
+// from passing is the principal-kind deny.
+//
+// The token is built by saBearerJWT() at package init below so the same
+// helper logic stays in one place; both the literal value (for the
+// fakeAuthServer.ValidateToken switch) and the request-time value share
+// the same constant.
+var saBearerToken = saBearerJWT()
+
+// saAdminUserID is the SA shadow user that "owns" admin-equivalent role
+// assignments. Phase 5.4 must deny it because the kind, not the role, is
+// the load-bearing signal at admin gates.
+const saAdminUserID = "00000000-bbbb-bbbb-bbbb-000000000001"
+
+// saBearerJWT builds a 3-segment unsigned JWT-shape with principal_kind set
+// to "service_account". RequireAuth only consumes the payload to extract
+// the claim — the signature segment is irrelevant because the auth service's
+// ValidateToken RPC is the trust anchor for signature verification.
+func saBearerJWT() string {
+	header := base64Url(`{"alg":"RS256","typ":"JWT"}`)
+	// Payload mirrors what auth.IssueToken would emit for an SA-owned token:
+	// principal_kind=="service_account" plus the standard subject + tenant.
+	payload := base64Url(`{"sub":"` + saAdminUserID + `","tenant_id":"` + testTenantID + `","principal_kind":"service_account"}`)
+	sig := base64Url("placeholder-signature")
+	return header + "." + payload + "." + sig
+}
+
+// base64URLEncoding is aliased here so the JWT-shape helper matches
+// the encoding RawURLEncoding chooses without an unused-import lint
+// failure when no other file references it.
+var base64URLEncoding = base64.RawURLEncoding
+
+// base64Url is a tiny helper so the token-construction logic stays out of
+// imports.
+func base64Url(s string) string {
+	return base64URLEncoding.EncodeToString([]byte(s))
+}
+
 // ---------------------------------------------------------------------------
 // Fake gRPC servers
 // ---------------------------------------------------------------------------
@@ -73,6 +116,13 @@ func (s *fakeAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 	// satisfies effectiveTenantAdmin via the legacy platform-admin path.
 	case platformAdminToken:
 		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: "platform-admin-user"}, nil
+	// Phase 5.4 — service-account principal. The token is JWT-shaped so the
+	// management middleware's parsePrincipalKindFromJWT can read the
+	// principal_kind="service_account" claim and tag the request context
+	// accordingly. GetUserPermissions returns admin roles for this user so
+	// the only thing keeping the gate from passing is the kind deny.
+	case saBearerToken:
+		return &authv1.ValidateTokenResponse{Valid: true, TenantId: testTenantID, UserId: saAdminUserID}, nil
 	default:
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
@@ -120,6 +170,20 @@ func (s *fakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.GetUs
 			Roles: []string{"admin"},
 			RoleAssignments: []*authv1.RoleAssignment{
 				{Id: "platform-admin-assign", UserId: "platform-admin-user", Role: "admin", ScopeType: "org", ScopeValue: "*"},
+			},
+		}, nil
+	case saAdminUserID:
+		// Phase 5.4 — SA shadow user that inherits admin-equivalent role
+		// assignments from its human owner. is_global_admin=true so the
+		// platform-admin gate ALSO has reason to pass (apart from the
+		// kind deny). Tenant-admin scope mirrors the human admin path.
+		// The Phase 5.4 deny must fire before either gate logic runs.
+		return &authv1.GetUserPermissionsResponse{
+			IsGlobalAdmin: true,
+			Roles:         []string{"admin"},
+			RoleAssignments: []*authv1.RoleAssignment{
+				{Id: "sa-shadow-assign", UserId: saAdminUserID, Role: "admin", ScopeType: "tenant", ScopeValue: testTenantID},
+				{Id: "sa-shadow-org-assign", UserId: saAdminUserID, Role: "admin", ScopeType: "org", ScopeValue: "*"},
 			},
 		}, nil
 	default:

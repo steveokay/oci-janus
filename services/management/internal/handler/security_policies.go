@@ -102,7 +102,14 @@ var allowedScannerPlugins = map[string]struct{}{
 // Valid callers:
 //   - Platform-admin marker (admin, org, "*")
 //   - Tenant-scoped admin (admin, tenant, <tenant_id>)
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: service-account principals are
+// denied up front. The shadow user behind an SA inherits the human owner's
+// roles, so a naïve assignment lookup would accidentally clear the gate
+// for any API key created by a tenant admin.
 func (h *Handler) requireScanPolicyAdmin(r *http.Request) bool {
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		return false
 	// Phase 5.1 tail (2026-06-29): global admins bypass — see
 	// handler.go:requireDomainAdmin for the full rationale.
 	if h.effectiveGlobalAdmin(r) {

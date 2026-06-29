@@ -90,9 +90,18 @@ type AdminScannerHealthResponse struct {
 //
 // REDESIGN-001 Phase 5.1: delegates to h.effectiveGlobalAdmin which reads
 // users.is_global_admin (typed primitive) instead of (admin, org, '*').
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: deny SA principals before the
+// role lookup. Swapping the active scanner adapter is a platform-wide
+// configuration change; SA bearers must never be able to clear this gate
+// just because their owner happens to be an admin.
 func (h *Handler) requireScannerAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.scanner == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
+		return false
+	}
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	if !h.effectiveGlobalAdmin(r) {

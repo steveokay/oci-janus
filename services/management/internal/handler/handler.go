@@ -1731,7 +1731,14 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 //
 // Moved from workspace_domains.go during REDESIGN-001 RM-001 (custom-domain
 // removal); the gate is still needed by proxy-cache and audit-export handlers.
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: deny SA principals up front. Both
+// proxy-cache config (upstream registry credentials) and audit-export
+// (regulated data egress) are sensitive enough that an API-key bearer must
+// never clear the gate via the shadow user's inherited roles.
 func (h *Handler) requireDomainAdmin(r *http.Request) bool {
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		return false
 	// Phase 5.1 tail (2026-06-29): global admins bypass the role-assignment
 	// check. The Phase 5.1 backfill deleted the legacy (admin, org, "*")
 	// marker without granting an equivalent (admin, tenant, <id>) row, so a

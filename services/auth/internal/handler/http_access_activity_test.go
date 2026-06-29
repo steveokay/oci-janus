@@ -168,7 +168,7 @@ func (e *activityTestEnv) issueActivityToken(t *testing.T, userID, tenantID uuid
 	if markAdmin {
 		roles = []string{"admin"}
 	}
-	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, roles, false)
+	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, roles, false, "human")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestHTTP_Activity_NoService_Returns501(t *testing.T) {
 
 	// Issue a valid token (auth should pass; 501 fires before the service call).
 	userID := uuid.New()
-	tok, err := tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, []string{"reader"}, false)
+	tok, err := tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, []string{"reader"}, false, "human")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

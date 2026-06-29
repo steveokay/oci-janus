@@ -1113,7 +1113,7 @@ func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
 	ctx := context.Background()
 	userID := uuid.New()
 	tenantID := uuid.New()
-	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false)
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false, "human")
 	if err != nil {
 		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
 	}

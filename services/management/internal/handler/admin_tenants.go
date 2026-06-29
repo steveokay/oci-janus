@@ -107,9 +107,19 @@ func tenantToAdminResp(t *tenantv1.Tenant) AdminTenantResponse {
 // REDESIGN-001 Phase 5.1: the platform-admin check now delegates to
 // h.effectiveGlobalAdmin which reads users.is_global_admin (the typed
 // primitive) instead of the (admin, org, '*') legacy marker string.
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: deny service-account principals
+// up front. Their attestable identity is the shadow user, which inherits
+// the human owner's roles — accidentally clearing admin gates an API key
+// should never clear. The check fires before any role lookup so an SA
+// bearer can never reach the underlying authz logic.
 func (h *Handler) requirePlatformAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.tenant == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
+		return false
+	}
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	if !h.effectiveGlobalAdmin(r) {

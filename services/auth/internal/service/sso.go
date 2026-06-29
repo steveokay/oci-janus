@@ -427,7 +427,10 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 // signing logic. The user's is_global_admin flag is included in the JWT
 // (REDESIGN-001 Phase 5.1).
 func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []string) (string, error) {
-	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin)
+	// SSO callbacks always provision human users — service-account principals
+	// are minted server-side and never appear in the SSO flow. user.Kind is
+	// forwarded verbatim so the contract stays correct if that ever changes.
+	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind)
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────

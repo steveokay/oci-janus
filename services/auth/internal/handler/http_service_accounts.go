@@ -138,8 +138,12 @@ func (h *HTTPHandler) requireSAAdmin(w http.ResponseWriter, r *http.Request) (ca
 		return uuid.Nil, uuid.Nil, parseErr
 	}
 
-	// Require admin or owner role in the caller's tenant.
-	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, tenantID) {
+	// Require admin or owner role in the caller's tenant. The
+	// PrincipalKind argument honours Decision #24 — an API-key bearer
+	// (claims.PrincipalKind == "service_account") is denied here
+	// regardless of the owner's roles, so SA principals can never mint
+	// other SA principals.
+	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, tenantID, claims.PrincipalKind) {
 		writeError(w, http.StatusForbidden, "DENIED", "admin role required")
 		return uuid.Nil, uuid.Nil, errors.New("forbidden")
 	}
