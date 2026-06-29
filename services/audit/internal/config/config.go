@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
 // Config holds all runtime configuration for the audit service.
@@ -46,6 +48,16 @@ type Config struct {
 	// `http://<rabbit-host>:15672` (RabbitMQ's default plugin port).
 	// Set to your TLS-terminated mgmt endpoint in production.
 	RabbitMQMgmtURL string `mapstructure:"RABBITMQ_MGMT_URL"`
+
+	// REDESIGN-001 Phase 3.4 — tenant gRPC client for SingleTenantInjector.
+	// In single mode the audit gRPC server pins every inbound RPC to the
+	// bootstrap tenant fetched from registry-tenant's GetDeploymentMetadata
+	// at startup. Required when DEPLOYMENT_MODE=single.
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+
+	// DeploymentMode is the binary's posture, normalised by
+	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
+	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -70,6 +82,12 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper.
+	mode, err := loader.LoadDeploymentMode()
+	if err != nil {
+		return nil, fmt.Errorf("load deployment mode: %w", err)
+	}
+	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
