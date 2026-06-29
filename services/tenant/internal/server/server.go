@@ -3,12 +3,15 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -22,6 +25,7 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/tenant/internal/config"
 	"github.com/steveokay/oci-janus/services/tenant/internal/handler"
@@ -58,7 +62,39 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// CreateTenant.
 	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain, cfg.DeploymentMode)
 
-	grpcOpts, err := buildGRPCOptions(cfg)
+	// REDESIGN-001 Phase 3.4 — in single-tenant mode every inbound RPC is
+	// pinned to the bootstrap tenant. services/tenant is the canonical
+	// source of GetDeploymentMetadata, so it can't self-dial like every
+	// other service does — instead the bootstrap tenant id is read
+	// directly from the repository (same DB it would serve over gRPC).
+	//
+	// Special case: the deployment may legitimately be pre-bootstrap on
+	// first boot (the bootstrap CLI writes `bootstrap_tenant_id` *after*
+	// the tenant service is up). In that window we skip wiring the
+	// injector and log a warning so the operator sees what happened.
+	// Once `make dev-bootstrap` (or the prod equivalent) runs, the next
+	// restart picks it up. Phase 3.2's CreateTenant guard already
+	// prevents a second tenant insertion in single mode, so the gap is
+	// covered by a different invariant in the meantime.
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := readBootstrapTenantID(ctx, repo)
+		switch {
+		case errors.Is(err, repository.ErrNotFound):
+			slog.Warn(
+				"single-mode: bootstrap_tenant_id not yet written — SingleTenantInjector NOT wired this boot; run the bootstrap CLI then restart",
+				"key", tenantbootstrap.DeploymentMetadataKey,
+			)
+		case err != nil:
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		default:
+			singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+			slog.Info("single-mode tenant injector wired (self-read from local repo)",
+				"bootstrap_tenant_id", bootstrapTenantID)
+		}
+	}
+
+	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -131,10 +167,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 }
 
 // buildGRPCOptions returns server options with interceptors and optional mTLS.
-func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+//
+// extraUnary, when non-nil, is chained after libs/middleware/grpc.ServerInterceptors
+// so the SingleTenantInjector (REDESIGN-001 Phase 3.4) runs after auth/tenant
+// extraction but before reaching handlers.
+func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainUnaryInterceptor(chain...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
 	}
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
@@ -147,6 +191,42 @@ func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
 		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
 	}
 	return opts, nil
+}
+
+// readBootstrapTenantID is the services/tenant-specific equivalent of
+// libs/tenant/bootstrap.FetchTenantID, but it reads directly from the
+// local repository rather than dialling the gRPC RPC. services/tenant
+// *is* the source of GetDeploymentMetadata so it cannot self-dial — and
+// even if it could, doing so during Run() would race against its own
+// listener coming up.
+//
+// Behaviour mirrors libs/tenant/bootstrap exactly so the same error
+// shape ("parse <key> JSON", "<key> %q is not a valid UUID") shows up
+// in logs no matter which service did the lookup:
+//   - repo returns ErrNotFound     → propagate (caller treats as warn + skip)
+//   - any other repo error         → wrap with the key name
+//   - JSONB value isn't a JSON str → "parse <key> JSON: ..."
+//   - JSON value isn't a UUID      → "<key> %q is not a valid UUID: ..."
+func readBootstrapTenantID(ctx context.Context, repo *repository.Repository) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, tenantbootstrap.LookupTimeout)
+	defer cancel()
+
+	value, err := repo.GetDeploymentMetadata(callCtx, tenantbootstrap.DeploymentMetadataKey)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", err
+		}
+		return "", fmt.Errorf("GetDeploymentMetadata(%s): %w", tenantbootstrap.DeploymentMetadataKey, err)
+	}
+
+	var idStr string
+	if err := json.Unmarshal(value, &idStr); err != nil {
+		return "", fmt.Errorf("parse %s JSON: %w", tenantbootstrap.DeploymentMetadataKey, err)
+	}
+	if _, err := uuid.Parse(idStr); err != nil {
+		return "", fmt.Errorf("%s %q is not a valid UUID: %w", tenantbootstrap.DeploymentMetadataKey, idStr, err)
+	}
+	return idStr, nil
 }
 
 // runMigrations runs goose SQL migrations against the database.
