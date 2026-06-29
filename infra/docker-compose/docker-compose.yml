@@ -562,6 +562,8 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/webhook.crt
       MTLS_KEY_PATH: /certs/webhook.key
+      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup.
+      TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro
     ports:
@@ -573,6 +575,8 @@ services:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      registry-tenant:
         condition: service_healthy
     networks:
       - registry

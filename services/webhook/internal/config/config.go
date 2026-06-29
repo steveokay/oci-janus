@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
 // Config holds all runtime configuration for the webhook service.
@@ -38,6 +40,13 @@ type Config struct {
 	DeliveryPollIntervalSecs int `mapstructure:"DELIVERY_POLL_INTERVAL_SECS"`
 	// DeliveryTimeoutSecs is the HTTP timeout per delivery attempt.
 	DeliveryTimeoutSecs int `mapstructure:"DELIVERY_TIMEOUT_SECS"`
+
+	// REDESIGN-001 Phase 3.4 — tenant gRPC client for SingleTenantInjector.
+	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
+
+	// DeploymentMode is the binary's posture, normalised by
+	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
+	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -63,6 +72,12 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper.
+	mode, err := loader.LoadDeploymentMode()
+	if err != nil {
+		return nil, fmt.Errorf("load deployment mode: %w", err)
+	}
+	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
