@@ -85,6 +85,7 @@
 | 3.4 #6 | services/webhook SingleTenantInjector wiring + compose env wire-in | #174 | 2026-06-29 |
 | 3.4 #7 | services/scanner SingleTenantInjector wiring + compose env wire-in + **added missing standard interceptor chain** (recovery/OTEL/logging) — pre-existing gap | #175 | 2026-06-29 |
 | 3.4 #8 | services/audit SingleTenantInjector wiring + compose env wire-in | #176 | 2026-06-29 |
+| 3.4 #10 | services/proxy SingleTenantInjector wiring + compose env wire-in + **added missing standard interceptor chain** (recovery/OTEL/logging) — pre-existing gap same as scanner | #178 | 2026-06-29 |
 | 3.4 #9 | services/gc SingleTenantInjector wiring — **reuses the existing TenantGRPCAddr conn** (gc already dialled tenant for ListTenants), so no second TCP stream; compose adds registry-tenant to depends_on chain | #177 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**

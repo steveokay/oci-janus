@@ -20,12 +20,16 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/proxy/internal/config"
 	"github.com/steveokay/oci-janus/services/proxy/internal/handler"
 	"github.com/steveokay/oci-janus/services/proxy/internal/repository"
@@ -128,13 +132,30 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}()
 	}
 
+	// REDESIGN-001 Phase 3.4 — in single-tenant mode every inbound RPC is
+	// pinned to the bootstrap tenant via a server interceptor. The tenant ID
+	// itself is fetched once at startup from registry-tenant's
+	// GetDeploymentMetadata RPC. In multi mode the tenant ID comes from the
+	// gateway/JWT and no interceptor is wired.
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr)
+	}
+
 	// gRPC server — mTLS-aware when certs are configured, plaintext in dev.
 	// Mirrors the auth / signer / metadata pattern. FUT-013 surfaced the
 	// missing TLS wrap here: the management BFF dials with mTLS creds (and
 	// has done since day one), so a plaintext server here would fail every
 	// dial. The pre-FUT-013 stack happened to work only because nothing
 	// dialled the proxy gRPC server externally.
-	grpcOpts, err := buildGRPCServerOptions(cfg)
+	grpcOpts, err := buildGRPCServerOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build grpc opts: %w", err)
 	}
@@ -208,13 +229,32 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 }
 
-// buildGRPCServerOptions wires mTLS server credentials when MTLS_* paths are
-// configured. Mirrors the pattern in services/auth + services/signer.
-// Without this the proxy gRPC server runs plaintext while every other
-// service in the stack runs mTLS — caused FUT-013's "tls: first record does
-// not look like a TLS handshake" smoke-test failure.
-func buildGRPCServerOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
-	var opts []grpc.ServerOption
+// buildGRPCServerOptions wires the standard interceptor chain plus mTLS
+// server credentials when MTLS_* paths are configured. Mirrors the pattern
+// in services/auth + services/signer.
+//
+// REDESIGN-001 Phase 3.4 added two things on top:
+//   - the standard `grpcmw.ServerInterceptors()` chain (recovery / OTEL /
+//     tracing / logging) which proxy was missing entirely — the gRPC
+//     server previously ran with no interceptors at all, same gap closed
+//     for scanner in PR #175.
+//   - extraUnary, when non-nil, is chained after the standard chain so the
+//     SingleTenantInjector runs after auth/tenant extraction but before
+//     reaching handlers.
+//
+// Without the mTLS wrap here the proxy gRPC server runs plaintext while
+// every other service in the stack runs mTLS — caused FUT-013's "tls:
+// first record does not look like a TLS handshake" smoke-test failure.
+func buildGRPCServerOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(chain...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
 		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
 		if err != nil {
@@ -225,6 +265,30 @@ func buildGRPCServerOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
 		slog.Warn("mTLS not configured — gRPC server running without TLS (development mode only)")
 	}
 	return opts, nil
+}
+
+// fetchBootstrapTenantID looks up the bootstrap tenant UUID from
+// registry-tenant's GetDeploymentMetadata RPC (REDESIGN-001 Phase 3.4).
+//
+// This is the single source of truth for "which tenant is this single-mode
+// binary wired to" — the value is read once at boot, then handed to
+// SingleTenantInjector for every inbound RPC. Errors fail the boot loudly
+// because a misconfigured tenant address would otherwise route every proxy
+// pull through the wrong tenant.
+func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.TenantGRPCAddr == "" {
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+	}
+	tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+	if err != nil {
+		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
+	}
+	tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
+	if err != nil {
+		return "", fmt.Errorf("dial tenant gRPC: %w", err)
+	}
+	defer func() { _ = tenantConn.Close() }()
+	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
 
 // clientCreds returns mTLS transport credentials when cert paths are set,
