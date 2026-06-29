@@ -21,7 +21,6 @@ import (
 	"github.com/pressly/goose/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -48,14 +47,29 @@ import (
 // Run initialises all dependencies, starts the GC cron loop, and serves
 // gRPC + health + metrics endpoints.
 func Run(ctx context.Context, cfg *config.Config) error {
-	creds := clientCreds(cfg)
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, creds)
+	// SEC-038 — Per-target mTLS dial options with the remote service's
+	// SAN/CN pinned in serverName, plus fail-closed on TLS load error.
+	// The legacy `clientCreds(cfg)` helper passed an empty serverName
+	// for every dial (no CN/SAN pin → MITM/impersonation could pin gc
+	// to any tenant for the process lifetime) and silently fell back
+	// to plaintext on cert-load failure. Every other Phase 3.4 service
+	// builds its dial creds via libs/auth/mtls.ClientCreds with the
+	// remote name passed in; gc now matches.
+	metaCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-metadata")
+	if err != nil {
+		return fmt.Errorf("build metadata gRPC creds: %w", err)
+	}
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(metaCreds))
 	if err != nil {
 		return fmt.Errorf("dial metadata: %w", err)
 	}
 	defer metaConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, creds)
+	storageCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-storage")
+	if err != nil {
+		return fmt.Errorf("build storage gRPC creds: %w", err)
+	}
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpc.WithTransportCredentials(storageCreds))
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -72,7 +86,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		bootstrapTenantID string
 	)
 	if cfg.TenantGRPCAddr != "" {
-		tenantConn, err = grpc.NewClient(cfg.TenantGRPCAddr, creds)
+		tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+		if err != nil {
+			return fmt.Errorf("build tenant gRPC creds: %w", err)
+		}
+		tenantConn, err = grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
 		if err != nil {
 			return fmt.Errorf("dial tenant: %w", err)
 		}
@@ -308,21 +326,6 @@ func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor
 		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
 	}
 	return opts, nil
-}
-
-// clientCreds returns a dial option with mTLS when cert paths are configured,
-// falling back to insecure with a warning for development without certs.
-func clientCreds(cfg *config.Config) grpc.DialOption {
-	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
-		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
-		if err != nil {
-			slog.Warn("mTLS client config failed, falling back to insecure", "error", err)
-			return grpc.WithTransportCredentials(insecure.NewCredentials())
-		}
-		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	}
-	slog.Warn("mTLS not configured — gRPC client using insecure (development mode only)")
-	return grpc.WithTransportCredentials(insecure.NewCredentials())
 }
 
 // runLoop is the legacy non-persisted cron loop kept for deployments
