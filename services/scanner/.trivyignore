@@ -1,0 +1,14 @@
+# Scanner image .trivyignore — explicit CVE allowlist with rationale.
+#
+# Format: CVE-XXXX-NNNNN<TAB># reason
+#
+# Listed CVEs come from the debian:12-slim base layer (perl-base) and have
+# no upstream fix available (fix_deferred per the Debian security tracker).
+# The scanner binary itself does not invoke perl; the package is a transitive
+# Debian dep brought in by `coreutils`. Removing perl-base would require
+# rebuilding on a leaner base image — tracked separately under REM-014
+# follow-up (Debian-slim → distroless audit). Until then, ignore the
+# specific CVEs so trivy still gates against new findings.
+
+CVE-2026-42496
+CVE-2026-8376
