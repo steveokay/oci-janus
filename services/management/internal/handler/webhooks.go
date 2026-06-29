@@ -86,7 +86,15 @@ type updateWebhookBody struct {
 // Valid callers:
 //   - Platform-admin marker (admin, org, "*")
 //   - Tenant-scoped admin (admin, tenant, <tenant_id>)
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: service-account principals are
+// denied. A webhook delivery URL is an exfiltration channel — letting an
+// API key configure one because its owner happens to be a tenant admin
+// would be a credential-grade privilege escalation.
 func (h *Handler) requireWebhookAdmin(r *http.Request) bool {
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		return false
+	}
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }

@@ -93,9 +93,18 @@ type gcRunNowBody struct {
 // and (b) the caller holding the platform-admin authority. The platform-admin
 // check delegates to h.effectiveGlobalAdmin (REDESIGN-001 Phase 5.1) which
 // reads users.is_global_admin instead of the legacy (admin, org, '*') marker.
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: service-account principals are
+// denied. Triggering GC destroys blobs, so the gate must refuse any
+// non-human bearer — the shadow user's inherited roles are not an
+// attestable signal that the SA itself should be allowed to delete data.
 func (h *Handler) requireGCAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if h.gc == nil {
 		writeError(w, http.StatusNotFound, "route disabled")
+		return false
+	}
+	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return false
 	}
 	if !h.effectiveGlobalAdmin(r) {

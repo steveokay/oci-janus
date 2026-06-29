@@ -59,6 +59,15 @@ type Claims struct {
 	// this field decode as false, which is safe — they trigger a re-validation
 	// on the next request so the flag is refreshed promptly.
 	IsGlobalAdmin bool `json:"is_global_admin,omitempty"`
+	// PrincipalKind mirrors users.kind ("human" or "service_account") for the
+	// authenticated subject. Set at JWT issuance time and by the API-key
+	// Bearer dispatch (FUT-006). Empty on legacy tokens issued before
+	// REDESIGN-001 Phase 5.4 — admin gates treat empty as "human" for
+	// backward compatibility (legacy logins did not embed the field). The
+	// claim's authenticity is enforced by the same RS256 signature that
+	// guards every other field, so downstream gates may trust it after a
+	// successful ValidateToken.
+	PrincipalKind string `json:"principal_kind,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -163,7 +172,15 @@ func New(
 // names held by the user in the tenant; it is embedded in the JWT so downstream
 // services (and the frontend) can read user roles without an extra RPC.
 // isGlobalAdmin mirrors users.is_global_admin (REDESIGN-001 Phase 5.1).
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool) (string, error) {
+// principalKind mirrors users.kind ("human" or "service_account") and is
+// embedded so downstream services can deny SA principals at admin gates
+// without a separate lookup (REDESIGN-001 Phase 5.4). Empty principalKind
+// is encoded as "human" so legacy callers and tests keep their default
+// behaviour without coordinated update.
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string) (string, error) {
+	if principalKind == "" {
+		principalKind = "human"
+	}
 	now := time.Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -178,6 +195,7 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		Access:        access,
 		Roles:         roles,
 		IsGlobalAdmin: isGlobalAdmin,
+		PrincipalKind: principalKind,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = s.keyID
@@ -288,7 +306,9 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	// may have changed between issue and refresh, but the TTL is 300s so the
 	// staleness window is the same as for Roles. A flag revocation takes effect
 	// on the next login, like role removals.
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin)
+	// PrincipalKind is carried forward — refresh must not mint a new kind. A
+	// service-account JWT refreshes to another service-account JWT.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -327,7 +347,10 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// user.IsGlobalAdmin comes from the scanned users.is_global_admin column
 	// (migration 20260629000001). It is always fresh from the DB on the login
 	// path so no separate lookup is needed.
-	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin)
+	// user.Kind is forwarded as the JWT principal_kind claim — Login is the
+	// human credential path (password), so in practice this is always
+	// "human", but we forward the actual column to keep the contract tight.
+	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind)
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in

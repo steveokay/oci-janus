@@ -209,7 +209,7 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	scopes := r.URL.Query()["scope"]
 	access := parseScopes(scopes)
 
-	var userID, userTenantID string
+	var userID, userTenantID, principalKind string
 
 	// If username is a valid UUID, treat it as an API key ID.
 	if keyID, parseErr := uuid.Parse(username); parseErr == nil {
@@ -228,6 +228,10 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 		}
 		userID = vk.UserID.String()
 		userTenantID = vk.TenantID.String()
+		// vk.PrincipalKind ("human" or "service_account") flows into the issued
+		// JWT so downstream services can deny SA principals at admin gates
+		// without re-querying the user record (REDESIGN-001 Phase 5.4).
+		principalKind = vk.PrincipalKind
 	} else {
 		user, err := h.svc.AuthenticateUser(r.Context(), tenantID, username, password)
 		if err != nil {
@@ -242,6 +246,7 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 		}
 		userID = user.ID.String()
 		userTenantID = user.TenantID.String()
+		principalKind = user.Kind
 	}
 
 	// Docker /auth/token issues per-action OCI tokens; roles claim is omitted
@@ -249,7 +254,7 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/login path goes through Service.Login() which embeds roles.
 	// is_global_admin is also false here — OCI clients don't need platform-admin
 	// context; they only need the scoped access list.
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false)
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
@@ -334,7 +339,7 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	// gate ("are you any kind of admin here?") — once the user exists, granting
 	// scoped roles is itself scope-gated (PENTEST-002), preventing an admin of
 	// org-A from elevating the new user to admin of org-B.
-	if !callerIsTenantAdmin(r.Context(), h.svc, callerUserID, tenantID) {
+	if !callerIsTenantAdmin(r.Context(), h.svc, callerUserID, tenantID, caller.PrincipalKind) {
 		writeError(w, http.StatusForbidden, "DENIED", "admin role required to create users")
 		return
 	}
@@ -400,7 +405,23 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 // at any scope within the tenant. Used as the gate for tenant-wide privileged
 // operations (currently: user creation) where there is no narrower target scope
 // to check. Returns false on lookup error — fail-closed.
-func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID) bool {
+//
+// REDESIGN-001 Phase 5.4 / Decision #24: service-account principals are denied
+// at every admin gate regardless of the role assignments on their shadow user.
+// The shadow user inherits the human owner's roles, so a naïve role lookup
+// against claims.Subject would let an API key clear admin gates that the
+// service account itself should not be able to clear. Callers must supply the
+// authenticated principal kind (claims.PrincipalKind) so this gate can refuse
+// SA bearers up front.
+func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID, principalKind string) bool {
+	// REDESIGN-001 Phase 5.4: deny SA principals before any role lookup.
+	// The shadow user's roles are not an attestable signal for admin
+	// authority because they were granted to the human owner, not minted
+	// for the SA. Honors Decision #24's promise that raw API keys cannot
+	// clear role-gated handlers.
+	if principalKind == "service_account" {
+		return false
+	}
 	assignments, err := svc.GetUserRoles(ctx, userID, tenantID)
 	if err != nil {
 		slog.WarnContext(ctx, "callerIsTenantAdmin: GetUserRoles failed", "error", err)
@@ -656,7 +677,7 @@ func (h *HTTPHandler) createSAAPIKey(w http.ResponseWriter, r *http.Request, req
 	}
 
 	// 3. Require the caller to be a tenant admin (admin or owner role).
-	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, callerTenant) {
+	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, callerTenant, claims.PrincipalKind) {
 		writeError(w, http.StatusForbidden, "DENIED", "admin role required")
 		return
 	}
@@ -862,6 +883,11 @@ func synthClaimsFromAPIKey(vk *service.ValidatedKey) *service.Claims {
 		},
 		TenantID: vk.TenantID.String(),
 		Access:   vk.Access,
+		// PrincipalKind is propagated so admin gates (callerIsTenantAdmin and
+		// the management require*Admin helpers) can deny service-account
+		// principals regardless of the owner's role assignments
+		// (REDESIGN-001 Phase 5.4, Decision #24).
+		PrincipalKind: vk.PrincipalKind,
 	}
 }
 
