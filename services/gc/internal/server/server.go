@@ -55,7 +55,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// to plaintext on cert-load failure. Every other Phase 3.4 service
 	// builds its dial creds via libs/auth/mtls.ClientCreds with the
 	// remote name passed in; gc now matches.
-	metaCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-metadata")
+	metaCreds, err := cfg.MTLSClientCreds("registry-metadata")
 	if err != nil {
 		return fmt.Errorf("build metadata gRPC creds: %w", err)
 	}
@@ -65,7 +65,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer metaConn.Close()
 
-	storageCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-storage")
+	storageCreds, err := cfg.MTLSClientCreds("registry-storage")
 	if err != nil {
 		return fmt.Errorf("build storage gRPC creds: %w", err)
 	}
@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		bootstrapTenantID string
 	)
 	if cfg.TenantGRPCAddr != "" {
-		tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+		tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 		if err != nil {
 			return fmt.Errorf("build tenant gRPC creds: %w", err)
 		}
