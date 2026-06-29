@@ -57,8 +57,9 @@
 | 3.4 #2 | services/metadata injector wiring | ✅ DONE | #164 | 2026-06-29 |
 | 3.4 libs | `libs/tenant/bootstrap` + `mtls.ClientCreds` extraction (rule-of-three) | ✅ DONE | #167 | 2026-06-29 |
 | 3.4 #3 | services/core injector wiring (1st libs consumer) | 🟡 IN REVIEW | #170 | — |
-| 3.4 #4 | services/storage injector wiring | 🟡 IN REVIEW | #171 | — |
-| 3.4 #5–11 | scanner / signer / webhook / audit / gc / proxy / tenant | ⬜ OPEN | — | — |
+| 3.4 #4 | services/storage injector wiring | ✅ DONE | #171 | 2026-06-29 |
+| 3.4 #5 | services/signer injector wiring | 🟡 IN REVIEW | #173 | — |
+| 3.4 #6–11 | scanner / webhook / audit / gc / proxy / tenant | ⬜ OPEN | — | — |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
