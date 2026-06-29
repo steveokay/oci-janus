@@ -243,6 +243,63 @@ services:
 
   # ── Application services ──────────────────────────────────────────────────
 
+  # RED-FU-007 - One-shot bootstrap container that seeds the deployment
+  # so Phase 3.4 services can start in single mode.
+  #
+  # The production runbook seeds the same rows via the `registry-auth bootstrap`
+  # CLI (services/auth/internal/bootstrap), which also creates the first admin
+  # user (argon2 hash in the auth DB). For the compose dev stack + CI
+  # conformance run we only need the *tenant-side* rows so that every
+  # Phase 3.4 service's startup tenant.GetDeploymentMetadata(bootstrap_tenant_id)
+  # lookup succeeds:
+  #
+  #   1. tenants row exists (so /api/v1/users tenant_id=... resolves)
+  #   2. tenant_policies row exists (FK + scan-on-push default)
+  #   3. deployment_metadata.bootstrap_tenant_id is set (Phase 3.4 lookup key)
+  #
+  # An alpine + psql one-shot is the smallest fix; using the real bootstrap
+  # CLI here would require either (a) a sidecar built from the auth image
+  # that waits for auth migrations to complete before seeding admin creds, or
+  # (b) a cross-module Go import to pull tenant migrations into the auth
+  # binary so it can run them itself. Both are larger architectural changes
+  # than this PR's scope. `make dev-bootstrap` still works post-stack-up for
+  # operators who want the dev admin user.
+  registry-bootstrap:
+    image: postgres:16-alpine
+    environment:
+      DSN: postgres://registry:${POSTGRES_PASSWORD:-registry}@postgres:5432/registry_tenant?sslmode=disable
+      BOOTSTRAP_TENANT_ID: "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
+      BOOTSTRAP_TENANT_NAME: "Development"
+    command:
+      - sh
+      - -ec
+      - |
+        until psql "$$DSN" -tc "SELECT 1 FROM information_schema.tables WHERE table_name='deployment_metadata'" 2>/dev/null | grep -q 1; do
+          echo "waiting for tenant migrations (deployment_metadata table)..."
+          sleep 1
+        done
+        echo "seeding bootstrap_tenant_id=$$BOOTSTRAP_TENANT_ID..."
+        psql "$$DSN" -v ON_ERROR_STOP=1 <<SQL
+          INSERT INTO tenants (id, name)
+            VALUES ('$$BOOTSTRAP_TENANT_ID', '$$BOOTSTRAP_TENANT_NAME')
+            ON CONFLICT (id) DO NOTHING;
+          INSERT INTO tenant_policies (tenant_id)
+            VALUES ('$$BOOTSTRAP_TENANT_ID')
+            ON CONFLICT (tenant_id) DO NOTHING;
+          INSERT INTO deployment_metadata (key, value)
+            VALUES ('bootstrap_tenant_id', to_jsonb('$$BOOTSTRAP_TENANT_ID'::text))
+            ON CONFLICT (key) DO NOTHING;
+        SQL
+        echo "RED-FU-007 bootstrap complete - Phase 3.4 services may now start."
+    depends_on:
+      postgres:
+        condition: service_healthy
+      registry-tenant:
+        condition: service_healthy
+    networks:
+      - registry
+    restart: "no"
+
   registry-gateway:
     build:
       context: ../../
@@ -319,6 +376,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -358,6 +420,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -396,6 +463,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -455,6 +527,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       redis:
@@ -507,6 +584,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -547,6 +629,11 @@ services:
         condition: service_completed_successfully
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -585,6 +672,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -633,6 +725,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -687,6 +784,11 @@ services:
       # which means registry-tenant must be Serving before gc dials.
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
@@ -976,6 +1078,11 @@ services:
         condition: service_healthy
       registry-tenant:
         condition: service_healthy
+      # RED-FU-007 - wait for the one-shot bootstrap container that
+      # seeds deployment_metadata.bootstrap_tenant_id; without this the
+      # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
+      registry-bootstrap:
+        condition: service_completed_successfully
     networks:
       - registry
     healthcheck:
