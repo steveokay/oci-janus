@@ -81,6 +81,7 @@
 | 3.4 libs | `libs/tenant/bootstrap.FetchTenantID` + `libs/auth/mtls.ClientCreds` extraction (rule-of-three lift before service rollout fans out); services/auth + services/metadata refactored to consume | #167 | 2026-06-29 |
 | REM-020 #10 a | scanner trivy 0.52.0→0.71.2 bump + .trivyignore for perl-base/zlib1g/grpc CVEs | #168 + #169 | 2026-06-29 |
 | REM-020 #10 b | scanner trivy-action skip-files on bundled trivy/grype + ignore-unfixed (kill whack-a-mole on upstream-binary CVEs) | #169 | 2026-06-29 |
+| 3.4 #5 | services/signer SingleTenantInjector wiring + compose env wire-in | #173 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
