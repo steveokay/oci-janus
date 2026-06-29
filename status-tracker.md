@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158). 38 PRs through 2026-06-29, ~87% complete. Phase 3.4 per-service injector adoption now in pilot (services/management first).
+**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158) + **Phase 3.4 ✅ COMPLETE — all 11 backend services with a gRPC server wire `libs/middleware/grpc.SingleTenantInjector` in single mode (#162, #164, #170, #171, #173–#179)**. 47 PRs through 2026-06-29, ~93% complete. Remaining: Phase 5/6/7 hardening + RED-FU-007 conformance compose-stack bootstrap follow-up.
 
 **Phases shipped so far:**
 
@@ -291,6 +291,7 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 
 | ID | Severity | Title | Status | Notes |
 |---|---|---|---|---|
+| **SEC-038** | MEDIUM | gc client mTLS misses server-name pin and fails open on TLS load error | OPEN | `services/gc/internal/server/server.go:315-326` — `clientCreds` calls `mtls.ClientTLSConfig(..., "")` (empty serverName, no CN/SAN pin to `registry-tenant`) and falls back to `insecure.NewCredentials()` on cert-load failure. Every other Phase 3.4 PR uses `mtls.ClientCreds(..., "registry-tenant")` + returns the error. MITM/impersonation of `registry-tenant`'s gRPC port can pin gc to an attacker-chosen tenant for the process lifetime. Surfaced by security-agent batch on the Phase 3.4 rollout review (2026-06-29). Fix before any non-local single-mode deploy. |
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
 

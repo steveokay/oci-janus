@@ -1084,6 +1084,40 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/scanner/Dockerfile`,
   `services/scanner/.trivyignore` (slim down once the base is leaner).
 
+### RED-FU-010 — scanner / core Docker build go.sum drift after #167 libs lift
+- **Why:** `CI — scanner Docker build` has been red on every push since
+  #163 (and `CI — core` likely shares the same shape). Failure:
+  `missing go.sum entry for ... libs/middleware/grpc` for `go-redis/v9`
+  and `otelgrpc` when the Dockerfile builds with `GOWORK=off`. Local
+  `go vet`/`go build`/`go test -short` are all clean because the
+  workspace pulls in the `libs/` module's go.sum directly — the drift
+  only bites the Docker stage. Fallout from the #167 middleware
+  extraction that pulled new transitive deps into `libs/middleware/grpc`.
+  Surfaced by qa-agent batch on 2026-06-29 (Phase 3.4 close-out review).
+- **Scope:** per-service `go mod tidy` sweep in services/scanner +
+  services/core covering the new libs/middleware/grpc transitive deps,
+  verify Docker build succeeds, sweep any other services if needed.
+  Half-day with the ci-tidy-check matrix workflow to catch future
+  drift.
+- **Affects:** `services/scanner/go.mod`, `services/scanner/go.sum`,
+  `services/core/go.mod`, `services/core/go.sum`, possibly others
+  flagged by `ci-tidy-check.yml`.
+
+### RED-FU-011 — Phase 3.4 helper unit-test coverage
+- **Why:** The 9 Phase 3.4 rollout PRs added a `fetchBootstrapTenantID`
+  helper to 7 services + a `readBootstrapTenantID` self-read variant
+  to services/tenant + reused-conn variant in services/gc, plus the
+  new `buildGRPCOptions(cfg, extraUnary)` chain — and zero unit tests.
+  `libs/tenant/bootstrap.FetchTenantID` already has bufconn coverage
+  from #167 so the RPC path itself is tested, but the per-service
+  wrappers + the interceptor-chain ordering aren't. Surfaced by
+  qa-agent batch on 2026-06-29.
+- **Scope:** P2 coverage backlog. Add 2 tests per service: (a) single
+  mode with bootstrap_tenant_id set wires injector; (b) multi mode
+  leaves chain unchanged. tenant gets a third for the pre-bootstrap
+  skip-with-warn branch. Half-day.
+- **Affects:** `services/{auth,metadata,core,storage,signer,webhook,scanner,audit,gc,proxy,tenant}/internal/server/server_test.go`.
+
 ### RED-FU-005 — Phase 7.1 CLAUDE.md / docs/SERVICES.md rewrite
 - **Why:** REDESIGN-001 Phase 7.1 is the catch-all "make CLAUDE.md and
   docs/SERVICES.md match the new reality." Once enough phases ship, the
