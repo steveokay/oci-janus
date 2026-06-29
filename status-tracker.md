@@ -189,6 +189,72 @@ layout; distroless scratch-dir / tmpdir perms).
 active adapter to the dev stub. REM-011 P2's in-memory swap means
 no container restart is needed.
 
+---
+
+### REM-020 — CI pipeline reshape (rethink + rework)
+
+**Surfaced:** 2026-06-29 during PR #160. The proto-touching PR
+unmasked multiple latent CI pathologies in a single afternoon — none
+are new, all are pre-existing rot — making it clear the pipeline
+needs a deliberate reshape, not just per-incident patches.
+
+**Why now:** REM-014 (lint backlog), REM-015 (auth lint-queries),
+REM-016 (Go stdlib CVEs) and the PR #156-#158 BE CI infrastructure
+reset already filed individual failures. REM-020 is the umbrella that
+turns "patch each fire as it surfaces" into "reshape the pipeline so
+the fires stop starting." Without it the next proto-touching PR
+re-discovers the same potholes.
+
+**Pain points surfaced this session:**
+
+| # | What's broken | Evidence | Impact |
+|---|---|---|---|
+| 1 | `ci-proto.yml` breaking-check used `cd proto && buf breaking --against '.git#branch=main'` — looked for `.git` inside `proto/` (doesn't exist) | PR #160 round 1 — fixed in commit `dc9cb8c` / `4612578` | Every proto PR for months silently failed this check; nobody noticed because it's been red on every PR |
+| 2 | `actions/checkout` default shallow clone doesn't fetch main, so `branch=main` fails even after fix #1 | PR #160 round 2 — required `fetch-depth: 0` + `branch=origin/main` | Hidden dependency on checkout config; every CI tool that compares against main needs this |
+| 3 | Per-service `go.sum` rot — Docker build fails with `missing go.sum entry for pgxpool` whenever `libs/config/loader` indirect deps change | PR #160 needed tidies in `services/tenant` AND `services/core`; memory note `current_sprint_status.md` flagged 2 services pre-existing | Every proto-touching PR re-discovers this. Workspace mode (`go.work`) hides it locally; Dockerfile's `GOWORK=off` exposes it |
+| 4 | `ci-core.yml` path-filtered on `proto/**` so a tenant-only RPC addition triggers the full core pipeline (build, conformance) | PR #160 — core ran even though no core code changed | Wasted runner minutes; obscures which service's CI is "actually" testing the change; means proto PRs hit 2× the failure surface |
+| 5 | `continue-on-error: true` sprawl — `lint` (REM-014), `security` (REM-016), at one point `breaking` was silently broken too. Red marks in `gh pr checks` no longer mean "merge blocker" | Every PR has 1-3 red marks that have to be triaged "is this a real blocker?" | Erodes signal-to-noise; new contributors can't tell if their PR is broken without reading workflow YAML |
+| 6 | 13 nearly-identical `ci-<svc>.yml` files. Drift between them is invisible until something breaks (PR #156 fixed golangci-lint version mismatch across all 13) | 13 × ~100 LOC YAML files, one per service | Drift bombs. DRY violation. Easy to fix one but miss the same fix in 12 others |
+| 7 | No Docker BuildKit cache mount on `go build`. Every CI build re-downloads every dep. ~5min per build job | Observed in PR #160 build logs — `go: downloading github.com/...` for ~150 deps every run | ~1h/day of runner time per active branch |
+| 8 | No `setup-go` cache, no go-mod cache shared across jobs in the same workflow | Same downloads in lint job → test job → build job | Adds ~30-60s per stage |
+| 9 | No central "pipeline health" view. Hard to know if main is currently green across all 13 services. Each PR resurfaces failures that exist on main too | Discovered REM-015 and REM-016 only after they leaked into PR #155's red-CI merge | Failures persist until a PR makes them visible |
+
+**Proposed reshape (sketch — confirm before execution):**
+
+1. **DRY the 13 `ci-<svc>.yml` files** into one reusable workflow
+   (`.github/workflows/_be-service-ci.yml`) consumed by 13 thin
+   per-service callers that pass `service: <name>`. One place to
+   change the toolchain, the lint config, the cache strategy.
+2. **Fix the build caching** — `actions/setup-go` with `cache:
+   true`, BuildKit cache-mount on `RUN go build`, hash-keyed on
+   `go.sum`. Expected: ~5min build → ~30s on cached PRs.
+3. **Standardise checkout** — `fetch-depth: 0` everywhere a tool
+   compares against `main`. Add a workflow lint that fails CI if a
+   workflow references `branch=main` without `fetch-depth: 0`.
+4. **Kill the path-filter cross-trigger** — narrow `ci-core.yml`'s
+   `proto/**` filter to only the proto subtrees core actually
+   consumes (e.g. `proto/storage/**`, `proto/metadata/**`).
+   Tenant-only proto changes shouldn't run core CI.
+5. **Per-service `go mod tidy` sweep** — one-shot PR that runs
+   tidy on all 13 services + libs to close the pre-existing rot.
+   Then add a `tidy-check` job (`go mod tidy && git diff --exit-code`)
+   so future PRs can't merge with stale go.sum.
+6. **Sunset `continue-on-error: true` once REM-014/015/016 close** —
+   per-service cleanup PRs are already designed to drop these
+   flags; REM-020 just tracks the campaign.
+7. **`main` health board** — a single workflow that runs
+   `gh run list --branch main --workflow ci-*.yml` nightly +
+   pings if any are red. Catches drift before it leaks into a PR.
+
+**Status:** OPEN — sketch above. Each numbered item ships as its
+own PR; REM-020 stays open until they all close. No immediate
+priority over the in-flight REDESIGN-001 work, but **interleaved**
+— each REDESIGN-001 PR that runs into a CI pothole files a fix
+inline and ticks the relevant REM-020 sub-item.
+
+**Owner:** TBD. PR #160 already shipped fixes for sub-items #1, #2,
+and partial #5 (tenant + core tidies).
+
 ## Open security items
 
 The full audit log lives in [`security.md`](security.md). Only items that remain OPEN are tracked here for ongoing attention.
