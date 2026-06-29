@@ -298,6 +298,11 @@ services:
       # material configured above. Optional — without this var the route
       # returns 501 NOT_IMPLEMENTED and the FE activity tab renders empty.
       AUDIT_GRPC_ADDR: registry-audit:50051
+      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup.
+      # Auth dials services/tenant at startup to fetch the deployment's
+      # bootstrap_tenant_id and wire libs/middleware/grpc.SingleTenantInjector.
+      # Without this, auth fails closed at startup in single mode.
+      TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro
     ports:
@@ -311,6 +316,8 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      registry-tenant:
         condition: service_healthy
     networks:
       - registry
@@ -368,6 +375,9 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/metadata.crt
       MTLS_KEY_PATH: /certs/metadata.key
+      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup
+      # (parallel to registry-auth above).
+      TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro
     ports:
@@ -379,6 +389,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      registry-tenant:
         condition: service_healthy
     networks:
       - registry
@@ -418,6 +430,9 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/core.crt
       MTLS_KEY_PATH: /certs/core.key
+      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup
+      # (parallel to registry-auth + registry-metadata above).
+      TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro
     ports:
@@ -433,6 +448,8 @@ services:
       registry-storage:
         condition: service_healthy
       registry-signer:
+        condition: service_healthy
+      registry-tenant:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
