@@ -675,6 +675,11 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # REDESIGN-001 Phase 3.4 — gc reuses its existing tenant gRPC
+      # connection for the bootstrap-tenant-id lookup in single mode,
+      # which means registry-tenant must be Serving before gc dials.
+      registry-tenant:
+        condition: service_healthy
     networks:
       - registry
     healthcheck:

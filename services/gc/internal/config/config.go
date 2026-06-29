@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
 // Config holds all runtime configuration for the GC service.
@@ -80,6 +82,14 @@ type Config struct {
 	// spot between "operator sees the grace window count down clearly" and
 	// "we're not putting unbounded pressure on the manifests scan".
 	RetentionGraceIntervalHours int `mapstructure:"RETENTION_GRACE_INTERVAL_HOURS"`
+
+	// DeploymentMode is the binary's posture, normalised by
+	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
+	// REDESIGN-001 Phase 3.4: in single mode the gRPC server pins every
+	// inbound RPC to the bootstrap tenant fetched from
+	// registry-tenant's GetDeploymentMetadata at startup (reusing the
+	// existing TenantGRPCAddr connection, which becomes mandatory).
+	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -110,6 +120,12 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper.
+	mode, err := loader.LoadDeploymentMode()
+	if err != nil {
+		return nil, fmt.Errorf("load deployment mode: %w", err)
+	}
+	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
