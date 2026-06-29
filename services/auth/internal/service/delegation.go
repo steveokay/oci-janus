@@ -57,14 +57,30 @@ func roleRank(role string) int {
 //
 //   - Same (type, value) pair dominates itself.
 //
+//   - A tenant-level assignment dominates any org and any repo within the
+//     same tenant. All RBAC queries are already tenant-bounded (the gRPC
+//     handler scopes assignments to the active tenant before calling this
+//     helper), so any "org" or "repo" target seen here is implicitly within
+//     the holder's tenant — checking holder type alone is sufficient.
+//
 //   - An org-level assignment dominates any repo within the same org. Repo
 //     scope_value is encoded as "<org>/<repo>"; we match by prefix on
 //     "<org>/" so that "myorg" does not accidentally cover "myorg-2/foo".
 //
-// Repo-level holders never dominate an org-level target — granting at the
-// org tier requires an org-tier holder.
+// Repo-level holders never dominate an org- or tenant-level target —
+// granting at a higher tier requires a higher-tier holder.
 func scopeDominates(holderType, holderValue, targetType, targetValue string) bool {
 	if holderType == targetType && holderValue == targetValue {
+		return true
+	}
+	// Tenant-scope assignment covers every org and repo in the tenant.
+	// Required by the existing tenant-admin → org-admin elevation flow
+	// (handler/tenant_users.go handleElevateToOrgAdmin); without this rule
+	// a tenant admin cannot promote an org admin even though they hold the
+	// strictly stronger role. The handler scopes assignments to the active
+	// tenant before calling this helper so we never need to compare tenant
+	// identifiers here.
+	if holderType == "tenant" && (targetType == "org" || targetType == "repo") {
 		return true
 	}
 	// Org-scope assignment covers any repo whose scope_value starts with
