@@ -20,6 +20,21 @@ service TenantService {
   // same transaction so the wildcard host (`<slug>.<base>`) follows the rename
   // on the very next GetTenant.
   rpc UpdateTenant(UpdateTenantRequest) returns (Tenant);
+
+  // GetDeploymentMetadata reads a deployment-scoped fact by key from the
+  // tenant DB's `deployment_metadata` table (REDESIGN-001 Phase 3.1.a).
+  // Generic over key so future deployment-scoped facts (KEK version, schema
+  // baseline, etc.) reuse the same RPC.
+  //
+  // Phase 3.4 first consumer: every service calls this once at startup with
+  // key="bootstrap_tenant_id" to learn the single-mode tenant id, which it
+  // hands to libs/middleware/grpc.SingleTenantInjector. Adding a 14th service
+  // gets the SingleTenantInjector wiring "for free" by virtue of having the
+  // tenant gRPC client; no per-service env var sprawl.
+  //
+  // NotFound is returned when the key has never been set. Callers should treat
+  // that as "value is unset" rather than an infrastructure error.
+  rpc GetDeploymentMetadata(GetDeploymentMetadataRequest) returns (GetDeploymentMetadataResponse);
 }
 
 message Tenant {
@@ -80,6 +95,22 @@ message UpdateTenantRequest {
   string tenant_id        = 1;
   optional string name    = 2;
   optional string plan    = 3;
+}
+
+// GetDeploymentMetadataRequest selects a single key from the
+// deployment_metadata table. Keys are stable strings agreed across the
+// codebase — current consumers: "bootstrap_tenant_id" (Phase 3.1.a / 3.4).
+message GetDeploymentMetadataRequest {
+  string key = 1;
+}
+
+// GetDeploymentMetadataResponse carries the raw JSONB value from the row.
+// Carried as bytes (not a typed oneof) because the table is intentionally
+// schema-less — each consumer knows the shape of the keys it reads. The
+// bootstrap_tenant_id value is a JSON-string-encoded UUID, e.g.
+// "\"98dbe36b-ef28-4903-b25c-bff1b2921c9e\"".
+message GetDeploymentMetadataResponse {
+  bytes value = 1;
 }
 
 message GetTenantPolicyRequest    { string tenant_id = 1; }

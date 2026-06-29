@@ -20,13 +20,14 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	TenantService_CreateTenant_FullMethodName       = "/registry.tenant.v1.TenantService/CreateTenant"
-	TenantService_GetTenant_FullMethodName          = "/registry.tenant.v1.TenantService/GetTenant"
-	TenantService_ListTenants_FullMethodName        = "/registry.tenant.v1.TenantService/ListTenants"
-	TenantService_DeleteTenant_FullMethodName       = "/registry.tenant.v1.TenantService/DeleteTenant"
-	TenantService_GetTenantPolicy_FullMethodName    = "/registry.tenant.v1.TenantService/GetTenantPolicy"
-	TenantService_UpdateTenantPolicy_FullMethodName = "/registry.tenant.v1.TenantService/UpdateTenantPolicy"
-	TenantService_UpdateTenant_FullMethodName       = "/registry.tenant.v1.TenantService/UpdateTenant"
+	TenantService_CreateTenant_FullMethodName          = "/registry.tenant.v1.TenantService/CreateTenant"
+	TenantService_GetTenant_FullMethodName             = "/registry.tenant.v1.TenantService/GetTenant"
+	TenantService_ListTenants_FullMethodName           = "/registry.tenant.v1.TenantService/ListTenants"
+	TenantService_DeleteTenant_FullMethodName          = "/registry.tenant.v1.TenantService/DeleteTenant"
+	TenantService_GetTenantPolicy_FullMethodName       = "/registry.tenant.v1.TenantService/GetTenantPolicy"
+	TenantService_UpdateTenantPolicy_FullMethodName    = "/registry.tenant.v1.TenantService/UpdateTenantPolicy"
+	TenantService_UpdateTenant_FullMethodName          = "/registry.tenant.v1.TenantService/UpdateTenant"
+	TenantService_GetDeploymentMetadata_FullMethodName = "/registry.tenant.v1.TenantService/GetDeploymentMetadata"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -45,6 +46,20 @@ type TenantServiceClient interface {
 	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
 	// on the very next GetTenant.
 	UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
+	// GetDeploymentMetadata reads a deployment-scoped fact by key from the
+	// tenant DB's `deployment_metadata` table (REDESIGN-001 Phase 3.1.a).
+	// Generic over key so future deployment-scoped facts (KEK version, schema
+	// baseline, etc.) reuse the same RPC.
+	//
+	// Phase 3.4 first consumer: every service calls this once at startup with
+	// key="bootstrap_tenant_id" to learn the single-mode tenant id, which it
+	// hands to libs/middleware/grpc.SingleTenantInjector. Adding a 14th service
+	// gets the SingleTenantInjector wiring "for free" by virtue of having the
+	// tenant gRPC client; no per-service env var sprawl.
+	//
+	// NotFound is returned when the key has never been set. Callers should treat
+	// that as "value is unset" rather than an infrastructure error.
+	GetDeploymentMetadata(ctx context.Context, in *GetDeploymentMetadataRequest, opts ...grpc.CallOption) (*GetDeploymentMetadataResponse, error)
 }
 
 type tenantServiceClient struct {
@@ -125,6 +140,16 @@ func (c *tenantServiceClient) UpdateTenant(ctx context.Context, in *UpdateTenant
 	return out, nil
 }
 
+func (c *tenantServiceClient) GetDeploymentMetadata(ctx context.Context, in *GetDeploymentMetadataRequest, opts ...grpc.CallOption) (*GetDeploymentMetadataResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDeploymentMetadataResponse)
+	err := c.cc.Invoke(ctx, TenantService_GetDeploymentMetadata_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantServiceServer is the server API for TenantService service.
 // All implementations should embed UnimplementedTenantServiceServer
 // for forward compatibility
@@ -141,6 +166,20 @@ type TenantServiceServer interface {
 	// same transaction so the wildcard host (`<slug>.<base>`) follows the rename
 	// on the very next GetTenant.
 	UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error)
+	// GetDeploymentMetadata reads a deployment-scoped fact by key from the
+	// tenant DB's `deployment_metadata` table (REDESIGN-001 Phase 3.1.a).
+	// Generic over key so future deployment-scoped facts (KEK version, schema
+	// baseline, etc.) reuse the same RPC.
+	//
+	// Phase 3.4 first consumer: every service calls this once at startup with
+	// key="bootstrap_tenant_id" to learn the single-mode tenant id, which it
+	// hands to libs/middleware/grpc.SingleTenantInjector. Adding a 14th service
+	// gets the SingleTenantInjector wiring "for free" by virtue of having the
+	// tenant gRPC client; no per-service env var sprawl.
+	//
+	// NotFound is returned when the key has never been set. Callers should treat
+	// that as "value is unset" rather than an infrastructure error.
+	GetDeploymentMetadata(context.Context, *GetDeploymentMetadataRequest) (*GetDeploymentMetadataResponse, error)
 }
 
 // UnimplementedTenantServiceServer should be embedded to have forward compatible implementations.
@@ -167,6 +206,9 @@ func (UnimplementedTenantServiceServer) UpdateTenantPolicy(context.Context, *Upd
 }
 func (UnimplementedTenantServiceServer) UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) GetDeploymentMetadata(context.Context, *GetDeploymentMetadataRequest) (*GetDeploymentMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetDeploymentMetadata not implemented")
 }
 
 // UnsafeTenantServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -306,6 +348,24 @@ func _TenantService_UpdateTenant_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantService_GetDeploymentMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDeploymentMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).GetDeploymentMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_GetDeploymentMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).GetDeploymentMetadata(ctx, req.(*GetDeploymentMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantService_ServiceDesc is the grpc.ServiceDesc for TenantService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -340,6 +400,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateTenant",
 			Handler:    _TenantService_UpdateTenant_Handler,
+		},
+		{
+			MethodName: "GetDeploymentMetadata",
+			Handler:    _TenantService_GetDeploymentMetadata_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

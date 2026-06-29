@@ -4,6 +4,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -36,6 +37,15 @@ type fakeTenantRepo struct {
 	// countErr non-nil → returned from CountTenants. Used by Phase 3.2
 	// guard tests to exercise the count-failure branch.
 	countErr error
+
+	// deploymentMetadata backs GetDeploymentMetadata. A key absent from the
+	// map → ErrNotFound (mirrors the production repo). Used by Phase 3.4
+	// tests for the GetDeploymentMetadata gRPC handler.
+	deploymentMetadata map[string]json.RawMessage
+	// deploymentMetadataErr non-nil → returned from GetDeploymentMetadata
+	// (overrides the map lookup). Used to exercise the non-ErrNotFound
+	// error branch.
+	deploymentMetadataErr error
 
 	// Force a duplicate-key error by simulating unique constraint violation.
 	dupKeyOnCreate bool
@@ -110,6 +120,23 @@ func (f *fakeTenantRepo) UpdatePolicy(_ context.Context, p *repository.PolicyRec
 	return nil
 }
 
+// GetDeploymentMetadata mirrors the real repo's signature so the testable
+// handler can drive the Phase 3.4 GetDeploymentMetadata RPC.
+//
+// Behaviour: deploymentMetadataErr (set via knob) wins; otherwise look up
+// the key in the map; absent → ErrNotFound to match the production repo's
+// "missing row" contract.
+func (f *fakeTenantRepo) GetDeploymentMetadata(_ context.Context, key string) (json.RawMessage, error) {
+	if f.deploymentMetadataErr != nil {
+		return nil, f.deploymentMetadataErr
+	}
+	v, ok := f.deploymentMetadata[key]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return v, nil
+}
+
 // UpdateTenant mirrors the real repo's signature so the testable handler can
 // drive it. The fake honours nil-pointer "leave unchanged" semantics so we
 // can exercise name-only / plan-only / both paths without DB plumbing.
@@ -153,6 +180,9 @@ type tenantRepo interface {
 	GetPolicy(ctx context.Context, tenantID uuid.UUID) (*repository.PolicyRecord, error)
 	UpdatePolicy(ctx context.Context, p *repository.PolicyRecord) error
 	UpdateTenant(ctx context.Context, tenantID uuid.UUID, name, plan *string) (*repository.TenantRecord, error)
+	// GetDeploymentMetadata is exercised by the Phase 3.4 RPC tests. Returns
+	// repository.ErrNotFound when the key has never been set.
+	GetDeploymentMetadata(ctx context.Context, key string) (json.RawMessage, error)
 }
 
 // testableHandler is a local variant of GRPCHandler that uses the interface
@@ -280,6 +310,24 @@ func (h *testableHandler) UpdateTenant(ctx context.Context, req *tenantv1.Update
 		return nil, status.Errorf(codes.NotFound, "tenant %s not found", req.TenantId)
 	}
 	return tenantToProto(rec), nil
+}
+
+// GetDeploymentMetadata mirrors the production handler so tests cover the
+// same branches. Phase 3.4: empty key → InvalidArgument, ErrNotFound →
+// NotFound, other DB errors → Internal (via the test path's MapDBError
+// substitute, kept simple here).
+func (h *testableHandler) GetDeploymentMetadata(ctx context.Context, req *tenantv1.GetDeploymentMetadataRequest) (*tenantv1.GetDeploymentMetadataResponse, error) {
+	if req.GetKey() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	value, err := h.repo.GetDeploymentMetadata(ctx, req.GetKey())
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "deployment_metadata key %q not found", req.GetKey())
+		}
+		return nil, status.Errorf(codes.Internal, "get deployment_metadata: %v", err)
+	}
+	return &tenantv1.GetDeploymentMetadataResponse{Value: []byte(value)}, nil
 }
 
 func (h *testableHandler) GetPolicy(ctx context.Context, req *tenantv1.GetTenantPolicyRequest) (*tenantv1.TenantPolicy, error) {
@@ -904,5 +952,81 @@ func TestNormalizeSlug_TableDriven(t *testing.T) {
 		if got != want {
 			t.Errorf("NormalizeSlug(%q): got %q, want %q", in, got, want)
 		}
+	}
+}
+
+// ── REDESIGN-001 Phase 3.4 — GetDeploymentMetadata ───────────────────────────
+//
+// These tests cover the new RPC that lets every service learn the bootstrap
+// tenant id at startup without per-service env var sprawl. The interesting
+// branches are: empty key → InvalidArgument, key absent → NotFound (separate
+// from "DB unreachable"), key present → raw JSONB bytes returned verbatim.
+
+// TestGetDeploymentMetadata_HappyPath verifies a stored key returns its raw
+// JSONB bytes verbatim. The bootstrap_tenant_id value in production is a
+// JSON-string UUID like "\"<uuid>\"" — the handler never unwraps it; callers
+// know the shape.
+func TestGetDeploymentMetadata_HappyPath_ReturnsRawValue(t *testing.T) {
+	repo := newFakeTenantRepo()
+	tenantID := uuid.New()
+	stored := json.RawMessage(`"` + tenantID.String() + `"`)
+	repo.deploymentMetadata = map[string]json.RawMessage{
+		"bootstrap_tenant_id": stored,
+	}
+	h := newTestable(repo)
+
+	resp, err := h.GetDeploymentMetadata(context.Background(),
+		&tenantv1.GetDeploymentMetadataRequest{Key: "bootstrap_tenant_id"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := string(resp.GetValue()), string(stored); got != want {
+		t.Errorf("value mismatch: got %q, want %q", got, want)
+	}
+}
+
+// TestGetDeploymentMetadata_EmptyKey_ReturnsInvalidArgument guards against
+// the "give me everything" misuse that would otherwise force the handler to
+// dispatch on an empty string. Empty key is a wiring bug at the caller, not
+// a valid query.
+func TestGetDeploymentMetadata_EmptyKey_ReturnsInvalidArgument(t *testing.T) {
+	h := newTestable(newFakeTenantRepo())
+	_, err := h.GetDeploymentMetadata(context.Background(),
+		&tenantv1.GetDeploymentMetadataRequest{Key: ""})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v (err=%v)", status.Code(err), err)
+	}
+}
+
+// TestGetDeploymentMetadata_Missing_ReturnsNotFound covers the explicit
+// distinction between "key not set" (NotFound) and "DB unreachable" (Internal).
+// Callers in single-mode rely on this — auth treats NotFound as
+// "deployment not bootstrapped yet" which is a fail-loud config error.
+func TestGetDeploymentMetadata_Missing_ReturnsNotFound(t *testing.T) {
+	repo := newFakeTenantRepo()
+	// No entries in deploymentMetadata map → ErrNotFound surface.
+	h := newTestable(repo)
+
+	_, err := h.GetDeploymentMetadata(context.Background(),
+		&tenantv1.GetDeploymentMetadataRequest{Key: "bootstrap_tenant_id"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v (err=%v)", status.Code(err), err)
+	}
+}
+
+// TestGetDeploymentMetadata_RepoError_ReturnsInternal covers the "DB error
+// that isn't ErrNotFound" branch — a pool exhaustion, network blip, anything
+// other than the missing-row sentinel — surfaces as Internal (the testable
+// handler's substitute for MapDBError, which maps to ResourceExhausted /
+// Internal in production).
+func TestGetDeploymentMetadata_RepoError_ReturnsInternal(t *testing.T) {
+	repo := newFakeTenantRepo()
+	repo.deploymentMetadataErr = errors.New("simulated DB failure")
+	h := newTestable(repo)
+
+	_, err := h.GetDeploymentMetadata(context.Background(),
+		&tenantv1.GetDeploymentMetadataRequest{Key: "bootstrap_tenant_id"})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want Internal, got %v (err=%v)", status.Code(err), err)
 	}
 }
