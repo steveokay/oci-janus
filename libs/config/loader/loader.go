@@ -12,6 +12,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/credentials"
+
+	"github.com/steveokay/oci-janus/libs/auth/mtls"
 )
 
 // BaseConfig contains fields that every service needs.
@@ -254,6 +257,30 @@ func RequireFields(fields map[string]string) error {
 		return nil
 	}
 	return fmt.Errorf("required env vars not set: %v", missing)
+}
+
+// MTLSClientCreds is a one-liner wrapper around libs/auth/mtls.ClientCreds
+// for services whose Config embeds BaseConfig. It threads the three mTLS
+// path fields and the remote service name through so call sites become:
+//
+//	creds, err := cfg.MTLSClientCreds("registry-tenant")
+//	if err != nil { return ... }
+//	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
+//
+// REDESIGN-001 RED-FU-012 — the unification follow-up flagged by
+// code-review-agent on SEC-039 (PR #182). The same `mtls.ClientCreds(
+// cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, name)` line
+// previously lived as `clientCreds(cfg, name)` / `buildClientCreds(cfg,
+// name)` / `buildGRPCCreds(cfg, name)` per service. Centralising here
+// keeps the empty-serverName regression (SEC-038 / SEC-039) impossible
+// to re-introduce because every BaseConfig consumer goes through the
+// same code path.
+//
+// Returns insecure.NewCredentials when ALL three cert paths are empty
+// (dev posture); with any path set, propagates the TLS load error so a
+// corrupted cert fails-loud instead of silently downgrading to plaintext.
+func (c *BaseConfig) MTLSClientCreds(serverName string) (credentials.TransportCredentials, error) {
+	return mtls.ClientCreds(c.MTLSCACertPath, c.MTLSCertPath, c.MTLSKeyPath, serverName)
 }
 
 // MTLSConfig is the shared mTLS configuration block.

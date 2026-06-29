@@ -178,7 +178,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// activity tab falls back to the empty-state. Cert paths reuse the
 	// gRPC-server mTLS material (same pattern as services/management).
 	if cfg.AuditGRPCAddr != "" {
-		auditCreds, err := buildClientCreds(cfg, "registry-audit")
+		auditCreds, err := cfg.MTLSClientCreds("registry-audit")
 		if err != nil {
 			return fmt.Errorf("build audit gRPC creds: %w", err)
 		}
@@ -368,9 +368,10 @@ func runMigrations(cfg *config.Config) error {
 //   - JSONB value parse failure → error. The deployment_metadata schema
 //     guarantees this is JSON-encoded; a parse failure means corruption.
 //
-// The dial uses the same mTLS material as the audit client (buildClientCreds);
-// in dev (cert paths unset) it falls back to plaintext with a slog.Warn from
-// the credentials helper itself.
+// The dial uses the same mTLS material as the audit client (via
+// cfg.MTLSClientCreds, lifted to loader.BaseConfig in RED-FU-012); in dev
+// (cert paths unset) it falls back to plaintext with a slog.Warn from the
+// credentials helper itself.
 //
 // The call is bounded by a 5-second context timeout — the tenant service must
 // be reachable for auth to start in single mode anyway, so blocking startup
@@ -379,7 +380,7 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	if cfg.TenantGRPCAddr == "" {
 		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
 	}
-	tenantCreds, err := buildClientCreds(cfg, "registry-tenant")
+	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {
 		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
 	}
@@ -390,14 +391,6 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	defer tenantConn.Close()
 
 	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
-}
-
-// buildClientCreds is the auth-local convenience wrapper around
-// libs/auth/mtls.ClientCreds — it converts the auth Config struct into the
-// three cert-path arguments. Kept as a one-liner so existing call sites
-// (audit client, tenant client) don't change.
-func buildClientCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
-	return mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
 }
 
 // buildGRPCOptions returns the server options list, including mTLS credentials

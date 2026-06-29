@@ -329,14 +329,8 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 // The post-dial RPC + parse stages live in libs/tenant/bootstrap so all 11+
 // service rollouts share one implementation. The dial half stays here
 // because it's per-service config (TENANT_GRPC_ADDR + the service's mTLS
-// material). Convenience wrapper buildClientCreds delegates to
-// libs/auth/mtls.ClientCreds.
-
-// buildClientCreds is the metadata-local convenience wrapper around
-// libs/auth/mtls.ClientCreds. Kept as a one-liner so call sites stay terse.
-func buildClientCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
-	return mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
-}
+// material). RED-FU-012 lifted the cert-path wrapper itself to
+// loader.BaseConfig.MTLSClientCreds (see libs/config/loader/loader.go).
 
 // fetchBootstrapTenantID dials the tenant gRPC server and delegates the
 // post-dial RPC + parse to libs/tenant/bootstrap.FetchTenantID. Caller in
@@ -345,7 +339,7 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	if cfg.TenantGRPCAddr == "" {
 		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
 	}
-	tenantCreds, err := buildClientCreds(cfg, "registry-tenant")
+	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {
 		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
 	}

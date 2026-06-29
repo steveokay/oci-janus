@@ -65,21 +65,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// gRPC client connections — per-target mTLS creds with serverName pinned
 	// to each remote's expected CN/SAN. SEC-039: a single shared `grpcCreds`
 	// with empty serverName would skip the per-target CN/SAN check.
-	authCreds, err := clientCreds(cfg, "registry-auth")
+	// RED-FU-012: lifted to loader.BaseConfig.MTLSClientCreds — the previous
+	// per-service `clientCreds(cfg, name)` wrapper is gone.
+	authCreds, err := cfg.MTLSClientCreds("registry-auth")
 	if err != nil {
 		return fmt.Errorf("build auth gRPC credentials: %w", err)
 	}
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, authCreds)
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(authCreds))
 	if err != nil {
 		return fmt.Errorf("dial auth: %w", err)
 	}
 	defer authConn.Close()
 
-	storageCreds, err := clientCreds(cfg, "registry-storage")
+	storageCreds, err := cfg.MTLSClientCreds("registry-storage")
 	if err != nil {
 		return fmt.Errorf("build storage gRPC credentials: %w", err)
 	}
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, storageCreds)
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpc.WithTransportCredentials(storageCreds))
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -283,7 +285,7 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	if cfg.TenantGRPCAddr == "" {
 		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
 	}
-	tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {
 		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
 	}
@@ -293,25 +295,6 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	}
 	defer func() { _ = tenantConn.Close() }()
 	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
-}
-
-// clientCreds returns mTLS dial credentials with serverName pinned to the
-// remote service's expected CN/SAN (e.g. "registry-auth", "registry-storage"),
-// falling back to plaintext insecure for local dev without certs. SEC-039:
-// the previous signature passed an empty serverName so no per-target
-// CN/SAN pin was enforced. mtls.ClientCreds returns insecure.NewCredentials
-// only when ALL cert paths are empty (dev posture); with paths set it
-// returns the error on TLS load failure so a corrupted cert fails-loud
-// instead of silently downgrading to plaintext.
-func clientCreds(cfg *config.Config, serverName string) (grpc.DialOption, error) {
-	creds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("load mTLS certs: %w", err)
-	}
-	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
-		slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
-	}
-	return grpc.WithTransportCredentials(creds), nil
 }
 
 // runMigrations opens a temporary pgxpool and runs goose migrations from the embedded FS.
