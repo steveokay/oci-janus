@@ -25,7 +25,9 @@ import (
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
@@ -188,8 +190,26 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		WriteTimeout:      30 * time.Second,
 	}
 
+	// REDESIGN-001 Phase 3.4 — in single-tenant mode every inbound RPC is
+	// pinned to the bootstrap tenant via a server interceptor. The tenant ID
+	// itself is fetched once at startup from registry-tenant's
+	// GetDeploymentMetadata RPC (single source of truth for the workspace
+	// the binary is wired to). In multi mode the tenant ID comes from the
+	// gateway/JWT and no interceptor is wired.
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr)
+	}
+
 	// gRPC server: health check + AuditService (GetBuildHistory for management).
-	grpcOpts, err := buildGRPCOptions(cfg)
+	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -280,10 +300,18 @@ func runRetentionLoop(ctx context.Context, repo *repository.Repository, retentio
 }
 
 // buildGRPCOptions returns server options with interceptors and optional mTLS.
-func buildGRPCOptions(cfg *config.Config) ([]grpc.ServerOption, error) {
+//
+// extraUnary, when non-nil, is chained after libs/middleware/grpc.ServerInterceptors
+// so the SingleTenantInjector (REDESIGN-001 Phase 3.4) runs after auth/tenant
+// extraction but before reaching handlers.
+func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(grpcmw.ServerInterceptors()...),
+		grpc.ChainUnaryInterceptor(chain...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
 	}
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
@@ -348,6 +376,30 @@ func decodeHexKey(s string) ([]byte, error) {
 		return nil, errors.New("expected 32 bytes (64 hex chars) of key material")
 	}
 	return b, nil
+}
+
+// fetchBootstrapTenantID looks up the bootstrap tenant UUID from
+// registry-tenant's GetDeploymentMetadata RPC (REDESIGN-001 Phase 3.4).
+//
+// This is the single source of truth for "which tenant is this single-mode
+// binary wired to" — the value is read once at boot, then handed to
+// SingleTenantInjector for every inbound RPC. Errors fail the boot loudly
+// because a misconfigured tenant address would otherwise route every audit
+// write to the wrong tenant.
+func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.TenantGRPCAddr == "" {
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+	}
+	tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+	if err != nil {
+		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
+	}
+	tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
+	if err != nil {
+		return "", fmt.Errorf("dial tenant gRPC: %w", err)
+	}
+	defer func() { _ = tenantConn.Close() }()
+	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
 
 // exportSecretsKey decodes AUDIT_EXPORT_SECRETS_KEY_HEX. Returns nil

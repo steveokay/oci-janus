@@ -38,6 +38,7 @@
 
 | ID | Description | Reference | Completed | Status |
 |---|---|---|---|---|
+| REDESIGN-001 Phase 3.4 service #8 — audit | services/audit SingleTenantInjector wiring + compose env wire-in. Same 15-LOC template; 4th libs consumer of `tenantbootstrap.FetchTenantID` + `mtls.ClientCreds`. Compose update bundled (TENANT_GRPC_ADDR + depends_on: registry-tenant: service_healthy). Tracker tick + Phase 3.4 plan row + status-tracker row all in the same commit per the rule established with #172 | PR #176 | 2026-06-29 | DONE (pending merge) |
 | REDESIGN-001 Phase 3.4 service #7 — scanner | services/scanner SingleTenantInjector wiring + compose env wire-in. Also closes a pre-existing gap: scanner's gRPC server had ZERO interceptors (no recovery, no OTEL, no tracing) — added the standard `grpcmw.ServerInterceptors()` chain while wiring Phase 3.4 so it matches the other 12 services. Same template otherwise | PR #175 | 2026-06-29 | DONE (pending merge) |
 | REDESIGN-001 Phase 3.4 service #6 — webhook | services/webhook SingleTenantInjector wiring + compose env wire-in. Same 15-LOC template; 3rd libs consumer | PR #174 | 2026-06-29 | DONE (pending merge) |
 | REDESIGN-001 Phase 3.4 service #5 — signer | services/signer SingleTenantInjector wiring. Same 15-LOC template from #170 (auth/core)/#171 (storage); 2nd libs consumer of `tenantbootstrap.FetchTenantID` + `mtls.ClientCreds`. Compose update bundled (TENANT_GRPC_ADDR + depends_on: registry-tenant). Tracker tick included in same commit per new bundling rule | PR #173 | 2026-06-29 | DONE (pending merge) |
