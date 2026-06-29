@@ -1,8 +1,7 @@
-// Package server tests cover the Phase 3.4 bootstrap-tenant-id fetch path
-// for services/metadata. Mirrors the test shape used in
-// services/auth/internal/server/bootstrap_tenant_id_test.go (PR #162) so a
-// reviewer comparing the two services sees an identical contract.
-package server
+// Tests for the post-dial bootstrap-tenant-id lookup. Mirrors the per-service
+// test shape that lived in services/auth and services/metadata before this
+// extraction.
+package bootstrap_test
 
 import (
 	"context"
@@ -19,12 +18,14 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
+
+	"github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 )
 
 // fakeTenantServer is the minimal TenantServiceServer needed to drive the
-// GetDeploymentMetadata path. value/err knobs override per test case; the
-// embedded UnimplementedTenantServiceServer makes any other RPC return
-// Unimplemented rather than panic.
+// GetDeploymentMetadata path. Other RPCs fall through to Unimplemented via
+// the embedded UnimplementedTenantServiceServer so an accidental extra call
+// returns Unimplemented rather than panicking.
 type fakeTenantServer struct {
 	tenantv1.UnimplementedTenantServiceServer
 	value []byte
@@ -41,8 +42,8 @@ func (f *fakeTenantServer) GetDeploymentMetadata(
 }
 
 // startTenantBufconn spins up an in-process gRPC server backed by the supplied
-// fake, returning a client wired to it. Identical pattern to services/auth so
-// future per-service follow-ups can copy-paste with confidence.
+// fake. Identical pattern to the per-service tests this replaces so reviewers
+// can diff the test shape and confirm symmetry.
 func startTenantBufconn(t *testing.T, fake *fakeTenantServer) tenantv1.TenantServiceClient {
 	t.Helper()
 
@@ -73,9 +74,9 @@ func startTenantBufconn(t *testing.T, fake *fakeTenantServer) tenantv1.TenantSer
 	return tenantv1.NewTenantServiceClient(conn)
 }
 
-// TestGetBootstrapTenantIDFromClient_HappyPath — production schema stores a
-// JSON-encoded UUID string. Verify it's parsed back to a bare UUID string.
-func TestGetBootstrapTenantIDFromClient_HappyPath(t *testing.T) {
+// TestFetchTenantID_HappyPath covers the canonical JSON-string-encoded UUID
+// shape that the bootstrap CLI stores in deployment_metadata.
+func TestFetchTenantID_HappyPath(t *testing.T) {
 	tenantID := uuid.New()
 	value, err := json.Marshal(tenantID.String())
 	if err != nil {
@@ -84,7 +85,7 @@ func TestGetBootstrapTenantIDFromClient_HappyPath(t *testing.T) {
 
 	client := startTenantBufconn(t, &fakeTenantServer{value: value})
 
-	got, err := getBootstrapTenantIDFromClient(context.Background(), client)
+	got, err := bootstrap.FetchTenantID(context.Background(), client)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,15 +94,15 @@ func TestGetBootstrapTenantIDFromClient_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetBootstrapTenantIDFromClient_NotFound — tenant returns NotFound when
-// deployment_metadata hasn't been seeded. Metadata must surface this as a
-// startup error so the operator runs the bootstrap CLI before retrying.
-func TestGetBootstrapTenantIDFromClient_NotFound(t *testing.T) {
+// TestFetchTenantID_NotFound — tenant returns NotFound when
+// deployment_metadata hasn't been seeded. Callers surface this as a startup
+// error so the operator runs the bootstrap CLI before retrying.
+func TestFetchTenantID_NotFound(t *testing.T) {
 	client := startTenantBufconn(t, &fakeTenantServer{
 		err: status.Error(codes.NotFound, "deployment_metadata key not found"),
 	})
 
-	_, err := getBootstrapTenantIDFromClient(context.Background(), client)
+	_, err := bootstrap.FetchTenantID(context.Background(), client)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -110,15 +111,14 @@ func TestGetBootstrapTenantIDFromClient_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetBootstrapTenantIDFromClient_NonJSONValue — covers the data-corruption
-// branch. Substring check (not errors.Is self-comparison) so the assertion
-// breaks if production stops wrapping with this exact phrase.
-func TestGetBootstrapTenantIDFromClient_NonJSONValue(t *testing.T) {
+// TestFetchTenantID_NonJSONValue covers the data-corruption branch. Substring
+// check on the wrap message so the assertion breaks if the wrap text drifts.
+func TestFetchTenantID_NonJSONValue(t *testing.T) {
 	client := startTenantBufconn(t, &fakeTenantServer{
 		value: []byte("not-json-at-all"),
 	})
 
-	_, err := getBootstrapTenantIDFromClient(context.Background(), client)
+	_, err := bootstrap.FetchTenantID(context.Background(), client)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -127,10 +127,10 @@ func TestGetBootstrapTenantIDFromClient_NonJSONValue(t *testing.T) {
 	}
 }
 
-// TestGetBootstrapTenantIDFromClient_NotAUUID — JSON parses cleanly but the
-// inner string isn't a UUID. UUID validation here means SingleTenantInjector
-// can trust its input without re-parsing.
-func TestGetBootstrapTenantIDFromClient_NotAUUID(t *testing.T) {
+// TestFetchTenantID_NotAUUID — JSON parses cleanly but the inner string
+// isn't a UUID. UUID validation here means SingleTenantInjector can trust its
+// input without re-parsing.
+func TestFetchTenantID_NotAUUID(t *testing.T) {
 	value, err := json.Marshal("definitely-not-a-uuid")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -138,7 +138,7 @@ func TestGetBootstrapTenantIDFromClient_NotAUUID(t *testing.T) {
 
 	client := startTenantBufconn(t, &fakeTenantServer{value: value})
 
-	_, err = getBootstrapTenantIDFromClient(context.Background(), client)
+	_, err = bootstrap.FetchTenantID(context.Background(), client)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
