@@ -136,8 +136,15 @@ type ServiceAccountInput struct {
 // transaction) and emits a service_account.created audit event with a snapshot
 // of the creator's identity.
 //
+// REDESIGN-001 Phase 5.3: the requested AllowedScopes must be a subset of the
+// creator's effective scope grant (or empty, which is always allowed). This
+// prevents a low-privilege user from minting an SA with higher authority than
+// they themselves hold. Global admins bypass the check — they are the
+// platform's effective root.
+//
 // Returns ErrAlreadyExists when a service account with the same name already
-// exists in the tenant.
+// exists in the tenant. Returns codes.PermissionDenied when the requested
+// AllowedScopes exceed the creator's effective grant.
 func (s *ServiceAccountService) Create(ctx context.Context, in ServiceAccountInput) (*repository.ServiceAccount, error) {
 	// Snapshot the creator's identity before the atomic create so we have
 	// something to put in the audit event even if the create fails partway.
@@ -152,6 +159,27 @@ func (s *ServiceAccountService) Create(ctx context.Context, in ServiceAccountInp
 			"actor_id", in.ActorUserID,
 			"err", err,
 		)
+	}
+
+	// Phase 5.3 delegation guard: a creator can only mint an SA whose
+	// AllowedScopes are a subset of their effective grant. Global admins
+	// bypass — they are the platform's effective root. An unknown creator
+	// (nil creator from a benign ErrNotFound race above) gets the strictest
+	// treatment: no roles loaded → an empty effective set → any non-empty
+	// AllowedScopes is denied. That is the safe default for a request whose
+	// actor we can't identify.
+	if creator == nil || !creator.IsGlobalAdmin {
+		var callerAssignments []repository.RoleAssignment
+		if creator != nil {
+			ra, rErr := s.users.GetUserRoles(ctx, in.ActorUserID, in.TenantID)
+			if rErr != nil {
+				return nil, rErr
+			}
+			callerAssignments = ra
+		}
+		if vErr := VerifyAllowedScopesSubset(callerAssignments, in.AllowedScopes); vErr != nil {
+			return nil, vErr
+		}
 	}
 
 	sa, _, err := s.sa.CreateAtomic(ctx, repository.CreateServiceAccountInput{

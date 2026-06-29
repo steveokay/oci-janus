@@ -39,14 +39,35 @@ type handlerFakeUserRepo struct {
 	// adminUsers controls which users return an admin role assignment from
 	// GetUserRoles. Tests promote a user to admin by calling makeAdmin(uuid).
 	adminUsers map[uuid.UUID]bool
+	// explicitRoles maps userID → explicit role assignments seeded by
+	// Phase 5.3 delegation tests. When non-empty for a user, GetUserRoles
+	// returns these instead of (and in addition to) the legacy adminUsers
+	// behaviour so existing tests stay green while new ones can express a
+	// precise role posture.
+	explicitRoles map[uuid.UUID][]repository.RoleAssignment
 }
 
 func newHandlerFakeUserRepo() *handlerFakeUserRepo {
 	return &handlerFakeUserRepo{
-		users:        make(map[string]*repository.User),
-		failedLogins: make(map[uuid.UUID]int),
-		adminUsers:   make(map[uuid.UUID]bool),
+		users:         make(map[string]*repository.User),
+		failedLogins:  make(map[uuid.UUID]int),
+		adminUsers:    make(map[uuid.UUID]bool),
+		explicitRoles: make(map[uuid.UUID][]repository.RoleAssignment),
 	}
+}
+
+// seedRole appends an explicit (role, scope_type, scope_value) assignment for
+// the user. Phase 5.3 GrantRole tests use this to give the caller a known
+// posture without going through the full GrantRole flow.
+func (f *handlerFakeUserRepo) seedRole(userID, tenantID uuid.UUID, role, scopeType, scopeValue string) {
+	f.explicitRoles[userID] = append(f.explicitRoles[userID], repository.RoleAssignment{
+		ID:         uuid.New(),
+		TenantID:   tenantID,
+		UserID:     userID,
+		RoleName:   role,
+		ScopeType:  scopeType,
+		ScopeValue: scopeValue,
+	})
 }
 
 // makeAdmin marks a user as holding an "admin" role in the tenant, so the
@@ -174,6 +195,19 @@ func (f *handlerFakeUserRepo) UpdatePasswordHash(_ context.Context, id uuid.UUID
 }
 
 func (f *handlerFakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
+	// Phase 5.3 explicit-roles seed wins when present so new tests can
+	// describe a precise role posture for the user. Legacy adminUsers
+	// behaviour is preserved for older tests that simply flip a user to
+	// "admin in test-org" without caring about scope detail.
+	if assigns, ok := f.explicitRoles[userID]; ok && len(assigns) > 0 {
+		var out []repository.RoleAssignment
+		for _, a := range assigns {
+			if a.TenantID == tenantID {
+				out = append(out, a)
+			}
+		}
+		return out, nil
+	}
 	if !f.adminUsers[userID] {
 		return nil, nil
 	}
