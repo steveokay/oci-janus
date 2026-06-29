@@ -1739,6 +1739,7 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) requireDomainAdmin(r *http.Request) bool {
 	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
 		return false
+	}
 	// Phase 5.1 tail (2026-06-29): global admins bypass the role-assignment
 	// check. The Phase 5.1 backfill deleted the legacy (admin, org, "*")
 	// marker without granting an equivalent (admin, tenant, <id>) row, so a
