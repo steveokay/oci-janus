@@ -12,7 +12,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -41,25 +40,34 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	defer rdb.Close()
 
-	// gRPC client transport: mTLS when cert paths are configured, plaintext otherwise.
-	grpcCreds, err := clientCreds(cfg)
+	// gRPC client transport: per-target mTLS creds with serverName pinned to
+	// the remote's expected CN/SAN. SEC-039 — a single shared `grpcCreds`
+	// with empty serverName would skip the per-target CN/SAN check.
+	authCreds, err := clientCreds(cfg, "registry-auth")
 	if err != nil {
-		return fmt.Errorf("load mTLS creds: %w", err)
+		return fmt.Errorf("load auth mTLS creds: %w", err)
 	}
-
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpcCreds)
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, authCreds)
 	if err != nil {
 		return fmt.Errorf("dial auth: %w", err)
 	}
 	defer authConn.Close()
 
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpcCreds)
+	metaCreds, err := clientCreds(cfg, "registry-metadata")
+	if err != nil {
+		return fmt.Errorf("load metadata mTLS creds: %w", err)
+	}
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, metaCreds)
 	if err != nil {
 		return fmt.Errorf("dial metadata: %w", err)
 	}
 	defer metaConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpcCreds)
+	storageCreds, err := clientCreds(cfg, "registry-storage")
+	if err != nil {
+		return fmt.Errorf("load storage mTLS creds: %w", err)
+	}
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, storageCreds)
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -91,7 +99,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// and the admission gate logs+allows instead of failing closed
 	// (dev-stack convenience). Production deployments always set this.
 	if cfg.SignerGRPCAddr != "" {
-		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, grpcCreds)
+		signerCreds, err := clientCreds(cfg, "registry-signer")
+		if err != nil {
+			return fmt.Errorf("load signer mTLS creds: %w", err)
+		}
+		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, signerCreds)
 		if err != nil {
 			return fmt.Errorf("dial signer: %w", err)
 		}
@@ -249,16 +261,22 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
 
-// clientCreds returns mTLS dial credentials when all three cert paths are set,
-// falling back to plaintext for local dev without certs.
-func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
-	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
-		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
-		if err != nil {
-			return nil, err
-		}
-		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+// clientCreds returns mTLS dial credentials with serverName pinned to the
+// remote service's expected CN/SAN (e.g. "registry-auth", "registry-metadata"),
+// falling back to plaintext insecure for local dev without certs. SEC-039:
+// the previous signature passed an empty serverName so no per-target
+// CN/SAN pin was enforced — an attacker holding any CA-signed cert could
+// MITM each dial. mtls.ClientCreds returns insecure.NewCredentials only
+// when ALL cert paths are empty (dev posture); with paths set it returns
+// the error on TLS load failure so a corrupted cert fails-loud instead
+// of silently downgrading to plaintext.
+func clientCreds(cfg *config.Config, serverName string) (grpc.DialOption, error) {
+	creds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
+	if err != nil {
+		return nil, err
 	}
-	slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
-	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
+	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+		slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
+	}
+	return grpc.WithTransportCredentials(creds), nil
 }

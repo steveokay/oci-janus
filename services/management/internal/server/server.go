@@ -10,7 +10,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
@@ -32,28 +31,36 @@ import (
 
 // Run starts the management HTTP server and blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg *config.Config) error {
-	// Build gRPC transport credentials. When all three mTLS cert paths are
-	// populated we use mutual TLS (required in production). In dev/test
-	// environments where the paths are empty we fall back to plaintext —
-	// config.validate() rejects this combination in production (OTEL_ENVIRONMENT=production).
-	grpcCreds, err := buildGRPCCreds(cfg)
+	// Per-target mTLS dial credentials — each gRPC client passes the remote's
+	// expected CN/SAN to buildGRPCCreds so the TLS handshake fails closed if
+	// the wrong service answers. SEC-039: the previous code shared a single
+	// `grpcCreds` value built with empty serverName across all 9 dial sites,
+	// skipping the per-target CN/SAN check.
+	authCreds, err := buildGRPCCreds(cfg, "registry-auth")
 	if err != nil {
-		return fmt.Errorf("build grpc credentials: %w", err)
+		return fmt.Errorf("build auth grpc credentials: %w", err)
 	}
-
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(authCreds))
 	if err != nil {
 		return fmt.Errorf("dial auth grpc: %w", err)
 	}
 	defer authConn.Close()
 
-	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+	metaCreds, err := buildGRPCCreds(cfg, "registry-metadata")
+	if err != nil {
+		return fmt.Errorf("build metadata grpc credentials: %w", err)
+	}
+	metaConn, err := grpc.NewClient(cfg.MetadataGRPCAddr, grpc.WithTransportCredentials(metaCreds))
 	if err != nil {
 		return fmt.Errorf("dial metadata grpc: %w", err)
 	}
 	defer metaConn.Close()
 
-	auditConn, err := grpc.NewClient(cfg.AuditGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+	auditCreds, err := buildGRPCCreds(cfg, "registry-audit")
+	if err != nil {
+		return fmt.Errorf("build audit grpc credentials: %w", err)
+	}
+	auditConn, err := grpc.NewClient(cfg.AuditGRPCAddr, grpc.WithTransportCredentials(auditCreds))
 	if err != nil {
 		return fmt.Errorf("dial audit grpc: %w", err)
 	}
@@ -74,7 +81,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// (enables the super-admin /api/v1/admin/tenants routes). nil disables them.
 	var tenantClient tenantv1.TenantServiceClient
 	if cfg.TenantGRPCAddr != "" {
-		tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		tenantCreds, err := buildGRPCCreds(cfg, "registry-tenant")
+		if err != nil {
+			return fmt.Errorf("build tenant grpc credentials: %w", err)
+		}
+		tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
 		if err != nil {
 			return fmt.Errorf("dial tenant grpc: %w", err)
 		}
@@ -86,7 +97,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// (enables the /api/v1/webhooks routes from FE-API-021..024).
 	var webhookClient webhookv1.WebhookServiceClient
 	if cfg.WebhookGRPCAddr != "" {
-		webhookConn, err := grpc.NewClient(cfg.WebhookGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		webhookCreds, err := buildGRPCCreds(cfg, "registry-webhook")
+		if err != nil {
+			return fmt.Errorf("build webhook grpc credentials: %w", err)
+		}
+		webhookConn, err := grpc.NewClient(cfg.WebhookGRPCAddr, grpc.WithTransportCredentials(webhookCreds))
 		if err != nil {
 			return fmt.Errorf("dial webhook grpc: %w", err)
 		}
@@ -100,7 +115,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// service still serves every other surface.
 	var signerClient signerv1.SignerServiceClient
 	if cfg.SignerGRPCAddr != "" {
-		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		signerCreds, err := buildGRPCCreds(cfg, "registry-signer")
+		if err != nil {
+			return fmt.Errorf("build signer grpc credentials: %w", err)
+		}
+		signerConn, err := grpc.NewClient(cfg.SignerGRPCAddr, grpc.WithTransportCredentials(signerCreds))
 		if err != nil {
 			return fmt.Errorf("dial signer grpc: %w", err)
 		}
@@ -113,7 +132,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// reports). Nil leaves the routes returning 404 "route disabled".
 	var scannerClient scannerv1.ScannerServiceClient
 	if cfg.ScannerGRPCAddr != "" {
-		scannerConn, err := grpc.NewClient(cfg.ScannerGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		scannerCreds, err := buildGRPCCreds(cfg, "registry-scanner")
+		if err != nil {
+			return fmt.Errorf("build scanner grpc credentials: %w", err)
+		}
+		scannerConn, err := grpc.NewClient(cfg.ScannerGRPCAddr, grpc.WithTransportCredentials(scannerCreds))
 		if err != nil {
 			return fmt.Errorf("dial scanner grpc: %w", err)
 		}
@@ -127,7 +150,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// cron-only mode continue to serve every other surface.
 	var gcClient gcv1.GCServiceClient
 	if cfg.GCGRPCAddr != "" {
-		gcConn, err := grpc.NewClient(cfg.GCGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		gcCreds, err := buildGRPCCreds(cfg, "registry-gc")
+		if err != nil {
+			return fmt.Errorf("build gc grpc credentials: %w", err)
+		}
+		gcConn, err := grpc.NewClient(cfg.GCGRPCAddr, grpc.WithTransportCredentials(gcCreds))
 		if err != nil {
 			return fmt.Errorf("dial gc grpc: %w", err)
 		}
@@ -142,7 +169,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// frontend probes and hides the sidebar entry when 404 lands.
 	var proxyClient proxyv1.ProxyServiceClient
 	if cfg.ProxyGRPCAddr != "" {
-		proxyConn, err := grpc.NewClient(cfg.ProxyGRPCAddr, grpc.WithTransportCredentials(grpcCreds))
+		proxyCreds, err := buildGRPCCreds(cfg, "registry-proxy")
+		if err != nil {
+			return fmt.Errorf("build proxy grpc credentials: %w", err)
+		}
+		proxyConn, err := grpc.NewClient(cfg.ProxyGRPCAddr, grpc.WithTransportCredentials(proxyCreds))
 		if err != nil {
 			return fmt.Errorf("dial proxy grpc: %w", err)
 		}
@@ -208,24 +239,19 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 }
 
-// buildGRPCCreds returns mTLS credentials when all three cert paths are
-// configured, or plaintext insecure credentials otherwise (dev only).
-// config.validate() ensures this plaintext path is rejected in production.
-func buildGRPCCreds(cfg *config.Config) (credentials.TransportCredentials, error) {
-	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
-		return insecure.NewCredentials(), nil
-	}
-	tlsCfg, err := mtls.ClientTLSConfig(
-		cfg.MTLSCACertPath,
-		cfg.MTLSCertPath,
-		cfg.MTLSKeyPath,
-		// serverName left empty — the server name comes from the addr in production
-		// (registry-auth.<namespace>.svc.cluster.local and similar). If a fixed server
-		// name override is needed, add it as an env var in a follow-up.
-		"",
-	)
-	if err != nil {
-		return nil, err
-	}
-	return credentials.NewTLS(tlsCfg), nil
+// buildGRPCCreds returns mTLS credentials with serverName pinned to the
+// remote service's expected CN/SAN (e.g. "registry-auth", "registry-tenant"),
+// or plaintext insecure credentials when no cert paths are set (dev only).
+// config.validate() rejects the plaintext path in production.
+//
+// SEC-039: the previous signature passed an empty serverName for every
+// dial so no per-target CN/SAN binding was enforced — any CA-signed cert
+// could impersonate any backend service. management dials 9 distinct
+// remote services (auth, metadata, audit, tenant, webhook, signer,
+// scanner, gc, proxy), each of which now passes its own expected
+// serverName here. mtls.ClientCreds delegates to ClientTLSConfig and
+// returns the error on TLS load failure, so a corrupted cert fails-loud
+// instead of silently downgrading to plaintext.
+func buildGRPCCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
+	return mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
 }
