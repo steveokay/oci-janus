@@ -15,7 +15,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -63,19 +62,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	})
 	defer rdb.Close()
 
-	// gRPC client connections — mTLS when certs are configured, insecure in dev.
-	grpcCreds, err := clientCreds(cfg)
+	// gRPC client connections — per-target mTLS creds with serverName pinned
+	// to each remote's expected CN/SAN. SEC-039: a single shared `grpcCreds`
+	// with empty serverName would skip the per-target CN/SAN check.
+	authCreds, err := clientCreds(cfg, "registry-auth")
 	if err != nil {
-		return fmt.Errorf("build gRPC credentials: %w", err)
+		return fmt.Errorf("build auth gRPC credentials: %w", err)
 	}
-
-	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpcCreds)
+	authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, authCreds)
 	if err != nil {
 		return fmt.Errorf("dial auth: %w", err)
 	}
 	defer authConn.Close()
 
-	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, grpcCreds)
+	storageCreds, err := clientCreds(cfg, "registry-storage")
+	if err != nil {
+		return fmt.Errorf("build storage gRPC credentials: %w", err)
+	}
+	storageConn, err := grpc.NewClient(cfg.StorageGRPCAddr, storageCreds)
 	if err != nil {
 		return fmt.Errorf("dial storage: %w", err)
 	}
@@ -291,18 +295,23 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
 
-// clientCreds returns mTLS transport credentials when cert paths are set,
-// or insecure credentials for local development.
-func clientCreds(cfg *config.Config) (grpc.DialOption, error) {
-	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
-		tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "")
-		if err != nil {
-			return nil, fmt.Errorf("load mTLS certs: %w", err)
-		}
-		return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
+// clientCreds returns mTLS dial credentials with serverName pinned to the
+// remote service's expected CN/SAN (e.g. "registry-auth", "registry-storage"),
+// falling back to plaintext insecure for local dev without certs. SEC-039:
+// the previous signature passed an empty serverName so no per-target
+// CN/SAN pin was enforced. mtls.ClientCreds returns insecure.NewCredentials
+// only when ALL cert paths are empty (dev posture); with paths set it
+// returns the error on TLS load failure so a corrupted cert fails-loud
+// instead of silently downgrading to plaintext.
+func clientCreds(cfg *config.Config, serverName string) (grpc.DialOption, error) {
+	creds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("load mTLS certs: %w", err)
 	}
-	slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
-	return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
+	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+		slog.Warn("mTLS not configured — gRPC clients running without TLS (development mode only)")
+	}
+	return grpc.WithTransportCredentials(creds), nil
 }
 
 // runMigrations opens a temporary pgxpool and runs goose migrations from the embedded FS.
