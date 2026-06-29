@@ -64,10 +64,9 @@ func (s *claimFakeAuthServer) GetUserPermissions(_ context.Context, req *authv1.
 	switch req.GetUserId() {
 	case platformAdminUser:
 		return &authv1.GetUserPermissionsResponse{
-			Roles: []string{"admin"},
-			RoleAssignments: []*authv1.RoleAssignment{
-				{Id: "marker", UserId: platformAdminUser, Role: "admin", ScopeType: "org", ScopeValue: "*"},
-			},
+			Roles:           []string{"admin"},
+			IsGlobalAdmin:   true,
+			RoleAssignments: nil,
 		}, nil
 	default:
 		return &authv1.GetUserPermissionsResponse{

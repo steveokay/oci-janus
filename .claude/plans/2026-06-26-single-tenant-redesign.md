@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-29 — 54 PRs shipped through #186. **Phase 3.4 service rollout ✅ COMPLETE** + Phase 3.4 close-out sweep done (SEC-038 #181, SEC-039 #182, RED-FU-007 conformance bootstrap #184, RED-FU-010 Docker go.sum gate #183, RED-FU-011 helper tests #185, RED-FU-012 mTLS unify #186). 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening + RED-FU-013 (scanner buildGRPCOptions extract) + RED-FU-014 (BaseConfig migration for 7 services).
+> **As-of:** 2026-06-29 — 58 PRs shipped through #190. **Phase 3.4 service rollout ✅ COMPLETE** + Phase 3.4 close-out sweep done (#181/#182/#183/#184/#185/#186) + tracker docs sync (#187) + scanner buildGRPCOptions extract (#188 RED-FU-013) + BaseConfig migration for the remaining 7 services (#189 RED-FU-014) + auth migration unblock (#190). **Local fresh-volume compose stack now reaches healthy on all 11 Phase 3.4 services for the first time since the rollout began.** 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|

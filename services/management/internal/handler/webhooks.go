@@ -94,6 +94,10 @@ type updateWebhookBody struct {
 func (h *Handler) requireWebhookAdmin(r *http.Request) bool {
 	if middleware.PrincipalKindFromContext(r.Context()) == middleware.PrincipalKindServiceAccount {
 		return false
+	// Phase 5.1 tail (2026-06-29): global admins bypass — see
+	// handler.go:requireDomainAdmin for the full rationale.
+	if h.effectiveGlobalAdmin(r) {
+		return true
 	}
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
