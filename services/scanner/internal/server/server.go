@@ -342,28 +342,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		)
 	}
 
-	// Build the gRPC interceptor chain. Pre-Phase 3.4 scanner had no
-	// interceptors at all (missed in earlier rollouts); adding the
-	// standard ServerInterceptors set (recovery + OTEL + logging) brings
-	// it in line with the rest of the platform. The injector slot stays
-	// at the end so it sees a fully-decorated context.
-	chain := grpcmw.ServerInterceptors()
-	if singleTenantInterceptor != nil {
-		chain = append(chain, singleTenantInterceptor)
-	}
-	grpcOpts := []grpc.ServerOption{
-		grpcmw.OTELServerHandler(),
-		grpc.ChainUnaryInterceptor(chain...),
-		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
-	}
-	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
-		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
-		if err != nil {
-			return fmt.Errorf("load mTLS server certs: %w", err)
-		}
-		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
-	} else {
-		slog.Warn("scanner gRPC server: mTLS not configured — running plaintext (dev only)")
+	// RED-FU-013 — build the gRPC server options via a helper so the
+	// chain shape matches every other Phase 3.4 service and can be
+	// unit-tested (services/scanner/internal/server/build_grpc_options_test.go).
+	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
+	if err != nil {
+		return fmt.Errorf("build gRPC options: %w", err)
 	}
 	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthSrv := health.NewServer()
@@ -440,6 +424,42 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildGRPCOptions returns server options for the scanner gRPC server,
+// including the standard interceptor chain (recovery / OTEL / logging),
+// an optional Phase 3.4 SingleTenantInjector slot, and mTLS server creds
+// when cert paths are configured.
+//
+// RED-FU-013 extracted this from inline `Run()` so the shape matches the
+// other 10 Phase 3.4 services and can be smoke-tested
+// (build_grpc_options_test.go). Pre-Phase 3.4 scanner had NO interceptors
+// at all (closed by PR #175 alongside the SingleTenantInjector wiring);
+// keeping the chain encapsulated here makes that regression structurally
+// hard to re-introduce.
+//
+// extraUnary, when non-nil, is chained after libs/middleware/grpc.ServerInterceptors
+// so the SingleTenantInjector sees a fully-decorated context.
+func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
+	chain := grpcmw.ServerInterceptors()
+	if extraUnary != nil {
+		chain = append(chain, extraUnary)
+	}
+	opts := []grpc.ServerOption{
+		grpcmw.OTELServerHandler(),
+		grpc.ChainUnaryInterceptor(chain...),
+		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
+	}
+	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {
+		tlsCfg, err := mtls.ServerTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS certs: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+	} else {
+		slog.Warn("mTLS not configured — gRPC running without TLS (development mode only)")
+	}
+	return opts, nil
 }
 
 // clientCreds returns mTLS dial credentials with serverName pinned to the
