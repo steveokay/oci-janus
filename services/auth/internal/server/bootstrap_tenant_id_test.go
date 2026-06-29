@@ -9,8 +9,8 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -139,9 +139,14 @@ func TestGetBootstrapTenantIDFromClient_NonJSONValue(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	// Sanity-check the wrap mentions JSON parsing so a log line is actionable.
-	if !errors.Is(err, err) || err.Error() == "" {
-		t.Errorf("error should be non-empty: %v", err)
+	// Assert the wrap mentions the parse step so a log line is actionable.
+	// Earlier draft used `errors.Is(err, err)` here — a tautological
+	// self-comparison that staticcheck SA4000 flags + that didn't actually
+	// verify the wrap chain. Substring check on the wrap message is what we
+	// want: if production stops wrapping with "parse bootstrap_tenant_id JSON"
+	// the test breaks.
+	if !strings.Contains(err.Error(), "parse bootstrap_tenant_id JSON") {
+		t.Errorf("error should mention parse step; got: %v", err)
 	}
 }
 
