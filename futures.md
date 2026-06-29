@@ -1130,7 +1130,10 @@ Docker v2 manifest list shapes are well-defined.
 ### RED-FU-012 — Lift mTLS ClientCreds wrapper into loader.BaseConfig — **✅ DONE (PR #186, 2026-06-29)**
 > Shipped: `(*BaseConfig) MTLSClientCreds(serverName)` added to `libs/config/loader/loader.go`. 5 services that already embed BaseConfig (auth, metadata, storage, proxy, management) dropped their local helper (`clientCreds` / `buildClientCreds` / `buildGRPCCreds`) and call the lifted method directly. 16 call sites unified. Remaining 7 services without BaseConfig embed filed as RED-FU-014 below.
 
-### RED-FU-013 — Extract scanner buildGRPCOptions + add helper tests
+### RED-FU-013 — Extract scanner buildGRPCOptions + add helper tests — **✅ DONE (PR #188, 2026-06-29)**
+> Shipped: extracted helper + the 3-test smoke suite. Two cosmetic wording fixes (matching the 9-service majority) folded inline per code-review-agent.
+
+#### Original notes (kept for context)
 - **Why:** Scanner's interceptor chain is built inline in `Run()`
   rather than threaded through a `buildGRPCOptions(cfg, extraUnary)`
   helper like every other Phase 3.4 service. Surfaced twice: by
@@ -1146,7 +1149,10 @@ Docker v2 manifest list shapes are well-defined.
   `services/scanner/internal/server/build_grpc_options_test.go`
   (new).
 
-### RED-FU-014 — Migrate the remaining 7 services to embed loader.BaseConfig
+### RED-FU-014 — Migrate the remaining 7 services to embed loader.BaseConfig — **✅ DONE (PR #189, 2026-06-29)**
+> Shipped: core/scanner/signer/webhook/audit/gc/tenant all embed BaseConfig now. core+scanner dropped their local `clientCreds` helpers; signer/webhook/audit/gc swapped inline `mtls.ClientCreds` calls to `cfg.MTLSClientCreds`. PR also fixed a latent bootstrap container bug (missing `slug` column in `INSERT INTO tenants`).
+
+#### Original notes (kept for context)
 - **Why:** RED-FU-012 only refactored the 5 services that already
   embed `loader.BaseConfig` (auth, metadata, storage, proxy,
   management). core, scanner, signer, webhook, audit, gc, and tenant
