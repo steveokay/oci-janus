@@ -1031,7 +1031,10 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/tenant/internal/handler/grpc.go`,
   `services/tenant/internal/handler/grpc_test.go`.
 
-### RED-FU-007 — Conformance compose-stack bootstrap fix (REM-020 #10 finisher)
+### RED-FU-007 — Conformance compose-stack bootstrap fix — **✅ DONE (PR #184, 2026-06-29)**
+> Shipped via approach (b) variant: postgres:16-alpine one-shot container seeds the tenant-side rows (tenants + tenant_policies + deployment_metadata.bootstrap_tenant_id) before Phase 3.4 services start. 10 services gain `depends_on: registry-bootstrap`. Admin user creation deferred to `make dev-bootstrap` since the auth bootstrap CLI's argon2 + cross-module migration requirements were a larger scope.
+
+#### Original notes (kept for context)
 - **Why:** REM-020 #10 conformance failures since 2026-06-25 traced to
   the Phase 3.4 fail-loud bootstrap lookup tripping in compose (auth +
   metadata + core + storage call `tenant.GetDeploymentMetadata` at
@@ -1084,7 +1087,10 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/scanner/Dockerfile`,
   `services/scanner/.trivyignore` (slim down once the base is leaner).
 
-### RED-FU-010 — scanner / core Docker build go.sum drift after #167 libs lift
+### RED-FU-010 — scanner / core Docker build go.sum drift after #167 libs lift — **✅ DONE (PR #183, 2026-06-29)**
+> Shipped: scanner gained 3 transitive deps (go-redis/v9, otelgrpc, atomic). Sweep across other modules confirmed scanner was the only one affected. ci-tidy-check workflow now runs `GOWORK=off` to match the Docker invariant so future drift is caught before reaching main.
+
+#### Original notes (kept for context)
 - **Why:** `CI — scanner Docker build` has been red on every push since
   #163 (and `CI — core` likely shares the same shape). Failure:
   `missing go.sum entry for ... libs/middleware/grpc` for `go-redis/v9`
@@ -1103,7 +1109,10 @@ Docker v2 manifest list shapes are well-defined.
   `services/core/go.mod`, `services/core/go.sum`, possibly others
   flagged by `ci-tidy-check.yml`.
 
-### RED-FU-011 — Phase 3.4 helper unit-test coverage
+### RED-FU-011 — Phase 3.4 helper unit-test coverage — **✅ DONE (PR #185, 2026-06-29)**
+> Shipped: 10 services × 3 tests each (nil extraUnary / non-nil / bad mTLS). Scanner deferred — chain still inlined into `Run()` rather than threaded through `buildGRPCOptions`. Tracked as RED-FU-013 below.
+
+#### Original notes (kept for context)
 - **Why:** The 9 Phase 3.4 rollout PRs added a `fetchBootstrapTenantID`
   helper to 7 services + a `readBootstrapTenantID` self-read variant
   to services/tenant + reused-conn variant in services/gc, plus the
@@ -1117,6 +1126,46 @@ Docker v2 manifest list shapes are well-defined.
   leaves chain unchanged. tenant gets a third for the pre-bootstrap
   skip-with-warn branch. Half-day.
 - **Affects:** `services/{auth,metadata,core,storage,signer,webhook,scanner,audit,gc,proxy,tenant}/internal/server/server_test.go`.
+
+### RED-FU-012 — Lift mTLS ClientCreds wrapper into loader.BaseConfig — **✅ DONE (PR #186, 2026-06-29)**
+> Shipped: `(*BaseConfig) MTLSClientCreds(serverName)` added to `libs/config/loader/loader.go`. 5 services that already embed BaseConfig (auth, metadata, storage, proxy, management) dropped their local helper (`clientCreds` / `buildClientCreds` / `buildGRPCCreds`) and call the lifted method directly. 16 call sites unified. Remaining 7 services without BaseConfig embed filed as RED-FU-014 below.
+
+### RED-FU-013 — Extract scanner buildGRPCOptions + add helper tests
+- **Why:** Scanner's interceptor chain is built inline in `Run()`
+  rather than threaded through a `buildGRPCOptions(cfg, extraUnary)`
+  helper like every other Phase 3.4 service. Surfaced twice: by
+  code-review-agent on PR #175 (scanner Phase 3.4 wiring) as a
+  should-fix, and by RED-FU-011 (PR #185) which had to skip scanner
+  from the unit-test sweep because there was no helper to test.
+- **Scope (~1h):** extract `buildGRPCOptions(cfg, extraUnary
+  grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error)` from
+  `services/scanner/internal/server/server.go` `Run()`; add the
+  3-test smoke suite (`build_grpc_options_test.go`) matching the
+  template now used by the other 10 services.
+- **Affects:** `services/scanner/internal/server/server.go`,
+  `services/scanner/internal/server/build_grpc_options_test.go`
+  (new).
+
+### RED-FU-014 — Migrate the remaining 7 services to embed loader.BaseConfig
+- **Why:** RED-FU-012 only refactored the 5 services that already
+  embed `loader.BaseConfig` (auth, metadata, storage, proxy,
+  management). core, scanner, signer, webhook, audit, gc, and tenant
+  still declare `LogLevel` / `LogFormat` / `GRPCAddr` / `HTTPAddr` /
+  `MetricsAddr` / `MTLS_*` / `OTEL_*` fields directly on their Config
+  struct — ~13 inherited fields per service. Migrating them to embed
+  BaseConfig delivers (a) automatic access to the lifted
+  `MTLSClientCreds` method and (b) one canonical home for the shared
+  fields. Code-review-agent on RED-FU-012 (PR #186) recommended adding
+  a `// TODO RED-FU-014` sentinel comment next to each surviving
+  helper in those services to signal intent to the next reader.
+- **Scope (~1 day):** per-service edit: replace ~13 standalone fields
+  with `loader.BaseConfig \`mapstructure:",squash"\``; sweep callers
+  for the embedded fields (already promoted via Go's field promotion
+  so no rename needed); drop the local clientCreds-style helper if
+  the service has one. Verify per-service local CI gate. Touches 7
+  service config + server files.
+- **Affects:** `services/{core,scanner,signer,webhook,audit,gc,tenant}/internal/config/config.go`
+  + `internal/server/server.go`.
 
 ### RED-FU-005 — Phase 7.1 CLAUDE.md / docs/SERVICES.md rewrite
 - **Why:** REDESIGN-001 Phase 7.1 is the catch-all "make CLAUDE.md and
