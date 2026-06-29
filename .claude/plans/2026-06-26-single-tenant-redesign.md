@@ -59,8 +59,9 @@
 | 3.4 #3 | services/core injector wiring (1st libs consumer) | 🟡 IN REVIEW | #170 | — |
 | 3.4 #4 | services/storage injector wiring | ✅ DONE | #171 | 2026-06-29 |
 | 3.4 #5 | services/signer injector wiring | ✅ DONE | #173 | 2026-06-29 |
-| 3.4 #6 | services/webhook injector wiring | 🟡 IN REVIEW | #174 | — |
-| 3.4 #7–11 | scanner / audit / gc / proxy / tenant | ⬜ OPEN | — | — |
+| 3.4 #6 | services/webhook injector wiring | ✅ DONE | #174 | 2026-06-29 |
+| 3.4 #7 | services/scanner injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #175 | — |
+| 3.4 #8–11 | audit / gc / proxy / tenant | ⬜ OPEN | — | — |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
