@@ -62,6 +62,8 @@
 | 3.4 #6 | services/webhook injector wiring | ✅ DONE | #174 | 2026-06-29 |
 | 3.4 #7 | services/scanner injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #175 | — |
 | 3.4 #8 | services/audit injector wiring | 🟡 IN REVIEW | #176 | — |
+| 3.4 #10 | services/proxy injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #178 | — |
+| 3.4 #9, #11 | gc / tenant | ⬜ OPEN | — | — |
 | 3.4 #9 | services/gc injector wiring (reuses existing tenant conn) | 🟡 IN REVIEW | #177 | — |
 | 3.4 #11 | services/tenant injector wiring (self-read from local repo — final service) | 🟡 IN REVIEW | #179 | — |
 | 3.4 #10 | services/proxy injector wiring | ⬜ OPEN | — | — |
