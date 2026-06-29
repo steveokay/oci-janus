@@ -18,7 +18,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -31,6 +30,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
+	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
@@ -389,60 +389,15 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	}
 	defer tenantConn.Close()
 
-	return getBootstrapTenantIDFromClient(ctx, tenantv1.NewTenantServiceClient(tenantConn))
+	return tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
 }
 
-// getBootstrapTenantIDFromClient is the post-dial half of
-// fetchBootstrapTenantID, split out so tests can inject a bufconn-backed
-// client without going through the cfg → mTLS → dial path. Behaviour
-// contract identical to the wrapping function for the RPC + parse stages.
-func getBootstrapTenantIDFromClient(ctx context.Context, client tenantv1.TenantServiceClient) (string, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	resp, err := client.GetDeploymentMetadata(callCtx, &tenantv1.GetDeploymentMetadataRequest{
-		Key: "bootstrap_tenant_id",
-	})
-	if err != nil {
-		return "", fmt.Errorf("GetDeploymentMetadata(bootstrap_tenant_id): %w", err)
-	}
-
-	// The value is JSONB-encoded — for bootstrap_tenant_id specifically a
-	// JSON string ("\"<uuid>\""). Unmarshal into a string then validate the
-	// UUID format so a typo'd value fails here rather than silently becoming
-	// a constant interceptor input.
-	var idStr string
-	if err := json.Unmarshal(resp.GetValue(), &idStr); err != nil {
-		return "", fmt.Errorf("parse bootstrap_tenant_id JSON: %w", err)
-	}
-	if _, err := uuid.Parse(idStr); err != nil {
-		return "", fmt.Errorf("bootstrap_tenant_id %q is not a valid UUID: %w", idStr, err)
-	}
-	return idStr, nil
-}
-
-// buildClientCreds returns mTLS credentials for outbound gRPC dials when all
-// three cert paths are configured, or plaintext insecure credentials
-// otherwise (dev only). config.validate() ensures the plaintext path is
-// rejected in production. The serverName argument is the expected CN /
-// SAN on the remote server's certificate; in production this is checked
-// against the cert's SAN. In dev (insecure mode) it is ignored.
-//
-// FE-API-048 FUT-005: used to dial registry-audit for the activity facade.
+// buildClientCreds is the auth-local convenience wrapper around
+// libs/auth/mtls.ClientCreds — it converts the auth Config struct into the
+// three cert-path arguments. Kept as a one-liner so existing call sites
+// (audit client, tenant client) don't change.
 func buildClientCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
-	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
-		return insecure.NewCredentials(), nil
-	}
-	tlsCfg, err := mtls.ClientTLSConfig(
-		cfg.MTLSCACertPath,
-		cfg.MTLSCertPath,
-		cfg.MTLSKeyPath,
-		serverName,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return credentials.NewTLS(tlsCfg), nil
+	return mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
 }
 
 // buildGRPCOptions returns the server options list, including mTLS credentials

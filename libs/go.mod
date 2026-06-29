@@ -10,6 +10,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.20.0
 	github.com/spf13/viper v1.19.0
+	github.com/steveokay/oci-janus/proto/gen/go v0.0.0-20260629114915-b1553001c7b0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.53.0
