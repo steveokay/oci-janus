@@ -106,19 +106,25 @@ type SetUserDisabledResponseBody struct {
 
 // ── RBAC gate ────────────────────────────────────────────────────────
 
-// isTenantAdminOrPlatformAdmin returns true when the caller holds
-// admin on the tenant scope OR the platform-admin marker `(admin, org, '*')`.
-// Used as the gate on every FUT-012 BFF route — the same gate
-// expression repeats four times so we factor it out here.
+// isTenantAdminOrPlatformAdmin returns true when the caller holds admin on
+// the tenant scope OR is an effective global admin (Phase 5.1 typed primitive
+// users.is_global_admin — and in single mode, any tenant admin). Used as the
+// gate on every FUT-012 BFF route.
 //
-// The tenant scope value is the tenant_id string the gateway injects;
-// tenant-admin grants are keyed on the literal tenant UUID. Platform-
-// admin's wildcard org grant trumps every tenant boundary.
+// Phase 5.1 tail #2 (2026-06-29): the legacy `(admin, org, "*")` marker check
+// was removed when #134 deleted that grant pattern across the codebase. A
+// brand-new bootstrap admin holds users.is_global_admin=true with no role
+// assignments; without the effectiveGlobalAdmin short-circuit they got 403
+// on every tenant-users route. Same shape as the hot-fix applied to
+// requireDomainAdmin / requireWebhookAdmin / requireScanPolicyAdmin in #193 —
+// see handler.go:requireDomainAdmin for the full rationale.
 func (h *Handler) isTenantAdminOrPlatformAdmin(r *http.Request) bool {
+	if h.effectiveGlobalAdmin(r) {
+		return true
+	}
 	assignments := h.getUserAssignments(r)
 	tenantID := middleware.TenantIDFromContext(r.Context())
-	return hasScopedRole(assignments, "tenant", tenantID, "admin") ||
-		hasScopedRole(assignments, "org", "*", "admin")
+	return hasScopedRole(assignments, "tenant", tenantID, "admin")
 }
 
 // ── handlers ──────────────────────────────────────────────────────────

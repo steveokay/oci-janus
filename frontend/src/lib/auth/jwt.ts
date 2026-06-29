@@ -12,6 +12,11 @@ export interface JanusJwtClaims {
   iat: number;
   jti: string;
   roles?: string[];
+  // is_global_admin mirrors users.is_global_admin (REDESIGN-001 Phase 5.1).
+  // True grants platform/workspace-admin abilities regardless of role
+  // assignments. Optional so legacy JWTs from before Phase 5.1 still parse
+  // (the field is omitempty on the backend; absent → false).
+  is_global_admin?: boolean;
   access?: Array<{
     type: string;     // "repository"
     name: string;     // "org/repo"
@@ -42,11 +47,14 @@ export function isExpiringSoon(claims: JanusJwtClaims, withinSeconds = 60): bool
  * REDESIGN-001 Phase 4.4 — sweep of call-sites follows in Phase 4.2.
  */
 export function isPlatformAdmin(claims: JanusJwtClaims | null): boolean {
-  // Platform-admin marker — backend grants `(admin, org, "*")` via the dev seed
-  // migration. The `roles` claim is the deduped role-name list; we look for the
-  // capital-A literal that the migration uses.
-  if (!claims?.roles) return false;
-  return claims.roles.includes("admin");
+  if (!claims) return false;
+  // Phase 5.1: typed users.is_global_admin is the canonical check.
+  if (claims.is_global_admin) return true;
+  // Legacy fallback for tokens that pre-date the is_global_admin claim.
+  // The Phase 5.1 backfill deleted the (admin, org, "*") marker grant so
+  // this only matches users still holding org-scoped admin — overly broad
+  // (the deprecation note above already flags this).
+  return claims.roles?.includes("admin") ?? false;
 }
 
 /**
@@ -69,6 +77,8 @@ export function isPlatformAdmin(claims: JanusJwtClaims | null): boolean {
 // Audit streaming). Real platform-admin surfaces (`/admin/*`) keep using
 // `isPlatformAdmin`.
 export function isWorkspaceAdmin(claims: JanusJwtClaims | null): boolean {
-  if (!claims?.roles) return false;
-  return claims.roles.includes("admin") || claims.roles.includes("owner");
+  if (!claims) return false;
+  // Phase 5.1: global admins always pass workspace-admin gates.
+  if (claims.is_global_admin) return true;
+  return claims.roles?.includes("admin") || claims.roles?.includes("owner") || false;
 }
