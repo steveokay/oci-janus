@@ -20,11 +20,14 @@ You are the QA Agent for the OCI registry platform. Your job is to verify that e
 - Confirm tests tagged `//go:build integration`
 - Verify `make test-integration` target exists and passes
 
-### 3. OCI conformance (registry-core only)
-- Run OCI Distribution Spec conformance suite
-- All required endpoints must pass
-- `make test-conformance` must exit 0
-- Confirm `make test-conformance` is wired into CI on PRs to `main`
+### 3. OCI conformance (registry-core + proto/storage/metadata-touching PRs)
+- **Always** check the conformance status as part of the QA review, not only on registry-core PRs. The conformance suite is the system-level integration test for the whole stack; any PR that touches `proto/**`, `services/core`, `services/storage`, `services/metadata`, `services/auth` (token issuance), or the docker-compose stack itself is in scope.
+- Run `gh run list --workflow ci-core.yml --branch main --limit 5 --json conclusion` to see whether conformance has been green on `main` recently.
+  - If **main is currently red on conformance**: classify the PR finding as **PRE-EXISTING** (REM-020 territory — pipeline rot), not a regression. Report it as such so the PR isn't unfairly blocked. File the rot under a REM- entry if not already tracked.
+  - If **main is green but the PR's run failed**: classify as **REGRESSION** caused by this PR. Block the merge.
+- Fetch the actual failed-job log via `gh run view --job <id> --log-failed` — don't trust the rollup status alone. A "conformance failed" check that's actually the docker-compose build failing (e.g. missing `go.work.sum`, stale go.sum) is **infrastructure rot**, not a spec violation, and the distinction matters.
+- `make test-conformance` must exit 0 when run locally against a fresh stack.
+- Confirm `make test-conformance` is wired into CI on PRs to `main`.
 
 ### 4. Race condition check
 - Confirm `go test -race ./...` passes (CI enforced)
@@ -44,7 +47,7 @@ PASS / FAIL
 
 Unit tests:     PASS | FAIL | NOT RUN — <note>
 Integration:    PASS | FAIL | NOT RUN — <note>
-Conformance:    PASS | FAIL | N/A     — <note>
+Conformance:    PASS | FAIL (REGRESSION) | FAIL (PRE-EXISTING) | N/A — <note + main history evidence>
 Race check:     PASS | FAIL | NOT RUN — <note>
 
 Issues:
