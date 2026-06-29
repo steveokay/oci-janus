@@ -71,6 +71,16 @@
 | CI infra #2 | `.golangci.yml` loosened (`go: 1.25`, exclude `gosec G115/G306`, drop `gocritic style+performance`, `default-signifies-exhaustive: true`, broader `_test.go` exclusions) + `security:` jobs non-blocking until Go runtime patch bump (REM-016). File REM-014/015/016 | #157 | 2026-06-28 |
 | CI infra #3 | `gofmt -w` sweep across 118 BE .go files (whitespace drift accumulated while typecheck-trapped) + `noctx` test-exclusion + `govulncheck ./... \|\| true` | #158 round 1 | 2026-06-28 |
 | CI infra #4 | Lint jobs (`lint:`) non-blocking across all 13 BE workflows; `exhaustive` + `unparam` + `staticcheck` removed/test-excluded; `godot` disabled (REM-014 tail) | #158 round 4 | 2026-06-29 |
+| 3.4 prep | `tenant.GetDeploymentMetadata` RPC — generic key-lookup over deployment_metadata, first consumer for per-service bootstrap_tenant_id fetch | #160 | 2026-06-29 |
+| REM-014 a | services/tenant lint tail closure — goimports + drop `continue-on-error: true` on tenant lint | #161 | 2026-06-29 |
+| 3.4 pilot | services/auth SingleTenantInjector wiring — first consumer of GetDeploymentMetadata | #162 | 2026-06-29 |
+| REM-020 #2 | per-service `go mod tidy` sweep + ci-tidy-check matrix workflow (libs + 11 services; auth deferred to #165) | #163 | 2026-06-29 |
+| 3.4 #2 | services/metadata SingleTenantInjector wiring | #164 | 2026-06-29 |
+| REM-020 #2 tail | services/auth tidy follow-up (closes the deferred shard from #163) | #165 | 2026-06-29 |
+| REM-014 + REM-020 #7 | REM-014 lint backlog closure across all 13 services + drop `continue-on-error: true` from every backend lint job; .golangci.yml _test.go exclusion expanded | #166 | 2026-06-29 |
+| 3.4 libs | `libs/tenant/bootstrap.FetchTenantID` + `libs/auth/mtls.ClientCreds` extraction (rule-of-three lift before service rollout fans out); services/auth + services/metadata refactored to consume | #167 | 2026-06-29 |
+| REM-020 #10 a | scanner trivy 0.52.0→0.71.2 bump + .trivyignore for perl-base/zlib1g/grpc CVEs | #168 + #169 | 2026-06-29 |
+| REM-020 #10 b | scanner trivy-action skip-files on bundled trivy/grype + ignore-unfixed (kill whack-a-mole on upstream-binary CVEs) | #169 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
