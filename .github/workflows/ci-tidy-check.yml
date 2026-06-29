@@ -68,9 +68,22 @@ jobs:
           # Cache go module downloads; modest speedup, big consistency win.
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
-      - name: Run go mod tidy
+      - name: Run go mod tidy (GOWORK=off)
         # Invoke from the module directory; tidy operates per-go.mod.
+        # GOWORK=off matches how every service's Dockerfile builds the
+        # binary (`CGO_ENABLED=0 GOOS=linux GOWORK=off go build ...`). The
+        # default workspace-aware `go mod tidy` will silently accept a
+        # go.sum that's missing entries for transitive deps satisfied
+        # only by the workspace's libs module — passing this CI gate but
+        # failing the Docker build at deploy time. RED-FU-010 (2026-06-29)
+        # surfaced exactly this: the #167 libs/middleware/grpc extraction
+        # pulled go-redis/v9 + otelgrpc into libs, the workspace
+        # transitively satisfied scanner's import, tidy-check stayed
+        # green, and the scanner Docker build broke for 4 days. GOWORK=off
+        # forces tidy to record every transitive in the per-module sum.
         working-directory: ${{ matrix.module }}
+        env:
+          GOWORK: "off"
         run: go mod tidy
 
       - name: Check go.mod / go.sum are unchanged
@@ -82,6 +95,6 @@ jobs:
           if ! git diff --exit-code -- go.mod go.sum; then
             echo ""
             echo "::error::go.mod or go.sum in ${{ matrix.module }} is stale."
-            echo "::error::Run 'cd ${{ matrix.module }} && go mod tidy' locally and commit."
+            echo "::error::Run 'cd ${{ matrix.module }} && GOWORK=off go mod tidy' locally and commit."
             exit 1
           fi
