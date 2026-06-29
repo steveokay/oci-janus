@@ -247,6 +247,11 @@ re-discovers the same potholes.
    tidy on all 13 services + libs to close the pre-existing rot.
    Then add a `tidy-check` job (`go mod tidy && git diff --exit-code`)
    so future PRs can't merge with stale go.sum.
+   🟡 **IN FLIGHT — PR TBD on `fix/ci-rem-020-tidy-sweep`.** Tidied 11
+   services + libs (services/auth deferred until PR #162 merges to
+   avoid branch conflict; auth tidy ships as a follow-up). Added
+   `.github/workflows/ci-tidy-check.yml` — matrix workflow over all 14
+   modules with `go mod tidy && git diff --exit-code` per module.
 6. **Sunset `continue-on-error: true` once REM-014/015/016 close** —
    per-service cleanup PRs are already designed to drop these
    flags; REM-020 just tracks the campaign.

@@ -1,0 +1,87 @@
+name: CI — tidy-check
+
+# Enforces that every Go module's go.mod + go.sum is in the canonical shape
+# `go mod tidy` would produce. Without this gate, transitive-dep churn in
+# libs/config/loader (or any other shared lib) silently rots each service's
+# go.sum until the next Dockerfile build trips on a "missing go.sum entry"
+# error.
+#
+# That failure mode bit PRs #160 and #162 of the REDESIGN-001 redesign and
+# is the root cause of REM-020 finding #2 in status-tracker.md. This
+# workflow makes it impossible to land a PR with a stale module in any of
+# the 12 backend services or the shared libs/ module.
+#
+# Why a matrix workflow rather than a step inside each ci-<svc>.yml:
+#   - One file to update when the toolchain version changes.
+#   - Tidy is a module-level invariant, not a per-service concern — it
+#     belongs at the repo-wide gate layer.
+#   - Per-service duplication would mean 13 places to fix when the gate
+#     itself evolves (e.g. when we add `go mod verify` per CLAUDE.md §13).
+#
+# Runs on every PR that touches a go.mod / go.sum / go.work file or any
+# Go source under libs/ or services/. Cheap (~30s per matrix shard) so we
+# don't bother with path-filter precision per service.
+
+on:
+  pull_request:
+    paths:
+      - "**/go.mod"
+      - "**/go.sum"
+      - "go.work"
+      - "go.work.sum"
+      - "libs/**/*.go"
+      - "services/**/*.go"
+
+jobs:
+  tidy-check:
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel sibling jobs on first failure — surfacing all 13
+      # offending modules in a single PR run is more useful than seeing
+      # one and re-pushing 12 times.
+      fail-fast: false
+      matrix:
+        # Order is alphabetical for log-readability. libs sits first
+        # because most rot starts in shared deps and surfaces in the
+        # per-service modules afterwards.
+        module:
+          - libs
+          - services/audit
+          - services/auth
+          - services/core
+          - services/gateway
+          - services/gc
+          - services/management
+          - services/metadata
+          - services/proxy
+          - services/scanner
+          - services/signer
+          - services/storage
+          - services/tenant
+          - services/webhook
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.7"
+          # Cache go module downloads; modest speedup, big consistency win.
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Run go mod tidy
+        # Invoke from the module directory; tidy operates per-go.mod.
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy
+
+      - name: Check go.mod / go.sum are unchanged
+        # If tidy produced any diff, the module's checked-in files were
+        # stale. `git diff --exit-code` exits non-zero in that case and
+        # fails the job with a readable diff in the log.
+        working-directory: ${{ matrix.module }}
+        run: |
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo ""
+            echo "::error::go.mod or go.sum in ${{ matrix.module }} is stale."
+            echo "::error::Run 'cd ${{ matrix.module }} && go mod tidy' locally and commit."
+            exit 1
+          fi
