@@ -86,6 +86,7 @@
 | 3.4 #7 | services/scanner SingleTenantInjector wiring + compose env wire-in + **added missing standard interceptor chain** (recovery/OTEL/logging) — pre-existing gap | #175 | 2026-06-29 |
 | 3.4 #8 | services/audit SingleTenantInjector wiring + compose env wire-in | #176 | 2026-06-29 |
 | 3.4 #9 | services/gc SingleTenantInjector wiring — **reuses the existing TenantGRPCAddr conn** (gc already dialled tenant for ListTenants), so no second TCP stream; compose adds registry-tenant to depends_on chain | #177 | 2026-06-29 |
+| 3.4 #11 | services/tenant SingleTenantInjector wiring — **closes the rollout**. Special case: tenant *is* the source of GetDeploymentMetadata, can't self-dial; reads bootstrap_tenant_id directly from local repo. Pre-bootstrap deployments log a warning + skip wiring (Phase 3.2 CreateTenant guard already covers the same invariant); once bootstrap CLI writes the key, the next restart wires the interceptor | #179 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
