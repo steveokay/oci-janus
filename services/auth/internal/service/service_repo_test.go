@@ -27,6 +27,15 @@ import (
 
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
+// ssoKey is the composite (provider_id, subject) lookup key used by the SSO
+// subject-binding fake side map (REDESIGN-001 Phase 5.5). Provider id is a
+// stable string from global_sso_config and subject is the IdP-assigned
+// identifier — together they uniquely identify a remote user account.
+type ssoKey struct {
+	provider string
+	subject  string
+}
+
 // fakeUserRepo is an in-memory userRepo fake. Methods are implemented minimally
 // to satisfy test needs. Zero-value is ready to use with an empty user store.
 type fakeUserRepo struct {
@@ -34,13 +43,31 @@ type fakeUserRepo struct {
 	users         map[string]*repository.User
 	failedLogins  map[uuid.UUID]int
 	recordFailErr error // if non-nil, RecordFailedLogin returns this error
+	// bySSOSubject mirrors the real partial index on
+	// (sso_provider_id, sso_subject) so GetUserBySSOSubject can match a
+	// returning login without scanning the whole user store. Seeded by
+	// CreateSSOUser and by the bindSSOSubject test helper.
+	bySSOSubject map[ssoKey]*repository.User
 }
 
 func newFakeUserRepo() *fakeUserRepo {
 	return &fakeUserRepo{
 		users:        make(map[string]*repository.User),
 		failedLogins: make(map[uuid.UUID]int),
+		bySSOSubject: make(map[ssoKey]*repository.User),
 	}
+}
+
+// bindSSOSubject is a test-only helper that records a (provider, subject)
+// binding for an existing user. Used by tests that seed a returning SSO user
+// directly into f.users (bypassing CreateSSOUser) so the subject-keyed
+// lookup still finds them.
+func (f *fakeUserRepo) bindSSOSubject(u *repository.User, providerID, subject string) {
+	if providerID == "" || subject == "" {
+		return
+	}
+	u.SSOSubject = subject
+	f.bySSOSubject[ssoKey{provider: providerID, subject: subject}] = u
 }
 
 // addUser inserts a user into the fake store. The password must already be hashed.
@@ -249,13 +276,67 @@ func (f *fakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSO
 		Email:     req.Email,
 		IsActive:  true,
 		CreatedAt: time.Now(),
+		// REDESIGN-001 Phase 5.5: persist the IdP subject at creation time so
+		// the next login matches by (provider, subject) instead of email.
+		SSOSubject: req.SSOSubject,
 	}
 	if req.DisplayName != "" {
 		v := req.DisplayName
 		u.DisplayName = &v
 	}
+	// Record the provider id on the fake user using a synthetic field — the
+	// real repository writes it to users.sso_provider_id. The service tests
+	// only need the subject + tenant invariant, so we stash the provider id
+	// on the synthetic provider-keyed lookup map below.
 	f.users[u.Username] = u
+	if req.SSOProviderID != "" && req.SSOSubject != "" {
+		f.bySSOSubject[ssoKey{provider: req.SSOProviderID, subject: req.SSOSubject}] = u
+	}
 	return u, nil
+}
+
+// GetUserBySSOSubject mirrors the real repo's composite lookup. The fake
+// keeps a side map keyed by (provider, subject) so a returning login can
+// be matched without scanning the user store. Tests seed entries either
+// via CreateSSOUser or by calling fakeUserRepo.bindSSOSubject directly.
+func (f *fakeUserRepo) GetUserBySSOSubject(_ context.Context, providerID string, subject string) (*repository.User, error) {
+	if subject == "" {
+		return nil, repository.ErrNotFound
+	}
+	u, ok := f.bySSOSubject[ssoKey{provider: providerID, subject: subject}]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
+// SetSSOSubject backfills the in-memory user's SSOSubject and updates the
+// side map so subsequent GetUserBySSOSubject calls match the new value.
+// Matches the real repo's contract: refuses to overwrite an existing
+// non-empty subject (the service layer rejects mismatches before calling
+// this method).
+func (f *fakeUserRepo) SetSSOSubject(_ context.Context, userID uuid.UUID, subject string) error {
+	if subject == "" {
+		return fmt.Errorf("set sso subject: subject is empty")
+	}
+	for _, u := range f.users {
+		if u.ID != userID {
+			continue
+		}
+		if u.SSOSubject != "" {
+			// Mirror the real repo's WHERE sso_subject IS NULL guard — no-op
+			// when a subject is already bound.
+			return nil
+		}
+		u.SSOSubject = subject
+		// Mirror the real index behaviour: subject becomes lookable now.
+		// Test seeds always pair providerID with subject via the helper
+		// below, so we cannot infer providerID here. The bindSSOSubject
+		// helper writes both fields atomically when tests need backfilled
+		// rows to be lookable via GetUserBySSOSubject.
+		return nil
+	}
+	return repository.ErrNotFound
 }
 
 func (f *fakeUserRepo) TouchLastLogin(_ context.Context, id uuid.UUID) error {

@@ -51,6 +51,15 @@ type userRepo interface {
 	// (sa+N@internal.invalid) so they cannot match on the SSO login path.
 	// Use this method on all human-authentication paths; GetByEmail is deprecated.
 	GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
+	// GetUserBySSOSubject is the (sso_provider_id, sso_subject) composite
+	// lookup that EnsureSSOUser consults first to defend against
+	// email-recycle account takeover (REDESIGN-001 Phase 5.5).
+	GetUserBySSOSubject(ctx context.Context, providerID string, subject string) (*repository.User, error)
+	// SetSSOSubject backfills users.sso_subject for accounts that pre-date
+	// the Phase 5.5 migration so future logins flow through the subject
+	// lookup. Called only on the first email-matched login of an existing
+	// pre-migration row with NULL sso_subject.
+	SetSSOSubject(ctx context.Context, userID uuid.UUID, subject string) error
 	CreateSSOUser(ctx context.Context, req repository.CreateSSOUserRequest) (*repository.User, error)
 	TouchLastLogin(ctx context.Context, id uuid.UUID) error
 	// Kind-guarded helpers (FE-API-048). GetHumanByID enforces kind='human' so

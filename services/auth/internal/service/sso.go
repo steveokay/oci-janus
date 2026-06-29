@@ -321,14 +321,37 @@ func isSyntheticSAEmail(email string) bool {
 	return strings.HasPrefix(email, "sa+") && strings.HasSuffix(email, "@internal.invalid")
 }
 
+// ErrSSOSubjectMismatch is returned when the IdP-asserted (provider, subject)
+// composite identity disagrees with the persisted binding on a user row that
+// was matched via email. The caller surfaces this as an operator-actionable
+// 401 — the user's IT/admin needs to either link the new SSO identity to the
+// existing account or clear the stale binding so the row can rebind.
+//
+// Why fail closed rather than silently rebind: if an employee leaves and the
+// corporate email is later reassigned to a new hire, allowing the new hire's
+// first SSO login to overwrite the persisted subject would silently bind them
+// to the prior employee's account (history, RBAC grants, audit trail). The
+// only correct response is to refuse and force a human decision.
+var ErrSSOSubjectMismatch = errors.New("sso subject does not match the persisted binding for this email")
+
 // EnsureSSOUser matches the identity to an existing local user OR provisions
 // a new one. It enforces the verified-email gate, the auto-provision flag,
 // and the default role grant. Returns the (possibly newly created) user and
 // the role names to embed in the JWT.
 //
+// Lookup order (REDESIGN-001 Phase 5.5):
+//  1. (sso_provider_id, sso_subject) composite lookup — the IdP's stable
+//     subject identifier is the authoritative binding.
+//  2. Email fallback for accounts that pre-date the subject migration. If the
+//     row has NULL sso_subject the subject is back-filled and login proceeds.
+//     If the row has a non-NULL sso_subject that disagrees with the IdP's
+//     assertion, the login is REJECTED to defend against email-recycle
+//     account takeover.
+//  3. Auto-provision when neither lookup matches and the provider allows it.
+//
 // Concurrency: if a parallel SSO callback races to create the same user, the
-// CreateSSOUser call returns ErrAlreadyExists and we re-query by email so
-// the second caller still gets a valid user record.
+// CreateSSOUser call returns ErrAlreadyExists and we re-query by subject
+// (then by email) so the second caller still gets a valid user record.
 //
 // REDESIGN-001 RM-003: accepts *repository.GlobalSSOProvider instead of
 // *repository.AuthProvider. TenantID for new auto-provisioned users falls
@@ -363,12 +386,62 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 		return nil, nil, fmt.Errorf("cannot resolve tenant for SSO callback: set AUTH_DEFAULT_TENANT_ID")
 	}
 
+	// Step 1: try the subject-keyed lookup first. A successful match here is
+	// the strongest signal we have that this is the same human who logged in
+	// before — the (provider, subject) pair is immune to email recycling
+	// because the IdP minted the subject when the remote account was created
+	// and will not re-assign it.
+	if ident.Subject != "" {
+		bySubject, err := s.auth.users.GetUserBySSOSubject(ctx, p.ProviderID, ident.Subject)
+		switch {
+		case err == nil:
+			if !bySubject.IsActive {
+				return nil, nil, ErrAccountDisabled
+			}
+			_ = s.auth.users.TouchLastLogin(ctx, bySubject.ID)
+			roles := s.auth.loadRoleNames(ctx, bySubject.ID, resolvedTenantID)
+			return bySubject, roles, nil
+		case errors.Is(err, repository.ErrNotFound):
+			// Fall through to email-based lookup / auto-provision.
+		default:
+			return nil, nil, fmt.Errorf("lookup user by sso subject: %w", err)
+		}
+	}
+
 	user, err := s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
 	switch {
 	case err == nil:
-		// Existing human user — accept the SSO login. GetHumanByEmail already
-		// excludes shadow users (kind='service_account'), so we cannot
-		// accidentally bind an SA identity here.
+		// Existing human user matched by email. Before accepting the login,
+		// reconcile the persisted SSO subject with the IdP's assertion so we
+		// detect (and refuse) a recycled-email takeover attempt.
+		//
+		// Three cases:
+		//   a. user.SSOSubject == "" (pre-migration row): back-fill the
+		//      subject and continue. After this point all future logins for
+		//      this account will hit the Step 1 fast path.
+		//   b. user.SSOSubject == ident.Subject: identity confirmed, accept.
+		//   c. user.SSOSubject != ident.Subject AND ident.Subject != "":
+		//      REJECT. The email matches but the IdP says this is a
+		//      different remote account — almost certainly an email recycle.
+		switch {
+		case ident.Subject == "":
+			// IdP failed to supply a subject. We cannot reconcile, so behave
+			// as the legacy code did and accept the match — but log so an
+			// operator can spot a misconfigured IdP integration.
+			slog.WarnContext(ctx, "SSO callback missing subject; accepting email-only match",
+				"provider_id", p.ProviderID, "user_id", user.ID)
+		case user.SSOSubject == "":
+			// Back-fill the subject for this pre-migration row.
+			if err := s.auth.users.SetSSOSubject(ctx, user.ID, ident.Subject); err != nil {
+				return nil, nil, fmt.Errorf("backfill sso subject: %w", err)
+			}
+			user.SSOSubject = ident.Subject
+		case user.SSOSubject != ident.Subject:
+			// Refuse with an operator-actionable message — see the
+			// ErrSSOSubjectMismatch doc comment for the rationale.
+			return nil, nil, fmt.Errorf("%w: An account exists for email %s but is bound to a different SSO identity. Ask your admin to link this account to your new SSO subject.",
+				ErrSSOSubjectMismatch, ident.Email)
+		}
 		if !user.IsActive {
 			return nil, nil, ErrAccountDisabled
 		}
@@ -383,7 +456,8 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 		return nil, nil, fmt.Errorf("no human user with email %q: %w", ident.Email, err)
 	}
 
-	// Auto-provision path.
+	// Auto-provision path. Persist the IdP subject at creation so the next
+	// login for this user matches via Step 1 and never falls back to email.
 	username := DeriveSSOUsername(ident.Email)
 	created, err := s.auth.users.CreateSSOUser(ctx, repository.CreateSSOUserRequest{
 		TenantID:      resolvedTenantID,
@@ -391,13 +465,26 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 		Email:         ident.Email,
 		DisplayName:   ident.DisplayName,
 		SSOProviderID: p.ProviderID, // stable string id (e.g. "google")
+		SSOSubject:    ident.Subject,
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
-			// Lost a race with a parallel callback — re-query by email.
-			created, err = s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
-			if err != nil {
-				return nil, nil, fmt.Errorf("no human user with email %q after race: %w", ident.Email, err)
+			// Lost a race with a parallel callback — re-query by subject
+			// first (it's the authoritative key), then by email. Clear the
+			// outer err on a successful recovery so the role-grant /
+			// returning-user logic below runs against `created`.
+			created = nil
+			if ident.Subject != "" {
+				if bySubject, lookupErr := s.auth.users.GetUserBySSOSubject(ctx, p.ProviderID, ident.Subject); lookupErr == nil {
+					created = bySubject
+				}
+			}
+			if created == nil {
+				byEmail, emailErr := s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
+				if emailErr != nil {
+					return nil, nil, fmt.Errorf("no human user with email %q after race: %w", ident.Email, emailErr)
+				}
+				created = byEmail
 			}
 		} else {
 			return nil, nil, fmt.Errorf("create sso user: %w", err)

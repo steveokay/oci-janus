@@ -54,6 +54,12 @@ type User struct {
 	// accounts and pre-existing users are backfilled to true so the wizard
 	// only ever fires for genuinely-new humans.
 	OnboardingComplete bool
+	// SSOSubject reflects users.sso_subject — the IdP-assigned stable subject
+	// identifier (OAuth `sub` claim / SAML NameID). NULL in the database
+	// surfaces as the empty string here. Added by migration 20260629222534
+	// (REDESIGN-001 Phase 5.5). Combined with SSOProviderID it forms the
+	// composite identity key that defends against email-recycle takeover.
+	SSOSubject string
 }
 
 // CreateUserRequest carries the validated inputs for creating a new user.
@@ -113,7 +119,8 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		          COALESCE(sso_subject, '')`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
@@ -122,6 +129,7 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -140,7 +148,8 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
 		FROM   users -- allow-any-kind: username lookup is kind-agnostic; callers on the
 		             -- human login path must use GetHumanByUsername instead (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND username = $2`
@@ -189,6 +198,12 @@ type CreateSSOUserRequest struct {
 	Email         string
 	DisplayName   string
 	SSOProviderID string // stable string id from global_sso_config (e.g. "google")
+	// SSOSubject is the IdP-assigned stable subject identifier (OAuth `sub`
+	// claim or SAML NameID). Required on the SSO auto-provision path so the
+	// (sso_provider_id, sso_subject) composite identity is established at
+	// creation time — see REDESIGN-001 Phase 5.5 and the comment on
+	// User.SSOSubject for why email alone is no longer trusted.
+	SSOSubject string
 }
 
 // CreateSSOUser inserts a user provisioned from an SSO callback.
@@ -204,21 +219,28 @@ type CreateSSOUserRequest struct {
 // the same user (race with another concurrent SSO callback).
 func (r *UserRepository) CreateSSOUser(ctx context.Context, req CreateSSOUserRequest) (*User, error) {
 	// is_global_admin defaults to false on INSERT (migration 20260629000001).
+	// sso_subject is persisted at creation time so the (sso_provider_id,
+	// sso_subject) composite identity is set up-front for new accounts
+	// (migration 20260629222534, REDESIGN-001 Phase 5.5). NULLIF maps the
+	// empty string to SQL NULL so the partial index continues to skip
+	// pre-redesign rows that were back-filled lazily.
 	const q = `
 		INSERT INTO users (tenant_id, username, email, password_hash,
-		                   display_name, sso_provider_id, kind)
-		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, 'human')
+		                   display_name, sso_provider_id, sso_subject, kind)
+		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, NULLIF($6, ''), 'human')
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		          COALESCE(sso_subject, '')`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q,
-		req.TenantID, req.Username, req.Email, req.DisplayName, req.SSOProviderID,
+		req.TenantID, req.Username, req.Email, req.DisplayName, req.SSOProviderID, req.SSOSubject,
 	).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -289,7 +311,8 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND kind = 'human'
 		ORDER  BY created_at DESC`
@@ -307,6 +330,7 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 			&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 			&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+			&u.SSOSubject,
 		); err != nil {
 			return nil, fmt.Errorf("scan human user: %w", err)
 		}
@@ -320,6 +344,64 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 // in a later task so callers do not need to change their signatures.
 type ListOpts struct{}
 
+// GetUserBySSOSubject returns the human user identified by the composite
+// (sso_provider_id, sso_subject) key, regardless of which tenant they belong
+// to. REDESIGN-001 Phase 5.5 — defends EnsureSSOUser against email-recycle
+// account takeover by anchoring SSO logins to the IdP's stable subject
+// identifier rather than to a mutable address.
+//
+// Why composite, not subject alone: subject strings are only unique within a
+// single IdP (e.g. two providers may both assert `sub=12345`). The migration
+// 20260629222534 index covers (sso_provider_id, sso_subject) so this lookup
+// is index-only when both columns are present.
+//
+// Returns ErrNotFound when no human user matches; an empty subject is treated
+// as not found so callers cannot accidentally bind a pre-migration NULL row
+// from this entry point (the email-backed lookup path handles those rows).
+func (r *UserRepository) GetUserBySSOSubject(ctx context.Context, providerID string, subject string) (*User, error) {
+	if subject == "" {
+		return nil, ErrNotFound
+	}
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
+		FROM   users -- kind = 'human' enforced in WHERE below; SA shadow users never carry an SSO subject
+		WHERE  sso_provider_id = $1
+		  AND  sso_subject     = $2
+		  AND  kind            = 'human'`
+
+	return r.scanOne(ctx, q, providerID, subject)
+}
+
+// SetSSOSubject backfills users.sso_subject for a user whose row predates the
+// REDESIGN-001 Phase 5.5 migration (or was provisioned via a path that did
+// not capture the subject). Called from EnsureSSOUser the first time an
+// existing email-matched account presents a verified IdP subject so future
+// logins flow through the subject-keyed lookup.
+//
+// Idempotent in spirit but the WHERE clause guards against overwriting an
+// already-bound subject — if the row already has a non-empty sso_subject the
+// UPDATE is a no-op and the caller is expected to have already rejected the
+// mismatched login at the service layer.
+func (r *UserRepository) SetSSOSubject(ctx context.Context, userID uuid.UUID, subject string) error {
+	if subject == "" {
+		return fmt.Errorf("set sso subject: subject is empty")
+	}
+	const q = `
+		UPDATE users
+		SET    sso_subject = $1,
+		       updated_at  = NOW()
+		WHERE  id = $2
+		  AND  sso_subject IS NULL`
+	_, err := r.pool.Exec(ctx, q, subject, userID)
+	if err != nil {
+		return fmt.Errorf("set sso subject: %w", err)
+	}
+	return nil
+}
+
 // GetHumanByEmail returns the human user with the given email in the given
 // tenant. Service-account synthetic emails (sa+N@internal.invalid) are
 // excluded by the kind='human' guard so they can never match.
@@ -330,7 +412,8 @@ func (r *UserRepository) GetHumanByEmail(ctx context.Context, tenantID uuid.UUID
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND LOWER(email) = LOWER($2) AND kind = 'human'`
 
@@ -345,7 +428,8 @@ func (r *UserRepository) GetHumanByID(ctx context.Context, id uuid.UUID) (*User,
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
 		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1)
 		WHERE  id = $1 AND kind = 'human'`
 
@@ -374,7 +458,8 @@ func (r *UserRepository) GetUserAnyKind(ctx context.Context, id uuid.UUID) (*Use
 	const q = `
 		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
 		       password_hash, is_active, failed_logins, locked_until,
-		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
 		FROM   users -- allow-any-kind: intentional — SA management handlers need shadow users
 		WHERE  id = $1`
 
@@ -459,6 +544,7 @@ func (r *UserRepository) scanOne(ctx context.Context, query string, args ...any)
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -521,13 +607,15 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, req Up
 		WHERE  id = $1
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		          COALESCE(sso_subject, '')`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q, id, setName, nameVal, setEmail, emailVal).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -594,13 +682,15 @@ func (r *UserRepository) MarkOnboardingComplete(ctx context.Context, userID uuid
 		WHERE  id = $1
 		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
 		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete`
+		          last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		          COALESCE(sso_subject, '')`
 
 	var u User
 	err := r.pool.QueryRow(ctx, q, userID).Scan(
 		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
 		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

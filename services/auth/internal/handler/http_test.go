@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -253,9 +254,48 @@ func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.Cr
 		Email:     req.Email,
 		IsActive:  true,
 		CreatedAt: time.Now(),
+		// REDESIGN-001 Phase 5.5: capture the IdP subject at creation so the
+		// returning-user fast path can match without falling back to email.
+		SSOSubject: req.SSOSubject,
 	}
 	f.users[u.Username] = u
 	return u, nil
+}
+
+// GetUserBySSOSubject implements the REDESIGN-001 Phase 5.5 lookup so handler
+// tests can exercise EnsureSSOUser end-to-end. The fake scans the user store
+// rather than maintaining a side map — handler tests are throughput-light and
+// the simpler implementation matches the rest of the file's style.
+func (f *handlerFakeUserRepo) GetUserBySSOSubject(_ context.Context, _ string, subject string) (*repository.User, error) {
+	if subject == "" {
+		return nil, repository.ErrNotFound
+	}
+	for _, u := range f.users {
+		if u.SSOSubject == subject && u.Kind != "service_account" {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// SetSSOSubject back-fills the subject on a pre-Phase-5.5 user row. Matches
+// the real repo's contract: refuses to overwrite an existing non-empty
+// subject (the service layer guards against mismatches before invoking this).
+func (f *handlerFakeUserRepo) SetSSOSubject(_ context.Context, userID uuid.UUID, subject string) error {
+	if subject == "" {
+		return errors.New("set sso subject: subject is empty")
+	}
+	for _, u := range f.users {
+		if u.ID != userID {
+			continue
+		}
+		if u.SSOSubject != "" {
+			return nil
+		}
+		u.SSOSubject = subject
+		return nil
+	}
+	return repository.ErrNotFound
 }
 
 func (f *handlerFakeUserRepo) TouchLastLogin(_ context.Context, _ uuid.UUID) error { return nil }
