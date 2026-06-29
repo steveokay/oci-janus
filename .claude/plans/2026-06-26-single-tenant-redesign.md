@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-29 — 37 PRs shipped through #169, Phase 3.4 service rollout in flight (4 of 11 services consume the libs lift from #167). 4 of 5 Top-5 critical findings closed.
+> **As-of:** 2026-06-29 — 47 PRs shipped through #179. **Phase 3.4 service rollout ✅ COMPLETE — all 11 backend services with a gRPC server now wire `libs/middleware/grpc.SingleTenantInjector` in single mode.** 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening + RED-FU-007 conformance compose-stack bootstrap follow-up.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -56,17 +56,15 @@
 | 3.4 pilot | services/auth injector wiring | ✅ DONE | #162 | 2026-06-29 |
 | 3.4 #2 | services/metadata injector wiring | ✅ DONE | #164 | 2026-06-29 |
 | 3.4 libs | `libs/tenant/bootstrap` + `mtls.ClientCreds` extraction (rule-of-three) | ✅ DONE | #167 | 2026-06-29 |
-| 3.4 #3 | services/core injector wiring (1st libs consumer) | 🟡 IN REVIEW | #170 | — |
+| 3.4 #3 | services/core injector wiring (1st libs consumer) | ✅ DONE | #170 | 2026-06-29 |
 | 3.4 #4 | services/storage injector wiring | ✅ DONE | #171 | 2026-06-29 |
 | 3.4 #5 | services/signer injector wiring | ✅ DONE | #173 | 2026-06-29 |
 | 3.4 #6 | services/webhook injector wiring | ✅ DONE | #174 | 2026-06-29 |
-| 3.4 #7 | services/scanner injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #175 | — |
-| 3.4 #8 | services/audit injector wiring | 🟡 IN REVIEW | #176 | — |
-| 3.4 #10 | services/proxy injector wiring (+ added missing interceptor chain) | 🟡 IN REVIEW | #178 | — |
-| 3.4 #9, #11 | gc / tenant | ⬜ OPEN | — | — |
-| 3.4 #9 | services/gc injector wiring (reuses existing tenant conn) | 🟡 IN REVIEW | #177 | — |
-| 3.4 #11 | services/tenant injector wiring (self-read from local repo — final service) | 🟡 IN REVIEW | #179 | — |
-| 3.4 #10 | services/proxy injector wiring | ⬜ OPEN | — | — |
+| 3.4 #7 | services/scanner injector wiring (+ added missing interceptor chain) | ✅ DONE | #175 | 2026-06-29 |
+| 3.4 #8 | services/audit injector wiring | ✅ DONE | #176 | 2026-06-29 |
+| 3.4 #9 | services/gc injector wiring (reuses existing tenant conn) | ✅ DONE | #177 | 2026-06-29 |
+| 3.4 #10 | services/proxy injector wiring (+ added missing interceptor chain) | ✅ DONE | #178 | 2026-06-29 |
+| 3.4 #11 | services/tenant injector wiring (self-read from local repo — closes rollout) | ✅ DONE | #179 | 2026-06-29 |
 | 4.1 | `useDeploymentInfo()` FE hook + Provider | ✅ DONE | #138 | 2026-06-27 |
 | 4.2.a | Sidebar IA restructure (operator mental model) | ✅ DONE | #141 | 2026-06-27 |
 | 4.2.b | Settings parent route + Account tab (profile, password, notification prefs, my API keys) | ✅ DONE | #143 | 2026-06-27 |
