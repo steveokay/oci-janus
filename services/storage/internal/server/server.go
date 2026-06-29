@@ -189,7 +189,7 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 	if cfg.TenantGRPCAddr == "" {
 		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
 	}
-	tenantCreds, err := mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")
+	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {
 		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
 	}
