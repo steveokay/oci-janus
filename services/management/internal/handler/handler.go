@@ -1732,6 +1732,15 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 // Moved from workspace_domains.go during REDESIGN-001 RM-001 (custom-domain
 // removal); the gate is still needed by proxy-cache and audit-export handlers.
 func (h *Handler) requireDomainAdmin(r *http.Request) bool {
+	// Phase 5.1 tail (2026-06-29): global admins bypass the role-assignment
+	// check. The Phase 5.1 backfill deleted the legacy (admin, org, "*")
+	// marker without granting an equivalent (admin, tenant, <id>) row, so a
+	// brand-new bootstrap admin held nothing but users.is_global_admin=true
+	// — every workspace-admin gate returned 403. The is_global_admin
+	// short-circuit restores access without re-introducing the marker.
+	if h.effectiveGlobalAdmin(r) {
+		return true
+	}
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }

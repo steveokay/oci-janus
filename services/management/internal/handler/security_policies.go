@@ -103,6 +103,11 @@ var allowedScannerPlugins = map[string]struct{}{
 //   - Platform-admin marker (admin, org, "*")
 //   - Tenant-scoped admin (admin, tenant, <tenant_id>)
 func (h *Handler) requireScanPolicyAdmin(r *http.Request) bool {
+	// Phase 5.1 tail (2026-06-29): global admins bypass — see
+	// handler.go:requireDomainAdmin for the full rationale.
+	if h.effectiveGlobalAdmin(r) {
+		return true
+	}
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	return effectiveTenantAdmin(h.getUserAssignments(r), tenantID)
 }

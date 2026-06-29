@@ -43,12 +43,14 @@ type adminClaimOrgResponse struct {
 // validateOrgName regex — the literal "*" platform-admin marker cannot leak
 // in here because `*` is not in the [a-z0-9-] allowlist.
 //
-// Gating: only the platform-admin marker (org=*, admin) may call this. We do
-// NOT relax the per-org strict-match used by handleCreateRepository (PENTEST-
-// 002 + PENTEST-024 stay intact).
+// Gating: caller must be an effective global admin. Phase 5.1 (PR #134)
+// replaced the legacy (admin, org, "*") role marker with the typed
+// users.is_global_admin column; the equivalent check now lives in
+// h.effectiveGlobalAdmin (rbac.go). The per-org strict-match used by
+// handleCreateRepository (PENTEST-002 + PENTEST-024) is unchanged.
 func (h *Handler) handleAdminClaimOrg(w http.ResponseWriter, r *http.Request) {
-	if !hasScopedRole(h.getUserAssignments(r), "org", "*", "admin") {
-		writeError(w, http.StatusForbidden, "platform-admin role required (org=*, admin)")
+	if !h.effectiveGlobalAdmin(r) {
+		writeError(w, http.StatusForbidden, "platform-admin role required")
 		return
 	}
 
