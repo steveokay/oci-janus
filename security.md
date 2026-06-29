@@ -1,5 +1,6 @@
 # Security Issues
 
+> Last updated: 2026-06-29 — SEC-038 (MEDIUM) RESOLVED in commit `329c63b` on branch `fix/sec-038-gc-clientcreds` (per-target serverName pinning + fail-closed mTLS load in `services/gc`). SEC-039 (MEDIUM) logged — same `clientCreds(cfg)` shape (empty serverName + insecure fallback on TLS error) still present in `services/core`, `services/scanner`, `services/proxy`, and `services/management`.
 > Last updated: 2026-06-29 — SEC-038 logged (MEDIUM, services/gc reuses a shared mTLS client without pinning the `registry-tenant` server name when dialling for Phase 3.4 bootstrap fetch; client-side TLS load failure also silently downgrades to plaintext) from Phase 3.4 SingleTenantInjector rollout review (PRs #170–#179).
 >
 > Last updated: 2026-06-27 — SEC-037 logged (LOW, single-statement onboarding backfill could contend with login UPDATEs on large user tables) from Phase 4.3 §1 review of commit `ec43e05`.
@@ -562,6 +563,36 @@ under CLAUDE.md §7 "JWT Validation."
   1. For deployments with > ~100k humans, batch the backfill into chunks (e.g. `UPDATE users SET onboarding_complete = true WHERE id IN (SELECT id FROM users WHERE NOT onboarding_complete LIMIT 10000)` looped) and commit between batches via an out-of-band runbook, leaving the migration to only run the `ALTER TABLE … ADD COLUMN NOT NULL DEFAULT false` (which is metadata-only on PG ≥ 11).
   2. Alternatively, drop the `WHERE created_at < NOW()` backfill entirely and rely on `NOT NULL DEFAULT false` for existing rows (this would re-show the wizard to pre-existing humans — a product choice, not a security one).
   3. Document the deployment-window cost in `infra/runbooks/` so operators of large installs know to run the backfill out-of-band before the schema migration.
+
+### SEC-038 — `services/gc` mTLS dials lacked serverName pin and silently downgraded to plaintext on cert load error
+- **Severity:** MEDIUM
+- **Status:** RESOLVED
+- **Service:** `services/gc`
+- **Raised:** 2026-06-29
+- **Description:** `services/gc/internal/server/server.go` (legacy `clientCreds(cfg)` helper, lines 315-326 of the pre-fix file) called `mtls.ClientTLSConfig(..., "")` with empty `serverName` for every outbound dial — metadata, storage, tenant — meaning the TLS handshake accepted any cert signed by the configured CA without binding the dial to a specific service identity. An attacker (or buggy operator who mis-issued certs) could pin gc to any tenant cert for the process lifetime. The same helper also fell back to `insecure.NewCredentials()` whenever `ClientTLSConfig` returned an error, so a corrupted client cert silently downgraded ALL three gRPC channels to plaintext rather than failing closed.
+- **Remediation:**
+  1. Drop the local helper; call `libs/auth/mtls.ClientCreds` inline at each dial site with the remote service's CN/SAN passed in (`"registry-metadata"`, `"registry-storage"`, `"registry-tenant"`).
+  2. Propagate the error from `ClientCreds` on TLS load failure so startup aborts rather than silently downgrading.
+- **References:** CLAUDE.md §7 (mTLS Between Services — "Client cert CN must match expected service name"), §13 (HTTP/Go hardening — fail-closed posture), CWE-295 (Improper Certificate Validation), CWE-636 (Not Failing Securely).
+- **Resolved:** 2026-06-29 — commit `329c63b` on branch `fix/sec-038-gc-clientcreds` inlines `mtls.ClientCreds` per-target with non-empty `serverName` and returns the wrapped error on TLS-load failure. No insecure fallback remains on the client path; the server-side `buildGRPCOptions` plaintext-on-empty-paths branch is the documented dev fallback and remains intentionally untouched.
+
+### SEC-039 — Same shape as SEC-038 still present in `services/core`, `services/scanner`, `services/proxy`, `services/management`
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/core`, `services/scanner`, `services/proxy`, `services/management`
+- **Raised:** 2026-06-29
+- **Description:** Sweep performed alongside the SEC-038 fix confirmed the same vulnerable shape — local `clientCreds(cfg)` (or `buildGRPCCreds(cfg)`) helper that calls `mtls.ClientTLSConfig(..., "")` with an empty serverName AND silently returns `insecure.NewCredentials()` on TLS load failure — survives in:
+  - `services/core/internal/server/server.go:254-264`
+  - `services/scanner/internal/server/server.go:442-452`
+  - `services/proxy/internal/server/server.go:296-306`
+  - `services/management/internal/server/server.go:214-231` (`buildGRPCCreds` — empty serverName comment explicitly punts to "follow-up")
+  Same impact class as SEC-038: no per-target CN/SAN binding on outbound dials (impersonation by any CA-signed cert), and corrupted cert silently downgrades the dial channel to plaintext for the process lifetime instead of refusing to start.
+- **Remediation:**
+  1. Mirror the SEC-038 fix in each service: drop the helper; call `libs/auth/mtls.ClientCreds(ca, cert, key, "<remote-service-name>")` inline at each dial site (metadata, storage, auth, scanner, signer, gc, tenant — whichever the service dials).
+  2. Where the same caller dials multiple remotes, build creds per-target — do not share one creds object across different remote services.
+  3. Propagate the error on TLS load failure rather than falling back to insecure.
+  4. For `services/management`, replace the "follow-up" comment in `buildGRPCCreds` with a per-target env var (or hardcoded constant matching the cert convention used by services/auth/metadata in their own helpers).
+- **References:** CLAUDE.md §7 (mTLS Between Services), §13 (fail-closed posture), CWE-295, CWE-636. Tracking parent: SEC-038.
 - **References:** CLAUDE.md §11 (migration rules — "run migrations at startup in a separate step before serving traffic"); PENTEST-028 manifest-backfill precedent (split bulk UPDATE out of migration into idempotent runbook).
 
 ### SEC-038 — services/gc client mTLS misses server-name pin and fails open on TLS load error
