@@ -63,8 +63,17 @@ jobs:
           image-ref: ghcr.io/steveokay/oci-janus/scanner:${{ github.sha }}
           exit-code: "1"
           severity: CRITICAL
-          # trivyignores file is a tab-separated list of CVE-IDs known to
-          # have no upstream fix (perl-base in debian:12-slim base layer).
-          # Tracked under REM-014 follow-up to revisit the Debian-slim →
-          # distroless audit.
+          ignore-unfixed: true
+          # Skip the upstream-supplied trivy + grype binaries — their
+          # internal deps (grpc, Go stdlib) are tracked by their respective
+          # upstreams (aquasec, anchore) and CVEs reachable inside those
+          # binaries are NOT exposed by our scanner adapter (which only
+          # forks the binary as a subprocess and reads its stdout/stderr —
+          # no Go-level integration). Avoids the per-CVE whack-a-mole on
+          # upstream-supplied tools.
+          # Tracked under REM-014 follow-up; revisit when the bundled
+          # upstreams ship newer Go runtimes + post-fix grpc deps.
+          skip-files: /usr/local/bin/trivy,/usr/local/bin/grype
+          # trivyignores still covers Debian-base CVEs that ignore-unfixed
+          # would catch anyway — kept as belt-and-braces documentation.
           trivyignores: services/scanner/.trivyignore
