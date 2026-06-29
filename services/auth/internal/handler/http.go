@@ -419,40 +419,40 @@ func (h *HTTPHandler) createUser(w http.ResponseWriter, r *http.Request) {
 
 // callerIsTenantAdmin reports whether the user holds an `admin` or `owner` role
 // at any scope within the tenant. Used as the gate for tenant-wide privileged
-// operations (currently: user creation) where there is no narrower target scope
-// to check. Returns false on lookup error — fail-closed.
-//
-// REDESIGN-001 Phase 5.4 / Decision #24: service-account principals are denied
-// at every admin gate regardless of the role assignments on their shadow user.
-// The shadow user inherits the human owner's roles, so a naïve role lookup
-// against claims.Subject would let an API key clear admin gates that the
-// service account itself should not be able to clear. Callers must supply the
-// authenticated principal kind (claims.PrincipalKind) so this gate can refuse
-// SA bearers up front.
-func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID, principalKind string) bool {
-	// REDESIGN-001 Phase 5.4: deny SA principals before any role lookup.
-	// The shadow user's roles are not an attestable signal for admin
-	// authority because they were granted to the human owner, not minted
-	// for the SA. Honors Decision #24's promise that raw API keys cannot
-	// clear role-gated handlers.
-	if principalKind == "service_account" {
-		return false
 // operations (user creation, service account creation, /me/abilities) where
 // there is no narrower target scope to check. Returns false on lookup error —
 // fail-closed.
 //
-// Phase 5.1 tail (2026-06-29): users.is_global_admin is a fast-path. The
-// Phase 5.1 backfill deleted the legacy (admin, org, "*") marker without
-// granting an equivalent (admin, tenant, <id>) row, so a brand-new bootstrap
-// admin (is_global_admin=true, no role assignments) was failing every gate
-// that funnels through this helper — users, service accounts, audit-export
-// abilities and so on. The user lookup is fail-open: if the GetUserByID call
-// errors, we still try the role-assignment path so a transient DB blip
-// doesn't lock everyone out.
-func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID) bool {
+// Gate dispatch order (load-bearing; corresponds to PR #194 + #193 stack):
+//
+//  1. REDESIGN-001 Phase 5.4 / Decision #24 — service-account principals are
+//     denied first, before any role lookup. The shadow user behind an SA
+//     inherits the human owner's roles, so a naïve role lookup against
+//     claims.Subject would let an API key clear admin gates that the SA
+//     itself should not be able to clear. Callers must supply the
+//     authenticated principal kind (claims.PrincipalKind) so this gate can
+//     refuse SA bearers up front.
+//
+//  2. REDESIGN-001 Phase 5.1 tail (#193 / #197) — users.is_global_admin is a
+//     fast-path. The Phase 5.1 backfill deleted the legacy (admin, org, "*")
+//     marker without granting an equivalent (admin, tenant, <id>) row, so a
+//     brand-new bootstrap admin (is_global_admin=true, no role assignments)
+//     was failing every gate that funnels through this helper. The user
+//     lookup is fail-open: if GetUserByID errors, fall through to the role
+//     lookup so a transient DB blip doesn't lock everyone out.
+//
+//  3. Standard role lookup — any admin/owner assignment within the tenant
+//     clears the gate.
+func callerIsTenantAdmin(ctx context.Context, svc *service.Service, userID, tenantID uuid.UUID, principalKind string) bool {
+	// Step 1: deny SA principals before any DB read.
+	if principalKind == "service_account" {
+		return false
+	}
+	// Step 2: is_global_admin fast-path (fail-open on lookup error).
 	if user, err := svc.GetUserByID(ctx, userID); err == nil && user != nil && user.IsGlobalAdmin {
 		return true
 	}
+	// Step 3: scoped role lookup.
 	assignments, err := svc.GetUserRoles(ctx, userID, tenantID)
 	if err != nil {
 		slog.WarnContext(ctx, "callerIsTenantAdmin: GetUserRoles failed", "error", err)
