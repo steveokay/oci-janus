@@ -3,29 +3,34 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	grpchealth "google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
+	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/config"
 	"github.com/steveokay/oci-janus/services/metadata/internal/handler"
 	"github.com/steveokay/oci-janus/services/metadata/internal/pullconsumer"
@@ -117,7 +122,29 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// ── 5. gRPC server ────────────────────────────────────────────────────────
-	grpcOpts, err := buildGRPCOptions(cfg, rdb)
+	//
+	// REDESIGN-001 Phase 3.4 — Single-tenant injector wiring.
+	//
+	// In DEPLOYMENT_MODE=single we look up the bootstrap tenant id from
+	// services/tenant.deployment_metadata at startup so the server-side
+	// interceptor can reject mismatched x-tenant-id metadata. Fail-loud:
+	// if the lookup errors, metadata exits — silently degrading the
+	// defence-in-depth interceptor is worse than failing to start. In
+	// multi mode we skip the dial entirely.
+	var singleTenantInterceptor grpc.UnaryServerInterceptor
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-mode tenant injector wired",
+			"bootstrap_tenant_id", bootstrapTenantID,
+			"tenant_grpc", cfg.TenantGRPCAddr,
+		)
+	}
+
+	grpcOpts, err := buildGRPCOptions(cfg, rdb, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
 	}
@@ -213,7 +240,11 @@ func runMigrations(cfg *config.Config) error {
 	return nil
 }
 
-func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOption, error) {
+// buildGRPCOptions assembles the server options including mTLS, OTEL handler,
+// the cache interceptor (REM-007), and — when supplied — the Phase 3.4
+// SingleTenantInjector. extraUnary may be nil; passing it explicitly keeps
+// the wiring symmetrical with the auth service (services/auth/internal/server).
+func buildGRPCOptions(cfg *config.Config, rdb *redis.Client, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
 	// Cache interceptor for read-heavy metadata methods (REM-007).
 	cacheInterceptor := grpcmw.CacheInterceptor(rdb, map[string]grpcmw.CachableMethod{
 		"/registry.metadata.v1.MetadataService/GetRepository": {
@@ -265,6 +296,12 @@ func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOptio
 	})
 
 	interceptors := append(grpcmw.ServerInterceptors(), cacheInterceptor)
+	// REDESIGN-001 Phase 3.4 — append the single-tenant injector last so it
+	// sees a fully-decorated context (auth + tracing + cache all set up).
+	// Nil in multi mode and skipped.
+	if extraUnary != nil {
+		interceptors = append(interceptors, extraUnary)
+	}
 
 	opts := []grpc.ServerOption{
 		grpcmw.OTELServerHandler(),
@@ -287,4 +324,79 @@ func buildGRPCOptions(cfg *config.Config, rdb *redis.Client) ([]grpc.ServerOptio
 
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	metrics.Handler().ServeHTTP(w, r)
+}
+
+// REDESIGN-001 Phase 3.4 — bootstrap-tenant-id lookup. Mirrors the wiring
+// shipped in services/auth (PR #162). The dial half lives here per-service
+// rather than in libs/ so the tenant client follows the existing per-service
+// config var idiom (TENANT_GRPC_ADDR).
+
+// buildClientCreds returns mTLS credentials for outbound gRPC dials when all
+// three cert paths are configured, or plaintext insecure credentials
+// otherwise (dev only). The serverName argument is the expected CN/SAN on
+// the remote server's certificate.
+func buildClientCreds(cfg *config.Config, serverName string) (credentials.TransportCredentials, error) {
+	if cfg.MTLSCACertPath == "" || cfg.MTLSCertPath == "" || cfg.MTLSKeyPath == "" {
+		return insecure.NewCredentials(), nil
+	}
+	tlsCfg, err := mtls.ClientTLSConfig(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, serverName)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
+// fetchBootstrapTenantID dials the tenant gRPC server, fetches
+// deployment_metadata['bootstrap_tenant_id'], and returns the UUID string
+// ready to hand to SingleTenantInjector.
+//
+// Behaviour mirrors services/auth: empty TENANT_GRPC_ADDR in single mode →
+// error, tenant returns NotFound → error, JSON parse / UUID parse failures
+// → error. Caller in Run() converts to a fatal startup failure.
+//
+// Bounded by a 5s timeout — the tenant service must be reachable for
+// metadata to start in single mode anyway, so blocking startup longer than
+// that just hides the misconfiguration.
+func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.TenantGRPCAddr == "" {
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+	}
+	tenantCreds, err := buildClientCreds(cfg, "registry-tenant")
+	if err != nil {
+		return "", fmt.Errorf("build tenant gRPC creds: %w", err)
+	}
+	tenantConn, err := grpc.NewClient(cfg.TenantGRPCAddr, grpc.WithTransportCredentials(tenantCreds))
+	if err != nil {
+		return "", fmt.Errorf("dial tenant gRPC: %w", err)
+	}
+	defer tenantConn.Close()
+
+	return getBootstrapTenantIDFromClient(ctx, tenantv1.NewTenantServiceClient(tenantConn))
+}
+
+// getBootstrapTenantIDFromClient is the post-dial half of
+// fetchBootstrapTenantID, split out so tests can inject a bufconn-backed
+// client without going through the cfg → mTLS → dial path.
+func getBootstrapTenantIDFromClient(ctx context.Context, client tenantv1.TenantServiceClient) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := client.GetDeploymentMetadata(callCtx, &tenantv1.GetDeploymentMetadataRequest{
+		Key: "bootstrap_tenant_id",
+	})
+	if err != nil {
+		return "", fmt.Errorf("GetDeploymentMetadata(bootstrap_tenant_id): %w", err)
+	}
+
+	// JSONB stores a JSON-encoded string ("\"<uuid>\""). Unmarshal into a
+	// string then validate as a UUID so a typo'd value fails here rather
+	// than silently becoming a constant interceptor input.
+	var idStr string
+	if err := json.Unmarshal(resp.GetValue(), &idStr); err != nil {
+		return "", fmt.Errorf("parse bootstrap_tenant_id JSON: %w", err)
+	}
+	if _, err := uuid.Parse(idStr); err != nil {
+		return "", fmt.Errorf("bootstrap_tenant_id %q is not a valid UUID: %w", idStr, err)
+	}
+	return idStr, nil
 }
