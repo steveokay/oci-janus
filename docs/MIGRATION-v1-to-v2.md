@@ -13,11 +13,13 @@
 
 # Migrating from v1 to v2 (REDESIGN-001)
 
-> **tl;dr.** **Single mode**: `docker compose down` → run the bootstrap CLI
-> once → `docker compose up -d`. **Multi mode**: same three steps, plus set
-> `MTLS_PEER_CN_ALLOWLIST` on every gRPC server after you've confirmed every
-> legitimate caller's certificate CN. No active re-encryption pass is
-> required (see Step 3). Downtime: 5–15 min, dominated by snapshot time.
+> **tl;dr.** Both modes share the same three steps: `docker compose down`
+> → run the bootstrap CLI once → `docker compose up -d`. **Multi mode** is
+> the same plus a tenant-create flow after bootstrap. **In either mode** we
+> recommend (optionally) setting `MTLS_PEER_CN_ALLOWLIST` per gRPC server
+> after you've confirmed every legitimate caller's certificate CN — see
+> Step 6. No active re-encryption pass is required (see Step 3). Downtime:
+> 5–15 min, dominated by snapshot time.
 
 For operators upgrading an existing v1 deployment. New installs: start at
 [`README.md`](../README.md). v1 = any commit before REDESIGN-001 lands; v2 =
@@ -173,7 +175,7 @@ This is the only step you cannot skip.
 
 Set the env var on every service that calls `loader.LoadDeploymentMode()` —
 easiest path is to set it once at the Compose `.env` level or as a global
-ConfigMap entry. Loader: `libs/config/loader/loader.go:230`.
+ConfigMap entry. Loader: `libs/config/loader/loader.go:229`.
 
 ### Run the bootstrap CLI
 
