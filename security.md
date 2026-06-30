@@ -1,5 +1,7 @@
 # Security Issues
 
+> Last updated: 2026-06-29 — SEC-040/041/042 logged (all MEDIUM/LOW from Phase 5.5 SSO subject-binding review) — `GetUserBySSOSubject` missing tenant filter (multi-mode boundary blur), race-recovery skips subject-mismatch reconciliation, and rejection error message leaks "account exists for email X" (email enumeration). Accepted as should-fix follow-ups so PR #195 could ship per cadence; all three remain OPEN.
+>
 > Last updated: 2026-06-29 — SEC-039 logged + RESOLVED (HIGH, same shape as SEC-038 across services/core, scanner, proxy, management — 17 dial sites missing serverName pin + silent insecure fallback on TLS load error; fixed by commit `41e9a72` on branch `fix/sec-039-clientcreds-sweep`, PR pending).
 > Last updated: 2026-06-29 — SEC-038 (MEDIUM) RESOLVED in commit `329c63b` on branch `fix/sec-038-gc-clientcreds` (per-target serverName pinning + fail-closed mTLS load in `services/gc`). SEC-039 (MEDIUM) logged — same `clientCreds(cfg)` shape (empty serverName + insecure fallback on TLS error) still present in `services/core`, `services/scanner`, `services/proxy`, and `services/management`.
 > Last updated: 2026-06-29 — SEC-038 logged (MEDIUM, services/gc reuses a shared mTLS client without pinning the `registry-tenant` server name when dialling for Phase 3.4 bootstrap fetch; client-side TLS load failure also silently downgrades to plaintext) from Phase 3.4 SingleTenantInjector rollout review (PRs #170–#179).
@@ -37,10 +39,38 @@
 
 ## Open Issues
 
-> No open security findings as of 2026-06-18 (excluding pentest findings below).
+> 3 OPEN findings as of 2026-06-29: SEC-040, SEC-041, SEC-042 — all surfaced by the security-agent during Phase 5.5 (SSO subject-binding, PR #195) review. Accepted as should-fix follow-ups so #195 could ship per cadence. Full descriptions below in the SEC-NNN section.
+>
 > Backend feature gaps (KMS signing backends, Notary v2, etc.) are tracked in
 > `status.md` Sprint 6 — those are unimplemented features rather than
 > security regressions, so they live in the project tracker, not here.
+
+### SEC-040 — `GetUserBySSOSubject` missing tenant filter
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Description:** The Phase 5.5 partial-index lookup `idx_users_sso_subject ON users (sso_provider_id, sso_subject) WHERE sso_subject IS NOT NULL` is global, not tenant-scoped. `GetUserBySSOSubject(ctx, providerID, subject)` matches purely on `(provider_id, subject)`. In single-tenant mode this is fine — there is only one tenant — but `DEPLOYMENT_MODE=multi` keeps the existing SaaS posture, and if two tenants ever shared an IdP (e.g. both use Google Workspace OAuth), a recycled subject id could surface a user from the wrong tenant.
+- **Remediation:** Add `tenant_id` filter to the lookup and to the partial-index definition. Existing migration `20260629222534_users_sso_subject.sql` can be amended via a follow-up migration that drops + recreates the index with the tenant column. The `EnsureSSOUser` call site already has `tenantID` in scope — propagate it through.
+- **References:** REDESIGN-001 Phase 5.5 (`.claude/plans/2026-06-26-single-tenant-redesign.md`), CLAUDE.md §9 (tenant isolation), CWE-639 (Authorization Bypass Through User-Controlled Key).
+
+### SEC-041 — SSO race-recovery skips subject-mismatch reconciliation
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Description:** When two concurrent SSO logins for the same subject hit `CreateSSOUser` and one wins the unique-index race, the loser falls back to `GetUserBySSOSubject(ctx, providerID, subject)`. The recovered row is returned without re-verifying that its `sso_subject` actually equals the requested subject. The race window is narrow (concurrent first-login of the same identity is exceptional), but if a buggy IdP or test harness emits two different subjects for the same email in quick succession, the loser could be handed a row whose subject was set by the winner's auth context.
+- **Remediation:** After the recovery query returns, check `loadedUser.SSOSubject == subject`; if mismatched, return a clear "subject mismatch — contact your admin" error instead of returning a session for the wrong identity. Single statement, no schema change.
+- **References:** REDESIGN-001 Phase 5.5, CWE-362 (Concurrent Execution using Shared Resource with Improper Synchronization).
+
+### SEC-042 — SSO rejection message leaks "account exists for email X" — email enumeration
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Description:** When an SSO login arrives with a fresh `subject` but the email already maps to a different existing user, `EnsureSSOUser` rejects with a message that echoes the email back ("An account exists for `<email>`; ask your admin to link it to your new SSO identity"). An attacker controlling an IdP they can spin up freely (Auth0 trial, self-hosted Keycloak) can probe which email addresses are registered with the deployment by issuing logins for emails of interest and reading the rejection string.
+- **Remediation:** Collapse to a generic message that does not echo the email: "This SSO identity is not linked to a registered account — contact your admin to link it." Server-side log can still include the email (we control that audience). Same shape as PENTEST-005's "collapse auth failure variants into one 401" rule applied at the SSO surface.
+- **References:** REDESIGN-001 Phase 5.5, OWASP Authentication Cheat Sheet (account enumeration), CWE-204 (Observable Response Discrepancy).
 
 ---
 

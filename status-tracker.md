@@ -30,7 +30,7 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases, ~4-6 weeks estimated. **Phase 0 ✅ COMPLETE 2026-06-26** (cleanup confirmation table walked: 9 RM full removals + 6 HD soft-hides + 5 design Qs).
 
-**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158) + **Phase 3.4 ✅ COMPLETE — all 11 backend services with a gRPC server wire `libs/middleware/grpc.SingleTenantInjector` in single mode (#162, #164, #170, #171, #173–#179)** + Phase 3.4 close-out sweep (SEC-038 #181, SEC-039 #182, RED-FU-007 conformance bootstrap #184, RED-FU-010 Docker go.sum gate #183, RED-FU-011 helper tests #185, RED-FU-012 mTLS unify #186) + scanner buildGRPCOptions extract (#188 RED-FU-013) + BaseConfig migration for 7 remaining services (#189 RED-FU-014) + auth migration unblock (#190). **Local fresh-volume compose stack now reaches healthy on all 11 Phase 3.4 services for the first time since the rollout began.** 58 PRs through 2026-06-29, ~95% complete. Remaining: Phase 5/6/7 hardening.
+**Status:** IN PROGRESS — Phase 4 fully shipped + Phase 2.x single-mode cleanup (2.3+2.4+2.5) + Phase 3.1.a/b/c, 3.2, 3.3 shipped + 4-PR BE CI infrastructure reset (#156-#158) + **Phase 3.4 ✅ COMPLETE — all 11 backend services with a gRPC server wire `libs/middleware/grpc.SingleTenantInjector` in single mode (#162, #164, #170, #171, #173–#179)** + Phase 3.4 close-out sweep (SEC-038 #181, SEC-039 #182, RED-FU-007 conformance bootstrap #184, RED-FU-010 Docker go.sum gate #183, RED-FU-011 helper tests #185, RED-FU-012 mTLS unify #186) + scanner buildGRPCOptions extract (#188 RED-FU-013) + BaseConfig migration for 7 remaining services (#189 RED-FU-014) + auth migration unblock (#190) + bootstrap runbook refresh (#192) + **Phase 5 RBAC simplification ✅ COMPLETE — 5.1 tail global-admin fast-path #193 + 5-gate sweep #197 + brace-collision hot-fix #198, 5.3 delegator-dominates #199 (incl. tenant→org/repo containment + post-rebase callerIsTenantAdmin stitch), 5.4 SA-deny at admin gates #194, 5.5 SSO subject-id binding #195, 5.6 SAML SSO_SAML_TRUST_EMAIL flag #196.** 68 PRs through 2026-06-29, ~98% complete. Remaining: Phase 6/7/8 hardening + docs + rollout prep.
 
 **Phases shipped so far:**
 
@@ -99,6 +99,14 @@
 | RED-FU-013 | extract scanner `buildGRPCOptions(cfg, extraUnary)` from inline `Run()` body + add the matching 3-test smoke suite. Scanner was the lone Phase 3.4 service still inlining the interceptor chain. Two trivial wording fixes (matching the 9-service majority on `"load mTLS certs"` vs `"load mTLS server certs"` and the platform-standard slog.Warn text) folded inline per code-review-agent | #188 | 2026-06-29 |
 | RED-FU-014 | embed `loader.BaseConfig` in the 7 remaining services (core/scanner/signer/webhook/audit/gc/tenant) — each Config struct shrinks by ~13 standalone field declarations; field promotion preserves all existing call sites. core+scanner drop their local `clientCreds(cfg, name)` helpers; signer/webhook/audit/gc swap inline `mtls.ClientCreds` calls to `cfg.MTLSClientCreds`. Also fixed a bootstrap container bug from #184 — `INSERT INTO tenants` was missing the NOT NULL `slug` column added by tenant migration 20260620000001; added new `BOOTSTRAP_TENANT_SLUG` env var (default `development`) matching the existing tenant id/name triplet | #189 | 2026-06-29 |
 | auth migration unblock (#190) | replace subquery-in-USING in `services/auth/migrations/20260628000003_drop_auth_providers.sql` — original used `ALTER COLUMN ... TYPE TEXT USING (SELECT ... FROM auth_providers ...)`, which Postgres rejects (SQLSTATE 0A000). Refactored to canonical add-temp-column / UPDATE-from-join / drop-and-rename pattern. Latent on main because the dev-stack volume kept the old schema across boots; surfaced today during the RED-FU-014 fresh-volume rebuild. Also cleaned up a latent `UPDATE users ... WHERE ap.id::TEXT = NULL` always-false bug whose own comment admitted it was a no-op. **Fresh-volume compose stack now reaches healthy on all 11 Phase 3.4 services for the first time since the rollout began.** | #190 | 2026-06-29 |
+| bootstrap runbook refresh | `infra/runbooks/bootstrap-first-admin.md` rewritten to reflect compose auto-seed via #184's registry-bootstrap container — adds MSYS_NO_PATHCONV, AUTH_DB_DSN, TENANT_DB_DSN, DEPLOYMENT_MODE=single, `--tenant-id <seeded-uuid>` (idempotency guard). Drops the obsolete `auth.bootstrap.completed` audit-event claim | #192 | 2026-06-29 |
+| 5.1 tail | global-admin fast-path on workspace gates — `requireDomainAdmin` / `requireWebhookAdmin` / `requireScanPolicyAdmin` / `admin_orgs.go` short-circuit `h.effectiveGlobalAdmin(r)` before the role-assignment lookup. Closes a workspace-wide 403 storm where freshly bootstrapped global admins (is_global_admin=true, no role rows after the Phase 5.1 marker-grant backfill) failed every gate that funnels through `effectiveTenantAdmin` | #193 | 2026-06-29 |
+| 5.4 | API-key principals denied at admin gates (REDESIGN-001 Decision #24) — `principalKind` field added to `*Claims` + propagated through JWT exchange; `callerIsTenantAdmin` signature extended with `principalKind string`; SA bearers refused up front at every admin gate. Bootstrap audit migration `users_sso_subject` is a separate PR (5.5). New tests: `caller_is_tenant_admin_test.go` + `admin_gates_apikey_deny_test.go` + `auth_principal_kind_test.go` | #194 | 2026-06-29 |
+| 5.5 | SSO subject-id binding — new `users.sso_subject TEXT` column + partial unique index on `(sso_provider_id, sso_subject) WHERE sso_subject IS NOT NULL`; `EnsureSSOUser` now matches by `(provider, subject)` first and only falls back to email lookup when the subject is empty (legacy users pre-#195). Recycled-email logins (same email, new subject) rejected with a clear error message. Migration: `20260629222534_users_sso_subject.sql`. **Known follow-ups deferred: SEC-040 (tenant filter on GetUserBySSOSubject), SEC-041 (race-recovery skips subject-mismatch reconciliation), SEC-042 (rejection error leaks "account exists for email X" — email enumeration). All accepted as should-fix per review cadence; logged below** | #195 | 2026-06-29 |
+| 5.6 | SAML `EmailVerified: true` hard-code → `SSO_SAML_TRUST_EMAIL` env flag (default `false`). When trust=false: NEW logins create users with `email_verified=false`; EXISTING-user logins also rejected (alternative would require trusting unverified email for lookup, defeating the gate). Documented expectation: a per-deployment "I trust this IdP's email" toggle. **Follow-up:** OAuth `ErrEmailNotVerified` should align from 401/UNAUTHORIZED to 403/EMAILNOTVERIFIED to match the SAML branch | #196 | 2026-06-29 |
+| 5.1 tail #2 | tenant-users gate + FE JWT helpers — `isTenantAdminOrPlatformAdmin` in `tenant_users.go` (gates 5 tenant-users routes) short-circuits on `h.effectiveGlobalAdmin(r)`; FE adds `is_global_admin?: boolean` to `JanusJwtClaims` + short-circuits both `isPlatformAdmin` and `isWorkspaceAdmin` helpers. Closes the second wave of workspace 403s the user surfaced (Security → Policies, Tenant Users, etc.) | #197 | 2026-06-29 |
+| 5.1 tail #3 | hot-fix: close SA-deny braces in 3 admin gates after #193 + #194 merge collision. PR #193 (IsGlobalAdmin fast-path) and PR #194 (SA-deny + principalKind) both edited `requireDomainAdmin` / `requireWebhookAdmin` / `requireScanPolicyAdmin` independently; each PR was clean in isolation, but when both landed on main the merge dropped the closing `}` between SA-deny's `return false` and the IsGlobalAdmin block — broke management compile. 3-line fix | #198 | 2026-06-29 |
+| 5.3 | delegator-dominates-delegatee in `GrantRole` + `CreateServiceAccount`. New `services/auth/internal/service/delegation.go` (`scopeDominates`, `VerifyDelegationBound`, `VerifyAllowedScopesSubset`). Containment rules: same-pair · `tenant → {org, repo}` (load-bearing for `handleElevateToOrgAdmin` — flagged by code-review-agent as BLOCKER before merge) · `org → repo` by `<org>/` prefix. 7-case regression test in `delegation_test.go`. Rebase onto main folded `callerIsTenantAdmin` SA-deny → IsGlobalAdmin → role-lookup dispatch order via an additional stitch commit (same 3-step pattern as #198 but in the `services/auth` http.go gate, not the management gates) | #199 | 2026-06-29 |
 
 **Top-5 security findings status (4 of 5 closed):**
 - #1 RLS missing — deferred per Phase 0 D4 decision
@@ -108,24 +116,10 @@
 - #5 Dev-seed admin shipped in prod image — ✅ closed by Phase 2.6 (PR #129)
 
 **Phases still OPEN:**
-- 3.4 (NEW) — Wire `libs/middleware/grpc.SingleTenantInjector` into each service's interceptor chain (per-service follow-ups; checklist below). Until adopted, single-mode defence still rests on the application-layer tenant_id filter + RLS.
-  - [ ] services/management
-  - [ ] services/auth
-  - [ ] services/metadata
-  - [ ] services/core
-  - [ ] services/storage
-  - [ ] services/scanner
-  - [ ] services/signer
-  - [ ] services/webhook
-  - [ ] services/audit
-  - [ ] services/gc
-  - [ ] services/proxy
-  - [ ] services/tenant
 - 4.7 — Remove SSO admin FE — ⛔ N/A (no FE consumer ever existed)
-- 5.3 — Delegator-dominates-delegatee rule in `GrantRole`
-- 5.4 — `digest_keyed.go` writer-tier scope (see RED-FU-003 in futures.md)
-- 5.5 — SSO subject-id binding
-- 5.6 — SAML `EmailVerified` hard-code fix
+- 5.5 follow-ups — SEC-040 (tenant filter on `GetUserBySSOSubject`), SEC-041 (race-recovery skips subject-mismatch reconciliation), SEC-042 (rejection error leaks "account exists for email X" — email enumeration). Listed in `Open security items` below
+- 5.6 follow-up — Align OAuth `ErrEmailNotVerified` from 401/UNAUTHORIZED to 403/EMAILNOTVERIFIED to match the SAML branch (code-review-agent note on #196)
+- RED-FU-003 — `services/management/internal/handler/digest_keyed.go:295` `hasAnyWriterRole` writer-tier scope (deferred from the original Phase 5.4 slot when Decision #24's SA-deny took priority; still tracked in `futures.md`)
 - 6.2 — Domain takeover guard (REPLACED by 2.1 removal; closed without code change)
 - 6.4 — AES-GCM KEK version prefix
 - 6.5 — JWKS rotation prep (multi-key support)
@@ -302,6 +296,9 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 
 | ID | Severity | Title | Status | Notes |
 |---|---|---|---|---|
+| **SEC-040** | MEDIUM | `GetUserBySSOSubject` missing tenant filter | OPEN | Surfaced by security-agent during Phase 5.5 review (PR #195). In multi-mode, a returning SSO subject is matched purely on `(provider_id, subject)` — no tenant scope. If two tenants happen to share an IdP (multi-tenant SaaS posture), a recycled subject id could resolve to a user in the wrong tenant. Fix: add `tenant_id` filter to the partial-index lookup. Accepted as should-fix follow-up so Phase 5.5 could ship. |
+| **SEC-041** | LOW | SSO race-recovery skips subject-mismatch reconciliation | OPEN | Surfaced by security-agent during Phase 5.5 review (PR #195). When two concurrent SSO logins for the same subject hit `CreateSSOUser` and one wins the unique-index race, the loser falls back to `GetUserBySSOSubject` — but doesn't re-verify the subject matches in the recovered row before returning. Race window is narrow but exists. Fix: re-check `loadedUser.SSOSubject == subject` post-recovery; reject if mismatched. |
+| **SEC-042** | LOW | SSO rejection message leaks "account exists for email X" — email enumeration | OPEN | Surfaced by security-agent during Phase 5.5 review (PR #195). When SSO login arrives with a fresh subject but the email already maps to a different user, the rejection text echoes the email back. An attacker controlling an IdP they can spin up freely can probe which emails are registered. Fix: collapse to a generic "this account is not linked to your SSO identity — contact your admin" without echoing the email. |
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
 
@@ -393,5 +390,5 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 
 ---
 
-> **Last updated:** 2026-06-23.
+> **Last updated:** 2026-06-29 — Phase 5 close-out sync (#193-#199 + hot-fixes #198 + bootstrap runbook #192).
 > **Maintainer:** see `git log -- status-tracker.md`.

@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-29 — 58 PRs shipped through #190. **Phase 3.4 service rollout ✅ COMPLETE** + Phase 3.4 close-out sweep done (#181/#182/#183/#184/#185/#186) + tracker docs sync (#187) + scanner buildGRPCOptions extract (#188 RED-FU-013) + BaseConfig migration for the remaining 7 services (#189 RED-FU-014) + auth migration unblock (#190). **Local fresh-volume compose stack now reaches healthy on all 11 Phase 3.4 services for the first time since the rollout began.** 4 of 5 Top-5 critical findings closed. Remaining work: Phase 5/6/7 hardening.
+> **As-of:** 2026-06-29 — 68 PRs shipped through #199. **Phase 5 RBAC simplification COMPLETE** — 5.1 typed `is_global_admin` (#134) + 2 hot-fix tails wiring the fast-path through every workspace + tenant-users gate (#193 / #197), 5.3 delegator-dominates (#199 — folds the code-review-agent's tenant→org/repo scope-containment fix inline + stitches `callerIsTenantAdmin` SA-deny/IsGlobalAdmin/role-lookup in the documented order after rebase), 5.4 SA-deny at admin gates (#194), 5.5 SSO subject-id binding (#195), 5.6 SAML `SSO_SAML_TRUST_EMAIL` flag (#196). Hot-fix #198 closed a 3-file build break where the #193 + #194 merge collision dropped enclosing braces from the SA-deny + IsGlobalAdmin composition. 4 of 5 Top-5 critical findings closed. Remaining work: Phase 6 hardening + Phase 7 docs/CI lint + Phase 8 rollout prep. Phase 5.5 surfaced 3 follow-up security findings (SEC-040/041/042 — see `security.md`) — Phase 5.5 shipped without them per "should-fix follow-up" cadence.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -78,10 +78,13 @@
 | 4.7 | Remove SSO admin FE (companion to 2.2) | ⛔ N/A | — | 2026-06-27 |
 | 5.1 | Typed `users.is_global_admin` primitive | ✅ DONE | #134 | 2026-06-28 |
 | 5.2 | Scope-aware tenant-admin gates (**closes Top-5 #2**) | ✅ DONE | #131 | 2026-06-27 |
-| 5.3 | Delegator-dominates-delegatee in `GrantRole` | ⬜ OPEN | — | — |
-| 5.4 | `digest_keyed.go` writer-tier scope (RED-FU-003) | ⬜ OPEN | — | — |
-| 5.5 | SSO subject-id binding | ⬜ OPEN | — | — |
-| 5.6 | SAML `EmailVerified` hard-code fix | ⬜ OPEN | — | — |
+| 5.1 tail | Global-admin fast-path on workspace gates (hot-fix) | ✅ DONE | #193 | 2026-06-29 |
+| 5.1 tail #2 | Tenant-users gate + FE JWT helpers + tenant_users gate sweep | ✅ DONE | #197 | 2026-06-29 |
+| 5.1 tail #3 | Close SA-deny braces in 3 admin gates (#193 + #194 merge collision) | ✅ DONE | #198 | 2026-06-29 |
+| 5.3 | Delegator-dominates-delegatee in `GrantRole` + SA scope subset (incl. tenant→org/repo containment) | ✅ DONE | #199 | 2026-06-29 |
+| 5.4 | API-key role gates deny SA principals up front (Decision #24) | ✅ DONE | #194 | 2026-06-29 |
+| 5.5 | SSO subject-id binding (`users.sso_subject` + `EnsureSSOUser` match-by-subject) | ✅ DONE | #195 | 2026-06-29 |
+| 5.6 | SAML `EmailVerified` hard-code → `SSO_SAML_TRUST_EMAIL` flag | ✅ DONE | #196 | 2026-06-29 |
 | 6.1 | Pull-through proxy digest verify (**closes Top-5 #4**) | ✅ DONE | #123 | 2026-06-26 |
 | 6.2 | Custom-domain takeover guard | ⛔ N/A | — | (replaced by 2.1) |
 | 6.3 | Audit catalogue completeness + lint test | ✅ DONE | #130 | 2026-06-27 |
@@ -1087,52 +1090,73 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 - [x] PR.
 
 ### Task 5.3: Delegator-dominates-delegatee rule in `GrantRole` and SA creation [Review §A1]
+> ✅ DONE — PR #199 (2026-06-29). Helpers in new `services/auth/internal/service/delegation.go`; tenant→org/repo containment + 7 regression tests added per code-review-agent before merge.
 
 **Files:**
 - Modify: `services/auth/internal/handler/grpc.go:189-239` (`GrantRole`)
 - Modify: `services/auth/internal/service/service_account.go:141-205` (`CreateServiceAccount`)
+- New: `services/auth/internal/service/delegation.go` (`scopeDominates`, `VerifyDelegationBound`, `VerifyAllowedScopesSubset`)
+- New: `services/auth/internal/service/delegation_test.go`
 
-- [ ] Add a `verifyDelegationBound(callerAssignments, grantedRole, grantedScope)` helper.
-- [ ] Rule: the caller's effective role at `grantedScope` (or any ancestor scope) must be ≥ `grantedRole`. Use the existing role-rank table (`owner > admin > writer > reader`).
-- [ ] For service accounts: `AllowedScopes` must be a subset of the creator's effective scopes (or `[]` = no access).
-- [ ] Test cases:
+- [x] Add a `VerifyDelegationBound(callerAssignments, grantedRole, grantedScope)` helper.
+- [x] Rule: the caller's effective role at `grantedScope` (or any ancestor scope) must be ≥ `grantedRole`. Use the existing role-rank table (`owner > admin > writer > reader`).
+- [x] For service accounts: `AllowedScopes` must be a subset of the creator's effective scopes (or `[]` = no access).
+- [x] Containment rules: same-pair dominates · `tenant → {org, repo}` (load-bearing for tenant-admin elevation flow) · `org → repo` by `<org>/` prefix.
+- [x] Test cases:
   - Owner of org-A can grant admin on org-A repos. ✅
   - Admin of org-A cannot grant owner on org-A. ✅ (delegator can't promote above own rank)
   - Admin of org-A cannot grant admin on org-B. ✅
   - Reader of repo-X cannot create an SA with writer-on-repo-X scope. ✅
-- [ ] PR.
+  - Tenant admin can grant org admin / repo writer; cannot grant org owner (rank above admin). ✅
+- [x] PR.
 
 ### Task 5.4: Bind API-key role gates to attestable identity [Review §A1 + Top-5 #2]
+> ✅ DONE — PR #194 (2026-06-29). Decision #24 honoured: API-key principals denied at every admin gate regardless of shadow-user roles. `principalKind` propagated end-to-end through `*Claims` + JWT exchange + `callerIsTenantAdmin` signature.
 
-The current `callerIsTenantAdmin` re-queries `GetUserRoles` by `claims.Subject` — but for API-key principals, the subject is the SA shadow user. The role gate accidentally succeeds because the API-key owner happens to hold admin. **Decision: API-key Bearer principals are denied at admin-only gates regardless of the owner's role.** This honors decision #24's intent.
+The current `callerIsTenantAdmin` re-queries `GetUserRoles` by `claims.Subject` — but for API-key principals, the subject is the SA shadow user. The role gate accidentally succeeded because the API-key owner happens to hold admin. **Decision: API-key Bearer principals are denied at admin-only gates regardless of the owner's role.**
 
 **Files:**
-- Modify: `services/auth/internal/handler/http.go:415-427` (`callerIsTenantAdmin`)
-- Same pattern across other `require*Admin` helpers.
+- Modify: `services/auth/internal/handler/http.go` (`callerIsTenantAdmin` — added `principalKind` parameter)
+- Modify: `services/management/internal/handler/handler.go` (`requireDomainAdmin`)
+- Modify: `services/management/internal/handler/webhooks.go` (`requireWebhookAdmin`)
+- Modify: `services/management/internal/handler/security_policies.go` (`requireScanPolicyAdmin`)
+- New: `services/auth/internal/handler/caller_is_tenant_admin_test.go`
+- New: `services/management/internal/handler/admin_gates_apikey_deny_test.go`
+- New: `services/management/internal/middleware/auth_principal_kind_test.go`
 
-- [ ] Add `if claims.PrincipalKind == "api_key" { return false }` at the top of every admin gate.
-- [ ] Test: API key for an admin user → 403 on `POST /api/v1/users`.
-- [ ] PR.
+- [x] Add `if principalKind == "service_account" { return false }` at the top of every admin gate.
+- [x] Test: API key for an admin user → 403 on tenant-admin routes. Legacy tokens with empty `principal_kind` still admitted via the role path.
+- [x] PR.
 
 ### Task 5.5: SSO subject-id binding [Review §A4, §D1 in review]
+> ✅ DONE — PR #195 (2026-06-29). `users.sso_subject` column + `(sso_provider_id, sso_subject)` partial unique index; `EnsureSSOUser` now match-by-subject with email fallback.
 
 **Files:**
-- Migration: add `users.sso_subject TEXT` column
-- Modify: `services/auth/internal/service/sso.go:471-484` (`EnsureSSOUser`) — match on `(sso_provider_id, sso_subject)`, fall back to email only if no existing user has the email
+- Migration: `services/auth/migrations/20260629222534_users_sso_subject.sql`
+- Modify: `services/auth/internal/service/sso.go` — match on `(sso_provider_id, sso_subject)`, fall back to email only if no existing user has the email
 
-- [ ] Migration backfills NULL — existing users continue working.
-- [ ] New SSO logins set `sso_subject` from the IdP's `sub` claim (OAuth) or NameID (SAML).
-- [ ] If email matches an existing user but `sso_subject` is different (recycled email), reject with a clear error: "An account exists for this email; ask your admin to link it to your new SSO identity."
-- [ ] PR.
+- [x] Migration backfills NULL — existing users continue working.
+- [x] New SSO logins set `sso_subject` from the IdP's `sub` claim (OAuth) or NameID (SAML).
+- [x] If email matches an existing user but `sso_subject` is different (recycled email), reject with a clear error.
+- [x] PR.
+
+**Follow-up security findings (security-agent "fix-before-merge" — accepted into security.md as SEC-040/041/042 follow-ups, NOT blocking PR #195 merge per cadence):**
+- **SEC-040** — `GetUserBySSOSubject` missing tenant filter (multi-mode boundary blur)
+- **SEC-041** — race-recovery path skips subject-mismatch reconciliation
+- **SEC-042** — rejection error message leaks "account exists for email X" (email enumeration)
 
 ### Task 5.6: Fix SAML `EmailVerified: true` hard-code [Review §G1]
+> ✅ DONE — PR #196 (2026-06-29). New `SSO_SAML_TRUST_EMAIL` env flag; default false → email_verified=false until a future verification flow lands. Existing-user login also rejected when trust=false because the alternative would require trusting unverified email for lookup.
 
 **Files:**
-- Modify: `services/auth/internal/handler/saml.go:283-290`
+- Modify: `services/auth/internal/handler/saml.go`
+- Modify: `services/auth/internal/config/config.go` (new `SSO_SAML_TRUST_EMAIL` flag)
 
-- [ ] Read a per-deployment config flag `SSO_SAML_TRUST_EMAIL` (default `false`).
-- [ ] If false, the email is stored as `email_verified=false` and the user must verify via a one-time email link before getting JWTs.
-- [ ] PR.
+- [x] Read a per-deployment config flag `SSO_SAML_TRUST_EMAIL` (default `false`).
+- [x] If false, the email is stored as `email_verified=false` and the user cannot complete login until a verification flow ships.
+- [x] PR.
+
+**Follow-up:** OAuth `ErrEmailNotVerified` returns 401/UNAUTHORIZED today; should align to 403/EMAILNOTVERIFIED to match the SAML branch (code-review-agent note, deferred).
 
 ---
 
