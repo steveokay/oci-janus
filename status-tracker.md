@@ -30,17 +30,20 @@
 
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases. Per-phase truth (every PR, every date) lives in that file's Progress dashboard.
 
-**Status:** ~98% complete. Phases 0–6 shipped (67 PRs through #210); Phase 7.1 (CLAUDE.md rewrite) shipped in #210. Top-5 #2/#3/#4/#5 all closed; #1 (universal RLS) deferred per Phase 0 D4. Consolidated shipped-PR row in [`status.md`](status.md).
+**Status:** ~99% complete. Phases 0–7 shipped + Phase 8.1 (migration guide) + 8.2 (README rewrite) shipped through #217. Top-5 #2/#3/#4/#5 all closed; #1 (universal RLS) deferred per Phase 0 D4. **2026-06-30 rescoping (#217):** 6.8 (SAML lib bump) DESCOPED → `futures.md` RED-FU-016; 6.11 (scanner sandbox) replaced by `infra/runbooks/scanner-isolation.md` runbook, in-process work parked at `futures.md` RED-FU-018; 6.4 KEK rotation tool anchored at RED-FU-015 (HIGH priority next pickup); 6.12 checkpoint signing anchored at RED-FU-017 (LOW). Consolidated shipped-PR row in [`status.md`](status.md).
 
 **Open:**
-- **6.8** — SAML library upgrade to v0.5.x — held for design pass (semver breaking changes need risk review)
-- **6.11** — Scanner plugin sandbox — held for design pass (Linux-only seccomp/landlock primitives need design discussion)
-- **7.2** — Per-decision ADR files — in flight on `feat/redesign-7.2-adrs`
-- **7.3** — Spec-lint CI tool — in flight on `feat/redesign-7.3-spec-lint`
-- **Phase 8** — Migration / rollout / release prep
-- Small tail follow-ups: 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch; SEC-051 (LOW, pre-migration audit rows silently unverifiable) + SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases)
+- **8.3** — Release v2.0.0: CHANGELOG covering every breaking change; tag `v2.0.0-rc1` → soak 1 week → `v2.0.0`. Sequencing only; last step.
+- **7.4 part 2** — Remove this REDESIGN-001 entry from `status-tracker.md` after 8.3 ships; append a resolution note to `status.md`.
+- Small tail follow-ups (non-blocking): 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch; SEC-051 (LOW, pre-migration audit rows silently unverifiable) + SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases); SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex).
 
-**Blocks:** FUT-019 Phase 3 (email channel).
+**Deferred to `futures.md`:**
+- RED-FU-015 — KEK rotation tool (HIGH, next pickup after v2.0.0)
+- RED-FU-016 — SAML v0.5.x bump (LOW, revisit on v0.4 advisory)
+- RED-FU-017 — Audit checkpoint signing (LOW, parked)
+- RED-FU-018 — Scanner in-process sandbox (PARKED, runtime CVE trigger)
+
+**Blocks:** FUT-019 Phase 3 (email channel) — unblocked once v2.0.0 ships.
 
 ---
 
@@ -295,5 +298,5 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 
 ---
 
-> **Last updated:** 2026-06-30 — Phase 7.4 tracker trim. REDESIGN-001 entry collapsed to a paragraph + OPEN bullets (per-PR shipped table moved into `status.md` as a single consolidated row); see `.claude/plans/2026-06-26-single-tenant-redesign.md` for the per-phase truth.
+> **Last updated:** 2026-06-30 — Phase 7 + 8.1 + 8.2 + held-item rescoping (#210-#217). REDESIGN-001 down to only 8.3 (release v2.0.0) + 4 RED-FU-15/16/17/18 anchored in `futures.md` (HIGH KEK rotation queued; SAML + sandbox + checkpoint parked with explicit triggering conditions).
 > **Maintainer:** see `git log -- status-tracker.md`.
