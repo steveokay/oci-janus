@@ -300,12 +300,15 @@ func (f *handlerFakeUserRepo) CreateSSOUser(_ context.Context, req repository.Cr
 // tests can exercise EnsureSSOUser end-to-end. The fake scans the user store
 // rather than maintaining a side map — handler tests are throughput-light and
 // the simpler implementation matches the rest of the file's style.
-func (f *handlerFakeUserRepo) GetUserBySSOSubject(_ context.Context, _ string, subject string) (*repository.User, error) {
+//
+// SEC-040: tenant filter — only return a row whose TenantID matches the
+// caller's. Matches the production query's tenant-scoped WHERE clause.
+func (f *handlerFakeUserRepo) GetUserBySSOSubject(_ context.Context, tenantID uuid.UUID, _ string, subject string) (*repository.User, error) {
 	if subject == "" {
 		return nil, repository.ErrNotFound
 	}
 	for _, u := range f.users {
-		if u.SSOSubject == subject && u.Kind != "service_account" {
+		if u.SSOSubject == subject && u.Kind != "service_account" && u.TenantID == tenantID {
 			return u, nil
 		}
 	}

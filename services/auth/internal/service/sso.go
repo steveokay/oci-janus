@@ -390,9 +390,10 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 	// the strongest signal we have that this is the same human who logged in
 	// before — the (provider, subject) pair is immune to email recycling
 	// because the IdP minted the subject when the remote account was created
-	// and will not re-assign it.
+	// and will not re-assign it. SEC-040 — lookup is now tenant-scoped so a
+	// shared IdP in multi-mode cannot leak cross-tenant.
 	if ident.Subject != "" {
-		bySubject, err := s.auth.users.GetUserBySSOSubject(ctx, p.ProviderID, ident.Subject)
+		bySubject, err := s.auth.users.GetUserBySSOSubject(ctx, resolvedTenantID, p.ProviderID, ident.Subject)
 		switch {
 		case err == nil:
 			if !bySubject.IsActive {
@@ -437,10 +438,16 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 			}
 			user.SSOSubject = ident.Subject
 		case user.SSOSubject != ident.Subject:
-			// Refuse with an operator-actionable message — see the
-			// ErrSSOSubjectMismatch doc comment for the rationale.
-			return nil, nil, fmt.Errorf("%w: An account exists for email %s but is bound to a different SSO identity. Ask your admin to link this account to your new SSO subject.",
-				ErrSSOSubjectMismatch, ident.Email)
+			// SEC-042 — refuse with a generic, non-enumerating message. The
+			// previous wording echoed the email back, which gave an attacker
+			// who controls an IdP they can spin up freely (Auth0 trial,
+			// self-hosted Keycloak) a probe for which addresses are
+			// registered. The email is still emitted to the server-side log
+			// so operators can debug genuine link issues.
+			slog.WarnContext(ctx, "SSO subject mismatch — refusing login",
+				"provider_id", p.ProviderID, "user_id", user.ID, "email", ident.Email)
+			return nil, nil, fmt.Errorf("%w: this SSO identity is not linked to a registered account — contact your admin to link it",
+				ErrSSOSubjectMismatch)
 		}
 		if !user.IsActive {
 			return nil, nil, ErrAccountDisabled
@@ -453,7 +460,10 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 			return nil, nil, ErrAutoProvisionDisabled
 		}
 	default:
-		return nil, nil, fmt.Errorf("no human user with email %q: %w", ident.Email, err)
+		// SEC-042 — keep the email out of the error chain. The DB error type
+		// is still propagated; operators can correlate via the SSO callback
+		// audit event which logs the email server-side.
+		return nil, nil, fmt.Errorf("lookup human user by email: %w", err)
 	}
 
 	// Auto-provision path. Persist the IdP subject at creation so the next
@@ -470,19 +480,38 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 	if err != nil {
 		if errors.Is(err, repository.ErrAlreadyExists) {
 			// Lost a race with a parallel callback — re-query by subject
-			// first (it's the authoritative key), then by email. Clear the
-			// outer err on a successful recovery so the role-grant /
-			// returning-user logic below runs against `created`.
+			// first (it's the authoritative key, tenant-scoped per SEC-040),
+			// then by email. Clear the outer err on a successful recovery so
+			// the role-grant / returning-user logic below runs against
+			// `created`.
 			created = nil
 			if ident.Subject != "" {
-				if bySubject, lookupErr := s.auth.users.GetUserBySSOSubject(ctx, p.ProviderID, ident.Subject); lookupErr == nil {
+				if bySubject, lookupErr := s.auth.users.GetUserBySSOSubject(ctx, resolvedTenantID, p.ProviderID, ident.Subject); lookupErr == nil {
 					created = bySubject
 				}
 			}
 			if created == nil {
 				byEmail, emailErr := s.auth.users.GetHumanByEmail(ctx, resolvedTenantID, ident.Email)
 				if emailErr != nil {
-					return nil, nil, fmt.Errorf("no human user with email %q after race: %w", ident.Email, emailErr)
+					// SEC-042 — strip the email from the wrapped error so it
+					// never reaches the caller (this surface bubbles up to
+					// SSO callback HTTP responses).
+					return nil, nil, fmt.Errorf("no human user after race: %w", emailErr)
+				}
+				// SEC-041 — race-recovery via email is the one path where the
+				// recovered row is NOT guaranteed to carry the requested
+				// subject. The race-winning concurrent callback may have set
+				// `byEmail.SSOSubject` to a different value; accepting the
+				// row blind would mean handing this caller a session for an
+				// identity the IdP did not assert in this request. Re-check
+				// and refuse with the same generic message as the
+				// well-trodden subject-mismatch path so the rejection shape
+				// is identical and non-enumerating.
+				if ident.Subject != "" && byEmail.SSOSubject != "" && byEmail.SSOSubject != ident.Subject {
+					slog.WarnContext(ctx, "SSO race recovery: subject mismatch on email-recovered row — refusing login",
+						"provider_id", p.ProviderID, "user_id", byEmail.ID, "email", ident.Email)
+					return nil, nil, fmt.Errorf("%w: this SSO identity is not linked to a registered account — contact your admin to link it",
+						ErrSSOSubjectMismatch)
 				}
 				created = byEmail
 			}

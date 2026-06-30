@@ -52,6 +52,11 @@ type fakeUserRepo struct {
 	// delegation tests). GetUserRoles returns the slice associated with
 	// (userID, tenantID); tests seed it via grantRoleInFake.
 	roles map[uuid.UUID][]repository.RoleAssignment
+	// failCreateSSOWith, when non-nil, makes CreateSSOUser return the
+	// given error before any in-memory state is checked or mutated. Used
+	// by SEC-041's race-recovery test to simulate the parallel-callback
+	// loser without having to spin up real concurrency.
+	failCreateSSOWith error
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -291,6 +296,13 @@ func (f *fakeUserRepo) GetHumanByEmail(_ context.Context, tenantID uuid.UUID, em
 }
 
 func (f *fakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSOUserRequest) (*repository.User, error) {
+	// SEC-041 test fixture — simulate the race-winning concurrent callback
+	// having already inserted a row. Returns the injected error before any
+	// in-memory state is consulted so the side maps (users, bySSOSubject)
+	// stay exactly as the test seeded them.
+	if f.failCreateSSOWith != nil {
+		return nil, f.failCreateSSOWith
+	}
 	for _, u := range f.users {
 		if u.TenantID == req.TenantID && (u.Username == req.Username || (req.Email != "" && strings.EqualFold(u.Email, req.Email))) {
 			return nil, repository.ErrAlreadyExists
@@ -326,12 +338,21 @@ func (f *fakeUserRepo) CreateSSOUser(_ context.Context, req repository.CreateSSO
 // keeps a side map keyed by (provider, subject) so a returning login can
 // be matched without scanning the user store. Tests seed entries either
 // via CreateSSOUser or by calling fakeUserRepo.bindSSOSubject directly.
-func (f *fakeUserRepo) GetUserBySSOSubject(_ context.Context, providerID string, subject string) (*repository.User, error) {
+//
+// SEC-040: tenant filter added — fakes the production index now keyed on
+// (tenant_id, sso_provider_id, sso_subject). The map key still uses only
+// (provider, subject) so existing test seeds continue to work; the tenant
+// check is layered on top via the user's TenantID field. Returning
+// ErrNotFound on tenant mismatch matches the production query shape.
+func (f *fakeUserRepo) GetUserBySSOSubject(_ context.Context, tenantID uuid.UUID, providerID string, subject string) (*repository.User, error) {
 	if subject == "" {
 		return nil, repository.ErrNotFound
 	}
 	u, ok := f.bySSOSubject[ssoKey{provider: providerID, subject: subject}]
 	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	if u.TenantID != tenantID {
 		return nil, repository.ErrNotFound
 	}
 	return u, nil
