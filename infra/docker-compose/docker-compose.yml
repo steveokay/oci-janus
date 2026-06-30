@@ -880,6 +880,7 @@ services:
       # tenant is the operator tenant locally; production should use a dedicated
       # operator tenant created out of band.
       PLATFORM_ADMIN_TENANT_ID: ${PLATFORM_ADMIN_TENANT_ID:-98dbe36b-ef28-4903-b25c-bff1b2921c9e}
+      PLATFORM_HOST: localhost:8080
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/management.crt
       MTLS_KEY_PATH: /certs/management.key
