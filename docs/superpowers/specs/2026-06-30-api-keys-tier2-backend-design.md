@@ -72,8 +72,9 @@ one tiny new BFF endpoint.
   `HelpersPanel.tsx`. Drop the `<PreviewBanner>`.
 - Add a `<Select>` at the top driven by `useServiceAccounts()` (hook
   already exists post-FE-API-048).
-- Snippets render from a `buildSnippets({hostname, saName, format})`
-  pure helper — easy to unit-test.
+- Snippets render from a `buildSnippets({hostname, saName})` pure helper
+  that returns `Record<SnippetFormat, string>` (all four formats at once
+  — one call regardless of active tab). Easy to unit-test.
 - Copy buttons keep their existing functional behaviour (they already
   work on the preview).
 - Route file: `_authenticated.api-keys.helpers.tsx` swaps the preview
