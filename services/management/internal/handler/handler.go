@@ -292,7 +292,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Deployment info — unauthenticated, public. Returns the deployment mode
 	// and version so the FE can decide which chrome to render (REDESIGN-001 Phase 1.4).
 	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.handleDeploymentInfo))
-	mux.Handle("GET /api/v1/registry-info", http.HandlerFunc(h.handleRegistryInfo))
+
+	// Registry info — authenticated. Returns the deployment's externally-reachable
+	// registry hostname for the FUT-002 credential-helpers surface. The hostname
+	// itself is publicly discoverable (it's the URL operators push/pull against),
+	// but the helpers page lives behind /api-keys/helpers which is auth-gated, so
+	// the matching BFF route is auth-gated too — spec compliance over symmetry
+	// with deployment-info.
+	mux.Handle("GET /api/v1/registry-info", authMW(http.HandlerFunc(h.handleRegistryInfo)))
 
 	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))

@@ -10,8 +10,11 @@ import (
 // render copy-paste-ready `docker login`, k8s Secret, Terraform, and GHA
 // snippets without operators having to type the hostname.
 //
-// Unauthenticated by design (mirrors handleDeploymentInfo) — leaks no
-// tenant data, only deployment metadata. Cached aggressively by the FE.
+// Auth-gated (requireAuth). The hostname itself is publicly discoverable —
+// it's the URL operators push/pull against — but the helpers page lives
+// behind /api-keys/helpers which is auth-gated, so the matching BFF route
+// is too. Spec compliance over symmetry with /deployment-info.
+// Cached aggressively by the FE (the hostname doesn't change during a session).
 //
 // Returns 500 with a clear error body when PLATFORM_HOST is empty, rather
 // than returning an empty string the FE would render as "docker login  "
