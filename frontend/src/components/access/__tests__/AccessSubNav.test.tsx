@@ -218,13 +218,30 @@ describe("AccessSubNav", () => {
 
     // DSGN-011 — the Preview section is collapsed by default. Verify the
     // links are hidden, then expand and verify they appear.
+    // FUT-002 shipped 2026-06-30 — "Credential helpers" graduated to the
+    // Workspace section and is asserted in its own test below.
     expect(screen.queryByText("Federated trust")).not.toBeInTheDocument();
     openPreviewSection();
 
     expect(screen.getByText("Federated trust")).toBeInTheDocument();
-    expect(screen.getByText("Credential helpers")).toBeInTheDocument();
     expect(screen.getByText("Token policies")).toBeInTheDocument();
     expect(screen.getByText("Access review")).toBeInTheDocument();
+  });
+
+  // FUT-002 graduation regression: Credential helpers must render in the
+  // always-visible Workspace section for admins, NOT inside the collapsed
+  // Preview flyout.
+  test("shows Credential helpers in Workspace section for admins without expansion", async () => {
+    mockClaims = adminClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Credential helpers")).toBeInTheDocument();
+    // Confirm the Preview flyout is still collapsed — the link is in the
+    // Workspace section above it, not behind the expander.
+    const expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    expect(expander).toHaveAttribute("aria-expanded", "false");
   });
 
   // DSGN-011 — collapsing the Preview section persists in localStorage so

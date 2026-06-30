@@ -1,10 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { HelpersPreview } from "@/components/access/previews/HelpersPreview";
+import { HelpersPanel } from "@/components/access/HelpersPanel";
 
-// /api-keys/helpers — credential-helper snippet preview surface (FUT-002).
-// Ships as a live route in Sprint 11. The layout-level admin gate in
-// AccessSubNav hides this link for non-admins; no additional beforeLoad
-// guard is required here.
+// /api-keys/helpers — live credential-helpers surface (FUT-002).
+// The layout-level admin gate in AccessSubNav hides this link for non-admins;
+// no additional beforeLoad guard is required here.
 export const Route = createFileRoute("/_authenticated/api-keys/helpers")({
-  component: HelpersPreview,
+  component: HelpersPanel,
 });

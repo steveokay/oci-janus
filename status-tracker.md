@@ -51,6 +51,25 @@
 
 ---
 
+### REM-021 — FUT-002 Credential helpers (in flight)
+
+**Affects:** `services/management` (new `/api/v1/registry-info` route + `PLATFORM_HOST` env), `frontend` (new `HelpersPanel` replacing the preview).
+
+**Status:** IN FLIGHT on `feat/fut-002-credential-helpers`. Smallest of the FUT-001..FUT-004 batch (`/api-keys/helpers` going from preview to live). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md`. No DB / proto change. Spec-compliance reviewed; auth-gating fix folded inline (`23d67e9`) after BFF spec reviewer caught a missing `authMW` wrap.
+
+**Plan:** `docs/superpowers/plans/2026-06-30-fut-002-credential-helpers.md`.
+
+**Follow-ups (non-blocking, file on merge):**
+- HelpersPanel test produces noisy `AggregateError` stderr in jsdom (no MSW handler). Tests pass deterministically; cosmetic noise only.
+- HelpersPanel test coverage is shell-only (loading branch + heading assertion). 4 render branches (loading / error / no-SA / rendered) → 1 covered. Add `vi.mock('@/lib/api/registry-info')` + `vi.mock('@/lib/api/service-accounts')` and assert rendered snippet contains hostname for at least one format. (qa-agent SHOULD-FIX, 2026-06-30.)
+- No `ci-management.yml` CI workflow. `.github/workflows/` has 18 ci-*.yml files; only `ci-tidy-check.yml` references the management module. New BFF handler doesn't run lint/vet/`go test`/`-race` in CI. Pre-existing repo gap exposed by FUT-002 being the first material services/management change in a while. File chore PR mirroring `ci-webhook.yml`. (qa-agent SHOULD-FIX, 2026-06-30.)
+- `HelpersPanel.tsx:88-164` JSX inside the `<>...</>` fragment indents at column 6 instead of column 8/10. Cosmetic; no prettier gate in CI; heals on next `npm run format`. (code-review-agent nit, 2026-06-30.)
+- `HelpersPanel.tsx:55-64` `handleCopy` swallows clipboard errors silently. Adding a one-shot toast ("Clipboard unavailable — select and copy manually") would be nicer UX. (code-review-agent nit, 2026-06-30.)
+
+**On merge:** remove this entry; append a resolution row to `status.md`.
+
+---
+
 ### REM-014 — Lint findings unmasked by Go 1.25 toolchain upgrade
 
 **Surfaced:** 2026-06-28 after PR #156 (`fix(ci): goinstall golangci-lint`) made golangci-lint reachable past its typecheck stage. Prior to #156 the action's bundled Go 1.24 binary couldn't parse Go 1.25 source, so every linter was short-circuited; PR #156 fixed that, which unmasked a real backlog.

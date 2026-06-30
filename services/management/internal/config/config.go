@@ -29,6 +29,13 @@ type Config struct {
 	// "route disabled").
 	WebhookGRPCAddr string `mapstructure:"WEBHOOK_GRPC_ADDR"`
 
+	// PlatformHost is the externally-reachable hostname of the registry
+	// (e.g. "registry.example.com" or "localhost:8080" in dev). Used by the
+	// credential-helpers (/api-keys/helpers) surface to render copy-paste
+	// snippets — operators copy `docker login <PlatformHost>` etc., so this
+	// must match what their CI runner will see. Required in production.
+	PlatformHost string `mapstructure:"PLATFORM_HOST"`
+
 	// SignerGRPCAddr is optional — only required when FE-API-003
 	// `/api/v1/.../signature` is enabled. Empty leaves that route at 404
 	// "route disabled" so a deployment without registry-signer still
@@ -124,6 +131,9 @@ func validate(cfg *Config) error {
 	if cfg.OTELEnvironment == "production" {
 		if cfg.CORSAllowedOrigin == "" {
 			return fmt.Errorf("CORS_ALLOWED_ORIGIN is required in production")
+		}
+		if cfg.PlatformHost == "" {
+			return fmt.Errorf("PLATFORM_HOST is required in production")
 		}
 	}
 	return nil

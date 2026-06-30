@@ -192,6 +192,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	h = h.WithGCClient(gcClient)
 	h = h.WithProxyClient(proxyClient)
 	h = h.WithDeploymentInfo(cfg.DeploymentMode, cfg.BuildVersion)
+	h = h.WithPlatformHost(cfg.PlatformHost)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
 	// interactive dashboard while blocking a runaway script.
 	h = h.WithRateLimiter(middleware.NewPerUserRateLimiter(20, 40))

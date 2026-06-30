@@ -105,6 +105,13 @@ type Handler struct {
 	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
 	// endpoint.
 	buildVersion string
+	// platformHost is the externally-reachable registry hostname (e.g.
+	// "registry.example.com"). Injected via WithPlatformHost; used by
+	// handleRegistryInfo for the FUT-002 credential-helpers surface.
+	// Empty in dev when the env var isn't set; the helper endpoint returns
+	// 500 in production with an empty value (the config layer rejects this
+	// at startup anyway).
+	platformHost string
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -230,6 +237,14 @@ func (h *Handler) WithDeploymentInfo(mode loader.DeploymentMode, version string)
 	return h
 }
 
+// WithPlatformHost wires the externally-reachable registry hostname that the
+// FUT-002 credential-helpers surface returns from GET /api/v1/registry-info.
+// Returns the handler for chained initialization, mirroring WithDeploymentInfo.
+func (h *Handler) WithPlatformHost(host string) *Handler {
+	h.platformHost = host
+	return h
+}
+
 // checkServicesHealth calls the gRPC health check on each configured service and
 // returns the percentage (0–100) that are currently SERVING.
 // Uses a 2-second deadline so a slow or unreachable service never stalls the stats page.
@@ -277,6 +292,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Deployment info — unauthenticated, public. Returns the deployment mode
 	// and version so the FE can decide which chrome to render (REDESIGN-001 Phase 1.4).
 	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.handleDeploymentInfo))
+
+	// Registry info — authenticated. Returns the deployment's externally-reachable
+	// registry hostname for the FUT-002 credential-helpers surface. The hostname
+	// itself is publicly discoverable (it's the URL operators push/pull against),
+	// but the helpers page lives behind /api-keys/helpers which is auth-gated, so
+	// the matching BFF route is auth-gated too — spec compliance over symmetry
+	// with deployment-info.
+	mux.Handle("GET /api/v1/registry-info", authMW(http.HandlerFunc(h.handleRegistryInfo)))
 
 	// Tenant-scoped aggregate stats.
 	mux.Handle("GET /api/v1/stats", authMW(http.HandlerFunc(h.handleStats)))
