@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-30 — 76 PRs shipped through #208. **Phase 6 hardening 6 of 8 COMPLETE in one parallel-agent fan-out:** 6.4 AES KEK version prefix (#203), 6.5 JWKS rotation (#206, +SEC-048/049), 6.7 Argon2 cache (#207), 6.9 mTLS hot reload (#205, +SEC-046/047), 6.10 peer-CN interceptor (#204, +SEC-044/045), 6.12 audit hash-chain (#208, +SEC-050 HIGH BLOCKER fix where security-agent caught a tamper-evidence flaw in the initial `audit_chain_tip` design — redesigned inline to derive tip from `audit_events.chain_seq` so `registry_audit_app` keeps INSERT-only). 6.8 SAML lib upgrade + 6.11 scanner sandbox held for explicit design conversations. Phase 6 close-out leaves only 7 (docs/CI lint) + 8 (rollout prep) before REDESIGN-001 ships. **Phase 5 RBAC simplification COMPLETE** — 5.1 typed `is_global_admin` (#134) + 2 hot-fix tails wiring the fast-path through every workspace + tenant-users gate (#193 / #197), 5.3 delegator-dominates (#199 — folds the code-review-agent's tenant→org/repo scope-containment fix inline + stitches `callerIsTenantAdmin` SA-deny/IsGlobalAdmin/role-lookup in the documented order after rebase), 5.4 SA-deny at admin gates (#194), 5.5 SSO subject-id binding (#195), 5.6 SAML `SSO_SAML_TRUST_EMAIL` flag (#196). Hot-fix #198 closed a 3-file build break where the #193 + #194 merge collision dropped enclosing braces from the SA-deny + IsGlobalAdmin composition. 4 of 5 Top-5 critical findings closed. Remaining work: Phase 6 hardening + Phase 7 docs/CI lint + Phase 8 rollout prep. Phase 5.5 surfaced 3 follow-up security findings (SEC-040/041/042 — see `security.md`) — Phase 5.5 shipped without them per "should-fix follow-up" cadence.
+> **As-of:** 2026-06-30 — 76 PRs shipped through #208. **Phase 6 hardening 6 of 8 COMPLETE in one parallel-agent fan-out:** 6.4 AES KEK version prefix (#203), 6.5 JWKS rotation (#206, +SEC-048/049), 6.7 Argon2 cache (#207), 6.9 mTLS hot reload (#205, +SEC-046/047), 6.10 peer-CN interceptor (#204, +SEC-044/045), 6.12 audit hash-chain (#208, +SEC-050 HIGH BLOCKER fix where security-agent caught a tamper-evidence flaw in the initial `audit_chain_tip` design — redesigned inline to derive tip from `audit_events.chain_seq` so `registry_audit_app` keeps INSERT-only). 6.8 SAML lib upgrade + 6.11 scanner sandbox **descoped 2026-06-30** — 6.8 demoted to [`futures.md` RED-FU-016](../../futures.md) (no v0.4 forcing function); 6.11 replaced by [`infra/runbooks/scanner-isolation.md`](../../infra/runbooks/scanner-isolation.md) (container-level read-only + cap-drop + NetworkPolicy + cgroup limits), in-process work re-listed as [`RED-FU-018`](../../futures.md). Phase 6 close-out leaves only 7 (docs/CI lint) + 8 (rollout prep) before REDESIGN-001 ships. **Phase 5 RBAC simplification COMPLETE** — 5.1 typed `is_global_admin` (#134) + 2 hot-fix tails wiring the fast-path through every workspace + tenant-users gate (#193 / #197), 5.3 delegator-dominates (#199 — folds the code-review-agent's tenant→org/repo scope-containment fix inline + stitches `callerIsTenantAdmin` SA-deny/IsGlobalAdmin/role-lookup in the documented order after rebase), 5.4 SA-deny at admin gates (#194), 5.5 SSO subject-id binding (#195), 5.6 SAML `SSO_SAML_TRUST_EMAIL` flag (#196). Hot-fix #198 closed a 3-file build break where the #193 + #194 merge collision dropped enclosing braces from the SA-deny + IsGlobalAdmin composition. 4 of 5 Top-5 critical findings closed. Remaining work: Phase 6 hardening + Phase 7 docs/CI lint + Phase 8 rollout prep. Phase 5.5 surfaced 3 follow-up security findings (SEC-040/041/042 — see `security.md`) — Phase 5.5 shipped without them per "should-fix follow-up" cadence.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -92,10 +92,10 @@
 | 6.5 | JWKS rotation prep (multi-key keyring + ring-wide fallback) | ✅ DONE | #206 | 2026-06-30 |
 | 6.6 | Redis fail-closed in `revoke:user:` check | ✅ DONE | #122 | 2026-06-26 |
 | 6.7 | API-key Argon2 verify cache (60s Redis cache + state-aware HIT) | ✅ DONE | #207 | 2026-06-30 |
-| 6.8 | SAML library upgrade to v0.5.x | ⬜ OPEN — held for design pass | — | — |
+| 6.8 | SAML library upgrade to v0.5.x | ⛔ DESCOPED — no forcing function on v0.4-line; demoted to `futures.md` RED-FU-016 (revisit only on v0.4 advisory or v0.5-only feature request) | — | 2026-06-30 |
 | 6.9 | mTLS hot reload via `GetCertificate` + mtime cache | ✅ DONE | #205 | 2026-06-30 |
 | 6.10 | mTLS peer-CN interceptor (`MTLS_PEER_CN_ALLOWLIST`) | ✅ DONE | #204 | 2026-06-30 |
-| 6.11 | Scanner plugin sandbox | ⬜ OPEN — held for design pass | — | — |
+| 6.11 | Scanner plugin sandbox | ⛔ DESCOPED — in-process sandbox replaced by `infra/runbooks/scanner-isolation.md` (container read-only + cap-drop + NetworkPolicy + cgroup limits). In-process work re-listed in `futures.md` as RED-FU-018 only if container-runtime CVE forces it | runbook | 2026-06-30 |
 | 6.12 | Audit hash-chain (`chain_seq` + per-tenant linked list, **SEC-050 fix**) | ✅ DONE | #208 | 2026-06-30 |
 | 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ⬜ OPEN | — | — |
 | 8 | Migration / rollout / release prep | ⬜ OPEN | — | — |
@@ -1254,6 +1254,12 @@ Specific events to add (from review):
 - [ ] PR.
 
 ### Task 6.8: SAML library upgrade per Q-005 (if Option B chosen)
+> ⛔ **DESCOPED 2026-06-30.** No forcing function on the `crewjam/saml`
+> v0.4 line (no known security advisory; v0.5 changes are API ergonomics).
+> Moved to [`futures.md` RED-FU-016](../futures.md) for revisit if a v0.4
+> advisory or v0.5-only feature request appears. Original task body
+> retained below for the future picker.
+
 
 - [ ] `cd services/auth && go get github.com/crewjam/saml@v0.5.x && go mod tidy`
 - [ ] Run all SAML tests; fix any API changes.
@@ -1280,6 +1286,15 @@ Specific events to add (from review):
 - [ ] PR.
 
 ### Task 6.11: Scanner plugin sandbox [Review §A6, §F P2]
+> ⛔ **DESCOPED 2026-06-30.** Replaced by the operator-facing
+> [`infra/runbooks/scanner-isolation.md`](../../infra/runbooks/scanner-isolation.md)
+> runbook: read-only root, cap-drop, NetworkPolicy egress restriction,
+> cgroup CPU/RAM limits, seccomp `RuntimeDefault`. Container-boundary
+> isolation covers ~80% of the threat without Linux-only Go primitives
+> that don't port to dev/test. In-process sandbox re-listed in
+> [`futures.md` RED-FU-018](../futures.md) only if container-runtime
+> CVE forces it. Original task body retained below for the future picker.
+
 
 **Files:**
 - Modify: `services/scanner/internal/plugin/process.go:133`

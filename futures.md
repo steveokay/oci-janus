@@ -1182,7 +1182,79 @@ Docker v2 manifest list shapes are well-defined.
   catalogue completeness.
 - **Scope:** doc-only sweep across `CLAUDE.md`, `docs/SERVICES.md` §2
   (auth) + §12 (tenant), `docs/SAML.md`, `docs/EVENTS.md`. ~half-day.
-- **Affects:** docs only.
+- **Affects:** docs only. **✅ DONE** — PR #210 + #211 (ADRs) + #212 (spec-lint) + #213 (tracker trim).
+
+### RED-FU-015 — KEK rotation tool (REDESIGN-001 Phase 6.4 follow-up) — **HIGH PRIORITY**
+- **Why:** Phase 6.4 (PR #203) shipped the AES `Version = 0x01` byte
+  prefix on every ciphertext. The version byte is the prerequisite; the
+  rotation tool is the deliverable that makes the prerequisite useful.
+  Without it, anyone running a long-lived deployment who needs to
+  rotate the master KEK (suspected compromise, scheduled rotation,
+  regulator requirement) has no shippable path. The deferred plan
+  checkboxes are documented in
+  `.claude/plans/2026-06-26-single-tenant-redesign.md` Task 6.4 as
+  "DEFERRED — version byte shipped" with explicit follow-up anchors.
+- **Scope:** small design doc → CLI subcommand (`registry-auth
+  rotate-kek --from-key OLD --to-key NEW`) → re-encrypt iterator
+  with a `kek_id` column added to the encrypted-secret tables
+  (`global_sso_config.oauth_client_secret_enc`,
+  `signatures.private_key_enc`, etc.). Estimate: 3-5 days.
+- **Recommendation:** next pickup after REDESIGN-001 v2.0.0 ships.
+
+### RED-FU-016 — SAML library upgrade to v0.5.x (REDESIGN-001 Phase 6.8 descoped) — **LOW PRIORITY**
+- **Why:** Originally scoped as REDESIGN-001 Phase 6.8 (semver-breaking
+  upgrade from `crewjam/saml` v0.4 → v0.5). Descoped 2026-06-30 — no
+  forcing function on v0.4. Enterprise SAML self-hosters are a thin
+  slice of the OSS audience and v0.5's headline changes are API ergonomics,
+  not security. Re-evaluate only when one of: (a) a security advisory
+  drops on v0.4-line; (b) a self-hoster files a v0.5-only feature
+  request; (c) we want to drop our hand-rolled `samlsp.Middleware`
+  bypass (a v0.5 cleanup).
+- **Scope when picked up:** `cd services/auth && go get
+  github.com/crewjam/saml@v0.5.x && go mod tidy`; run SAML tests; fix
+  API churn; add `samlsp.ParseMetadata` cache per `(provider_id)` to
+  avoid per-request parse. Estimate: 1-2 days assuming clean upgrade.
+- **Recommendation:** park here; revisit only on a triggering event
+  per above.
+
+### RED-FU-017 — Audit hash-chain checkpoint signing (REDESIGN-001 Phase 6.12 follow-up) — **LOW PRIORITY**
+- **Why:** Originally part of REDESIGN-001 Phase 6.12 plan but explicitly
+  scoped out of the 6.12 PR (`#208`) as "checkpoint signing is OUT OF
+  SCOPE for this PR; this PR just lays the per-row primitive." The
+  in-DB hash chain catches internal tampering (the SEC-050 scenario);
+  checkpoint signing catches a different and rarer threat: an attacker
+  with **full DB superuser** who bypasses `FORCE RLS` + the
+  `registry_audit_app` role and rewrites the entire chain from genesis
+  (including the genesis sentinel). At that privilege level the right
+  defence is offline verification + tamper-evident checkpoints
+  periodically published to an immutable external store.
+- **Scope when picked up:** cron-driven publisher that signs `(tenant_id,
+  chain_seq, row_hash, occurred_at)` tuples with a long-lived KMS key
+  and writes them to S3 (or equivalent immutable object store) with
+  object-lock + WORM. Verifier walks the in-DB chain AND cross-checks
+  against the latest published checkpoint. Estimate: 1 week (S3 plumbing,
+  KMS integration, verifier CLI).
+- **Recommendation:** park here. Revisit only when a regulated customer
+  arrives, an incident-response runbook requires it, or audit forensics
+  becomes a stated use case.
+
+### RED-FU-018 — Scanner plugin in-process sandbox (REDESIGN-001 Phase 6.11 descoped) — **PARKED**
+- **Why:** Originally REDESIGN-001 Phase 6.11. Descoped 2026-06-30 in
+  favour of the operator-facing
+  [`infra/runbooks/scanner-isolation.md`](infra/runbooks/scanner-isolation.md)
+  runbook (read-only root, cap-drop, NetworkPolicy egress restriction,
+  cgroup CPU/RAM limits, seccomp profile via K8s `RuntimeDefault`). The
+  runbook neutralises ~80% of the scanner-RCE-via-CVE threat at the
+  container boundary — no Linux-only Go primitives required, ports to
+  dev/test cleanly. The remaining 20% is "attacker compromises scanner
+  process AND escapes the container runtime AND reaches the host" — a
+  scenario the original 6.11 plan addressed in-process via seccomp /
+  landlock / netns drops.
+- **Scope when picked up:** the original 6.11 task body. Re-read the
+  `Plan task 6.11` section before starting; the design has not changed.
+- **Recommendation:** park here unless a container-runtime CVE drops or
+  a multi-tenant SaaS deployment specifically requires per-process
+  isolation beyond NetworkPolicy enforcement.
 
 ---
 
