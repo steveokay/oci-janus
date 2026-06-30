@@ -51,10 +51,12 @@ type userRepo interface {
 	// (sa+N@internal.invalid) so they cannot match on the SSO login path.
 	// Use this method on all human-authentication paths; GetByEmail is deprecated.
 	GetHumanByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*repository.User, error)
-	// GetUserBySSOSubject is the (sso_provider_id, sso_subject) composite
-	// lookup that EnsureSSOUser consults first to defend against
-	// email-recycle account takeover (REDESIGN-001 Phase 5.5).
-	GetUserBySSOSubject(ctx context.Context, providerID string, subject string) (*repository.User, error)
+	// GetUserBySSOSubject is the (tenant_id, sso_provider_id, sso_subject)
+	// composite lookup that EnsureSSOUser consults first to defend against
+	// email-recycle account takeover (REDESIGN-001 Phase 5.5). Tenant filter
+	// added by SEC-040 — closes the multi-mode boundary where two tenants
+	// sharing one IdP could resolve the same subject to a wrong-tenant user.
+	GetUserBySSOSubject(ctx context.Context, tenantID uuid.UUID, providerID string, subject string) (*repository.User, error)
 	// SetSSOSubject backfills users.sso_subject for accounts that pre-date
 	// the Phase 5.5 migration so future logins flow through the subject
 	// lookup. Called only on the first email-matched login of an existing

@@ -90,10 +90,15 @@ type fakeIdP struct {
 	emailVerified bool
 	email         string
 	name          string
+	// subject overrides the default `idp-sub-1` value returned from the
+	// `/userinfo` endpoint. SEC-043 tests mutate this between callbacks to
+	// simulate an email-recycle / subject-recycle scenario where the same
+	// email arrives back with a different IdP subject id.
+	subject string
 }
 
 func newFakeIdP(t *testing.T, email, name string, verified bool) *fakeIdP {
-	idp := &fakeIdP{email: email, name: name, emailVerified: verified}
+	idp := &fakeIdP{email: email, name: name, emailVerified: verified, subject: "idp-sub-1"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -107,7 +112,7 @@ func newFakeIdP(t *testing.T, email, name string, verified bool) *fakeIdP {
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := json.Marshal(map[string]any{
-			"sub":            "idp-sub-1",
+			"sub":            idp.subject,
 			"email":          idp.email,
 			"email_verified": idp.emailVerified,
 			"name":           idp.name,
@@ -414,6 +419,90 @@ func TestSSOCallback_RejectsUnverifiedEmail(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("want 401 for unverified email, got %d; body=%s", resp.StatusCode, string(body))
+	}
+}
+
+// TestSSOCallback_SEC043_SubjectMismatchReturns401WithGenericBody is the
+// regression test for the security-agent finding on the SEC-040/041/042 PR:
+// the service layer carefully built a generic, non-enumerating rejection
+// message for ErrSSOSubjectMismatch (SEC-042), but the OAuth callback
+// handler had no explicit case for that sentinel — it fell through to the
+// default 500 INTERNAL branch, so the message never reached the wire.
+//
+// Test sequence:
+//  1. First callback with sub=idp-sub-1 → 302 redirect, user auto-provisioned.
+//  2. Mutate the IdP to return a different subject for the same email.
+//  3. Second callback → must be 401 UNAUTHORIZED with the generic body
+//     and the redirect path must NOT echo the email back.
+func TestSSOCallback_SEC043_SubjectMismatchReturns401WithGenericBody(t *testing.T) {
+	srv, _, globalProviders, _, _ := buildSSOTestServer(t)
+	const recycledEmail = "recycled@example.com"
+	idp := newFakeIdP(t, recycledEmail, "First Holder", true)
+
+	const providerID = "generic"
+	globalProviders.Providers[providerID] = &repository.GlobalSSOProvider{
+		ProviderID:     providerID,
+		Kind:           "oauth_generic",
+		DisplayName:    "Acme",
+		Enabled:        true,
+		OAuthClientID:  "client-id",
+		OAuthIssuerURL: idp.server.URL,
+		AutoProvision:  true,
+	}
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+	// First login: provisions the row with sso_subject = idp-sub-1.
+	r1, err := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/dashboard")
+	if err != nil {
+		t.Fatalf("start #1: %v", err)
+	}
+	_ = r1.Body.Close()
+	loc1, _ := url.Parse(r1.Header.Get("Location"))
+	state1 := loc1.Query().Get("state")
+	cb1 := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s",
+		srv.URL, providerID, url.QueryEscape(state1))
+	resp1, err := client.Get(cb1)
+	if err != nil {
+		t.Fatalf("callback #1: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != http.StatusFound {
+		t.Fatalf("callback #1: want 302, got %d", resp1.StatusCode)
+	}
+
+	// Second login: same email, new subject. This is the recycled-email path.
+	idp.subject = "idp-sub-NEW-HIRE"
+	r2, err := client.Get(srv.URL + "/auth/oauth/" + providerID + "/start?next=/dashboard")
+	if err != nil {
+		t.Fatalf("start #2: %v", err)
+	}
+	_ = r2.Body.Close()
+	loc2, _ := url.Parse(r2.Header.Get("Location"))
+	state2 := loc2.Query().Get("state")
+	cb2 := fmt.Sprintf("%s/auth/oauth/%s/callback?code=fake&state=%s",
+		srv.URL, providerID, url.QueryEscape(state2))
+	resp2, err := client.Get(cb2)
+	if err != nil {
+		t.Fatalf("callback #2: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	// SEC-043 — must be 401 with the generic body, NOT a default 500.
+	if resp2.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("subject mismatch must return 401, got %d; body=%s", resp2.StatusCode, string(body))
+	}
+	body, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(body), "contact your admin") {
+		t.Errorf("SEC-043: response body must use the generic SEC-042 phrasing; got %s", string(body))
+	}
+	// SEC-042 — the email must never reach the wire.
+	if strings.Contains(string(body), recycledEmail) {
+		t.Errorf("SEC-042: response body must not leak the email; got %s", string(body))
+	}
+	if strings.Contains(resp2.Header.Get("Location"), recycledEmail) {
+		t.Errorf("SEC-042: redirect target must not leak the email; Location=%s", resp2.Header.Get("Location"))
 	}
 }
 

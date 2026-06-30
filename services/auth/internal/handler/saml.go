@@ -328,6 +328,12 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 				"email", email)
 			writeError(w, http.StatusForbidden, "EMAILNOTVERIFIED", "SAML email cannot be trusted on this deployment; ask your administrator to set SSO_SAML_TRUST_EMAIL=true after confirming the IdP verifies emails")
 			return
+		case errors.Is(err, service.ErrSSOSubjectMismatch):
+			// SEC-043 — explicit dispatch so the SEC-042 generic body
+			// reaches the wire. Matches the OAuth branch in sso.go to
+			// keep the rejection shape uniform across both SSO flows.
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "this SSO identity is not linked to a registered account — contact your admin to link it")
+			return
 		}
 		slog.ErrorContext(r.Context(), "saml: EnsureSSOUser", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not complete login")

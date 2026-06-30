@@ -345,20 +345,24 @@ func (r *UserRepository) ListHumans(ctx context.Context, tenantID uuid.UUID, opt
 type ListOpts struct{}
 
 // GetUserBySSOSubject returns the human user identified by the composite
-// (sso_provider_id, sso_subject) key, regardless of which tenant they belong
-// to. REDESIGN-001 Phase 5.5 — defends EnsureSSOUser against email-recycle
-// account takeover by anchoring SSO logins to the IdP's stable subject
-// identifier rather than to a mutable address.
+// (tenant_id, sso_provider_id, sso_subject) key. REDESIGN-001 Phase 5.5 —
+// defends EnsureSSOUser against email-recycle account takeover by anchoring
+// SSO logins to the IdP's stable subject identifier rather than to a mutable
+// address.
 //
-// Why composite, not subject alone: subject strings are only unique within a
-// single IdP (e.g. two providers may both assert `sub=12345`). The migration
-// 20260629222534 index covers (sso_provider_id, sso_subject) so this lookup
-// is index-only when both columns are present.
+// Why tenant-scoped: SEC-040 closed the multi-mode gap where two tenants
+// sharing one IdP (e.g. both consuming Google Workspace OAuth) could resolve
+// the same `(provider, subject)` tuple to a user in the wrong tenant.
+// Single-tenant deployments are unaffected at runtime (only one tenant
+// exists) but the schema-level boundary belongs here so the gap cannot
+// reopen when DEPLOYMENT_MODE=multi is the active posture. Migration
+// `20260630120000_users_sso_subject_tenant_filter.sql` covers the matching
+// index over `(tenant_id, sso_provider_id, sso_subject)`.
 //
 // Returns ErrNotFound when no human user matches; an empty subject is treated
 // as not found so callers cannot accidentally bind a pre-migration NULL row
 // from this entry point (the email-backed lookup path handles those rows).
-func (r *UserRepository) GetUserBySSOSubject(ctx context.Context, providerID string, subject string) (*User, error) {
+func (r *UserRepository) GetUserBySSOSubject(ctx context.Context, tenantID uuid.UUID, providerID string, subject string) (*User, error) {
 	if subject == "" {
 		return nil, ErrNotFound
 	}
@@ -368,11 +372,12 @@ func (r *UserRepository) GetUserBySSOSubject(ctx context.Context, providerID str
 		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
 		       COALESCE(sso_subject, '')
 		FROM   users -- kind = 'human' enforced in WHERE below; SA shadow users never carry an SSO subject
-		WHERE  sso_provider_id = $1
-		  AND  sso_subject     = $2
+		WHERE  tenant_id       = $1
+		  AND  sso_provider_id = $2
+		  AND  sso_subject     = $3
 		  AND  kind            = 'human'`
 
-	return r.scanOne(ctx, q, providerID, subject)
+	return r.scanOne(ctx, q, tenantID, providerID, subject)
 }
 
 // SetSSOSubject backfills users.sso_subject for a user whose row predates the

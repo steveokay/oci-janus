@@ -312,6 +312,14 @@ func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrAccountDisabled):
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "account is disabled")
 			return
+		case errors.Is(err, service.ErrSSOSubjectMismatch):
+			// SEC-043 — explicit dispatch so the SEC-042 generic body
+			// reaches the wire. Without this branch the mismatch fell
+			// through to the default 500 INTERNAL response and the
+			// generic phrasing built by EnsureSSOUser was never
+			// rendered to the user.
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "this SSO identity is not linked to a registered account — contact your admin to link it")
+			return
 		}
 		slog.ErrorContext(r.Context(), "sso: EnsureSSOUser", "err", err, "provider_id", providerID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")

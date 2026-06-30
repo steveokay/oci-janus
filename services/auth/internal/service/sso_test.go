@@ -336,8 +336,15 @@ func TestSSO_RecycledEmail_Rejected(t *testing.T) {
 	require.Error(t, err, "subject mismatch on same email must be rejected")
 	require.ErrorIs(t, err, ErrSSOSubjectMismatch,
 		"must surface as ErrSSOSubjectMismatch so handlers can map to a clean 401")
-	require.Contains(t, err.Error(), "Ask your admin",
+	// SEC-042 — the rejection message is intentionally generic: it no longer
+	// echoes the email back ("An account exists for `<email>`...") because
+	// that gave an attacker controlling a self-hosted IdP a probe for which
+	// addresses are registered. The generic phrasing must still be
+	// operator-actionable.
+	require.Contains(t, err.Error(), "contact your admin",
 		"error must be operator-actionable")
+	require.NotContains(t, err.Error(), recycledEmail,
+		"SEC-042: rejection message must not leak the email back to the caller")
 }
 
 // TestSSO_PreMigrationUser_BackfillsSubject verifies that an existing user
@@ -429,4 +436,106 @@ func TestSSO_DifferentProvider_SameSubject_Distinct(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, a.ID, b.ID,
 		"same subject value from a different provider must produce a different account")
+}
+
+// TestSSO_SEC040_TenantFilterOnSubjectLookup is the regression test for
+// SEC-040 — the Phase 5.5 partial index was missing tenant_id, so in
+// DEPLOYMENT_MODE=multi a recycled IdP subject reachable from two tenants
+// sharing one provider could resolve to a user in the wrong tenant. The
+// lookup is now (tenant_id, provider, subject); a subject that exists in
+// tenant A must NOT be visible to an EnsureSSOUser call scoped to tenant B.
+func TestSSO_SEC040_TenantFilterOnSubjectLookup(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	const sharedSubject = "google-sub-cross-tenant"
+	const sharedEmail = "alice@example.com"
+
+	// First login: provision Alice in tenant A.
+	tenantA := fakes.tenantID
+	a, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         sharedEmail,
+		EmailVerified: true,
+		Subject:       sharedSubject,
+	}, tenantA)
+	require.NoError(t, err)
+	require.Equal(t, tenantA, a.TenantID, "tenant A user must be in tenant A")
+
+	// Second login: same IdP, same subject, same email — but the callback is
+	// scoped to tenant B. With SEC-040's tenant filter, the subject lookup
+	// in Step 1 must miss; the auto-provision path then creates a SECOND
+	// distinct user in tenant B. Without the filter, the lookup would
+	// resolve to Alice in tenant A and return a session for the wrong
+	// tenant.
+	tenantB := uuid.New()
+	b, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         sharedEmail,
+		EmailVerified: true,
+		Subject:       sharedSubject,
+	}, tenantB)
+	require.NoError(t, err)
+	require.NotEqual(t, a.ID, b.ID,
+		"SEC-040: subject lookup must be tenant-scoped — the same (provider, subject) in a different tenant must NOT resolve to the tenant-A user")
+	require.Equal(t, tenantB, b.TenantID,
+		"the freshly provisioned tenant-B user must belong to tenant B")
+}
+
+// TestSSO_SEC041_RaceRecoveryRefusesSubjectMismatch is the regression test
+// for SEC-041 — when CreateSSOUser loses the unique-index race AND the
+// subject-keyed lookup misses (subject was never persisted on the
+// race-winning row), the recovery path falls back to GetHumanByEmail. The
+// recovered row may carry a DIFFERENT sso_subject already; accepting it
+// blind would hand the caller a session for an identity the IdP did not
+// assert in this request.
+//
+// We simulate the race outcome by seeding a row that has the email AND a
+// subject that differs from the one EnsureSSOUser is asserting now, then
+// rigging the CreateSSOUser fake to surface ErrAlreadyExists. The
+// subject-lookup will miss (different subject) and the email-fallback
+// path must refuse with ErrSSOSubjectMismatch + the generic SEC-042
+// message rather than handing back the wrong row.
+func TestSSO_SEC041_RaceRecoveryRefusesSubjectMismatch(t *testing.T) {
+	ctx := context.Background()
+	sso, fakes := newSSOService(t)
+
+	const sharedEmail = "race@example.com"
+	const previouslyBoundSubject = "google-sub-race-winner"
+	const newCallerSubject = "google-sub-race-loser"
+
+	// Seed the race-winning row: same email, but a different subject. The
+	// real DB would have a unique-index on email so the next
+	// CreateSSOUser would surface ErrAlreadyExists. The fake mirrors that
+	// via the failCreateSSOWith hook.
+	racePartner := &repository.User{
+		ID:         uuid.New(),
+		TenantID:   fakes.tenantID,
+		Username:   "race",
+		Email:      sharedEmail,
+		Kind:       "human",
+		IsActive:   true,
+		SSOSubject: previouslyBoundSubject,
+		CreatedAt:  time.Now(),
+	}
+	fakes.userRepo.addUser(racePartner)
+	fakes.userRepo.bindSSOSubject(racePartner, fakes.provider.ProviderID, previouslyBoundSubject)
+	fakes.userRepo.failCreateSSOWith = repository.ErrAlreadyExists
+
+	// Second caller arrives asserting newCallerSubject. The subject lookup
+	// must miss (we bound previouslyBoundSubject, not newCallerSubject).
+	// CreateSSOUser then trips ErrAlreadyExists (rigged above), the
+	// subject-fallback again misses, and the email-fallback finds the row
+	// — at which point the SEC-041 mismatch check must fire.
+	_, _, err := sso.EnsureSSOUser(ctx, fakes.provider, SSOIdentity{
+		Email:         sharedEmail,
+		EmailVerified: true,
+		Subject:       newCallerSubject,
+	}, fakes.tenantID)
+
+	require.Error(t, err, "race-recovery via email with a mismatched subject must be rejected")
+	require.ErrorIs(t, err, ErrSSOSubjectMismatch,
+		"SEC-041: rejection must surface as ErrSSOSubjectMismatch so handlers map to a clean 401")
+	require.Contains(t, err.Error(), "contact your admin",
+		"SEC-042: race-recovery rejection must use the same generic, non-enumerating phrasing")
+	require.NotContains(t, err.Error(), sharedEmail,
+		"SEC-042: race-recovery rejection must not leak the email")
 }
