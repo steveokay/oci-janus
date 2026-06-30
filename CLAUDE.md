@@ -1,15 +1,5 @@
 # CLAUDE.md — OCI-Compliant Docker Registry Platform
 
-> ⚠ **ARCHITECTURE REDESIGN IN FLIGHT (2026-06-26).**
-> A deep system review (`.claude/reviews/system-review-2026-06-26.md`) surfaced significant drift between this file's claims and the codebase. The agreed direction (REDESIGN-001 in `status-tracker.md`, plan in `.claude/plans/2026-06-26-single-tenant-redesign.md`) is:
-> - **Default deployment mode shifts to `single` (self-hosted single-tenant);** `DEPLOYMENT_MODE=multi` preserves the SaaS capability.
-> - **Custom domains, per-tenant SSO, tenant signup, plan/billing UI are being removed.**
-> - **Settings IA collapses Admin + Workspace + Account into one role-gated `/settings` page.** No standalone Admin / Deployment sidebar group.
-> - **`is_global_admin` typed primitive replaces the `scope_value='*'` magic-string platform-admin convention.** In single mode, workspace admins are effective global admins.
-> - **Several security/spec claims in this file are aspirational** until the redesign Phases 1, 5, 6, 7 land: RLS coverage (§9), mTLS hot reload (§7), fail-closed Redis check (§7), JWT cache on management path (§7), audit-event catalogue completeness (§10). Treat these sections as the *target state*, not the current state, until Phase 7.1 rewrites them.
->
-> Until the redesign ships, prefer the plan + review docs over this file when they conflict.
-
 > **Purpose:** Canonical rules for AI-assisted development of the Docker Registry Platform.
 > This file holds prescriptive conventions and pointers; descriptive content lives next to the code.
 > When code disagrees with this file, the code is wrong — but proto files (`proto/*/v1/*.proto`) and migration files (`services/*/migrations/`) are the authoritative contracts.
@@ -26,7 +16,7 @@
 6. [Communication Patterns](#6-communication-patterns)
 7. [Authentication & Security](#7-authentication--security)
 8. [Storage Layer](#8-storage-layer)
-9. [Multi-Tenancy & Custom Domains](#9-multi-tenancy--custom-domains)
+9. [Multi-Tenancy](#9-multi-tenancy)
 10. [Observability](#10-observability)
 11. [Database Conventions](#11-database-conventions)
 12. [gRPC Conventions](#12-grpc-conventions)
@@ -48,21 +38,30 @@ External references:
 
 ## 1. Project Overview
 
-A production-grade, multi-tenant OCI-compliant Docker registry platform built in Go. Equivalent in feature scope to Docker Hub / Nexus / AWS ECR, designed for self-hosted deployment.
+A production-grade OCI-compliant Docker registry platform built in Go. Equivalent in feature scope to Docker Hub / Nexus / AWS ECR, designed primarily for self-hosted deployment.
+
+### Deployment mode
+
+The platform ships in two postures controlled by `DEPLOYMENT_MODE`:
+
+- **`single` (default, OSS posture)** — self-hosted single-tenant. One bootstrap tenant is provisioned via the `registry-auth bootstrap` CLI; FE chrome hides tenant switcher, plan/billing, custom domains, and tenant-create flows. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted. (REDESIGN-001 Decision #25.)
+- **`multi`** — preserves the SaaS posture for operators who want multi-tenant capability. Same proto contracts; FE re-exposes the multi-tenant surfaces.
+
+Storage schemas keep `tenant_id` columns in both modes — single mode just populates them with the bootstrap tenant id.
 
 ### Core Capabilities
 
 - Full OCI Distribution Spec v1.1 compliance (push, pull, delete, list, referrers)
-- Multi-tenant with per-tenant custom domains
-- JWT (RS256) + API key authentication; mTLS between all internal services
-- Per-tenant SSO: OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP (auto-provisioning, AES-256-GCM-encrypted client secrets) — see [`docs/SAML.md`](docs/SAML.md)
+- JWT (RS256) + API key authentication; mTLS between all internal services with hot reload (§7) + per-server peer-CN allowlist (§7)
+- Multi-key JWT signing + JWKS rotation via `JWT_KEY_RING_PATH` (REDESIGN-001 Phase 6.5)
+- Global SSO config: OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP (auto-provisioning, AES-256-GCM-encrypted client secrets, `SSO_SAML_TRUST_EMAIL` flag) — see [`docs/SAML.md`](docs/SAML.md). REDESIGN-001 Decision #27 retired the per-tenant SSO model.
 - Pluggable storage: MinIO, AWS S3, GCP Cloud Storage, Azure Blob
 - Pluggable vulnerability scanner interface (external-process JSON-RPC) with per-tenant scan policies + compliance reports (SPDX SBOM + PDF)
 - Image signing via Cosign (Sigstore) and Notary v2 — see [`docs/SIGNING.md`](docs/SIGNING.md)
-- Pull-through proxy cache for upstream registries
-- RBAC at org / repo level (owner / admin / writer / reader); platform-admin marker scope `(admin, org, *)`
+- Pull-through proxy cache for upstream registries with upstream digest verification (Top-5 #4)
+- RBAC at org / repo level (owner / admin / writer / reader); typed `users.is_global_admin` primitive replaces the legacy `(admin, org, '*')` marker scope (REDESIGN-001 Decision #26)
 - Webhook delivery with retries and HMAC signing
-- Full append-only audit trail (Postgres RLS + low-privilege role)
+- Tamper-evident append-only audit trail: Postgres FORCE RLS + low-privilege `registry_audit_app` role + per-tenant sha-256 hash-chain (`chain_seq` + `prev_hash` + `row_hash`) so a compromised audit service cannot rewrite or fork the chain (REDESIGN-001 Phase 6.12)
 - Pluggable observability: OpenTelemetry → Jaeger, Grafana Tempo, or Datadog
 
 ### Language & Runtime
@@ -170,7 +169,7 @@ github.com/steveokay/oci-janus/
 | # | Service | Purpose | Owns | Notable |
 |---|---|---|---|---|
 | 1 | `registry-gateway` | TLS termination + host-based tenant resolution + rate limit | — | Traefik v3 |
-| 2 | `registry-auth` | JWT issuance, API keys, RBAC permission checks, per-tenant SSO (OAuth + SAML) | Postgres (auth schema — incl. `auth_providers`, `auth_login_sessions`, `users.sso_provider_id`, `service_accounts`) | RS256, 300s TTL, JTI revocation in Redis; PKCE S256 OAuth; SAML SP via `crewjam/saml` |
+| 2 | `registry-auth` | JWT issuance (multi-key RS256 ring), API keys (Argon2 verify + 60s Redis cache), RBAC permission checks, global SSO (OAuth + SAML) | Postgres (auth schema — incl. `global_sso_config`, `auth_login_sessions`, `users.sso_subject`, `users.is_global_admin`, `service_accounts`) | RS256 300s TTL, JTI revocation in Redis fail-closed, principal-revocation `revoke:user:<id>`; multi-key kid-stamped JWTs (`JWT_KEY_RING_PATH`); PKCE S256 OAuth; SAML SP via `crewjam/saml` with `SSO_SAML_TRUST_EMAIL` flag |
 | 3 | `registry-core` | OCI Distribution Spec v1.1 — `/v2/` API | — | Streams blobs, checkAccess on every handler; tag immutability preflight on `PutManifest` rejects re-pushes with `400 MANIFEST_INVALID` when `repositories.immutable_tags=true` OR `tags.immutable=true` |
 | 4 | `registry-storage` | Pluggable blob storage abstraction | Object store backend | MinIO/S3/GCS/Azure/filesystem |
 | 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans/SBOMs | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing; per-tag SBOM columns |
@@ -180,7 +179,7 @@ github.com/steveokay/oci-janus/
 | 9 | `registry-webhook` | Reliable webhook delivery with retries + HMAC + delivery payload retrieval | Postgres (webhook schema) | SSRF block-list; HTTPS-only; `GetDelivery` for FE inspection |
 | 10 | `registry-audit` | Immutable audit log + analytics + notifications | Postgres (audit schema) | `FORCE ROW LEVEL SECURITY`, `registry_audit_app` role; PG14 `date_bin` time-series |
 | 11 | `registry-gc` | Mark-sweep garbage collection + GC status visibility | Postgres (`gc_runs` table) | `pg_try_advisory_lock`; FNV-64a key per tenant; async `RunNow` queues a row + drains via `FOR UPDATE SKIP LOCKED` |
-| 12 | `registry-tenant` | Tenant CRUD (incl. rename + plan), custom domain CRUD + verification | Postgres (tenant schema — `tenants.slug`, `tenant_domains.is_primary`) | DNS TXT challenge; 24h/48h notification; atomic primary swap |
+| 12 | `registry-tenant` | Tenant CRUD (single-mode rejects 2nd insert; multi-mode allows full CRUD) + `deployment_metadata` source for `bootstrap_tenant_id` | Postgres (tenant schema — `tenants.slug`, `deployment_metadata`) | `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` in single mode; `GetDeploymentMetadata` RPC feeds every other service's SingleTenantInjector (REDESIGN-001 Phase 3.4). Custom domain CRUD removed (RM-001) |
 | 13 | `registry-management` | REST BFF for the dashboard (and CLI/Terraform) | — | No gRPC server; translates HTTP → gRPC; mounts SSO + signer + scanner + gc routes when their gRPC addrs are set |
 
 ---
@@ -264,12 +263,12 @@ Every gRPC client/server pair uses mutual TLS.
 **Certificate management:**
 - Development: self-signed certs generated by `make dev-certs` (uses `cfssl`). `gen-dev-certs.sh` emits subjectAltName for Go 1.15+ hostname verification.
 - Production (K8s): cert-manager with internal CA issuer.
-- Cert rotation: automated via cert-manager. Services reload certs without restart (use `tls.Config.GetCertificate`).
+- **Hot reload** — `libs/auth/mtls.ServerTLSConfig` / `ClientTLSConfig` wire `tls.Config.GetCertificate` to a per-config cache keyed on `(mtime, size)`. The on-disk fingerprint is re-checked at each TLS handshake; a successful change triggers a single re-read + parse, mutex-guarded so concurrent handshakes coalesce to one disk read. Cert-manager's atomic rename surfaces in the next handshake on every connection without a service restart. (REDESIGN-001 Phase 6.9 — closed the prior aspirational claim by shipping the primitive.)
 
 **Rules:**
 - Every gRPC server sets `tls.RequireAndVerifyClientCert`.
-- Client cert CN must match expected service name (enforce in server-side interceptor).
-- Per-server peer-CN allowlist via `MTLS_PEER_CN_ALLOWLIST` (CSV, e.g. `registry-core,registry-management`) — `libs/middleware/grpc.PeerCNAllowlistFromEnv()` denies CA-signed peers whose CN is not in the list with `codes.PermissionDenied`; empty/unset == no enforcement (opt-in per service, REDESIGN-001 Phase 6.10).
+- Client cert CN must match expected service name. Enforced server-side by `libs/middleware/grpc.PeerCNAllowlistFromEnv()` reading `MTLS_PEER_CN_ALLOWLIST` (CSV, e.g. `registry-core,registry-management`). Empty/unset = no enforcement (Option A — per-server opt-in for backwards compat; flip to Option B once every service is wired). Rejections increment `registry_grpc_peer_cn_denied_total{method, reason}` and the disabled-in-production state is visible via `registry_grpc_peer_cn_allowlist_enabled` gauge. (REDESIGN-001 Phase 6.10.)
+- Client-side serverName pinning is enforced via `loader.BaseConfig.MTLSClientCreds(serverName)` — every outbound dial names the expected peer so a stolen CA-signed cert cannot impersonate an arbitrary peer (SEC-038/039 close-out).
 - CA cert loaded from `MTLS_CA_CERT_PATH` env var. No defaults.
 - Certificate validity: maximum 90 days.
 - Cert key file permissions: `chmod 600` (SEC-024).
@@ -277,22 +276,31 @@ Every gRPC client/server pair uses mutual TLS.
 **mTLS config builder (from `libs/auth/mtls`):**
 
 ```go
-// ServerTLSConfig returns a tls.Config for gRPC servers requiring client certs
+// ServerTLSConfig returns a tls.Config for gRPC servers requiring client certs.
+// Both this and the reloading variant below cache cert pairs by (mtime, size) so
+// renewals pick up at the next handshake without a restart.
 func ServerTLSConfig(caCertPath, certPath, keyPath string) (*tls.Config, error)
+func ReloadingServerTLSConfig(caCertPath, certPath, keyPath string) (*tls.Config, error)
 
-// ClientTLSConfig returns a tls.Config for gRPC clients presenting a cert
+// ClientTLSConfig returns a tls.Config for gRPC clients presenting a cert.
+// Same hot-reload semantics via GetClientCertificate.
 func ClientTLSConfig(caCertPath, certPath, keyPath string, serverName string) (*tls.Config, error)
+func ReloadingClientTLSConfig(caCertPath, certPath, keyPath string, serverName string) (*tls.Config, error)
 ```
+
+Reload failures fall back to the cached cert (defence against cert-manager mid-rename windows). The fallback emits `slog.Warn` so a stuck rotation is visible; it is **not** the right channel for emergency revocation — operators rotating to revoke must do so through the CA pool / CRL / OCSP, not by deleting a leaf cert file. (SEC-046.)
 
 Dev fallback: when cert paths are unset, services log `slog.Warn` and use `insecure.NewCredentials()`. Never allow this in production — config validation in `main.go` must reject empty cert paths when `OTEL_ENVIRONMENT=production`.
 
 ### JWT Validation
 
-- Every gRPC server validates Bearer tokens via `registry-auth` gRPC call.
-- Cache validation results in Redis: key `jwt:valid:<jti>`, TTL = `time.Until(claims.ExpiresAt.Time)` (REM-002).
-- The cached value must serialise the full `Access` list as JSON — the cache must not drop claim fields.
+- `services/auth` signs RS256 tokens. Signing keys live in a key ring (`services/auth/internal/service/keyring.go`) loaded from `JWT_KEY_RING_PATH` at startup. Each key's filename base is the `kid`, stamped into `tok.Header["kid"]` on issuance. `JWT_SIGNING_KID` optionally pins which key signs new tokens; empty defaults to the most-recently-modified file. Mixing the ring path with the legacy `JWT_PRIVATE_KEY_B64`/`JWT_PUBLIC_KEY_B64`/`JWT_KEY_ID` trio is rejected at startup. Ring hard cap = 16 keys (SEC-048); fallback hits bump `registry_auth_jwt_kid_fallback_total{reason}`. (REDESIGN-001 Phase 6.5.)
+- JWKS endpoint at `/.well-known/jwks.json` enumerates every public key in the ring so external validators can rotate too.
+- Every gRPC server validates Bearer tokens via `registry-auth.ValidateToken` gRPC call. **Note (Phase 7.1):** the Redis-backed JWT validation cache (`jwt:valid:<jti>`) on the management/BFF path remains aspirational — REM-002 follow-up. The auth service itself does NOT need this cache because every gRPC validation is already against an in-process key ring.
+- The cached value (when implemented) must serialise the full `Access` list as JSON — the cache must not drop claim fields.
 - On cache miss: call `registry-auth.ValidateToken` gRPC.
-- If `registry-auth` is unreachable: fail closed (deny all), log error, increment metric.
+- If `registry-auth` is unreachable: **fail closed** (deny all), log error, increment metric. The fail-closed posture also applies to the principal-revocation Redis check (`revoke:user:<id>`) on the auth service — Redis unreachable triggers a deny instead of a silent allow. (REDESIGN-001 Phase 6.6 closed the prior aspirational claim.)
+- API-key Argon2 verify caches successful results in Redis at `apikey:valid:<keyID>:<sha256-hex-secret>` (TTL 60s) so high-RPS CI bots skip the ~100ms Argon2 cost per request without losing the security boundary. The HIT path still re-loads the live DB row + re-runs every state gate (expiry, disabled, SA-disabled, scope intersection); cache is invalidated on `DeleteAPIKey` / `SetUserDisabled` / SA disable/delete. Redis-down failure-mode is **fail-open** (cache is an optimisation, not a security boundary — full Argon2 verify runs). (REDESIGN-001 Phase 6.7.)
 
 ### HTTP Bearer Auth — JWT and API-key forms (FUT-006)
 
@@ -350,37 +358,38 @@ Per-driver env var tables: see [`docs/SERVICES.md` §4](docs/SERVICES.md#4-regis
 
 ---
 
-## 9. Multi-Tenancy & Custom Domains
+## 9. Multi-Tenancy
+
+### Deployment modes
+
+The platform supports two `DEPLOYMENT_MODE` values (REDESIGN-001 Decision #25):
+
+- **`single` (default)** — self-hosted OSS posture. One bootstrap tenant is provisioned by the `registry-auth bootstrap` CLI; its id is recorded in `tenant.deployment_metadata` under the `bootstrap_tenant_id` key. Every gRPC server wires `libs/middleware/grpc.SingleTenantInjector` to inject `bootstrap_tenant_id` into requests missing tenant metadata and to reject mismatched tenant ids with `InvalidArgument`. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted. Custom domain CRUD has been removed (REDESIGN-001 RM-001).
+- **`multi`** — preserves the SaaS posture. Tenant create/delete + tenant switcher + plan badge UI are re-exposed; the single-tenant guards are bypassed.
+
+The wire format and schema are mode-agnostic — `tenant_id UUID NOT NULL` columns persist in both modes. Single mode just populates them with the bootstrap tenant id.
 
 ### Tenant Isolation
 
 - All database rows include `tenant_id UUID NOT NULL`.
 - All queries in `registry-metadata` must filter by `tenant_id` — never query across tenants.
-- PostgreSQL Row Security Policy (RLS) enabled as a second layer of defence:
-
-  ```sql
-  ALTER TABLE repositories ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY tenant_isolation ON repositories
-    USING (tenant_id = current_setting('app.tenant_id')::uuid);
-  ```
-
-- Application sets `SET LOCAL app.tenant_id = '<id>'` in each transaction.
 - Storage keys are prefixed with `tenant_id` (see [`docs/SERVICES.md` §4 storage key layout](docs/SERVICES.md#4-registry-storage)).
 - RabbitMQ messages include `tenant_id` in payload and as a message header.
+- `libs/middleware/grpc.SingleTenantInjector` enforces the single-mode invariant at the interceptor layer (REDESIGN-001 Phase 3.4).
 
-### Custom Domain Resolution
+### Row-Level Security (RLS)
 
+> **Status (Phase 7.1):** RLS as a second layer of defence remains *partial*. The `audit_events` table has `FORCE ROW LEVEL SECURITY` + the `registry_audit_app` low-privilege role (Decision #15). Other tables rely on application-layer `tenant_id` filtering + the single-tenant injector for now. Universal RLS coverage was deferred per Phase 0 D4 decision (Top-5 #1 remains open) and is tracked separately.
+
+When RLS is enabled on a table the pattern is:
+
+```sql
+ALTER TABLE repositories ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON repositories
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
 ```
-Incoming request Host: registry.acme.com
-  → Gateway looks up in Redis: domain:registry.acme.com → tenant_id: <uuid>
-  → Cache miss → query registry-tenant gRPC → cache result (TTL 60s)
-  → Inject X-Tenant-ID header
-  → Route to registry-core
-```
 
-- Wildcard platform domain: `*.registry.example.com` → tenant resolved from subdomain.
-- Custom domain: verified and stored in `registry-tenant` DB.
-- If domain not found: return 404 with no tenant information exposed.
+Application sets `SET LOCAL app.tenant_id = '<id>'` in each transaction. Treat this section as the target state for future RLS rollouts; current truth is in the migrations.
 
 ---
 
@@ -423,10 +432,19 @@ Every service exposes Prometheus metrics at `GET /metrics` on a **dedicated port
 - `registry_rabbitmq_messages_consumed_total` — counter, labels: service, queue, status
 - `registry_storage_operation_duration_seconds` — histogram, labels: driver, operation, status
 - `registry_active_uploads_total` — gauge
+- `registry_grpc_peer_cn_denied_total` — counter, labels: method, reason (`missing_cn` / `cn_not_allowed`) — REDESIGN-001 Phase 6.10
+- `registry_grpc_peer_cn_allowlist_enabled` — gauge (1 when `MTLS_PEER_CN_ALLOWLIST` is non-empty for the local server; 0 = no enforcement) — REDESIGN-001 Phase 6.10
+- `registry_auth_jwt_kid_fallback_total` — counter, labels: reason (`missing_kid` / `unknown_kid`) — REDESIGN-001 Phase 6.5
 
 The local stack uses otel-collector → Prometheus → Jaeger SPM. The otel-collector requires:
 - An `otlp` receiver pipeline for `metrics` (not only `traces`), otherwise SDK metric pushes fail with `Unimplemented MetricsService`.
 - The prometheus exporter `namespace: registry` is reflected in Jaeger's `PROMETHEUS_QUERY_NAMESPACE=registry` env var so SPM queries the right metric names.
+
+### Audit Trail
+
+- `services/audit` consumes typed events from RabbitMQ (`registry.events` topic exchange) and persists them to `audit_events` via the `eventconsumer` package. Every event type registered in `libs/rabbitmq/events` must either map to a row in `audit_events` (via a case in `mapEvent`) OR carry an explicit `// audit: skip` annotation in `events.go`. A Go test enforces this invariant — adding a new event without one of those treatments fails CI (REDESIGN-001 Phase 6.3).
+- Storage posture (Decision #15): `audit_events` table has `FORCE ROW LEVEL SECURITY` so even the table owner cannot bypass the policy; the runtime role `registry_audit_app` is INSERT-only on `audit_events` (no UPDATE, no DELETE). The pgx connection pool authenticates as that role.
+- **Hash chain** (Decision #30, REDESIGN-001 Phase 6.12): each row carries `prev_hash` + `row_hash` (`sha256(prev_hash || canonical_row_bytes)`) and a `chain_seq BIGINT GENERATED ALWAYS AS IDENTITY`. Per-tenant chain serialised by `pg_advisory_xact_lock(tenant_id)`. The tip is derived from `audit_events` itself (`SELECT row_hash FROM audit_events WHERE tenant_id = $1 ORDER BY chain_seq DESC LIMIT 1`) rather than a separate writable table, so the runtime role keeps INSERT-only and cannot rewrite the tip. `Repository.VerifyChain(ctx, tenantID)` walks the linked list and returns the first tampered/forked row's `(id, occurred_at)`.
 
 ### Structured Logging
 
@@ -596,6 +614,12 @@ Numbered SEC items (SEC-001..SEC-036) and their resolution notes live in `securi
 | 22 | Service-account principal pattern: shadow users (FE-API-048) | Each service account auto-provisions a `users.kind='service_account'` row. `ValidateAPIKey`/`ValidateToken` return that id in `user_id`; downstream services treat it as an opaque actor. RBAC/audit/RLS/JWT machinery unchanged. Distinguishing principal kind is a read-path concern (`LEFT JOIN users ON kind`), not a write-path one. | 2026-06-22 |
 | 23 | Two-layer tag immutability — `repositories.immutable_tags` + `tags.immutable` (futures.md Tier 1 #2) | Repo-wide flag is the table-stakes posture; per-tag pin is the lighter alternative for repos that mix mutable dev tags + a small set of pinned releases. `services/core.checkTagImmutable` short-circuits on idempotent same-digest re-pushes (not a "move") and fails OPEN on metadata reachability failures (warn + continue) so a transient DB blip doesn't reject every push. Per-tag pin wins precedence — repo flag is the second RPC only when the same-digest fast path didn't fire | 2026-06-23 |
 | 24 | Unified Bearer dispatch in `requireAuth` — JWT + `key.<id>.<secret>` (FUT-006) | Picked option (a) over a parallel `/principal/me` route. One auth surface keeps the mental model simple; the `key.` literal prefix is a cheap structural discriminator that can't collide with a JWT (JWT segment 0 starts with `eyJ` after base64-encoding `{`). Synthesised `*Claims` set `Roles: []` deliberately — raw API keys aren't expected to carry RBAC, so role-gated handlers return a legible 403 instead of misrouting to a 401 | 2026-06-23 |
+| 25 | Self-hosted single-tenant by default; `DEPLOYMENT_MODE=single\|multi` flag controls posture | A 2026-06-26 system review surfaced significant drift between this file's multi-tenant SaaS claims and the codebase. Rather than fix the drift forward (full SaaS) or backward (rip the tenant_id columns out), we shift the default deployment posture to single-tenant self-hosted (the dominant OSS use case) and keep the multi-tenant surface behind an env flag. Custom domains, per-tenant SSO, tenant signup, plan/billing UI all removed. Single mode auto-bootstraps one tenant via the `registry-auth bootstrap` CLI + `tenant.deployment_metadata.bootstrap_tenant_id`. Decision-source: REDESIGN-001 Phase 0 + .claude/plans/2026-06-26-single-tenant-redesign.md | 2026-06-26 |
+| 26 | `users.is_global_admin` typed primitive replaces the `(admin, org, '*')` marker scope | The previous platform-admin convention encoded "global admin" as a magic-string `scope_value = '*'` on an `org`-scoped role assignment. Every gate had to special-case that string, which produced both the SEC-022 marker-leak gap and the SEC-026 "any-org-admin clears workspace admin" scope-creep finding. `users.is_global_admin BOOLEAN` is a typed column; `effectiveGlobalAdmin(r)` short-circuits gates BEFORE role-assignment lookup; in single mode every workspace admin is an effective global admin. The Phase 5.1 backfill deleted the marker grants without granting equivalent tenant-scoped admin rows — Phase 5.1 tail PRs (#193 / #197 / #198) wired the fast-path through every workspace gate. (REDESIGN-001 Phase 5.1.) | 2026-06-28 |
+| 27 | Global SSO config replaces per-tenant `auth_providers` | Self-hosters have ONE IdP; the per-tenant `auth_providers` table + admin RPCs were SaaS-only complexity. New `global_sso_config` table holds the single configuration; OAuth client_secret + SAML SP private key are AES-256-GCM-encrypted with a versioned ciphertext prefix (Decision #29). Per-tenant SSO admin surfaces removed (RM-003). (REDESIGN-001 Phase 2.2.) | 2026-06-28 |
+| 28 | Bootstrap CLI replaces the dev-seed admin migration | The original platform shipped a `services/auth/migrations/...seed_dev_admin.sql` that wrote a hardcoded admin row + password hash into every deployment. Top-5 #5 in the 2026-06-26 system review flagged this as CRITICAL — every prod image contained a known-good admin credential. New `registry-auth bootstrap` subcommand replaces the migration: operator runs it once per deployment with `--admin-email --admin-username --admin-password-stdin --tenant-name`; idempotency enforced via `tenant.deployment_metadata.bootstrap_tenant_id`. (REDESIGN-001 Phase 3.1.b + Phase 2.6.) | 2026-06-27 |
+| 29 | AES-256-GCM ciphertext carries a `Version = 0x01` prefix for future KEK rotation | `libs/crypto/aes` ciphertext layout is `version \|\| nonce(12) \|\| ciphertext \|\| tag(16)`. Decrypt is "try v1 then fall back to legacy" because ~1/256 legacy ciphertexts have random nonces starting with `0x01` and strict dispatch would break those rows — tamper safety is preserved by GCM auth tag verification on both branches. The version byte is the prerequisite for a future KEK rotation tool; the rotation itself ships separately. (REDESIGN-001 Phase 6.4.) | 2026-06-30 |
+| 30 | Audit hash-chain tip derived from `audit_events.chain_seq` rather than a separate writable table | Initial design used `audit_chain_tip(tenant_id PK, row_hash, updated_at)` and granted UPDATE on it to `registry_audit_app`. Pre-PR security-agent flagged this as HIGH BLOCKER: a compromised audit service could rewrite the tip + INSERT a forged row chained off it without the linked-list verifier noticing. Redesigned to drop the writable tip table and derive the tip from `audit_events` via `ORDER BY chain_seq DESC LIMIT 1`. `registry_audit_app` keeps INSERT-only on `audit_events` (FORCE RLS already denies UPDATE/DELETE per Decision #15); the advisory lock alone serialises per-tenant inserters. Tamper-evidence is now structural — no role has the privilege required to rewrite the chain. (REDESIGN-001 Phase 6.12.) | 2026-06-30 |
 
 ---
 
