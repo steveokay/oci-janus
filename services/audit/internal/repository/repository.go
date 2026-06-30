@@ -95,25 +95,30 @@ func (r *Repository) Insert(ctx context.Context, e *AuditEvent) error {
 		return fmt.Errorf("audit Insert advisory lock: %w", err)
 	}
 
-	// 2. Read the current chain tip from audit_chain_tip. SELECT FOR
-	//    UPDATE so a second inserter on the same tenant blocks here
-	//    until we commit; combined with the advisory lock above, this
-	//    is belt-and-braces against concurrent races. On the very
-	//    first insert for a tenant the row doesn't exist yet — we
-	//    fall back to the genesis sentinel and INSERT the tip row
-	//    after computing the hash.
+	// 2. SEC-044 redesign: derive the tip from audit_events itself
+	//    rather than reading a writable audit_chain_tip table. The
+	//    advisory lock above is the serialisation primitive — no
+	//    inserter for this tenant reaches this query until we commit
+	//    or roll back — so a plain SELECT (no FOR UPDATE) is safe.
+	//    chain_seq is the IDENTITY column from migration 20260630120000;
+	//    DESC + LIMIT 1 hits the per-tenant index in a single btree
+	//    lookup regardless of the tenant's history depth.
+	//
+	//    On the very first insert for a tenant ErrNoRows fires — we
+	//    fall back to the genesis sentinel for prev_hash.
 	var prevHash []byte
 	err = tx.QueryRow(ctx,
-		`SELECT row_hash FROM audit_chain_tip WHERE tenant_id = $1 FOR UPDATE`,
+		`SELECT row_hash FROM audit_events
+		 WHERE tenant_id = $1
+		 ORDER BY chain_seq DESC
+		 LIMIT 1`,
 		e.TenantID,
 	).Scan(&prevHash)
-	tipExists := true
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("audit Insert read tip: %w", err)
 		}
 		prevHash = genesisPrevHash
-		tipExists = false
 	}
 
 	// 3. Generate the id ourselves so it can be hashed before the
@@ -148,25 +153,13 @@ func (r *Repository) Insert(ctx context.Context, e *AuditEvent) error {
 		return fmt.Errorf("audit Insert: %w", err)
 	}
 
-	// 6. Update the chain tip. INSERT-on-first, UPDATE-on-subsequent.
-	//    The advisory lock + SELECT FOR UPDATE above guarantee no
-	//    concurrent inserter for this tenant reaches this point until
-	//    we commit, so a non-conditional UPSERT is safe.
-	if tipExists {
-		if _, err := tx.Exec(ctx,
-			`UPDATE audit_chain_tip SET row_hash = $1, updated_at = now() WHERE tenant_id = $2`,
-			rowHash, e.TenantID,
-		); err != nil {
-			return fmt.Errorf("audit Insert update tip: %w", err)
-		}
-	} else {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO audit_chain_tip (tenant_id, row_hash) VALUES ($1, $2)`,
-			e.TenantID, rowHash,
-		); err != nil {
-			return fmt.Errorf("audit Insert create tip: %w", err)
-		}
-	}
+	// SEC-044 redesign: there is no separate tip table to UPSERT.
+	// The freshly-inserted row IS the new tip — the next inserter's
+	// SELECT ... ORDER BY chain_seq DESC LIMIT 1 will pick this row's
+	// row_hash as its prev_hash. registry_audit_app has INSERT-only
+	// on audit_events (FORCE RLS denies UPDATE/DELETE), so a
+	// compromised audit service cannot rewrite this row or any
+	// earlier one — the tamper-evidence posture is preserved.
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("audit Insert commit: %w", err)

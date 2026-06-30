@@ -212,9 +212,12 @@ func newCanonHasher() hash.Hash { return sha256.New() }
 //
 // Collisions across DIFFERENT tenants are harmless — at worst two
 // tenants serialise their inserts unnecessarily. They never lose
-// integrity. (A separate-table tip approach was considered but
-// rejected: it would require a new GRANT and a new RLS policy on
-// audit_chain_tip, whereas advisory locks need no schema changes.)
+// integrity. (SEC-044 redesign: an earlier draft used a separate
+// audit_chain_tip table, but granting UPDATE on it to
+// `registry_audit_app` defeated the tamper-evidence posture.
+// We now derive the tip from `SELECT row_hash FROM audit_events
+// ORDER BY chain_seq DESC LIMIT 1` so the role keeps INSERT-only
+// on audit_events.)
 func tenantAdvisoryLockKey(tenantID uuid.UUID) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write(tenantID[:])
