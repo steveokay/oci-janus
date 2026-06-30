@@ -31,7 +31,7 @@
 ## Progress dashboard
 
 > **Status legend:** ✅ DONE — shipped + merged · 🟡 IN PROGRESS — branch open · ⛔ N/A — closed without code change · ⬜ OPEN — not started.
-> **As-of:** 2026-06-30 — 70 PRs shipped through #201 (#200 tracker sync, #201 closes all 4 SSO security findings SEC-040/041/042/043). **Phase 5 RBAC simplification COMPLETE** — 5.1 typed `is_global_admin` (#134) + 2 hot-fix tails wiring the fast-path through every workspace + tenant-users gate (#193 / #197), 5.3 delegator-dominates (#199 — folds the code-review-agent's tenant→org/repo scope-containment fix inline + stitches `callerIsTenantAdmin` SA-deny/IsGlobalAdmin/role-lookup in the documented order after rebase), 5.4 SA-deny at admin gates (#194), 5.5 SSO subject-id binding (#195), 5.6 SAML `SSO_SAML_TRUST_EMAIL` flag (#196). Hot-fix #198 closed a 3-file build break where the #193 + #194 merge collision dropped enclosing braces from the SA-deny + IsGlobalAdmin composition. 4 of 5 Top-5 critical findings closed. Remaining work: Phase 6 hardening + Phase 7 docs/CI lint + Phase 8 rollout prep. Phase 5.5 surfaced 3 follow-up security findings (SEC-040/041/042 — see `security.md`) — Phase 5.5 shipped without them per "should-fix follow-up" cadence.
+> **As-of:** 2026-06-30 — 76 PRs shipped through #208. **Phase 6 hardening 6 of 8 COMPLETE in one parallel-agent fan-out:** 6.4 AES KEK version prefix (#203), 6.5 JWKS rotation (#206, +SEC-048/049), 6.7 Argon2 cache (#207), 6.9 mTLS hot reload (#205, +SEC-046/047), 6.10 peer-CN interceptor (#204, +SEC-044/045), 6.12 audit hash-chain (#208, +SEC-050 HIGH BLOCKER fix where security-agent caught a tamper-evidence flaw in the initial `audit_chain_tip` design — redesigned inline to derive tip from `audit_events.chain_seq` so `registry_audit_app` keeps INSERT-only). 6.8 SAML lib upgrade + 6.11 scanner sandbox held for explicit design conversations. Phase 6 close-out leaves only 7 (docs/CI lint) + 8 (rollout prep) before REDESIGN-001 ships. **Phase 5 RBAC simplification COMPLETE** — 5.1 typed `is_global_admin` (#134) + 2 hot-fix tails wiring the fast-path through every workspace + tenant-users gate (#193 / #197), 5.3 delegator-dominates (#199 — folds the code-review-agent's tenant→org/repo scope-containment fix inline + stitches `callerIsTenantAdmin` SA-deny/IsGlobalAdmin/role-lookup in the documented order after rebase), 5.4 SA-deny at admin gates (#194), 5.5 SSO subject-id binding (#195), 5.6 SAML `SSO_SAML_TRUST_EMAIL` flag (#196). Hot-fix #198 closed a 3-file build break where the #193 + #194 merge collision dropped enclosing braces from the SA-deny + IsGlobalAdmin composition. 4 of 5 Top-5 critical findings closed. Remaining work: Phase 6 hardening + Phase 7 docs/CI lint + Phase 8 rollout prep. Phase 5.5 surfaced 3 follow-up security findings (SEC-040/041/042 — see `security.md`) — Phase 5.5 shipped without them per "should-fix follow-up" cadence.
 
 | Phase | Task | Status | PR | Date |
 |---|---|---|---|---|
@@ -88,15 +88,15 @@
 | 6.1 | Pull-through proxy digest verify (**closes Top-5 #4**) | ✅ DONE | #123 | 2026-06-26 |
 | 6.2 | Custom-domain takeover guard | ⛔ N/A | — | (replaced by 2.1) |
 | 6.3 | Audit catalogue completeness + lint test | ✅ DONE | #130 | 2026-06-27 |
-| 6.4 | AES-GCM KEK version prefix | ⬜ OPEN | — | — |
-| 6.5 | JWKS rotation prep (multi-key support) | ⬜ OPEN | — | — |
+| 6.4 | AES-GCM KEK version prefix | ✅ DONE | #203 | 2026-06-30 |
+| 6.5 | JWKS rotation prep (multi-key keyring + ring-wide fallback) | ✅ DONE | #206 | 2026-06-30 |
 | 6.6 | Redis fail-closed in `revoke:user:` check | ✅ DONE | #122 | 2026-06-26 |
-| 6.7 | API-key Argon2 verify cache | ⬜ OPEN | — | — |
-| 6.8 | SAML library upgrade to v0.5.x | ⬜ OPEN | — | — |
-| 6.9 | mTLS hot reload via `GetCertificate` + fsnotify | ⬜ OPEN | — | — |
-| 6.10 | mTLS peer-CN interceptor | ⬜ OPEN | — | — |
-| 6.11 | Scanner plugin sandbox | ⬜ OPEN | — | — |
-| 6.12 | Audit hash-chain + checkpoint signing | ⬜ OPEN | — | — |
+| 6.7 | API-key Argon2 verify cache (60s Redis cache + state-aware HIT) | ✅ DONE | #207 | 2026-06-30 |
+| 6.8 | SAML library upgrade to v0.5.x | ⬜ OPEN — held for design pass | — | — |
+| 6.9 | mTLS hot reload via `GetCertificate` + mtime cache | ✅ DONE | #205 | 2026-06-30 |
+| 6.10 | mTLS peer-CN interceptor (`MTLS_PEER_CN_ALLOWLIST`) | ✅ DONE | #204 | 2026-06-30 |
+| 6.11 | Scanner plugin sandbox | ⬜ OPEN — held for design pass | — | — |
+| 6.12 | Audit hash-chain (`chain_seq` + per-tenant linked list, **SEC-050 fix**) | ✅ DONE | #208 | 2026-06-30 |
 | 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ⬜ OPEN | — | — |
 | 8 | Migration / rollout / release prep | ⬜ OPEN | — | — |
 
