@@ -393,6 +393,12 @@ agent-style.
   JWT mapped to a service account.
 
 ### FUT-002: Credential helpers (docker login / k8s YAML / terraform / GHA snippets) — Sprint 11
+
+**DONE — see `status.md` (REM-021).** Design history preserved below for context.
+
+<details>
+<summary>Original FUT-002 design (pre-implementation)</summary>
+
 - **Why:** Operators copy-paste credentials into CI configs and get them wrong.
   Auto-generated, copy-ready snippets reduce support burden.
 - **What:** `/api-keys` Helpers tab (preview surface already shipped) renders
@@ -401,6 +407,8 @@ agent-style.
   reference the workspace's actual registry hostname and the selected service
   account. No new backend RPCs needed — purely frontend rendering against
   existing `/api/v1/workspace/me` data.
+
+</details>
 
 ### FUT-003: Token policies (max-TTL, force-rotation, idle-revoke) — Sprint 12
 - **Why:** Long-lived keys with no rotation policy are the #1 lateral-movement

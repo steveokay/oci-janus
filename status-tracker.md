@@ -62,6 +62,21 @@
 
 ---
 
+### REM-021 — FUT-002 Credential helpers (in flight)
+
+**Affects:** `services/management` (new `/api/v1/registry-info` route + `PLATFORM_HOST` env), `frontend` (new `HelpersPanel` replacing the preview).
+
+**Status:** IN FLIGHT on `feat/fut-002-credential-helpers`. Smallest of the FUT-001..FUT-004 batch (`/api-keys/helpers` going from preview to live). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md`. No DB / proto change. Spec-compliance reviewed; auth-gating fix folded inline (`23d67e9`) after BFF spec reviewer caught a missing `authMW` wrap.
+
+**Plan:** `docs/superpowers/plans/2026-06-30-fut-002-credential-helpers.md`.
+
+**Follow-ups (non-blocking, file on merge):**
+- HelpersPanel test produces noisy `AggregateError` stderr in jsdom (no MSW handler). Tests pass deterministically; cosmetic noise only.
+
+**On merge:** remove this entry; append a resolution row to `status.md`.
+
+---
+
 ### REM-014 — Lint findings unmasked by Go 1.25 toolchain upgrade
 
 **Surfaced:** 2026-06-28 after PR #156 (`fix(ci): goinstall golangci-lint`) made golangci-lint reachable past its typecheck stage. Prior to #156 the action's bundled Go 1.24 binary couldn't parse Go 1.25 source, so every linter was short-circuited; PR #156 fixed that, which unmasked a real backlog.
