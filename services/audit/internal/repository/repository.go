@@ -38,21 +38,131 @@ func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// Insert writes one audit event row. It never updates or deletes.
+// Insert writes one audit event row, linking it into the per-tenant
+// hash chain (REDESIGN-001 Phase 6.12). Each row's row_hash is
+// sha256(prev_hash || canonical_row_bytes) — see hashchain.go for the
+// canonicalisation contract. Insert never updates or deletes.
+//
+// Concurrency: this runs inside a transaction that takes
+// pg_advisory_xact_lock keyed on tenant_id. Two concurrent inserts for
+// the same tenant serialise on the lock, so they can't both read the
+// same "tip" row_hash and produce two rows pointing at the same
+// prev_hash. Different tenants don't contend (different keys).
+//
+// Cold start: when no prior row exists for the tenant, prev_hash is the
+// genesis sentinel (single 0x00 byte) which matches the prev_hash
+// column DEFAULT — see migrations/20260630120000_audit_hash_chain.sql.
+//
+// The function mutates e.ID (filled with gen_random_uuid via RETURNING)
+// so callers that need the row id post-insert can read it back.
 func (r *Repository) Insert(ctx context.Context, e *AuditEvent) error {
+	if e.TenantID == uuid.Nil {
+		return ErrTenantIDRequired
+	}
 	meta := e.Metadata
 	if meta == nil {
 		meta = json.RawMessage("{}")
 	}
-	_, err := r.pool.Exec(ctx,
+	e.Metadata = meta // store the normalised form back on e so the
+	// canonical bytes the hash sees match what's persisted to the DB
+
+	// Default occurred_at if the caller didn't set it. We freeze it here
+	// (before computing the hash) so the value the application hashes
+	// and the value the DB persists are bit-for-bit identical — using
+	// the DB's `DEFAULT now()` would race the hash computation against
+	// the server clock.
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = time.Now().UTC()
+	}
+	// Truncate to microsecond precision — Postgres TIMESTAMPTZ stores
+	// microseconds; if we hashed nanoseconds here the verifier (which
+	// reads the truncated value back) would never match. Canonicaliser
+	// applies the same truncation as defence in depth.
+	e.OccurredAt = e.OccurredAt.UTC().Truncate(time.Microsecond)
+
+	// Single transaction: advisory lock → read tip → compute hash → INSERT.
+	// The advisory lock auto-releases at COMMIT/ROLLBACK. Rollback on any
+	// error path is handled by the deferred tx.Rollback below.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("audit Insert begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 1. Serialise concurrent inserts for the same tenant.
+	lockKey := tenantAdvisoryLockKey(e.TenantID)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+		return fmt.Errorf("audit Insert advisory lock: %w", err)
+	}
+
+	// 2. SEC-044 redesign: derive the tip from audit_events itself
+	//    rather than reading a writable audit_chain_tip table. The
+	//    advisory lock above is the serialisation primitive — no
+	//    inserter for this tenant reaches this query until we commit
+	//    or roll back — so a plain SELECT (no FOR UPDATE) is safe.
+	//    chain_seq is the IDENTITY column from migration 20260630120000;
+	//    DESC + LIMIT 1 hits the per-tenant index in a single btree
+	//    lookup regardless of the tenant's history depth.
+	//
+	//    On the very first insert for a tenant ErrNoRows fires — we
+	//    fall back to the genesis sentinel for prev_hash.
+	var prevHash []byte
+	err = tx.QueryRow(ctx,
+		`SELECT row_hash FROM audit_events
+		 WHERE tenant_id = $1
+		 ORDER BY chain_seq DESC
+		 LIMIT 1`,
+		e.TenantID,
+	).Scan(&prevHash)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("audit Insert read tip: %w", err)
+		}
+		prevHash = genesisPrevHash
+	}
+
+	// 3. Generate the id ourselves so it can be hashed before the
+	//    INSERT (we can't hash a server-generated default and then
+	//    insert it without a second round-trip). uuid.NewRandom is
+	//    crypto-grade per §13.
+	if e.ID == uuid.Nil {
+		newID, err := uuid.NewRandom()
+		if err != nil {
+			return fmt.Errorf("audit Insert generate id: %w", err)
+		}
+		e.ID = newID
+	}
+
+	// 4. Compute row_hash from prev + canonical bytes.
+	rowHash, err := computeRowHash(prevHash, e)
+	if err != nil {
+		return fmt.Errorf("audit Insert compute hash: %w", err)
+	}
+
+	// 5. INSERT with explicit hash columns. Parameterised per §11 — no
+	//    string-built SQL.
+	_, err = tx.Exec(ctx,
 		`INSERT INTO audit_events
-		    (tenant_id, actor_id, actor_type, actor_ip, action, resource, outcome, metadata, occurred_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		e.TenantID, e.ActorID, e.ActorType, e.ActorIP,
+		    (id, tenant_id, actor_id, actor_type, actor_ip, action, resource, outcome, metadata, occurred_at, prev_hash, row_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		e.ID, e.TenantID, e.ActorID, e.ActorType, e.ActorIP,
 		e.Action, e.Resource, e.Outcome, meta, e.OccurredAt,
+		prevHash, rowHash,
 	)
 	if err != nil {
 		return fmt.Errorf("audit Insert: %w", err)
+	}
+
+	// SEC-044 redesign: there is no separate tip table to UPSERT.
+	// The freshly-inserted row IS the new tip — the next inserter's
+	// SELECT ... ORDER BY chain_seq DESC LIMIT 1 will pick this row's
+	// row_hash as its prev_hash. registry_audit_app has INSERT-only
+	// on audit_events (FORCE RLS denies UPDATE/DELETE), so a
+	// compromised audit service cannot rewrite this row or any
+	// earlier one — the tamper-evidence posture is preserved.
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("audit Insert commit: %w", err)
 	}
 	return nil
 }
