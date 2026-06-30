@@ -28,6 +28,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 )
 
 // peerCNAllowlistEnvVar is the canonical environment variable each service
@@ -37,14 +39,23 @@ import (
 //	MTLS_PEER_CN_ALLOWLIST=registry-core,registry-management
 //
 // Whitespace around individual entries is trimmed; empty entries are dropped.
+//
+// CN comparison is case-sensitive (`registry-auth` ≠ `Registry-Auth`). The
+// platform's gen-dev-certs.sh + cert-manager templates both emit lowercase
+// `registry-<svc>` CNs, so case-sensitivity matches reality; if you set a
+// mixed-case entry you'll silently get a denial.
 const peerCNAllowlistEnvVar = "MTLS_PEER_CN_ALLOWLIST"
 
-// peerCNAllowlistDisabledLog ensures the "allowlist disabled" message is
-// emitted at most once per server, on the first RPC where the allowlist is
-// observed to be empty. Logging it every RPC would be noisy and would buy
-// nothing for an operator triaging the absence of enforcement — the absence is
-// a configuration property, not a per-call event.
-var peerCNAllowlistDisabledLog sync.Once
+// otelEnvironmentEnvVar mirrors the project-wide OTEL_ENVIRONMENT setting
+// (see CLAUDE.md §10) — checked at allowlist-constructor time so we can WARN
+// loudly when production starts up with the allowlist still unset.
+const otelEnvironmentEnvVar = "OTEL_ENVIRONMENT"
+
+// peerCNAllowlistStateLog ensures the "allowlist enabled" / "allowlist
+// disabled" startup message is emitted at most once per process, even when a
+// server wires both PeerCNAllowlist + PeerCNAllowlistStream (each constructor
+// calls logAllowlistState — the sync.Once collapses to a single emission).
+var peerCNAllowlistStateLog sync.Once
 
 // PeerCNAllowlist returns a UnaryServerInterceptor that rejects RPCs whose
 // caller does not present a TLS client certificate with a Common Name in
@@ -71,16 +82,20 @@ func PeerCNAllowlist(allowed ...string) grpc.UnaryServerInterceptor {
 	// once instead of per-call.
 	allowedSet := buildAllowedSet(allowed)
 
+	// Constructor-time observability so the configuration state is visible
+	// without waiting for the first RPC (SEC-044 follow-up). The gauge is
+	// always set so an alert can fire on `== 0`. The startup WARN fires loudly
+	// when production starts with no allowlist, so a misconfigured deploy
+	// surfaces in the deploy log rather than dribbling out as INFO on RPC 1.
+	logAllowlistState(allowedSet)
+
 	return func(
 		ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 	) (any, error) {
-		// Empty allowlist == no enforcement (Option A). Log once so operators
-		// can see in stdout that this server is currently not enforcing peer
-		// CN restrictions and remember to wire MTLS_PEER_CN_ALLOWLIST later.
+		// Empty allowlist == no enforcement (Option A). The "disabled" state is
+		// already logged + reflected in the GRPCPeerCNAllowlistEnabled gauge at
+		// constructor time; pass through without per-RPC noise.
 		if len(allowedSet) == 0 {
-			peerCNAllowlistDisabledLog.Do(func() {
-				slog.Info("grpc peer CN allowlist disabled — set MTLS_PEER_CN_ALLOWLIST to enable")
-			})
 			return handler(ctx, req)
 		}
 
@@ -92,6 +107,7 @@ func PeerCNAllowlist(allowed ...string) grpc.UnaryServerInterceptor {
 			slog.Warn("grpc peer CN missing — rejecting RPC",
 				"method", info.FullMethod,
 			)
+			metrics.GRPCPeerCNDeniedTotal.WithLabelValues(info.FullMethod, "missing_cn").Inc()
 			return nil, status.Error(codes.PermissionDenied, "peer not in allowlist")
 		}
 
@@ -104,6 +120,7 @@ func PeerCNAllowlist(allowed ...string) grpc.UnaryServerInterceptor {
 				"method", info.FullMethod,
 				"peer_cn", cn,
 			)
+			metrics.GRPCPeerCNDeniedTotal.WithLabelValues(info.FullMethod, "cn_not_allowed").Inc()
 			return nil, status.Error(codes.PermissionDenied, "peer not in allowlist")
 		}
 
@@ -116,16 +133,17 @@ func PeerCNAllowlist(allowed ...string) grpc.UnaryServerInterceptor {
 func PeerCNAllowlistStream(allowed ...string) grpc.StreamServerInterceptor {
 	allowedSet := buildAllowedSet(allowed)
 
+	// Constructor-time observability — see PeerCNAllowlist for rationale. The
+	// sync.Once gating inside logAllowlistState means a server running both
+	// unary + stream interceptors logs the state exactly once.
+	logAllowlistState(allowedSet)
+
 	return func(
 		srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler,
 	) error {
-		// Match the unary behaviour — empty allowlist is a no-op, logged once
-		// (the same sync.Once also gates the unary path so a server running
-		// both kinds of RPCs logs the disabled state exactly once).
+		// Match the unary behaviour — empty allowlist is a no-op (already
+		// logged + gauge-set at constructor time, no per-RPC logging).
 		if len(allowedSet) == 0 {
-			peerCNAllowlistDisabledLog.Do(func() {
-				slog.Info("grpc peer CN allowlist disabled — set MTLS_PEER_CN_ALLOWLIST to enable")
-			})
 			return handler(srv, ss)
 		}
 
@@ -134,6 +152,7 @@ func PeerCNAllowlistStream(allowed ...string) grpc.StreamServerInterceptor {
 			slog.Warn("grpc peer CN missing — rejecting stream",
 				"method", info.FullMethod,
 			)
+			metrics.GRPCPeerCNDeniedTotal.WithLabelValues(info.FullMethod, "missing_cn").Inc()
 			return status.Error(codes.PermissionDenied, "peer not in allowlist")
 		}
 
@@ -142,6 +161,7 @@ func PeerCNAllowlistStream(allowed ...string) grpc.StreamServerInterceptor {
 				"method", info.FullMethod,
 				"peer_cn", cn,
 			)
+			metrics.GRPCPeerCNDeniedTotal.WithLabelValues(info.FullMethod, "cn_not_allowed").Inc()
 			return status.Error(codes.PermissionDenied, "peer not in allowlist")
 		}
 
@@ -198,6 +218,36 @@ func buildAllowedSet(allowed []string) map[string]struct{} {
 		}
 	}
 	return set
+}
+
+// logAllowlistState is called once at interceptor construction (per server,
+// per kind) to surface the current allowlist posture in logs + metrics. The
+// sync.Once gate means a server that wires both PeerCNAllowlist and
+// PeerCNAllowlistStream emits the state exactly once.
+//
+// SEC-044 follow-up: when the allowlist is empty AND OTEL_ENVIRONMENT=production,
+// we WARN instead of INFO so a misconfigured deploy ("we forgot to set
+// MTLS_PEER_CN_ALLOWLIST in prod") is visible in the deploy log, not lost in
+// per-RPC noise. The GRPCPeerCNAllowlistEnabled gauge is set unconditionally
+// so an alert can fire on `== 0` without needing log parsing.
+func logAllowlistState(allowedSet map[string]struct{}) {
+	peerCNAllowlistStateLog.Do(func() {
+		if len(allowedSet) == 0 {
+			metrics.GRPCPeerCNAllowlistEnabled.Set(0)
+			if strings.EqualFold(os.Getenv(otelEnvironmentEnvVar), "production") {
+				slog.Warn("grpc peer CN allowlist disabled in production — set MTLS_PEER_CN_ALLOWLIST to enforce per-peer identity",
+					"env", "production",
+				)
+			} else {
+				slog.Info("grpc peer CN allowlist disabled — set MTLS_PEER_CN_ALLOWLIST to enable")
+			}
+			return
+		}
+		metrics.GRPCPeerCNAllowlistEnabled.Set(1)
+		slog.Info("grpc peer CN allowlist enabled",
+			"peer_count", len(allowedSet),
+		)
+	})
 }
 
 // peerCommonName extracts the Common Name from the first peer certificate on

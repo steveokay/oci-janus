@@ -49,6 +49,27 @@ var (
 		Name: "registry_active_uploads_total",
 		Help: "Number of blob uploads currently in progress.",
 	})
+
+	// GRPCPeerCNDeniedTotal counts gRPC requests rejected by the peer-CN
+	// allowlist interceptor (REDESIGN-001 Phase 6.10, SEC-045 follow-up).
+	// `reason` distinguishes the rejection cause so operators can tell
+	// "wrong CN" from "no peer info" — both indicate a configuration issue,
+	// but the remediation differs.
+	GRPCPeerCNDeniedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "registry_grpc_peer_cn_denied_total",
+		Help: "Total gRPC calls rejected by the peer-CN allowlist interceptor.",
+	}, []string{"method", "reason"})
+
+	// GRPCPeerCNAllowlistEnabled is a gauge that surfaces whether peer-CN
+	// enforcement is active for the local gRPC server (SEC-044 follow-up).
+	// 1 == enforcement on (allowlist populated), 0 == Option A no-op. Scrape
+	// + alert on `== 0` in production so the "we forgot to wire
+	// MTLS_PEER_CN_ALLOWLIST" failure mode is visible without spelunking
+	// through logs.
+	GRPCPeerCNAllowlistEnabled = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "registry_grpc_peer_cn_allowlist_enabled",
+		Help: "1 if MTLS_PEER_CN_ALLOWLIST is non-empty and enforcement is active, 0 otherwise.",
+	})
 )
 
 // Handler returns an http.Handler that serves the default Prometheus registry.

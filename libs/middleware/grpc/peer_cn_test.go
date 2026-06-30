@@ -20,14 +20,43 @@ import (
 	"crypto/x509/pkix"
 	"net"
 	"os"
+	"sync"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 )
+
+// testutilGetCounter reads the current value of a labelled Prometheus
+// counter for asserting deltas inside tests. Promauto registers metrics
+// against the default registry; we just round-trip through the public
+// CounterVec → Write(dto.Metric) API.
+func testutilGetCounter(t *testing.T, vec *prometheus.CounterVec, labels ...string) float64 {
+	t.Helper()
+	c := vec.WithLabelValues(labels...)
+	m := &dto.Metric{}
+	if err := c.Write(m); err != nil {
+		t.Fatalf("counter Write: %v", err)
+	}
+	return m.GetCounter().GetValue()
+}
+
+// testutilGetGauge reads the current value of an unlabelled Prometheus gauge.
+func testutilGetGauge(t *testing.T, g prometheus.Gauge) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	if err := g.Write(m); err != nil {
+		t.Fatalf("gauge Write: %v", err)
+	}
+	return m.GetGauge().GetValue()
+}
 
 // peerCNRecordingHandler mirrors the recordingHandler pattern in
 // single_tenant_injector_test.go but kept local so the two test files don't
@@ -240,6 +269,78 @@ func TestPeerCNAllowlistStream_RejectsBadCN(t *testing.T) {
 	}
 	if st, ok := status.FromError(err); !ok || st.Code() != codes.PermissionDenied {
 		t.Errorf("expected PermissionDenied, got %v", err)
+	}
+}
+
+// TestPeerCNAllowlistStream_AllowsGoodCN is the parity test for the happy
+// path on the stream interceptor — symmetric with the unary "allowed CN"
+// coverage. Added per the code-review-agent's nit on the 6.10 review batch.
+func TestPeerCNAllowlistStream_AllowsGoodCN(t *testing.T) {
+	allowed := PeerCNAllowlistStream("registry-core")
+	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/Stream"}
+	called := false
+	err := allowed(nil, &fakeServerStream{ctx: ctxWithPeerCN("registry-core")}, info, func(_ any, _ grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("allowed CN must pass through, got: %v", err)
+	}
+	if !called {
+		t.Error("stream handler must be invoked for an allowed CN")
+	}
+}
+
+// TestPeerCNAllowlist_DeniedIncrementsMetric is the SEC-045 follow-up: every
+// rejection must bump the `registry_grpc_peer_cn_denied_total` counter so
+// operators can alert + page on unexpected cross-service call attempts even
+// when slog logs are sampled out.
+func TestPeerCNAllowlist_DeniedIncrementsMetric(t *testing.T) {
+	// Fresh sync.Once so the test's constructor state runs predictably.
+	peerCNAllowlistStateLog = sync.Once{}
+
+	interceptor := PeerCNAllowlist("registry-core")
+	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/MetricTest"}
+
+	before := testutilGetCounter(t, metrics.GRPCPeerCNDeniedTotal, info.FullMethod, "cn_not_allowed")
+	rec := &peerCNRecordingHandler{}
+	if _, err := interceptor(ctxWithPeerCN("registry-gc"), nil, info, rec.handle); err == nil {
+		t.Fatal("expected denial")
+	}
+	after := testutilGetCounter(t, metrics.GRPCPeerCNDeniedTotal, info.FullMethod, "cn_not_allowed")
+	if after-before != 1 {
+		t.Errorf("denied_total{cn_not_allowed}: before=%v after=%v; expected +1", before, after)
+	}
+
+	// "missing_cn" path bumps a different reason label.
+	beforeMissing := testutilGetCounter(t, metrics.GRPCPeerCNDeniedTotal, info.FullMethod, "missing_cn")
+	if _, err := interceptor(context.Background(), nil, info, rec.handle); err == nil {
+		t.Fatal("expected denial for missing CN")
+	}
+	afterMissing := testutilGetCounter(t, metrics.GRPCPeerCNDeniedTotal, info.FullMethod, "missing_cn")
+	if afterMissing-beforeMissing != 1 {
+		t.Errorf("denied_total{missing_cn}: before=%v after=%v; expected +1", beforeMissing, afterMissing)
+	}
+}
+
+// TestPeerCNAllowlist_ConstructorSetsGauge confirms the SEC-044 gauge fires
+// at construction time, not on first RPC. The gauge value is the canonical
+// "is enforcement on?" signal scrapeable by Prometheus.
+func TestPeerCNAllowlist_ConstructorSetsGauge(t *testing.T) {
+	// Reset the sync.Once so this test's constructor actually emits state.
+	peerCNAllowlistStateLog = sync.Once{}
+	// Force a known state by setting the gauge to a sentinel before construct.
+	metrics.GRPCPeerCNAllowlistEnabled.Set(42)
+	_ = PeerCNAllowlist("registry-core")
+	if got := testutilGetGauge(t, metrics.GRPCPeerCNAllowlistEnabled); got != 1 {
+		t.Errorf("populated allowlist must set gauge to 1, got %v", got)
+	}
+
+	peerCNAllowlistStateLog = sync.Once{}
+	metrics.GRPCPeerCNAllowlistEnabled.Set(42)
+	_ = PeerCNAllowlist() // empty allowlist
+	if got := testutilGetGauge(t, metrics.GRPCPeerCNAllowlistEnabled); got != 0 {
+		t.Errorf("empty allowlist must set gauge to 0, got %v", got)
 	}
 }
 
