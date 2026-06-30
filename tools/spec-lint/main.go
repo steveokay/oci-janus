@@ -125,6 +125,11 @@ func readFile(path string) (string, error) {
 // grepFile returns true if the regex matches anywhere in the file. Missing
 // file is treated as no-match (not an error) so rules can be lenient about
 // platform-specific subtrees if needed.
+//
+// CAVEAT: a missing file silently passes through as `false, nil`. If a rule
+// REQUIRES the file to exist, the rule must perform its own presence check
+// (readFile or os.Stat) BEFORE calling grepFile — otherwise a future repo
+// reshuffle that deletes the file will be invisible to this lint.
 func grepFile(path string, re *regexp.Regexp) (bool, error) {
 	body, err := readFile(path)
 	if err != nil {
@@ -358,8 +363,14 @@ func ruleEventCatalogueCovered(root string) error {
 		line := body[lineStart:lineEnd]
 		// Also consider the immediately-preceding comment line as eligible
 		// for the annotation, matching how Go const blocks are documented.
-		precStart := strings.LastIndex(body[:lineStart-1], "\n") + 1
-		preceding := body[precStart : lineStart-1]
+		// Guard against the first-line case where there's no preceding line
+		// (code-review-agent flagged the underflow: `body[:lineStart-1]`
+		// would panic when lineStart == 0).
+		var preceding string
+		if lineStart > 0 {
+			precStart := strings.LastIndex(body[:lineStart-1], "\n") + 1
+			preceding = body[precStart : lineStart-1]
+		}
 		skipped := skipRE.MatchString(line) || skipRE.MatchString(preceding)
 		if skipped {
 			continue

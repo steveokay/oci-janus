@@ -1,5 +1,7 @@
 # Security Issues
 
+> Last updated: 2026-06-30 — SEC-053 + SEC-054 logged (both LOW) from the pre-PR review of `feat/redesign-7.3-spec-lint` (REDESIGN-001 Phase 7.3). The spec-lint tool itself is benign (read-only, no `os.Create`/`exec.Command`/network; workflow uses `pull_request` not `pull_request_target`). Two false-negative paths flagged: (1) Rule #11 `// audit: skip` annotation has no allowlist so a bad-faith PR can silently exempt a sensitive event by adding the comment in the same diff that adds the event; (2) Rule #12 mTLS-validate gate matches the generic regex `cfg\.Validate\(\)` which any service-local `Validate()` satisfies, regardless of whether it actually runs the mTLS path check. Both accepted as should-fix follow-ups — they do not block the Phase 7.3 PR but should be tightened in a subsequent spec-lint hardening pass. Rule #4 (audit_chain_tip CREATE TABLE forbidden) was reviewed and is sufficient: any literal re-introduction is caught, and a rename would be visible in PR diff against §10 docs that name the column-derived tip.
+>
 > Last updated: 2026-06-30 — SEC-050 RESOLVED in `feat/redesign-6.12-audit-hash-chain` (REDESIGN-001 Phase 6.12). Pre-PR security-agent flagged the initial design as a HIGH BLOCKER: granting UPDATE on `audit_chain_tip` to `registry_audit_app` defeated the entire tamper-evidence posture — a compromised audit service could rewrite the tip to an earlier `row_hash` and INSERT a forged row chained off it without the linked-list verifier noticing. Redesign drops the separate tip table entirely and derives the tip from `audit_events.chain_seq` (BIGINT GENERATED ALWAYS AS IDENTITY) via `SELECT row_hash FROM audit_events WHERE tenant_id = $1 ORDER BY chain_seq DESC LIMIT 1`. `registry_audit_app` keeps INSERT-only on `audit_events` (FORCE RLS denies UPDATE/DELETE per Decision #15); the advisory lock alone provides per-tenant serialisation — no FOR UPDATE needed. SEC-051 (LOW, pre-migration rows are silently unverifiable) and SEC-052 (INFO, canonicaliseJSON NaN/Inf/>2^53 edge cases) tracked as follow-ups but accepted within Phase 6.12 scope.
 >
 > Last updated: 2026-06-30 — SEC-048 + SEC-049 logged + RESOLVED in `feat/redesign-6.5-jwks-rotation-multi-key`. SEC-048 (LOW, fallback DoS): hard cap `maxKeyRingSize = 16` in `loadKeyRingFromDir` + new `registry_auth_jwt_kid_fallback_total{reason}` counter so operators can alert on sustained-high fallback rates. SEC-049 (INFO, observability): boot-time `slog.Info "jwt key loaded"` with `(kid, pubkey_sha256, mtime)` per key so silent same-base overwrite collisions are visible; `pickDefaultSigningKID` switched from "lex greatest" to "most-recently-modified file" so naming conventions without timestamps still get the right default signer.
@@ -714,3 +716,27 @@ under CLAUDE.md §7 "JWT Validation."
   2. Document the naming-convention requirement in `services/auth/.env.example` next to `JWT_KEY_RING_PATH` (date-prefix or ULID, never freeform).
   3. Consider switching the default signer from "lex-greatest" to "most-recently-modified" mtime (already captured in `loaded.modTime` at keyring.go:244 but currently only used as a tie-break that never fires). Matches operator intuition ("the key I just added") regardless of naming convention.
 - **References:** CLAUDE.md §7 (JWT validation, kid-targeted lookup); CWE-1188 (Insecure Default Initialization); CWE-345 (Insufficient Verification of Data Authenticity).
+
+### SEC-053 — spec-lint rule #11 (`// audit: skip` annotation) has no allowlist; bad-faith PR can silently exempt a sensitive event
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `tools/spec-lint`
+- **Raised:** 2026-06-30
+- **Description:** `ruleEventCatalogueCovered` (tools/spec-lint/main.go:323) treats `// audit: skip` as a self-applied opt-out: any `Routing*` constant in `libs/rabbitmq/events/events.go` either has a `case` in `services/audit/internal/eventconsumer/consumer.go`'s `mapEvent` switch, OR carries an inline / preceding-line `// audit: skip` comment. The annotation is unrestricted — a PR can add `RoutingRBACRoleGranted = "rbac.role_granted" // audit: skip` in the same diff that defines the constant, and spec-lint will PASS even though the event is meant to be audited per CLAUDE.md §10. The check enforces "every constant is decided about" but not "the decision matches the security policy."
+- **Remediation:**
+  1. Maintain an in-tree allowlist (e.g. `tools/spec-lint/skip_allowlist.txt`) of routing keys explicitly approved for skip; reject `// audit: skip` annotations on any constant not in the file.
+  2. Alternatively, require skips to cite a CLAUDE.md or `status.md` reference in the comment (`// audit: skip — REDESIGN-001 Phase X, non-actor event`); spec-lint regexes for the reference. Cheaper than a separate file but still constrains the casual abuse vector.
+  3. Track which constants currently use the annotation in the lint output so reviewers see the count drift in CI logs.
+- **References:** CLAUDE.md §10 (audit trail); CWE-778 (Insufficient Logging); CWE-1173 (Improper Use of Validation Framework).
+
+### SEC-054 — spec-lint rule #12 (mTLS validate gate) matches generic `cfg.Validate()` regex; any local Validate satisfies the rule regardless of behaviour
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `tools/spec-lint`
+- **Raised:** 2026-06-30
+- **Description:** `ruleEveryServiceValidatesMTLS` (tools/spec-lint/main.go:392) walks every `services/<name>/cmd/server/main.go` and passes if any of `ValidateMTLSConfig`, `cfg.Validate()`, or `loader.Validate` appears in the file. The first form is precise; the latter two are not. A new service that ships its own `cfg.Validate()` checking unrelated fields (e.g. `DB_DSN != ""`) will pass the rule without ever exercising the mTLS path-validation gate that CLAUDE.md §7 requires (mTLS cert paths must be set when `OTEL_ENVIRONMENT=production`). Combined with the dev fallback in `libs/auth/mtls` that downgrades to `insecure.NewCredentials()` when paths are unset, this lets a regression ship where a production service silently runs plaintext gRPC because nothing forced the mTLS validator to run.
+- **Remediation:**
+  1. Tighten the gate regex to require an actual reference to the mTLS validator: `ValidateMTLSConfig|loader\.ValidateMTLSConfig|mtls\.Validate`.
+  2. If services must keep a local `cfg.Validate()` indirection, additionally lint that the local Validate body itself calls `loader.ValidateMTLSConfig` (one-level callgraph walk via `go/ast` rather than text grep).
+  3. Add a dedicated runtime assertion in `libs/auth/mtls` that panics on `Bootstrap` if `OTEL_ENVIRONMENT=production` AND cert paths are empty — defence in depth so the lint regression is caught at startup even if spec-lint misses it.
+- **References:** CLAUDE.md §7 (mTLS between services, production validation requirement); CWE-311 (Missing Encryption); CWE-358 (Improperly Implemented Security Check).
