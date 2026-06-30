@@ -626,12 +626,12 @@ ORDER BY provider_id, created_at DESC;
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-005-tenant-create-removal`
-- [ ] Remove HTTP handlers. Note: this is BFF-only; the gRPC layer is intentionally kept.
-- [ ] If HD-002 mode is "delete entirely in single mode," wrap the route registration in `if h.deploymentMode == "multi" { ... }`.
-- [ ] FE: update `_authenticated.admin.tenants.tsx` to a read-only deployment-info card (calls `/api/v1/deployment-info` from Task 1.4).
-- [ ] Test the bootstrap CLI path still works (depends on Task 3.1 — if Task 3.1 not yet merged, defer this).
-- [ ] PR: "feat(redesign): remove tenant signup/create from BFF [RM-005]"
+- [x] Branch: `feat/redesign-rm-005-tenant-create-removal`
+- [x] Remove HTTP handlers. Note: this is BFF-only; the gRPC layer is intentionally kept.
+- [x] If HD-002 mode is "delete entirely in single mode," wrap the route registration in `if h.deploymentMode == "multi" { ... }`.
+- [x] FE: update `_authenticated.admin.tenants.tsx` to a read-only deployment-info card (calls `/api/v1/deployment-info` from Task 1.4).
+- [x] Test the bootstrap CLI path still works (depends on Task 3.1 — if Task 3.1 not yet merged, defer this).
+- [x] PR: "feat(redesign): remove tenant signup/create from BFF [RM-005]"
 
 ### Task 2.4: Strip plan/billing UI [RM-006]
 
@@ -643,14 +643,14 @@ ORDER BY provider_id, created_at DESC;
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-006-plan-ui`
-- [ ] Remove the FE references via grep:
+- [x] Branch: `feat/redesign-rm-006-plan-ui`
+- [x] Remove the FE references via grep:
 ```
 grep -rn "workspace.plan\|tenant.plan\|plan_badge\|PlanBadge" frontend/src/
 ```
-- [ ] Replace each with either nothing (sidebar) or a hidden field (admin pages still rendered only in MULTI mode).
-- [ ] Run `npm run typecheck`.
-- [ ] PR: "feat(fe): drop plan/billing chrome from sidebar + admin tenants [RM-006]"
+- [x] Replace each with either nothing (sidebar) or a hidden field (admin pages still rendered only in MULTI mode).
+- [x] Run `npm run typecheck`.
+- [x] PR: "feat(fe): drop plan/billing chrome from sidebar + admin tenants [RM-006]"
 
 ### Task 2.5: Rewrite login copy + remove tenant chrome [RM-007 + HD-001]
 
@@ -661,11 +661,11 @@ grep -rn "workspace.plan\|tenant.plan\|plan_badge\|PlanBadge" frontend/src/
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-007-login-copy`
-- [ ] Update login form to read deployment_mode from `useDeploymentInfo()` (new hook, created here) and conditionally show signup link.
-- [ ] Update topbar to hide UUID chip + plan badge in single mode.
-- [ ] Verify both modes render correctly via a couple of Vite env permutations in a manual smoke test.
-- [ ] PR: "feat(fe): single-mode login copy + tenant chrome [RM-007, HD-001]"
+- [x] Branch: `feat/redesign-rm-007-login-copy`
+- [x] Update login form to read deployment_mode from `useDeploymentInfo()` (new hook, created here) and conditionally show signup link.
+- [x] Update topbar to hide UUID chip + plan badge in single mode.
+- [x] Verify both modes render correctly via a couple of Vite env permutations in a manual smoke test.
+- [x] PR: "feat(fe): single-mode login copy + tenant chrome [RM-007, HD-001]"
 
 ### Task 2.6: Delete dev-seed migration [RM-008] [Top-5 #5]
 > ✅ DONE — PR #129 (2026-06-27) — **closes Top-5 #5**. Conformance user residual risk flagged as RED-FU-004 follow-up.
@@ -707,12 +707,12 @@ dev-bootstrap: ## Bootstrap a dev admin via the CLI (no migration-baked secrets)
 
 **Steps:**
 
-- [ ] Branch: `feat/redesign-rm-009-helm-domain-cleanup`
-- [ ] `helm template ./infra/helm/registry/charts/gateway > /tmp/before.yaml`
-- [ ] Strip the dead config.
-- [ ] `helm template ./infra/helm/registry/charts/gateway > /tmp/after.yaml; diff /tmp/before.yaml /tmp/after.yaml`
-- [ ] Verify only custom-domain blocks are removed.
-- [ ] PR: "chore(infra): drop dead custom-domain Helm + ACME config [RM-009]"
+- [x] Branch: `feat/redesign-rm-009-helm-domain-cleanup` ⛔ N/A — no actual dead config existed in `infra/helm/registry/charts/gateway`; closed without code change. Dashboard row marked N/A.
+- [x] `helm template ./infra/helm/registry/charts/gateway > /tmp/before.yaml`
+- [x] Strip the dead config.
+- [x] `helm template ./infra/helm/registry/charts/gateway > /tmp/after.yaml; diff /tmp/before.yaml /tmp/after.yaml`
+- [x] Verify only custom-domain blocks are removed.
+- [x] PR: "chore(infra): drop dead custom-domain Helm + ACME config [RM-009]"
 
 ---
 
@@ -779,8 +779,8 @@ echo "Again" | docker compose run --rm -T auth registry-auth bootstrap \
 - `services/tenant/internal/handler/grpc.go` — `CreateTenant` checks `DEPLOYMENT_MODE` (per Q-001 hard-error)
 - `services/tenant/internal/service/tenant.go` — add `singleTenantGuard`
 
-- [ ] Add deployment mode to service config.
-- [ ] In `CreateTenant`:
+- [x] Add deployment mode to service config.
+- [x] In `CreateTenant`:
 ```go
 // In single mode the deployment owns exactly one tenant (the bootstrap one).
 // Refusing a second CreateTenant is a hard error so misconfiguration surfaces
@@ -793,8 +793,8 @@ if s.deploymentMode == loader.DeploymentModeSingle {
     }
 }
 ```
-- [ ] Test: in single mode, second CreateTenant returns FAILED_PRECONDITION.
-- [ ] PR.
+- [x] Test: in single mode, second CreateTenant returns FAILED_PRECONDITION.
+- [x] PR.
 
 ### Task 3.3: Wire `tenant_id` defaults in single mode
 
@@ -804,9 +804,9 @@ The system already filters by `tenant_id` everywhere. In single mode the tenant_
 - Modify: `libs/middleware/grpc/server.go` — add `SingleTenantInjector` (active only when `DEPLOYMENT_MODE=single`)
 - Create: `libs/middleware/grpc/single_tenant_injector_test.go`
 
-- [ ] Lookup bootstrap tenant id at startup (cached in middleware).
-- [ ] When DEPLOYMENT_MODE=single and request lacks a tenant_id, inject the bootstrap one.
-- [ ] When DEPLOYMENT_MODE=single and request HAS a different tenant_id, log a warning + reject. This catches bugs where FE/BFF accidentally pass a stale UUID.
+- [x] Lookup bootstrap tenant id at startup (cached in middleware).
+- [x] When DEPLOYMENT_MODE=single and request lacks a tenant_id, inject the bootstrap one.
+- [x] When DEPLOYMENT_MODE=single and request HAS a different tenant_id, log a warning + reject. This catches bugs where FE/BFF accidentally pass a stale UUID.
 
 ---
 
@@ -819,9 +819,9 @@ The system already filters by `tenant_id` everywhere. In single mode the tenant_
 - Create: `frontend/src/hooks/use-deployment-info.ts`
 - Modify: `frontend/src/main.tsx` — wrap app in `<DeploymentInfoProvider>`
 
-- [ ] Fetch `/api/v1/deployment-info` once at app boot. Cache in React Query.
-- [ ] Expose `{ mode, version, ssoEnabled }`.
-- [ ] Hook returns `useDeploymentInfo()` — used by sidebar, login, topbar, admin routes.
+- [x] Fetch `/api/v1/deployment-info` once at app boot. Cache in React Query.
+- [x] Expose `{ mode, version, ssoEnabled }`.
+- [x] Hook returns `useDeploymentInfo()` — used by sidebar, login, topbar, admin routes.
 
 ### Task 4.2: Sidebar + unified Settings IA (per `memory/feedback_sidebar_nav_grouping.md`)
 
@@ -912,14 +912,14 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 
 **Steps:**
 
-- [ ] Replace the current sidebar tree with the structure above. Delete the `Admin` and `Deployment` sidebar groups entirely.
-- [ ] Build the Settings page as a TanStack Router parent route (`_authenticated.settings.tsx`) with tab children. Tabs render based on `useDeploymentInfo()` (mode) + `useAbility()` (role). Default landing tab is `Account`.
-- [ ] Implement `effectiveGlobalAdmin(claims, mode)` in `services/management/internal/handler/rbac.go`. Use it from every `requirePlatformAdmin` site instead of raw `claims.IsGlobalAdmin`.
-- [ ] Each section within a tab gates on `useAbility(action, scope)` from Task 4.4 (this replaces the current `isPlatformAdmin` flat check).
-- [ ] In multi mode: Platform tab visibility hinges on `is_global_admin`; in single mode: hidden entirely.
-- [ ] Add a hamburger drawer for narrow viewports (Task 4.6).
-- [ ] Migrate the existing `/admin/scanner`, `/admin/gc`, `/admin/tenants` route content into Settings tabs. Add 301 redirects from the legacy URLs so bookmarks don't 404.
-- [ ] Manual smoke test:
+- [x] Replace the current sidebar tree with the structure above. Delete the `Admin` and `Deployment` sidebar groups entirely.
+- [x] Build the Settings page as a TanStack Router parent route (`_authenticated.settings.tsx`) with tab children. Tabs render based on `useDeploymentInfo()` (mode) + `useAbility()` (role). Default landing tab is `Account`.
+- [x] Implement `effectiveGlobalAdmin(claims, mode)` in `services/management/internal/handler/rbac.go`. Use it from every `requirePlatformAdmin` site instead of raw `claims.IsGlobalAdmin`.
+- [x] Each section within a tab gates on `useAbility(action, scope)` from Task 4.4 (this replaces the current `isPlatformAdmin` flat check).
+- [x] In multi mode: Platform tab visibility hinges on `is_global_admin`; in single mode: hidden entirely.
+- [x] Add a hamburger drawer for narrow viewports (Task 4.6).
+- [x] Migrate the existing `/admin/scanner`, `/admin/gc`, `/admin/tenants` route content into Settings tabs. Add 301 redirects from the legacy URLs so bookmarks don't 404.
+- [x] Manual smoke test:
   - Single mode as bootstrap admin: Account + Workspace tabs; Workspace tab contains scanner / GC / deployment-info sections.
   - Single mode as repo-reader: Account tab only.
   - Multi mode as global admin: Account + Workspace + Platform tabs.
@@ -941,9 +941,9 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 5. Create an API key (existing `POST /api/v1/apikeys`)
 6. Done — link to docs
 
-- [ ] Persist completion via the new BFF route.
-- [ ] Reachable from `Settings > Help` even after dismissal.
-- [ ] PR.
+- [x] Persist completion via the new BFF route.
+- [x] Reachable from `Settings > Help` even after dismissal.
+- [x] PR.
 
 ### Task 4.4: Replace `claims.Roles` mining with `useAbility()` [Review §C2 + D3]
 
@@ -955,15 +955,15 @@ func effectiveGlobalAdmin(claims *Claims, mode loader.DeploymentMode) bool {
 - Modify: every FE route guard that currently calls `isPlatformAdmin`
 
 **Server side:**
-- [ ] BFF calls `GetUserPermissions` (existing) and translates each `RoleAssignment` into a flat ability list using the same containment rule already in `services/management/internal/handler/rbac.go:hasScopedRole`. **Critically: this is the same code path — extract `containmentRule` into a shared helper and call from both sites.**
+- [x] BFF calls `GetUserPermissions` (existing) and translates each `RoleAssignment` into a flat ability list using the same containment rule already in `services/management/internal/handler/rbac.go:hasScopedRole`. **Critically: this is the same code path — extract `containmentRule` into a shared helper and call from both sites.**
 
 **Client side:**
-- [ ] `useAbility("admin", { type: "org", value: "myorg" })` → bool.
-- [ ] Replace `isPlatformAdmin` everywhere — grep finds the callsites:
+- [x] `useAbility("admin", { type: "org", value: "myorg" })` → bool.
+- [x] Replace `isPlatformAdmin` everywhere — grep finds the callsites:
 ```
 grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 ```
-- [ ] Delete `frontend/src/lib/auth/jwt.ts:isPlatformAdmin` once unreferenced.
+- [x] Delete `frontend/src/lib/auth/jwt.ts:isPlatformAdmin` once unreferenced.
 
 ### Task 4.5: Strip placeholder "Coming Soon" surfaces [Review §C4]
 
@@ -974,8 +974,8 @@ grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 - Modify: notification preferences UI — disable channel rows whose hint says "Wired in Phase 3+" instead of showing them as toggleable
 
 **Steps:**
-- [ ] Either remove the Security tab entirely or replace with an "Account" tab listing the user's current sessions (when sessions are real — Phase 6.8).
-- [ ] Notification rows: `disabled + tooltip "Available after Phase 3 (email channel)"`.
+- [x] Either remove the Security tab entirely or replace with an "Account" tab listing the user's current sessions (when sessions are real — Phase 6.8).
+- [x] Notification rows: `disabled + tooltip "Available after Phase 3 (email channel)"`.
 
 ### Task 4.6: Mobile-responsive shell [Review §C3]
 
@@ -984,11 +984,11 @@ grep -rn "isPlatformAdmin\|claims\.roles\|roles\.includes" frontend/src/
 - Modify: `frontend/src/components/shell/topbar.tsx`
 - Create: `frontend/src/components/shell/mobile-nav.tsx`
 
-- [ ] Below `lg` breakpoint: sidebar becomes off-canvas drawer.
-- [ ] Topbar gets a hamburger button (left of brand) that opens the drawer.
-- [ ] Add a skip-link at the top of every page (`<a href="#main" class="sr-only focus:not-sr-only">Skip to main</a>`).
-- [ ] Verify keyboard focus works through the drawer (Tab, Escape closes).
-- [ ] Verify with Chrome DevTools mobile emulation (iPhone SE, Pixel 5).
+- [x] Below `lg` breakpoint: sidebar becomes off-canvas drawer.
+- [x] Topbar gets a hamburger button (left of brand) that opens the drawer.
+- [x] Add a skip-link at the top of every page (`<a href="#main" class="sr-only focus:not-sr-only">Skip to main</a>`).
+- [x] Verify keyboard focus works through the drawer (Tab, Escape closes).
+- [x] Verify with Chrome DevTools mobile emulation (iPhone SE, Pixel 5).
 
 ### Task 4.7: Remove SSO admin FE [companion to RM-003]
 
@@ -1216,11 +1216,11 @@ Specific events to add (from review):
 - Modify: `services/proxy/internal/service/upstream.go` — same for upstream creds
 - Modify: `services/audit/internal/service/export.go` — same for audit export secrets
 
-- [ ] Ciphertext format: `[1-byte version][nonce][ciphertext + tag]`.
-- [ ] Versioned decrypt picks the right key by reading the first byte.
-- [ ] Migration: re-encrypt existing rows with version=1 (a single pass at deploy time).
-- [ ] Document rotation: deploy v2 key alongside v1, rotate writers to v2, run re-encryption job, drop v1.
-- [ ] PR.
+- [x] Ciphertext format: `[1-byte version][nonce][ciphertext + tag]`.
+- [x] Versioned decrypt picks the right key by reading the first byte. (Phase 6.4 shipped "try v1, fall back to legacy" instead of strict-on-version because ~1/256 legacy ciphertexts have random nonces starting with `0x01`; tamper safety preserved by GCM auth tag.)
+- [ ] Migration: re-encrypt existing rows with version=1 (a single pass at deploy time). DEFERRED — Phase 6.4 shipped version byte only; active KEK rotation tool is a follow-up.
+- [ ] Document rotation: deploy v2 key alongside v1, rotate writers to v2, run re-encryption job, drop v1. DEFERRED — depends on rotation tool above.
+- [x] PR. (#203)
 
 ### Task 6.5: JWKS rotation prep [Review §B]
 
@@ -1228,9 +1228,9 @@ Specific events to add (from review):
 - Modify: `services/auth/internal/config/config.go:23-27` — support multiple `JWT_PRIVATE_KEY_<KID>_B64` envs
 - Modify: `services/auth/internal/service/auth.go:194-199` — `kid`-based lookup with both keys accepted
 
-- [ ] Active key signs new tokens; both keys validate existing tokens.
-- [ ] `/.well-known/jwks.json` lists both.
-- [ ] After old key's max-TTL has passed, the old env var can be removed without invalidating any live token.
+- [x] Active key signs new tokens; both keys validate existing tokens. (Phase 6.5 ships `keyRing` with kid-targeted lookup + ring-wide fallback for legacy/unknown-kid tokens.)
+- [x] `/.well-known/jwks.json` lists both. (Enumerates every public key in the ring.)
+- [x] After old key's max-TTL has passed, the old env var can be removed without invalidating any live token. (`JWT_SIGNING_KID` pins signer; remove the retired key's PEM file from `JWT_KEY_RING_PATH` + restart.)
 
 ### Task 6.6: `revoke:user:<sub>` fail-closed on Redis error [Review §B]
 > ✅ DONE — PR #122 (2026-06-26) — closes Review §B (Redis fail-closed).
@@ -1248,10 +1248,10 @@ Specific events to add (from review):
 - Modify: `services/auth/internal/service/auth.go:441` (ValidateAPIKey)
 - Add: Redis cache key `apikey:valid:<hash_of_secret>` with short TTL (60s) + `apikey:revoked:<id>` flag for instant revocation override
 
-- [ ] On hit: skip Argon2 verify, use cached `(user_id, allowed_scopes)`.
-- [ ] On revoke: write `apikey:revoked:<id>` with TTL = cache TTL + buffer. Validate checks both.
-- [ ] Test: revoked key denied within 60s of revocation.
-- [ ] PR.
+- [x] On hit: skip Argon2 verify, use cached `(user_id, allowed_scopes)`. (HIT path still hits DB to re-run row-state gates from the LIVE row; only Argon2 is skipped.)
+- [x] On revoke: write `apikey:revoked:<id>` with TTL = cache TTL + buffer. Validate checks both. (Phase 6.7 invalidates the cache directly on `DeleteAPIKey` / `SetUserDisabled` / SA disable/delete; 60s TTL bounds the staleness window.)
+- [x] Test: revoked key denied within 60s of revocation. (`HitRespectsIsActive`, `HitRespectsExpiry`, `MissAfterInvalidation`.)
+- [x] PR. (#207)
 
 ### Task 6.8: SAML library upgrade per Q-005 (if Option B chosen)
 
@@ -1266,18 +1266,18 @@ Specific events to add (from review):
 - Modify: `libs/auth/mtls/mtls.go` — replace `Certificates: []tls.Certificate{cert}` with `GetCertificate: <closure>`
 - Add: fsnotify watcher reloads the cert when the file changes on disk
 
-- [ ] Test: write a fresh cert+key pair to disk → next handshake uses the new one.
-- [ ] PR.
+- [x] Test: write a fresh cert+key pair to disk → next handshake uses the new one. (`TestServerTLSConfig_ReloadsOnFingerprintChange` + `TestClientTLSConfig_ReloadsOnFingerprintChange`.)
+- [x] PR. (#205)
 
 ### Task 6.10: mTLS peer-CN interceptor [Review §A3]
 
 **Files:**
 - Modify: `libs/middleware/grpc/server.go:77-92` — add `PeerCNInterceptor`
 
-- [ ] Reads expected peer list from service config (`MTLS_ALLOWED_PEERS=core,gateway` etc.).
-- [ ] Rejects calls from CNs not in the list with `codes.PermissionDenied`.
-- [ ] Test: stub conn with unexpected CN → rejected.
-- [ ] PR.
+- [x] Reads expected peer list from service config (`MTLS_PEER_CN_ALLOWLIST=core,gateway` etc. — env var name landed as `MTLS_PEER_CN_ALLOWLIST` not `MTLS_ALLOWED_PEERS`).
+- [x] Rejects calls from CNs not in the list with `codes.PermissionDenied`. (Increments `registry_grpc_peer_cn_denied_total{method, reason}`.)
+- [x] Test: stub conn with unexpected CN → rejected. (`TestPeerCNAllowlist_*` suite, 19 cases.)
+- [x] PR. (#204)
 
 ### Task 6.11: Scanner plugin sandbox [Review §A6, §F P2]
 
@@ -1296,9 +1296,9 @@ Specific events to add (from review):
 - Migration: add `prev_hash BYTEA`, `event_hash BYTEA` to `audit_events`
 - Modify: audit consumer writes both columns; `event_hash = sha256(prev_hash || canonical_json(event))`
 
-- [ ] Verifier CLI: walks the chain, reports the first inconsistency.
-- [ ] Periodic publish of `head_hash` to a separate sink (S3 + KMS-signed object).
-- [ ] PR.
+- [x] Verifier CLI: walks the chain, reports the first inconsistency. (Shipped as `Repository.VerifyChain(ctx, tenantID)` — Go function; standalone CLI wrapper deferred.)
+- [ ] Periodic publish of `head_hash` to a separate sink (S3 + KMS-signed object). DEFERRED — checkpoint signing is explicitly out of scope for Phase 6.12 per the plan task brief.
+- [x] PR. (#208 — incl. SEC-050 HIGH BLOCKER fix where the original `audit_chain_tip` design was redesigned to derive the tip from `audit_events.chain_seq` instead.)
 
 ---
 
@@ -1354,18 +1354,18 @@ Specific events to add (from review):
 - Every event type in `libs/rabbitmq/events` must have a case in `mapEvent` OR a `// audit: skip` annotation.
 - Every service `main.go` must call `loader.ValidateMTLSConfig`.
 
-- [ ] PR.
+- [x] PR. (#212 — 13 rules in `tools/spec-lint/main.go` + `.github/workflows/ci-spec-lint.yml`.)
 
 ### Task 7.4: Move tracking item to `status-tracker.md`
 
-- [ ] Once Phase 0 is signed off and Phase 1 work begins, add an entry to `status-tracker.md`:
+- [x] Once Phase 0 is signed off and Phase 1 work begins, add an entry to `status-tracker.md`:
 ```
 ### REDESIGN-001 — Single-tenant self-hosted redesign
 **Affects:** all services + frontend.
 **Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md`.
 **Status:** IN PROGRESS — Phase N of 8.
 ```
-- [ ] Remove the entry from `status-tracker.md` and append a resolution note to `status.md` once all phases ship.
+- [ ] Remove the entry from `status-tracker.md` and append a resolution note to `status.md` once all phases ship. — Pending Phase 8 completion (the entry was last trimmed by PR #213; final removal happens after 8.1/8.2/8.3 ship).
 
 ---
 
