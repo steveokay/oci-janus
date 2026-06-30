@@ -27,7 +27,7 @@ What just happened:
 1. `make dev-certs` writes a local CA + per-service certs to `certs/` (Kubernetes deployments use cert-manager instead).
 2. `docker compose up -d` brings up Postgres, Redis, RabbitMQ, MinIO, Vault, Jaeger, and all 13 registry services on the `registry.events` topic.
 3. `make dev-bootstrap` runs `registry-auth bootstrap` inside the auth container to create the first tenant + admin user (idempotent — safe to re-run).
-4. The dashboard is at `https://localhost:5173`; the OCI `/v2/` API is at `http://localhost:8081`.
+4. The dashboard is at `http://localhost:5173` (Vite dev server, no TLS); the OCI `/v2/` API is at `http://localhost:8081`. For production deployment guidance, see [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 5. Full bootstrap walkthrough (production paths, password from stdin, tenant id pinning) lives in [`infra/runbooks/bootstrap-first-admin.md`](infra/runbooks/bootstrap-first-admin.md).
 
 `docker login localhost:8081 -u admin -p Admin1234!` and you're pushing.
@@ -87,7 +87,7 @@ The `DEPLOYMENT_MODE` env var picks the posture; the schema and wire format are 
 | `single` (default) | Self-hosted, one-team OSS deploy | One tenant via `registry-auth bootstrap` | Tenant switcher / plan UI hidden |
 | `multi` | SaaS-style multi-tenant | First tenant via bootstrap; subsequent via Settings → Platform → Tenants | Full SaaS surface |
 
-In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on the second insert, and the `SingleTenantInjector` interceptor stamps every request with the bootstrap tenant id. See [ADR-0025](docs/adr/0025-single-tenant-default-deployment-mode.md) for the rationale.
+In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on the second insert, and the `SingleTenantInjector` interceptor stamps every request with the bootstrap tenant id. See [ADR-0025](docs/adr/0025-single-tenant-default-deployment-mode.md) for the rationale; upgrading from v1 → v2: [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).
 
 ---
 
