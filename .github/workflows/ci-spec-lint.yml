@@ -1,0 +1,40 @@
+name: CI — spec-lint
+
+# Asserts that CLAUDE.md's claims still match the codebase. See
+# tools/spec-lint/README.md for the rule catalogue. New rules are added in
+# tools/spec-lint/main.go.
+#
+# REDESIGN-001 Phase 7.3.
+
+on:
+  push:
+    paths:
+      - "CLAUDE.md"
+      - "tools/spec-lint/**"
+      - "libs/**"
+      - "services/*/migrations/**"
+      - "services/*/cmd/**"
+      - "services/audit/internal/eventconsumer/**"
+      - ".github/workflows/ci-spec-lint.yml"
+  pull_request:
+    paths:
+      - "CLAUDE.md"
+      - "tools/spec-lint/**"
+      - "libs/**"
+      - "services/*/migrations/**"
+      - "services/*/cmd/**"
+      - "services/audit/internal/eventconsumer/**"
+      - ".github/workflows/ci-spec-lint.yml"
+
+jobs:
+  spec-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.7" }
+      - name: Build spec-lint
+        working-directory: tools/spec-lint
+        run: go build -o spec-lint .
+      - name: Run spec-lint
+        run: ./tools/spec-lint/spec-lint .
