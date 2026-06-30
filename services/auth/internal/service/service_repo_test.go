@@ -1249,10 +1249,13 @@ func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
 	// Parse the signed token to obtain the claims so callers can use
 	// claims.Subject as the key for revoke:user:<sub>.
 	var claims Claims
-	// ParseWithClaims validates the signature against svc.pubKey; we access it
-	// via the same-package field since both this file and auth.go are in package service.
+	// ParseWithClaims validates the signature against the key in the ring's
+	// signing slot — same-package access via svc.keys (Phase 6.5 multi-key
+	// refactor; pre-Phase-6.5 this read svc.pubKey directly).
+	_, signerPriv := svc.keys.signer()
+	signerPub := &signerPriv.PublicKey
 	tok, err := jwt.ParseWithClaims(token, &claims, func(_ *jwt.Token) (any, error) {
-		return svc.pubKey, nil
+		return signerPub, nil
 	})
 	if err != nil || !tok.Valid {
 		panic("issueJWT: parse claims failed: " + err.Error())

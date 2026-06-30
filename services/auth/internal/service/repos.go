@@ -157,13 +157,12 @@ func NewWithFakes(
 	rdb redisClient,
 	privKeyB64, pubKeyB64, keyID string,
 ) (*Service, error) {
-	privKey, err := parsePrivateKey(privKeyB64)
+	// Phase 6.5 — fakes still take a single PEM pair; we wrap it into a
+	// 1-element ring so the test path exercises the same code as production
+	// single-key configs.
+	ring, err := singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID)
 	if err != nil {
-		return nil, fmt.Errorf("parse JWT private key: %w", err)
-	}
-	pubKey, err := parsePublicKey(pubKeyB64)
-	if err != nil {
-		return nil, fmt.Errorf("parse JWT public key: %w", err)
+		return nil, err
 	}
 	return &Service{
 		users:           users,
@@ -171,8 +170,33 @@ func NewWithFakes(
 		serviceAccounts: sa,
 		audit:           audit,
 		redis:           rdb,
-		privKey:         privKey,
-		pubKey:          pubKey,
-		keyID:           keyID,
+		keys:            ring,
+	}, nil
+}
+
+// NewWithFakesAndRing is the multi-key analogue of NewWithFakes. Phase 6.5
+// rotation tests use this to wire a pre-built keyRing (e.g. one containing
+// kid A as the signer plus kid B as a verify-only entry) without going
+// through the disk loader.
+//
+// Like NewWithFakes, this is test-only — production code uses NewWithKeyRing.
+func NewWithFakesAndRing(
+	users userRepo,
+	apiKeys apiKeyRepo,
+	sa saRepo,
+	audit AuditEmitter,
+	rdb redisClient,
+	ring *keyRing,
+) (*Service, error) {
+	if ring == nil {
+		return nil, fmt.Errorf("auth: key ring is required")
+	}
+	return &Service{
+		users:           users,
+		apiKeys:         apiKeys,
+		serviceAccounts: sa,
+		audit:           audit,
+		redis:           rdb,
+		keys:            ring,
 	}, nil
 }

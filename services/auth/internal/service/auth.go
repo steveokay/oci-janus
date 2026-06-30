@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
@@ -127,14 +128,26 @@ type Service struct {
 	serviceAccounts saRepo
 	audit           AuditEmitter
 	redis           redisClient
-	privKey         *rsa.PrivateKey
-	pubKey          *rsa.PublicKey
-	keyID           string
+	// keys is the multi-key signing + validation ring (Phase 6.5). The ring
+	// holds every RS256 key the service knows about; signing uses the kid
+	// nominated at construction time, validation uses the kid carried in the
+	// JWT header (falling back to a try-every-key sweep for legacy tokens
+	// minted before the kid header was stamped).
+	//
+	// Replaces the pre-Phase-6.5 single-key trio (privKey/pubKey/keyID). The
+	// migration is internal-only; callers of New / NewWithFakes are
+	// unchanged for the single-key path (the helpers wrap the single key
+	// into a 1-element ring transparently).
+	keys *keyRing
 }
 
 // New constructs a Service by parsing the base64-encoded PEM keys from config.
 // sa and audit may be nil; if nil, the service-account branch of ValidateAPIKey
 // returns codes.Unimplemented and cross-tenant audit emission is skipped.
+//
+// This single-key constructor builds a 1-element key ring for backwards
+// compatibility (Phase 6.5). To use the multi-key ring, build a *keyRing
+// directly via loadKeyRingFromDir and pass it to NewWithKeyRing.
 func New(
 	users *repository.UserRepository,
 	apiKeys *repository.APIKeyRepository,
@@ -143,13 +156,9 @@ func New(
 	rdb *redis.Client,
 	privKeyB64, pubKeyB64, keyID string,
 ) (*Service, error) {
-	privKey, err := parsePrivateKey(privKeyB64)
+	ring, err := singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID)
 	if err != nil {
-		return nil, fmt.Errorf("parse JWT private key: %w", err)
-	}
-	pubKey, err := parsePublicKey(pubKeyB64)
-	if err != nil {
-		return nil, fmt.Errorf("parse JWT public key: %w", err)
+		return nil, err
 	}
 	var saR saRepo
 	if sa != nil {
@@ -161,10 +170,70 @@ func New(
 		serviceAccounts: saR,
 		audit:           audit,
 		redis:           rdb,
-		privKey:         privKey,
-		pubKey:          pubKey,
-		keyID:           keyID,
+		keys:            ring,
 	}, nil
+}
+
+// NewWithKeyRing constructs a Service from an already-built multi-key ring
+// (Phase 6.5). Server startup uses this path when JWT_KEY_RING_PATH is set,
+// loading every PEM in the directory into the ring before calling here.
+//
+// The single-key wrappers (New, NewWithFakes) remain the entry point for
+// callers that only know about one key — they internally wrap their PEMs
+// into a 1-element ring and call newKeyRing, so the in-memory shape is the
+// same as the multi-key path.
+func NewWithKeyRing(
+	users *repository.UserRepository,
+	apiKeys *repository.APIKeyRepository,
+	sa *repository.ServiceAccountRepo,
+	audit AuditEmitter,
+	rdb *redis.Client,
+	ring *keyRing,
+) (*Service, error) {
+	if ring == nil {
+		return nil, errors.New("auth: key ring is required")
+	}
+	var saR saRepo
+	if sa != nil {
+		saR = sa
+	}
+	return &Service{
+		users:           users,
+		apiKeys:         apiKeys,
+		serviceAccounts: saR,
+		audit:           audit,
+		redis:           rdb,
+		keys:            ring,
+	}, nil
+}
+
+// singleKeyRingFromB64 wraps a single base64-encoded PEM key pair into a
+// 1-element keyRing. Used by both New and NewWithFakes so the single-key
+// path stays a thin shim over the multi-key ring without forcing callers to
+// learn the new type.
+func singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID string) (*keyRing, error) {
+	if keyID == "" {
+		return nil, errors.New("auth: keyID is required for single-key ring")
+	}
+	priv, err := parsePrivateKey(privKeyB64)
+	if err != nil {
+		return nil, fmt.Errorf("parse JWT private key: %w", err)
+	}
+	pub, err := parsePublicKey(pubKeyB64)
+	if err != nil {
+		return nil, fmt.Errorf("parse JWT public key: %w", err)
+	}
+	ring, err := newKeyRing([]signingKey{{
+		kid:        keyID,
+		privateKey: priv,
+		publicKey:  pub,
+	}}, keyID)
+	if err != nil {
+		// Should not happen for a single well-formed entry; surface anyway
+		// so any future invariant break is loud.
+		return nil, fmt.Errorf("build single-key ring: %w", err)
+	}
+	return ring, nil
 }
 
 // IssueToken signs and returns a JWT for the given user with the requested access
@@ -198,8 +267,13 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		PrincipalKind: principalKind,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	tok.Header["kid"] = s.keyID
-	signed, err := tok.SignedString(s.privKey)
+	// Phase 6.5 — stamp the kid header so validators can pick the right
+	// public key from the ring without trying every one in turn. The kid
+	// itself is non-sensitive (it appears in the JWKS document) so it is
+	// safe to embed in the JWT header.
+	signingKID, signingPriv := s.keys.signer()
+	tok.Header["kid"] = signingKID
+	signed, err := tok.SignedString(signingPriv)
 	if err != nil {
 		return "", fmt.Errorf("sign token: %w", err)
 	}
@@ -215,16 +289,80 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 
 // ValidateToken parses and validates the token string, then checks the Redis
 // revocation list. Returns the parsed claims on success.
+//
+// Phase 6.5 — multi-key validation:
+//  1. If the JWT carries a `kid` header AND that kid is present in the ring,
+//     verify with that key only. This is the fast, common path.
+//  2. If the kid is missing or unknown, fall back to trying every key in the
+//     ring. Tokens minted before the kid header was stamped (pre-Phase-6.5)
+//     land on this path; a slog.Warn surfaces the fallback so operators can
+//     spot stale token issuers during a rotation window. Once every issuer
+//     stamps a kid, the warn is the operator's signal that someone is still
+//     issuing legacy tokens and they can disable the fallback path (future
+//     work).
+//
+// The fallback is bounded by the ring size (1–N keys, typically 2 during a
+// rotation window) so the worst-case is N signature verifies — cheap
+// compared to the Redis revocation check that follows.
 func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, error) {
 	var claims Claims
 	tok, err := jwt.ParseWithClaims(tokenStr, &claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-		return s.pubKey, nil
+		// Look up by kid if the JWT supplied one.
+		kid, _ := t.Header["kid"].(string)
+		if kid != "" {
+			if pub := s.keys.find(kid); pub != nil {
+				return pub, nil
+			}
+			// Kid present but not in ring — signal jwt to try the
+			// fallback path. We return the first key's public half so
+			// jwt.ParseWithClaims has something to verify against; if it
+			// fails (which is likely — the token was signed with a kid we
+			// don't know), we re-try below against every other key.
+			//
+			// Returning an error here would short-circuit the whole call
+			// before we get to try the rest of the ring, which is the
+			// opposite of what we want.
+			return s.keys.all()[0].publicKey, nil
+		}
+		// No kid in header — same fallback signal. Return the first key
+		// and let the post-parse retry loop catch the mismatch.
+		return s.keys.all()[0].publicKey, nil
 	})
 	if err != nil || !tok.Valid {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
+		// First-pass verify failed. Try every key in the ring in turn —
+		// either the issuer used a kid we did not know about (rotation
+		// race) or the JWT was minted before kids were stamped at all.
+		//
+		// The fallback re-uses the same Claims pointer so a successful
+		// retry populates the same struct. We do NOT touch ctx, the JTI
+		// revocation check, or any side-effect — those still run after
+		// the (now successful) verify below.
+		recovered, recovErr := s.validateWithFallback(tokenStr, &claims)
+		if recovErr != nil {
+			// Preserve the original error in the wrap so the operator
+			// log surface is unchanged from the pre-Phase-6.5 behaviour.
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
+		}
+		tok = recovered
+		// A fallback success means either (a) a legacy token without a
+		// kid, or (b) a token whose kid did not match any ring entry.
+		// Both are operator-visible signals during a rotation. SEC-048
+		// follow-up: bump `registry_auth_jwt_kid_fallback_total` with
+		// the reason label so operators can alert on sustained-high
+		// fallback rates without scraping logs.
+		hdrKid, _ := tok.Header["kid"].(string)
+		reason := "missing_kid"
+		if hdrKid != "" {
+			reason = "unknown_kid"
+		}
+		metrics.AuthJWTKidFallbackTotal.WithLabelValues(reason).Inc()
+		slog.WarnContext(ctx, "auth: JWT validated via ring fallback path",
+			"jwt_kid", hdrKid,
+			"reason", reason,
+		)
 	}
 
 	// Check revocation list — the key TTL matches token lifetime so an expired
@@ -962,8 +1100,56 @@ func (s *Service) DeleteAPIKey(ctx context.Context, keyID, userID uuid.UUID) err
 }
 
 // JWKS returns the public key set for JWT verification by other services.
+//
+// Phase 6.5 — every key in the ring is enumerated so external validators can
+// verify tokens minted by any kid currently in rotation. Order matches the
+// ring's internal order (deterministic, sorted by kid when loaded from disk
+// via loadKeyRingFromDir).
 func (s *Service) JWKS() JWKSResponse {
-	return JWKSResponse{Keys: []JWK{rsaToJWK(s.pubKey, s.keyID)}}
+	all := s.keys.all()
+	out := make([]JWK, 0, len(all))
+	for _, k := range all {
+		out = append(out, rsaToJWK(k.publicKey, k.kid))
+	}
+	return JWKSResponse{Keys: out}
+}
+
+// validateWithFallback retries JWT verification against every key in the
+// ring. It is called only when the first-pass kid-targeted verify failed,
+// which happens for:
+//  1. JWTs minted before the kid header was stamped (pre-Phase-6.5);
+//  2. JWTs whose kid is not in the current ring (e.g. an old key file was
+//     deleted while a token issued under it is still within its TTL — the
+//     operator should have waited for the TTL to drain first, but a
+//     well-behaved validator gracefully rejects in that case anyway, since
+//     the verify will fail against every other key in the ring).
+//
+// Returns the parsed token on success, or an error if NO key validates. The
+// caller logs a slog.Warn on success so operators see fallback hits during
+// rotation windows.
+func (s *Service) validateWithFallback(tokenStr string, claims *Claims) (*jwt.Token, error) {
+	all := s.keys.all()
+	var lastErr error
+	for _, k := range all {
+		// Reset claims on each attempt — jwt.ParseWithClaims may have left
+		// partially-populated fields from the previous (failed) attempt.
+		*claims = Claims{}
+		key := k.publicKey
+		tok, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return key, nil
+		})
+		if err == nil && tok.Valid {
+			return tok, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no key in ring validated the token")
+	}
+	return nil, lastErr
 }
 
 // CheckIPRateLimit returns ErrRateLimited when the given IP has exceeded
@@ -1032,13 +1218,21 @@ func parsePrivateKey(b64 string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode base64: %w", err)
 	}
+	return parsePrivateKeyPEM(raw)
+}
+
+// parsePrivateKeyPEM parses a raw PEM-encoded RSA private key (PKCS8 first,
+// PKCS1 fallback). Extracted so the keyring-from-disk loader can reuse the
+// same parsing logic as the legacy base64-wrapped path without going through
+// an unnecessary base64 round-trip. Never logs the key material.
+func parsePrivateKeyPEM(raw []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil {
 		return nil, errors.New("no PEM block found in private key")
 	}
 	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		// Fall back to PKCS1 format
+		// Fall back to PKCS1 format.
 		return x509.ParsePKCS1PrivateKey(block.Bytes)
 	}
 	rsaKey, ok := key.(*rsa.PrivateKey)

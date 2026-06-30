@@ -1,5 +1,7 @@
 # Security Issues
 
+> Last updated: 2026-06-30 — SEC-048 + SEC-049 logged + RESOLVED in `feat/redesign-6.5-jwks-rotation-multi-key`. SEC-048 (LOW, fallback DoS): hard cap `maxKeyRingSize = 16` in `loadKeyRingFromDir` + new `registry_auth_jwt_kid_fallback_total{reason}` counter so operators can alert on sustained-high fallback rates. SEC-049 (INFO, observability): boot-time `slog.Info "jwt key loaded"` with `(kid, pubkey_sha256, mtime)` per key so silent same-base overwrite collisions are visible; `pickDefaultSigningKID` switched from "lex greatest" to "most-recently-modified file" so naming conventions without timestamps still get the right default signer.
+>
 > Last updated: 2026-06-30 — SEC-046 / SEC-047 logged + RESOLVED in `feat/redesign-6.9-mtls-hot-reload` (REDESIGN-001 Phase 6.9). SEC-046 (INFO): added package-doc caveat clarifying that the cached-cert fallback on reload failure is the wrong channel for emergency revocation — operational revocation must flow through the CA pool / CRL, not leaf-file deletion. SEC-047 (LOW): added `TestCertCache_BadReloadFallsBackToCached` regression that pins the documented behaviour when the new cert file is malformed PEM, plus `slog.Warn` on both the stat-failure-with-cache and the reload-failure-with-cache branches so a stuck rotation is visible in the log. Both findings surfaced by the pre-PR 6.9 security-agent batch.
 >
 > Last updated: 2026-06-30 — SEC-043 RESOLVED in the same `fix/sec-040-041-042-sso-followups` branch (fix-up commit on top of `5ece50a`). Both handlers now dispatch on `service.ErrSSOSubjectMismatch` → `401 UNAUTHORIZED` with the fixed SEC-042 generic body; new `TestSSOCallback_SEC043_SubjectMismatchReturns401WithGenericBody` regression covers the OAuth path end-to-end (drives a second callback with a mutated `sub`, asserts 401 + generic body + no email leak in body OR redirect Location). SEC-041 guard tightened — now refuses whenever `ident.Subject != "" && byEmail.SSOSubject != ident.Subject`, dropping the `!= ""` precondition so an unexpected empty-subject race-winning row fails closed rather than handing back a session.
@@ -684,3 +686,29 @@ under CLAUDE.md §7 "JWT Validation."
   4. Sweep the codebase for `ClientTLSConfig(..., "")` and `ClientCreds(..., "")` to ensure no remaining empty serverName. ✅ (zero matches in production code)
 - **References:** CLAUDE.md §7 ("Client cert CN must match expected service name") + fail-closed rule; CWE-295 (Improper Certificate Validation); CWE-757 (Selection of Less-Secure Algorithm); SEC-038 (same shape, gc).
 - **Resolved:** 2026-06-29 — commit `41e9a72` on branch `fix/sec-039-clientcreds-sweep` (PR pending). Per-target serverName pinned at all 17 dial sites; `mtls.ClientCreds` fail-closed semantics enforced (insecure returned only when ALL cert paths empty); dev cert SANs in `scripts/gen-dev-certs.sh` line 55 already emit `DNS:registry-<svc>` for every required service so no dev-stack regression.
+
+### SEC-048 — JWT validation fallback "try every key" path is unbounded and unmetered
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-30
+- **Description:** `Service.ValidateToken` (services/auth/internal/service/auth.go:306) falls through to `validateWithFallback` (auth.go:983) when the JWT carries a `kid` not in the ring OR no `kid` at all. The fallback iterates every key in the ring and runs `jwt.ParseWithClaims` against each public half (~2–5 ms RSA verify per attempt). At Phase 6.5 ring sizes (1–N, expected 2–3 during a rotation window) the absolute cost is small (~6–15 ms), but the design has no upper bound: an attacker who can submit JWTs with arbitrary `kid` values forces the service to pay the full N-verify cost on every reject. Combined with the `slog.WarnContext` emitted on every successful fallback hit (auth.go:353), a flood of bogus-kid tokens also produces an unbounded warn-log volume that can mask real rotation-window signal. No counter / rate limit. Also note: on a kid-miss the keyfunc at auth.go:327 returns `s.keys.all()[0].publicKey` (the first key, deterministic since the ring is sorted by kid) — this is NOT a kid-spoof vector because `jwt.ParseWithClaims` will fail signature verify and the post-parse fallback loop re-tries the rest of the ring; an attacker cannot bypass verification, only force CPU work.
+- **Remediation:**
+  1. Add a `auth_jwt_fallback_total` counter labelled by reason ("kid_missing" / "kid_unknown") so the rate is visible in Prometheus.
+  2. Cap the fallback search to a hard ring-size limit (e.g. reject the token outright once `len(ring) > 8`).
+  3. Once every issuer stamps a kid (post-rotation grace window), add a feature flag `JWT_REJECT_MISSING_KID=true` to skip the no-kid fallback entirely (the code comment at auth.go:300 already foreshadows this).
+- **References:** CLAUDE.md §13; CWE-400 (Uncontrolled Resource Consumption); CWE-307.
+
+### SEC-049 — kid derived from PEM file base name allows silent collision on operator typo; default signer is lex-greatest not most-recent
+- **Severity:** INFO
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-06-30
+- **Description:** Two related operator-ergonomics issues in `loadKeyRingFromDir` (services/auth/internal/service/keyring.go:183) and `pickDefaultSigningKID` (keyring.go:328).
+  - **49a (overwrite):** `kid` is derived from the filename minus extension. `newKeyRing` rejects duplicate kids at startup, so two files with the same base name in the same dir error loudly. **However**, a realistic scenario is silent overwrite: an operator drops `2026-07-15.pem` into the ring directory not realising a key with that same base name already exists from a prior extraction; the filesystem-level replacement substitutes new key material under an unchanged kid. Validators that have cached the old JWKS will then fail to verify tokens signed by the new private half once the JWKS cache refreshes, and the rotation "works" only until the TTL expires. No fingerprint / mtime check surfaces the swap in the boot log.
+  - **49b (default kid choice):** `pickDefaultSigningKID` (keyring.go:328) returns the lexicographically greatest kid when `JWT_SIGNING_KID` is empty. For operators who name keys `prod-a.pem`, `prod-b.pem`, `prod-c.pem`, the default picks `prod-c.pem` — which may not be the most recently added. The agent's comment ("timestamps or ULIDs give automatic promotion") is correct guidance, but the code does not enforce it; a freeform naming convention can sign new tokens with an old key by default.
+- **Remediation:**
+  1. At startup, log `(kid, sha256(publicKey)[:8])` for every key in the ring so an inadvertent overwrite shows up as a SHA change in the next boot log. Extend the existing `slog.Info("JWT key ring loaded", ...)` call at services/auth/internal/server/server.go:374.
+  2. Document the naming-convention requirement in `services/auth/.env.example` next to `JWT_KEY_RING_PATH` (date-prefix or ULID, never freeform).
+  3. Consider switching the default signer from "lex-greatest" to "most-recently-modified" mtime (already captured in `loaded.modTime` at keyring.go:244 but currently only used as a tie-break that never fires). Matches operator intuition ("the key I just added") regardless of naming convention.
+- **References:** CLAUDE.md §7 (JWT validation, kid-targeted lookup); CWE-1188 (Insecure Default Initialization); CWE-345 (Insufficient Verification of Data Authenticity).

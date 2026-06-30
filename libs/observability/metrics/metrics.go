@@ -70,6 +70,19 @@ var (
 		Name: "registry_grpc_peer_cn_allowlist_enabled",
 		Help: "1 if MTLS_PEER_CN_ALLOWLIST is non-empty and enforcement is active, 0 otherwise.",
 	})
+
+	// AuthJWTKidFallbackTotal counts JWT validations that fell back to the
+	// "try every key in the ring" path because the token's `kid` header was
+	// missing or didn't match any key (REDESIGN-001 Phase 6.5, SEC-048
+	// follow-up). `reason` is "missing_kid" or "unknown_kid". A sustained
+	// high rate indicates clients with stale JWKS caches or — at very high
+	// rates with a populated ring — a DoS probe trying to amplify the
+	// per-RPC RSA verify cost. Set an alert at sustained > 1 fallback per
+	// 100 RPCs.
+	AuthJWTKidFallbackTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "registry_auth_jwt_kid_fallback_total",
+		Help: "JWT validations that fell back to ring-wide retry because the kid was missing or unknown.",
+	}, []string{"reason"})
 )
 
 // Handler returns an http.Handler that serves the default Prometheus registry.

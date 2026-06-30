@@ -78,7 +78,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// audit is nil for now; the full AuditEmitter wiring (RabbitMQ publish or
 	// direct audit-service call) ships in T13/T14. Cross-tenant attempts are
 	// still rejected — the audit emission is best-effort.
-	svc, err := service.New(users, apiKeys, sa, nil, rdb, cfg.JWTPrivateKeyB64, cfg.JWTPublicKeyB64, cfg.JWTKeyID)
+	//
+	// Phase 6.5 — branch on JWT_KEY_RING_PATH to pick between the legacy
+	// single-key constructor and the multi-key ring constructor. Config-
+	// layer validation already guarantees exactly one of the two paths is
+	// active, so we do not need to defensively check both.
+	svc, err := buildAuthService(users, apiKeys, sa, rdb, cfg)
 	if err != nil {
 		return fmt.Errorf("init service: %w", err)
 	}
@@ -341,6 +346,44 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildAuthService picks the right service constructor for the configured
+// JWT-key posture (Phase 6.5). When JWTKeyRingPath is set, we load every PEM
+// in the directory into a ring and hand it to NewWithKeyRing; otherwise we
+// fall through to the legacy single-key New constructor.
+//
+// Fails loud on every error path — per CLAUDE.md §7, an unreadable ring
+// directory must NOT silently fall back to single-key mode.
+func buildAuthService(
+	users *repository.UserRepository,
+	apiKeys *repository.APIKeyRepository,
+	saRepo *repository.ServiceAccountRepo,
+	rdb *redis.Client,
+	cfg *config.Config,
+) (*service.Service, error) {
+	if cfg.JWTKeyRingPath == "" {
+		// Legacy single-key path — exactly what the pre-Phase-6.5 server
+		// did. Internally still builds a 1-element ring so the runtime
+		// behaviour is identical to the multi-key path.
+		return service.New(users, apiKeys, saRepo, nil, rdb,
+			cfg.JWTPrivateKeyB64, cfg.JWTPublicKeyB64, cfg.JWTKeyID)
+	}
+	// Multi-key path: load every PEM in the directory, build a ring, hand
+	// it to the ring-aware constructor. The signing kid is either the
+	// operator's nomination (JWT_SIGNING_KID) or — when empty — the
+	// lexicographically-greatest kid (auto-promotion on restart for
+	// monotonic naming conventions).
+	ring, err := service.LoadKeyRing(cfg.JWTKeyRingPath, cfg.JWTSigningKID)
+	if err != nil {
+		return nil, fmt.Errorf("load JWT key ring: %w", err)
+	}
+	slog.Info("JWT key ring loaded",
+		"path", cfg.JWTKeyRingPath,
+		"signing_kid", ring.SigningKID(),
+		"kid_count", ring.Size(),
+	)
+	return service.NewWithKeyRing(users, apiKeys, saRepo, nil, rdb, ring)
 }
 
 // runMigrations opens a temporary *sql.DB, applies goose migrations, then closes it.

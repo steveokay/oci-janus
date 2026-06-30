@@ -20,11 +20,39 @@ type Config struct {
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
 	RedisDB       int    `mapstructure:"REDIS_DB"`
 
-	// JWT RS256 signing keys — base64-encoded PEM, never stored in plaintext
+	// JWT RS256 signing keys — base64-encoded PEM, never stored in plaintext.
+	//
+	// Phase 6.5 (multi-key rotation prep): these three env vars remain the
+	// single-key path used by every existing deployment. To opt into the
+	// multi-key ring set JWTKeyRingPath below; when it is set, these three
+	// env vars become optional (a single-key ring is built from the
+	// directory instead).
 	JWTPrivateKeyB64 string `mapstructure:"JWT_PRIVATE_KEY_B64"`
 	JWTPublicKeyB64  string `mapstructure:"JWT_PUBLIC_KEY_B64"`
-	// JWTKeyID is the kid header value used for key rotation via JWKS
+	// JWTKeyID is the kid header value used for key rotation via JWKS.
+	// Required only on the single-key path.
 	JWTKeyID string `mapstructure:"JWT_KEY_ID"`
+
+	// REDESIGN-001 Phase 6.5 — multi-key JWT ring for online rotation.
+	//
+	// JWTKeyRingPath is the optional path to a directory of PEM-encoded RSA
+	// private keys. Each file becomes one ring entry; the file's base name
+	// (without extension) is the kid. When set, the ring REPLACES the
+	// single-key trio above: signing uses the kid named in JWTSigningKID
+	// (or the lexicographically-greatest kid if JWTSigningKID is empty),
+	// validation accepts any kid in the ring, and the JWKS endpoint
+	// enumerates every public key.
+	//
+	// Per CLAUDE.md §7: if JWTKeyRingPath is set but unreadable, contains
+	// no PEM files, or contains a malformed PEM, the service fails to
+	// start. Silently falling back to single-key mode would defeat the
+	// rotation surface.
+	JWTKeyRingPath string `mapstructure:"JWT_KEY_RING_PATH"`
+	// JWTSigningKID nominates which kid in the ring signs new tokens.
+	// Optional — empty defaults to the lexicographically-greatest kid in
+	// the ring, so operators using a monotonic naming convention
+	// (timestamps, ULIDs) get auto-promotion on restart.
+	JWTSigningKID string `mapstructure:"JWT_SIGNING_KID"`
 
 	// DevDefaultTenantID is used in local dev when no X-Tenant-ID header is present.
 	// Must not be set in production.
@@ -156,11 +184,25 @@ func Load() (*Config, error) {
 func validate(cfg *Config) error {
 	// mTLS cert paths are required in production but optional for local dev.
 	// The server will warn and run without TLS if they are absent.
-	return loader.RequireFields(map[string]string{
-		"DB_DSN":              cfg.DBDSN,
-		"REDIS_ADDR":          cfg.RedisAddr,
-		"JWT_PRIVATE_KEY_B64": cfg.JWTPrivateKeyB64,
-		"JWT_PUBLIC_KEY_B64":  cfg.JWTPublicKeyB64,
-		"JWT_KEY_ID":          cfg.JWTKeyID,
-	})
+	required := map[string]string{
+		"DB_DSN":     cfg.DBDSN,
+		"REDIS_ADDR": cfg.RedisAddr,
+	}
+	// Phase 6.5 — JWT key material can come from either the single-key
+	// trio (JWT_PRIVATE_KEY_B64 + JWT_PUBLIC_KEY_B64 + JWT_KEY_ID) OR from
+	// JWT_KEY_RING_PATH. Exactly one must be present; mixing them is
+	// rejected so the operator cannot end up with two competing key sources
+	// and a subtle bug about which one wins.
+	if cfg.JWTKeyRingPath == "" {
+		required["JWT_PRIVATE_KEY_B64"] = cfg.JWTPrivateKeyB64
+		required["JWT_PUBLIC_KEY_B64"] = cfg.JWTPublicKeyB64
+		required["JWT_KEY_ID"] = cfg.JWTKeyID
+	} else {
+		// Multi-key path: forbid the single-key envs so there is exactly
+		// one source of truth for the active signing material.
+		if cfg.JWTPrivateKeyB64 != "" || cfg.JWTPublicKeyB64 != "" || cfg.JWTKeyID != "" {
+			return fmt.Errorf("invalid config: JWT_KEY_RING_PATH is set; JWT_PRIVATE_KEY_B64 / JWT_PUBLIC_KEY_B64 / JWT_KEY_ID must be empty (pick exactly one path)")
+		}
+	}
+	return loader.RequireFields(required)
 }

@@ -160,3 +160,23 @@ func TestLoad_multipleMissingFields_reportsAll(t *testing.T) {
 		}
 	}
 }
+
+// TestLoad_RejectsMixedJWTConfig is the SEC-049 / qa-agent regression: when
+// JWT_KEY_RING_PATH is set, all three legacy single-key vars
+// (JWT_PRIVATE_KEY_B64, JWT_PUBLIC_KEY_B64, JWT_KEY_ID) MUST be empty.
+// Mixing the two paths is a misconfiguration (which signing key is real?);
+// Load() must reject it with a clear error rather than silently fall back to
+// one path or the other.
+func TestLoad_RejectsMixedJWTConfig(t *testing.T) {
+	setMinimalValidEnv(t)
+	// Operator set a ring path AND left the legacy vars populated by mistake.
+	t.Setenv("JWT_KEY_RING_PATH", "/etc/registry/keys")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to reject mixed legacy + ring config, got nil")
+	}
+	if !strings.Contains(err.Error(), "JWT_KEY_RING_PATH") {
+		t.Errorf("error must name JWT_KEY_RING_PATH so the operator knows which var to clear: %v", err)
+	}
+}
