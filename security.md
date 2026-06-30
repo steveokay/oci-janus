@@ -1,5 +1,9 @@
 # Security Issues
 
+> Last updated: 2026-06-30 — SEC-043 RESOLVED in the same `fix/sec-040-041-042-sso-followups` branch (fix-up commit on top of `5ece50a`). Both handlers now dispatch on `service.ErrSSOSubjectMismatch` → `401 UNAUTHORIZED` with the fixed SEC-042 generic body; new `TestSSOCallback_SEC043_SubjectMismatchReturns401WithGenericBody` regression covers the OAuth path end-to-end (drives a second callback with a mutated `sub`, asserts 401 + generic body + no email leak in body OR redirect Location). SEC-041 guard tightened — now refuses whenever `ident.Subject != "" && byEmail.SSOSubject != ident.Subject`, dropping the `!= ""` precondition so an unexpected empty-subject race-winning row fails closed rather than handing back a session.
+>
+> Last updated: 2026-06-30 — SEC-043 logged (MEDIUM, blocker for `fix/sec-040-041-042-sso-followups` PR). Service-layer fixes for SEC-040/041/042 are correct, but neither the OAuth (`services/auth/internal/handler/sso.go:304`) nor the SAML (`services/auth/internal/handler/saml.go:315`) handler maps `service.ErrSSOSubjectMismatch`, so a subject-mismatch SSO callback now surfaces as `500 INTERNAL` (with the bare error logged at ERROR) instead of a clean `401 UNAUTHORIZED`. The email-enumeration objective of SEC-042 is still met (the email no longer rides the wire), but the user-facing posture and operator-log signal both regress. Also flagged: SEC-041 fix only fires when `byEmail.SSOSubject != ""`; if a parallel callback writes the row with an empty subject, this caller is still handed a session without subject verification (narrower than the original SEC-041 window but the same shape).
+>
 > Last updated: 2026-06-29 — SEC-040/041/042 logged (all MEDIUM/LOW from Phase 5.5 SSO subject-binding review) — `GetUserBySSOSubject` missing tenant filter (multi-mode boundary blur), race-recovery skips subject-mismatch reconciliation, and rejection error message leaks "account exists for email X" (email enumeration). Accepted as should-fix follow-ups so PR #195 could ship per cadence; all three remain OPEN.
 >
 > Last updated: 2026-06-29 — SEC-039 logged + RESOLVED (HIGH, same shape as SEC-038 across services/core, scanner, proxy, management — 17 dial sites missing serverName pin + silent insecure fallback on TLS load error; fixed by commit `41e9a72` on branch `fix/sec-039-clientcreds-sweep`, PR pending).
@@ -39,7 +43,7 @@
 
 ## Open Issues
 
-> 3 OPEN findings as of 2026-06-29: SEC-040, SEC-041, SEC-042 — all surfaced by the security-agent during Phase 5.5 (SSO subject-binding, PR #195) review. Accepted as should-fix follow-ups so #195 could ship per cadence. Full descriptions below in the SEC-NNN section.
+> 0 OPEN SEC findings as of 2026-06-30 — SEC-040, SEC-041, SEC-042, SEC-043 all RESOLVED in `fix/sec-040-041-042-sso-followups` (PR pending). See SEC-NNN entries below for full triage notes.
 >
 > Backend feature gaps (KMS signing backends, Notary v2, etc.) are tracked in
 > `status.md` Sprint 6 — those are unimplemented features rather than
@@ -47,30 +51,57 @@
 
 ### SEC-040 — `GetUserBySSOSubject` missing tenant filter
 - **Severity:** MEDIUM
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `services/auth`
 - **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Resolved:** 2026-06-30 — branch `fix/sec-040-041-042-sso-followups`. Migration `20260630120000_users_sso_subject_tenant_filter.sql` drops the global `(provider, subject)` partial index and recreates as `idx_users_sso_subject_tenant` over `(tenant_id, sso_provider_id, sso_subject) WHERE sso_subject IS NOT NULL`. `GetUserBySSOSubject` signature gains `tenantID`; `EnsureSSOUser` threads `resolvedTenantID` through both call sites (Step 1 fast-path + race-recovery fallback). Regression test `TestSSO_SEC040_TenantFilterOnSubjectLookup` confirms the same `(provider, subject)` tuple in two tenants now produces two distinct users.
 - **Description:** The Phase 5.5 partial-index lookup `idx_users_sso_subject ON users (sso_provider_id, sso_subject) WHERE sso_subject IS NOT NULL` is global, not tenant-scoped. `GetUserBySSOSubject(ctx, providerID, subject)` matches purely on `(provider_id, subject)`. In single-tenant mode this is fine — there is only one tenant — but `DEPLOYMENT_MODE=multi` keeps the existing SaaS posture, and if two tenants ever shared an IdP (e.g. both use Google Workspace OAuth), a recycled subject id could surface a user from the wrong tenant.
 - **Remediation:** Add `tenant_id` filter to the lookup and to the partial-index definition. Existing migration `20260629222534_users_sso_subject.sql` can be amended via a follow-up migration that drops + recreates the index with the tenant column. The `EnsureSSOUser` call site already has `tenantID` in scope — propagate it through.
 - **References:** REDESIGN-001 Phase 5.5 (`.claude/plans/2026-06-26-single-tenant-redesign.md`), CLAUDE.md §9 (tenant isolation), CWE-639 (Authorization Bypass Through User-Controlled Key).
 
 ### SEC-041 — SSO race-recovery skips subject-mismatch reconciliation
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `services/auth`
 - **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Resolved:** 2026-06-30 — branch `fix/sec-040-041-042-sso-followups`. `EnsureSSOUser` now re-verifies the recovered row's subject on the email-fallback recovery path; rejection wraps `ErrSSOSubjectMismatch` with the SEC-042 generic body. Guard tightened per security-agent review: refuses whenever `ident.Subject != "" && byEmail.SSOSubject != ident.Subject` — empty-subject row no longer earns a free pass. Regression test `TestSSO_SEC041_RaceRecoveryRefusesSubjectMismatch` exercises the path via a `failCreateSSOWith` injection.
 - **Description:** When two concurrent SSO logins for the same subject hit `CreateSSOUser` and one wins the unique-index race, the loser falls back to `GetUserBySSOSubject(ctx, providerID, subject)`. The recovered row is returned without re-verifying that its `sso_subject` actually equals the requested subject. The race window is narrow (concurrent first-login of the same identity is exceptional), but if a buggy IdP or test harness emits two different subjects for the same email in quick succession, the loser could be handed a row whose subject was set by the winner's auth context.
 - **Remediation:** After the recovery query returns, check `loadedUser.SSOSubject == subject`; if mismatched, return a clear "subject mismatch — contact your admin" error instead of returning a session for the wrong identity. Single statement, no schema change.
 - **References:** REDESIGN-001 Phase 5.5, CWE-362 (Concurrent Execution using Shared Resource with Improper Synchronization).
 
 ### SEC-042 — SSO rejection message leaks "account exists for email X" — email enumeration
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `services/auth`
 - **Raised:** 2026-06-29 (Phase 5.5 review on PR #195)
+- **Resolved:** 2026-06-30 — branch `fix/sec-040-041-042-sso-followups`. Generic rejection body: "this SSO identity is not linked to a registered account — contact your admin to link it." Email stripped from all wrapped errors on the SSO path (the well-trodden subject-mismatch branch, the race-recovery email-fallback, and two `lookup human user...` wrap sites). Server-side `slog.WarnContext` still emits the email for operator debugging. SEC-043 (companion finding) ensures both the OAuth and SAML handlers actually dispatch on `ErrSSOSubjectMismatch` so the generic body reaches the wire. Regression coverage: `TestSSO_RecycledEmail_Rejected` updated with `NotContains(err.Error(), email)` assertion + `TestSSOCallback_SEC043_SubjectMismatchReturns401WithGenericBody` covers the full HTTP path.
 - **Description:** When an SSO login arrives with a fresh `subject` but the email already maps to a different existing user, `EnsureSSOUser` rejects with a message that echoes the email back ("An account exists for `<email>`; ask your admin to link it to your new SSO identity"). An attacker controlling an IdP they can spin up freely (Auth0 trial, self-hosted Keycloak) can probe which email addresses are registered with the deployment by issuing logins for emails of interest and reading the rejection string.
 - **Remediation:** Collapse to a generic message that does not echo the email: "This SSO identity is not linked to a registered account — contact your admin to link it." Server-side log can still include the email (we control that audience). Same shape as PENTEST-005's "collapse auth failure variants into one 401" rule applied at the SSO surface.
 - **References:** REDESIGN-001 Phase 5.5, OWASP Authentication Cheat Sheet (account enumeration), CWE-204 (Observable Response Discrepancy).
+
+### SEC-043 — SSO handlers don't map `ErrSSOSubjectMismatch`; mismatch surfaces as `500 INTERNAL`
+- **Severity:** MEDIUM
+- **Status:** RESOLVED (same branch)
+- **Service:** `services/auth`
+- **Raised:** 2026-06-30 (review of `fix/sec-040-041-042-sso-followups`, commit `5ece50a`)
+- **Description:** The service-layer fixes for SEC-040/041/042 in `services/auth/internal/service/sso.go` are correct — the rejection error wraps `ErrSSOSubjectMismatch` with a generic, non-enumerating message. But neither HTTP handler `errors.Is`-dispatches on that sentinel:
+  - `services/auth/internal/handler/sso.go:304-318` (OAuth callback) only switches on `ErrEmailNotVerified`, `ErrAutoProvisionDisabled`, `ErrAccountDisabled` then falls through to `slog.ErrorContext("sso: EnsureSSOUser", "err", err)` + `writeError(500, "INTERNAL", "internal error")`.
+  - `services/auth/internal/handler/saml.go:315-334` (SAML ACS) has the same shape and the same default branch.
+
+  Consequences:
+  1. A legitimate recycled-email/mismatch rejection — the well-trodden case SEC-042 was raised against — now returns `500 INTERNAL` instead of a clean `401 UNAUTHORIZED`. End-users see a generic server error and have nothing actionable. The SEC-042 generic message (`this SSO identity is not linked to a registered account — contact your admin to link it`) is built but never rendered.
+  2. The server-side log line becomes `slog.ErrorContext("sso: EnsureSSOUser", "err", "sso subject does not match the persisted binding for this email: this SSO identity is not linked..."` — alert-noise (ERROR level) for what is an expected client-side authentication outcome, not a server fault.
+  3. Subtle: the `ErrSSOSubjectMismatch.Error()` string contains the phrase "the persisted binding for this email" — when the wrapped error is logged at ERROR level on every mismatch, operators reading the log get the email correlated via the structured field anyway, but the SLO/alert pipeline now treats every email-enumeration probe as a server outage.
+
+  Regression tests for SEC-040/041/042 (`TestSSO_SEC040_TenantFilterOnSubjectLookup`, `TestSSO_SEC041_RaceRecoveryRefusesSubjectMismatch`, `TestSSO_RecycledEmail_Rejected`) all assert at the **service** layer (`require.ErrorIs(err, ErrSSOSubjectMismatch)`) — they do not exercise the HTTP handler dispatch, so the gap is not caught by CI.
+
+  Secondary (smaller) gap on SEC-041: the race-recovery mismatch check at `sso.go:510` is gated on `byEmail.SSOSubject != ""`. If a parallel callback created the row through a path that left `sso_subject` empty (e.g. a future code path that backfills subject lazily), the caller still gets a session for that row without subject verification. The current code only creates rows with subject set so the window is closed in practice, but the guard isn't strictly tight.
+- **Remediation:**
+  1. Add an `errors.Is(err, service.ErrSSOSubjectMismatch)` case to **both** `services/auth/internal/handler/sso.go` (OAuth callback) and `services/auth/internal/handler/saml.go` (SAML ACS). Map to `writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "<generic SEC-042 message>")` — do NOT propagate `err.Error()`, render a fixed string so the wrapped tail can't leak.
+  2. Drop the log level for this branch to `slog.WarnContext` (it's a client-side authentication outcome, not a server fault).
+  3. Add handler-level regression tests in `services/auth/internal/handler/sso_test.go` and `saml_test.go` that drive an SSO callback with a mismatched subject and assert `401 UNAUTHORIZED` + body string contains the generic phrasing + body does NOT contain the email.
+  4. Tighten the SEC-041 guard to refuse whenever `ident.Subject != "" && byEmail.SSOSubject != ident.Subject` (drop the `byEmail.SSOSubject != ""` precondition; empty-subject race-recovery should still re-bind via `SetSSOSubject` after verifying no other row in the tenant already claims `ident.Subject`).
+- **References:** SEC-040, SEC-041, SEC-042, CLAUDE.md §7 (HTTP Bearer Auth — clean 401 vs 500), CWE-755 (Improper Handling of Exceptional Conditions), CWE-209 (Information Exposure Through an Error Message — partial; the email itself is stripped, but the 500 status code is itself a signal).
 
 ---
 

@@ -460,9 +460,13 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 			return nil, nil, ErrAutoProvisionDisabled
 		}
 	default:
-		// SEC-042 — keep the email out of the error chain. The DB error type
-		// is still propagated; operators can correlate via the SSO callback
-		// audit event which logs the email server-side.
+		// SEC-042 — keep the email out of the error chain. The DB error
+		// type is still propagated; the handler logs `provider_id` + the
+		// wrapped err at error level so operators can correlate, but the
+		// email itself only appears at the IdP-side audit log (out of
+		// our scope) — there is intentionally no server-side log of the
+		// email at this branch since a DB outage shouldn't be a vector
+		// for enumerating which addresses are registered.
 		return nil, nil, fmt.Errorf("lookup human user by email: %w", err)
 	}
 
@@ -507,9 +511,15 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 				// and refuse with the same generic message as the
 				// well-trodden subject-mismatch path so the rejection shape
 				// is identical and non-enumerating.
-				if ident.Subject != "" && byEmail.SSOSubject != "" && byEmail.SSOSubject != ident.Subject {
+				//
+				// Guard intentionally does NOT require `byEmail.SSOSubject !=
+				// ""` — fail-closed if the recovered row is in an unexpected
+				// shape (e.g. a partially-written race-winning row). Tightened
+				// per the security-agent's pre-PR review.
+				if ident.Subject != "" && byEmail.SSOSubject != ident.Subject {
 					slog.WarnContext(ctx, "SSO race recovery: subject mismatch on email-recovered row — refusing login",
-						"provider_id", p.ProviderID, "user_id", byEmail.ID, "email", ident.Email)
+						"provider_id", p.ProviderID, "user_id", byEmail.ID, "email", ident.Email,
+						"row_subject_empty", byEmail.SSOSubject == "")
 					return nil, nil, fmt.Errorf("%w: this SSO identity is not linked to a registered account — contact your admin to link it",
 						ErrSSOSubjectMismatch)
 				}
