@@ -473,6 +473,11 @@ type ValidateAPIKeyOpts struct {
 // exposed; all call sites must use this method.
 func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (*ValidatedKey, error) {
 	// 1. Key lookup and baseline validation (shared between human and SA paths).
+	//    Always re-read the row from the DB — even on a cache HIT — so that
+	//    is_active / expires_at flips propagate within one TTL window without
+	//    relying solely on the explicit invalidation hooks. The DB row read is
+	//    sub-millisecond; what we save with the cache is the ~50-100 ms
+	//    Argon2id verify, not the row fetch.
 	key, err := s.apiKeys.GetByID(ctx, opts.KeyID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -480,16 +485,44 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 		}
 		return nil, err
 	}
-	// Verify the secret FIRST (before expiry / is_active checks) so an attacker
-	// who guesses or knows a key id cannot distinguish "wrong secret" (fast)
-	// from "expired" (also fast) by timing. argon2 is intentionally slow
-	// (~100ms); making every reject path pay that cost neutralises the oracle.
-	// PENTEST-004 applies the same pattern to AuthenticateUser.
+
+	// 1a. Cache fast path (REDESIGN-001 Phase 6.7).
+	//
+	// If we have previously verified this exact (key_id, secret) pair within
+	// the last apiKeyCacheTTL, skip the Argon2id step. The cache key embeds
+	// sha256(secret) so a stolen key_id alone cannot surface a HIT.
+	//
+	// We still apply every row-state and SA-state check below before
+	// returning — the cache only attests to the secret match. A HIT lets us
+	// pass the expiry / is_active / SA-disabled gates without paying Argon2.
+	//
+	// On any cache failure (Redis down, malformed entry) we silently fall
+	// through to the cold path — the cache is an optimisation, never a gate.
+	if cached, ok := s.getCachedValidatedKey(ctx, opts.KeyID, opts.RawSecret); ok {
+		vk, hitErr := s.applyKeyChecksFromCache(ctx, key, cached, opts.RequestTenantID)
+		// applyKeyChecksFromCache returns (nil, nil) only when the cached
+		// payload does not match the row's owner shape (extremely unlikely
+		// but defensible). In that one case we fall through to the cold
+		// path so the request still completes correctly.
+		if hitErr != nil || vk != nil {
+			return vk, hitErr
+		}
+	}
+
+	// 2. Cold path: verify the secret FIRST (before expiry / is_active checks)
+	// so an attacker who guesses or knows a key id cannot distinguish "wrong
+	// secret" (fast) from "expired" (also fast) by timing. argon2 is
+	// intentionally slow (~100ms); making every reject path pay that cost
+	// neutralises the oracle. PENTEST-004 applies the same pattern to
+	// AuthenticateUser.
 	ok, err := argon2pkg.Verify(opts.RawSecret, key.KeyHash)
 	if err != nil {
 		return nil, fmt.Errorf("verify key: %w", err)
 	}
 	if !ok {
+		// Never write a negative cache entry — every wrong-secret attempt
+		// must continue to pay the full Argon2 cost so brute-force attackers
+		// cannot mass-test cheaply (Phase 6.7 security invariant).
 		return nil, ErrInvalidCredentials
 	}
 
@@ -502,15 +535,108 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 		return nil, ErrInvalidCredentials
 	}
 
-	// 2. Branch on owner type.
+	// 3. Branch on owner type. Each successful branch additionally writes the
+	// result to the cache so the next call within apiKeyCacheTTL bypasses
+	// Argon2. The write is best-effort: a Redis failure logs at WARN and
+	// continues (the next call simply re-pays the Argon2 cost).
 	switch {
 	case key.ServiceAccountID != nil:
 		// SA-owned key: load the SA, apply disable check, cross-tenant guard,
 		// and scope intersection.
-		return s.validateSAKey(ctx, key, opts.RequestTenantID)
+		vk, err := s.validateSAKey(ctx, key, opts.RequestTenantID)
+		if err == nil && vk != nil {
+			s.putCachedValidatedKey(ctx, opts.KeyID, opts.RawSecret, vk)
+		}
+		return vk, err
 
 	case key.UserID != nil:
 		// Human-owned key: fire-and-forget last_used update, return immediately.
+		s.touchLastUsedAsync(key.ID)
+		vk := &ValidatedKey{
+			UserID:          *key.UserID,
+			TenantID:        key.TenantID,
+			Access:          mapScopesToAccess(key.Scopes),
+			PrincipalKind:   "human",
+			EffectiveScopes: key.Scopes,
+		}
+		s.putCachedValidatedKey(ctx, opts.KeyID, opts.RawSecret, vk)
+		return vk, nil
+
+	default:
+		// Both owner columns are NULL — violates the DB CHECK constraint but
+		// defend at the application layer as well.
+		return nil, fmt.Errorf("api_key %s has null owner on both sides — database constraint violated", key.ID)
+	}
+}
+
+// applyKeyChecksFromCache runs every row-state / SA-state gate that the cold
+// path runs after a successful Argon2 verify, using a previously cached
+// identity instead of re-deriving it from the DB. Returns a ValidatedKey
+// when every gate passes, or an error matching the cold path's behaviour
+// (ErrKeyExpired, ErrInvalidCredentials, ErrAccountDisabled, etc.).
+//
+// Returns (nil, nil) only when the cached payload's owner shape does not
+// match the row (e.g. cache built for a human key but the row has since
+// been altered to look SA-owned — extremely unlikely but defensible).
+// The caller falls through to the cold path on a (nil, nil) return.
+//
+// This is the central "stale cache cannot outlive revocation" enforcement
+// point: even though the secret-match has been proven by the cache HIT,
+// every other gate runs from the fresh DB row.
+func (s *Service) applyKeyChecksFromCache(ctx context.Context, key *repository.APIKey, cached *cachedValidatedKey, requestTenantID *uuid.UUID) (*ValidatedKey, error) {
+	// Row-state gates — identical ordering to the cold path so behaviour is
+	// observably the same regardless of whether the request hit the cache.
+	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
+		return nil, ErrKeyExpired
+	}
+	if !key.IsActive {
+		return nil, ErrInvalidCredentials
+	}
+
+	switch {
+	case key.ServiceAccountID != nil:
+		// SA branch: rerun the SA disable / cross-tenant / scope-intersection
+		// checks from the live SA row. The cache supplied EffectiveScopes,
+		// but we deliberately do not trust it — the SA's AllowedScopes may
+		// have been narrowed since the cache was written, in which case the
+		// effective set must shrink to match.
+		if s.serviceAccounts == nil {
+			return nil, fmt.Errorf("%w: service-account key support requires a ServiceAccountRepo", ErrInvalidCredentials)
+		}
+		sa, err := s.serviceAccounts.Get(ctx, *key.ServiceAccountID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, ErrInvalidCredentials
+			}
+			return nil, fmt.Errorf("lookup service account: %w", err)
+		}
+		if sa.DisabledAt != nil {
+			return nil, ErrAccountDisabled
+		}
+		if requestTenantID != nil && *requestTenantID != sa.TenantID {
+			s.emitCrossTenantAttempt(ctx, sa, key, requestTenantID)
+			return nil, ErrInvalidCredentials
+		}
+		eff := intersectScopes(key.Scopes, sa.AllowedScopes)
+		if len(eff) == 0 {
+			return nil, fmt.Errorf("%w: all key scopes removed from SA allowlist; rotate key", ErrInvalidCredentials)
+		}
+		s.touchLastUsedAsync(key.ID)
+		return &ValidatedKey{
+			UserID:           sa.ShadowUserID,
+			TenantID:         sa.TenantID,
+			Access:           mapScopesToAccess(eff),
+			PrincipalKind:    "service_account",
+			ServiceAccountID: &sa.ID,
+			EffectiveScopes:  eff,
+		}, nil
+
+	case key.UserID != nil:
+		// Human branch: row already passed expiry + active checks above; no
+		// further state to consult. Assemble from the DB row (not the cache)
+		// so a stale EffectiveScopes — for example if an operator narrowed
+		// the key's scopes after the cache entry was written — cannot leak.
+		_ = cached
 		s.touchLastUsedAsync(key.ID)
 		return &ValidatedKey{
 			UserID:          *key.UserID,
@@ -521,9 +647,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 		}, nil
 
 	default:
-		// Both owner columns are NULL — violates the DB CHECK constraint but
-		// defend at the application layer as well.
-		return nil, fmt.Errorf("api_key %s has null owner on both sides — database constraint violated", key.ID)
+		// Cached entry refers to a row that now has neither owner set —
+		// fall through to the cold path so the regular DB-constraint
+		// violation error message fires.
+		return nil, nil
 	}
 }
 
@@ -819,8 +946,19 @@ func (s *Service) ListAPIKeys(ctx context.Context, userID uuid.UUID) ([]*reposit
 }
 
 // DeleteAPIKey soft-deletes an API key owned by the given user.
+//
+// REDESIGN-001 Phase 6.7: after a successful soft-delete, the API-key
+// validation cache for this keyID is invalidated so a CI bot still holding
+// the secret cannot keep authenticating off a cached HIT for the rest of the
+// TTL window. The HIT path also re-reads the row's is_active flag as a
+// backstop, so a failure to invalidate cleanly is non-fatal — the worst
+// case is up to apiKeyCacheTTL of staleness, bounded by the row check.
 func (s *Service) DeleteAPIKey(ctx context.Context, keyID, userID uuid.UUID) error {
-	return s.apiKeys.Delete(ctx, keyID, userID)
+	if err := s.apiKeys.Delete(ctx, keyID, userID); err != nil {
+		return err
+	}
+	s.InvalidateAPIKeyCache(ctx, keyID)
+	return nil
 }
 
 // JWKS returns the public key set for JWT verification by other services.

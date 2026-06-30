@@ -84,6 +84,21 @@ type RedisCmdable interface {
 	Del(ctx context.Context, keys ...string) interface{ Err() error }
 }
 
+// APIKeyCacheInvalidator is the optional hook the API-key validation cache
+// (Phase 6.7) supplies so SA lifecycle mutations (disable, delete) can
+// proactively wipe every cached identity for the SA's keys. Wiring it
+// through an injected function keeps service_account.go from depending
+// on the full redis.Client surface (SMembers, Pipeline, etc.) — those
+// already live on the auth.Service-owned redisClient interface in repos.go,
+// and the implementation forwards there.
+//
+// A nil invalidator means "no cache" — the call collapses to a no-op so
+// pre-Phase-6.7 wiring (and tests that don't care about the cache) still
+// works unchanged. Errors are not surfaced because cache invalidation is
+// always best-effort: the row-state check on the cache HIT path is the
+// authoritative backstop.
+type APIKeyCacheInvalidator func(ctx context.Context, keyIDs ...uuid.UUID)
+
 // ServiceAccountService implements business logic for FE-API-048 service accounts.
 type ServiceAccountService struct {
 	// sa is the service_accounts repository.
@@ -98,10 +113,18 @@ type ServiceAccountService struct {
 	audit AuditEmitter
 	// redis is used for best-effort JWT revocation on SA disable (spec §5.5).
 	redis RedisCmdable
+	// invalidateAPIKeyCache is the optional Phase 6.7 hook called from
+	// SetDisabled and Delete to wipe every cached ValidateAPIKey result
+	// for the SA's keys. nil = no cache wired = no-op (legacy callers and
+	// tests that don't construct the auth Service still work unchanged).
+	invalidateAPIKeyCache APIKeyCacheInvalidator
 }
 
 // NewServiceAccountService constructs a ServiceAccountService.
-// All arguments are required; passing nil values will cause panics at runtime.
+// All required arguments must be non-nil; passing nil values will cause panics
+// at runtime. The optional cache invalidator (Phase 6.7) defaults to nil — wire
+// it via SetAPIKeyCacheInvalidator after construction when the auth.Service is
+// available.
 func NewServiceAccountService(
 	sa saRepo,
 	users userRepo,
@@ -116,6 +139,14 @@ func NewServiceAccountService(
 		audit: audit,
 		redis: rdb,
 	}
+}
+
+// SetAPIKeyCacheInvalidator wires the Phase 6.7 API-key validation cache
+// invalidation hook so SA disable / delete proactively wipes cached
+// identities for the SA's keys. Safe to call multiple times; pass nil to
+// detach. Idempotent — calling it again replaces the previous hook.
+func (s *ServiceAccountService) SetAPIKeyCacheInvalidator(fn APIKeyCacheInvalidator) {
+	s.invalidateAPIKeyCache = fn
 }
 
 // ServiceAccountInput is the service-layer DTO for creating a new SA. It adds
@@ -351,6 +382,25 @@ func (s *ServiceAccountService) SetDisabled(ctx context.Context, id, tenantID uu
 			// Intentionally not returning — audit must still fire and the DB is the
 			// source of truth.
 		}
+		// Phase 6.7: also drop every cached ValidateAPIKey result for the SA's
+		// keys so a CI bot still holding a secret cannot keep authenticating off
+		// the cache for the TTL window. Best-effort: a failure to list keys is
+		// logged but does not block the disable — the cache HIT path re-checks
+		// the SA's disabled_at column as a backstop, so staleness is bounded by
+		// apiKeyCacheTTL regardless.
+		if s.invalidateAPIKeyCache != nil {
+			keys, err := s.keys.ListByServiceAccount(ctx, sa.ID)
+			if err != nil {
+				slog.WarnContext(ctx, "service_account: list keys for cache invalidation failed",
+					"err", err, "sa_id", sa.ID)
+			} else if len(keys) > 0 {
+				ids := make([]uuid.UUID, 0, len(keys))
+				for _, k := range keys {
+					ids = append(ids, k.ID)
+				}
+				s.invalidateAPIKeyCache(ctx, ids...)
+			}
+		}
 	} else {
 		// Enabling: clear any stale revoke key so JWT validation resumes working.
 		// Error is ignored — if the key doesn't exist Del returns 0 rows affected,
@@ -389,6 +439,26 @@ func (s *ServiceAccountService) Delete(ctx context.Context, id uuid.UUID, actor 
 	shadowUserID := sa.ShadowUserID
 	tenantID := sa.TenantID
 
+	// Phase 6.7: snapshot the SA's key IDs BEFORE the DB delete cascades the
+	// api_keys rows away. We invalidate the cache entries AFTER the DB delete
+	// succeeds, but we cannot enumerate them after the rows are gone. A
+	// listing failure is logged and we proceed — the row-state check on the
+	// cache HIT path will then reject any stale entries (the key row is gone
+	// → apiKeys.GetByID returns ErrNotFound → ErrInvalidCredentials).
+	var keyIDs []uuid.UUID
+	if s.invalidateAPIKeyCache != nil {
+		keys, listErr := s.keys.ListByServiceAccount(ctx, id)
+		if listErr != nil {
+			slog.WarnContext(ctx, "service_account: list keys for cache invalidation failed",
+				"err", listErr, "sa_id", id)
+		} else {
+			keyIDs = make([]uuid.UUID, 0, len(keys))
+			for _, k := range keys {
+				keyIDs = append(keyIDs, k.ID)
+			}
+		}
+	}
+
 	// Delete cascades to shadow user → api_keys → role_assignments via DB FKs.
 	if err := s.sa.Delete(ctx, id); err != nil {
 		return err
@@ -397,6 +467,11 @@ func (s *ServiceAccountService) Delete(ctx context.Context, id uuid.UUID, actor 
 	// Clear any stale revoke key for the shadow user now that it is gone.
 	// Best-effort — ignore the error.
 	_ = s.redis.Del(ctx, "revoke:user:"+shadowUserID.String()).Err()
+
+	// Phase 6.7: wipe cached ValidateAPIKey identities for the SA's keys.
+	if s.invalidateAPIKeyCache != nil && len(keyIDs) > 0 {
+		s.invalidateAPIKeyCache(ctx, keyIDs...)
+	}
 
 	// Emit audit event with the name snapshot so the audit trail is useful
 	// even after the row has been hard-deleted.

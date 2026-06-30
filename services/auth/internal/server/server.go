@@ -169,6 +169,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		saAudit,
 		redisCmdableAdapter{rdb},
 	)
+	// Phase 6.7: wire the API-key validation cache invalidator so SA disable
+	// / delete proactively wipes cached identities for the SA's keys. Without
+	// this, a CI bot still holding a secret could keep authenticating off the
+	// cache for up to apiKeyCacheTTL (the row-state check is the backstop,
+	// but the proactive invalidation tightens the window from "up to TTL"
+	// to "immediately").
+	saSvc.SetAPIKeyCacheInvalidator(svc.InvalidateAPIKeyCache)
 	httpH = httpH.WithServiceAccountService(saSvc)
 
 	// ── 5b. Activity service (FE-API-048 FUT-005) ────────────────────────

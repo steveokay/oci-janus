@@ -117,6 +117,13 @@ type redisClient interface {
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
 	Pipeline() redis.Pipeliner
 	SMembers(ctx context.Context, key string) *redis.StringSliceCmd
+	// SAdd / Expire are used by the API-key validation cache (Phase 6.7) to
+	// maintain a per-key_id index of cached secret-hashes for fast
+	// invalidation on disable/revoke. They live here on the minimal
+	// interface so test-only redisClient implementations (see
+	// revokeUserErrRedis) embed *redis.Client and pick them up transparently.
+	SAdd(ctx context.Context, key string, members ...interface{}) *redis.IntCmd
+	Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd
 }
 
 // Ensure the concrete repository types satisfy the interfaces at compile time.
