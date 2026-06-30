@@ -269,6 +269,7 @@ Every gRPC client/server pair uses mutual TLS.
 **Rules:**
 - Every gRPC server sets `tls.RequireAndVerifyClientCert`.
 - Client cert CN must match expected service name (enforce in server-side interceptor).
+- Per-server peer-CN allowlist via `MTLS_PEER_CN_ALLOWLIST` (CSV, e.g. `registry-core,registry-management`) — `libs/middleware/grpc.PeerCNAllowlistFromEnv()` denies CA-signed peers whose CN is not in the list with `codes.PermissionDenied`; empty/unset == no enforcement (opt-in per service, REDESIGN-001 Phase 6.10).
 - CA cert loaded from `MTLS_CA_CERT_PATH` env var. No defaults.
 - Certificate validity: maximum 90 days.
 - Cert key file permissions: `chmod 600` (SEC-024).
