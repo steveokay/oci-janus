@@ -250,6 +250,10 @@ func (s *OIDCTrustService) validateOnCreate(ctx context.Context, in CreateOIDCTr
 // mutation. Wrapped so a nil emitter (test / dev stacks) is a no-op.
 // Errors are logged but never bubbled up — the DB write is the source
 // of truth.
+//
+// The Fields map carries the OIDCTrustPayload-equivalent shape so a
+// publisher routing on Action (see server.go's audit-router) can build
+// the right RabbitMQ envelope without re-fetching the trust row.
 func (s *OIDCTrustService) emitTrustEvent(ctx context.Context, action, actorID string, row *repository.OIDCTrust) {
 	if s.audit == nil {
 		return
@@ -267,6 +271,7 @@ func (s *OIDCTrustService) emitTrustEvent(ctx context.Context, action, actorID s
 			"issuer_url":         row.IssuerURL,
 			"audience":           row.Audience,
 			"subject_pattern":    row.SubjectPattern,
+			"actor_id":           actorID,
 		},
 	}
 	if err := s.audit.Emit(ctx, ev); err != nil {
