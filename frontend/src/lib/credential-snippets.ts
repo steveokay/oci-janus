@@ -26,13 +26,15 @@ export interface SnippetInputs {
   saName: string;
 }
 
-// sanitiseSAName — reject shell-meaningful characters so a maliciously
-// named SA can't break out of its quoted slot. Defence in depth on top
-// of the SA-name regex enforced at create time.
+// sanitiseSAName — defence-in-depth allowlist mirroring the server-side
+// SA-name regex (`^[a-z0-9]+([._-][a-z0-9]+)*$` at
+// services/auth/internal/handler/http_service_accounts.go). Any character
+// outside `[a-z0-9._-]` is stripped before the name lands in a shell or
+// YAML context. An allowlist (not a blocklist) closes SEC-055 — a future
+// loosening of the server-side regex can't silently widen the FE
+// snippet's attack surface.
 function sanitiseSAName(name: string): string {
-  // Drop double-quote, backtick, dollar, and backslash. The remaining set
-  // (lowercase + digits + `_-`) is safe in every shell + YAML context.
-  return name.replace(/["`$\\]/g, "");
+  return name.replace(/[^a-z0-9._-]/g, "");
 }
 
 // buildSnippets — render all four snippet formats parameterised on the

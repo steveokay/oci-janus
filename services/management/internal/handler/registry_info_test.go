@@ -8,9 +8,9 @@ import (
 )
 
 // TestRegistryInfo covers the FUT-002 GET /api/v1/registry-info endpoint.
-// The endpoint is unauthenticated by design (parallels handleDeploymentInfo)
-// and leaks no tenant data — just the deployment's registry hostname so the
-// FE credential-helpers surface can render copy-paste snippets.
+// The endpoint is auth-gated at the mux layer (handler.go); these tests
+// invoke the handler function directly to exercise the response shape +
+// the dev-misconfig (empty PLATFORM_HOST) failure path.
 func TestRegistryInfo_ReturnsConfiguredHost(t *testing.T) {
 	h := New(nil, nil, nil, nil, "")
 	h = h.WithPlatformHost("registry.example.com")
@@ -25,8 +25,8 @@ func TestRegistryInfo_ReturnsConfiguredHost(t *testing.T) {
 	}
 
 	var body struct {
-		RegistryHost     string `json:"registry_host"`
-		SupportsOCIV11   bool   `json:"supports_oci_v1_1"`
+		RegistryHost   string `json:"registry_host"`
+		SupportsOCIV11 bool   `json:"supports_oci_v1_1"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)

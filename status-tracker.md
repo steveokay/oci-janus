@@ -72,6 +72,10 @@
 
 **Follow-ups (non-blocking, file on merge):**
 - HelpersPanel test produces noisy `AggregateError` stderr in jsdom (no MSW handler). Tests pass deterministically; cosmetic noise only.
+- HelpersPanel test coverage is shell-only (loading branch + heading assertion). 4 render branches (loading / error / no-SA / rendered) → 1 covered. Add `vi.mock('@/lib/api/registry-info')` + `vi.mock('@/lib/api/service-accounts')` and assert rendered snippet contains hostname for at least one format. (qa-agent SHOULD-FIX, 2026-06-30.)
+- No `ci-management.yml` CI workflow. `.github/workflows/` has 18 ci-*.yml files; only `ci-tidy-check.yml` references the management module. New BFF handler doesn't run lint/vet/`go test`/`-race` in CI. Pre-existing repo gap exposed by FUT-002 being the first material services/management change in a while. File chore PR mirroring `ci-webhook.yml`. (qa-agent SHOULD-FIX, 2026-06-30.)
+- `HelpersPanel.tsx:88-164` JSX inside the `<>...</>` fragment indents at column 6 instead of column 8/10. Cosmetic; no prettier gate in CI; heals on next `npm run format`. (code-review-agent nit, 2026-06-30.)
+- `HelpersPanel.tsx:55-64` `handleCopy` swallows clipboard errors silently. Adding a one-shot toast ("Clipboard unavailable — select and copy manually") would be nicer UX. (code-review-agent nit, 2026-06-30.)
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 

@@ -28,8 +28,8 @@ func (h *Handler) handleRegistryInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := map[string]any{
-		"registry_host":      h.platformHost,
-		"supports_oci_v1_1":  true,
+		"registry_host":     h.platformHost,
+		"supports_oci_v1_1": true,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

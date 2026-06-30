@@ -50,4 +50,33 @@ describe("buildSnippets", () => {
     // SA name regex disallows ", so this is defence in depth.
     expect(s).not.toContain('--username evil"name');
   });
+
+  // SEC-055 — the FE sanitiser is now an allowlist mirroring the
+  // server-side SA-name regex `[a-z0-9._-]`. This test pins the
+  // allowlist contract so a future loosening of the regex on either
+  // side can't silently widen the snippet's attack surface.
+  it("strips any character outside the [a-z0-9._-] allowlist", () => {
+    const cases: Array<[string, string]> = [
+      ["semicolons", "evil;rm -rf"],
+      ["pipes", "ci|exfil"],
+      ["newlines", "line1\nline2"],
+      ["spaces", "with space"],
+      ["unicode", "ci-‮-drop"],
+      ["uppercase", "MIXED-Case"],
+    ];
+    for (const [label, raw] of cases) {
+      const { "docker login": s } = buildSnippets({ hostname, saName: raw });
+      // None of the disallowed characters should appear in the rendered
+      // --username slot. We match the literal "--username " prefix and
+      // assert the substring up to the next backslash-newline is
+      // [a-z0-9._-] only.
+      const m = s.match(/--username (.*?) \\/);
+      expect(m, `${label}: --username slot not found`).not.toBeNull();
+      const rendered = m![1];
+      expect(
+        rendered,
+        `${label}: ${JSON.stringify(rendered)} contains a disallowed char`
+      ).toMatch(/^[a-z0-9._-]*$/);
+    }
+  });
 });
