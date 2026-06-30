@@ -105,6 +105,13 @@ type Handler struct {
 	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
 	// endpoint.
 	buildVersion string
+	// platformHost is the externally-reachable registry hostname (e.g.
+	// "registry.example.com"). Injected via WithPlatformHost; used by
+	// handleRegistryInfo for the FUT-002 credential-helpers surface.
+	// Empty in dev when the env var isn't set; the helper endpoint returns
+	// 500 in production with an empty value (the config layer rejects this
+	// at startup anyway).
+	platformHost string
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -227,6 +234,14 @@ func (h *Handler) WithProxyClient(c proxyv1.ProxyServiceClient) *Handler {
 func (h *Handler) WithDeploymentInfo(mode loader.DeploymentMode, version string) *Handler {
 	h.deploymentMode = mode
 	h.buildVersion = version
+	return h
+}
+
+// WithPlatformHost wires the externally-reachable registry hostname that the
+// FUT-002 credential-helpers surface returns from GET /api/v1/registry-info.
+// Returns the handler for chained initialization, mirroring WithDeploymentInfo.
+func (h *Handler) WithPlatformHost(host string) *Handler {
+	h.platformHost = host
 	return h
 }
 
