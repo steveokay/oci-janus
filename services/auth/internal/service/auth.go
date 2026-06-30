@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
+	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
@@ -348,11 +349,19 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		tok = recovered
 		// A fallback success means either (a) a legacy token without a
 		// kid, or (b) a token whose kid did not match any ring entry.
-		// Both are operator-visible signals during a rotation.
+		// Both are operator-visible signals during a rotation. SEC-048
+		// follow-up: bump `registry_auth_jwt_kid_fallback_total` with
+		// the reason label so operators can alert on sustained-high
+		// fallback rates without scraping logs.
 		hdrKid, _ := tok.Header["kid"].(string)
+		reason := "missing_kid"
+		if hdrKid != "" {
+			reason = "unknown_kid"
+		}
+		metrics.AuthJWTKidFallbackTotal.WithLabelValues(reason).Inc()
 		slog.WarnContext(ctx, "auth: JWT validated via ring fallback path",
 			"jwt_kid", hdrKid,
-			"reason", "kid missing or not in ring",
+			"reason", reason,
 		)
 	}
 

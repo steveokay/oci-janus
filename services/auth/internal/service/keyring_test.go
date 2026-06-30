@@ -16,8 +16,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,25 +299,43 @@ func TestJWKS_listsEveryKid(t *testing.T) {
 
 // TestLoadKeyRingFromDir_loadsAndSorts exercises the disk loader: it writes
 // two PEM files to a temp directory, calls LoadKeyRing, and asserts that
-// (a) both kids are present, (b) the lexicographically-greatest kid is the
-// default signer when JWT_SIGNING_KID is empty.
+// (a) both kids are present, (b) the MOST-RECENTLY-MODIFIED kid is the
+// default signer when JWT_SIGNING_KID is empty (SEC-049 changed this from
+// lex-greatest because operators using semantic names like `prod-a.pem`,
+// `prod-b.pem`, `prod-c.pem` would have the OLDEST file selected by lex
+// order). The test forces the mtime ordering explicitly so the result is
+// independent of write-order timing on coarse-resolution filesystems.
 func TestLoadKeyRingFromDir_loadsAndSorts(t *testing.T) {
 	dir := t.TempDir()
 	_, pemA := genTestKey(t)
 	_, pemB := genTestKey(t)
-	if err := os.WriteFile(filepath.Join(dir, "kid-a.pem"), pemA, 0o600); err != nil {
+	pathA := filepath.Join(dir, "kid-a.pem")
+	pathB := filepath.Join(dir, "kid-b.pem")
+	if err := os.WriteFile(pathA, pemA, 0o600); err != nil {
 		t.Fatalf("write a: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "kid-b.pem"), pemB, 0o600); err != nil {
+	if err := os.WriteFile(pathB, pemB, 0o600); err != nil {
 		t.Fatalf("write b: %v", err)
+	}
+	// Force kid-a to be the most-recently-modified file — even though kid-b
+	// is the lex-greatest, the SEC-049 mtime selector should pick kid-a.
+	// 2-second skew defeats coarse mtime resolution on Windows NTFS / older
+	// HFS+.
+	pastT := time.Now().Add(-1 * time.Hour)
+	futureT := time.Now()
+	if err := os.Chtimes(pathB, pastT, pastT); err != nil {
+		t.Fatalf("chtimes b: %v", err)
+	}
+	if err := os.Chtimes(pathA, futureT, futureT); err != nil {
+		t.Fatalf("chtimes a: %v", err)
 	}
 	// A stray non-PEM file must be tolerated (skipped, not failed).
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("notes"), 0o600); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
 
-	// Empty signing kid → default to lexicographically-greatest, which is
-	// kid-b.
+	// Empty signing kid → SEC-049 default = most-recently-modified file =
+	// kid-a (we set its mtime to "now", kid-b to "1 hour ago").
 	ring, err := LoadKeyRing(dir, "")
 	if err != nil {
 		t.Fatalf("LoadKeyRing: %v", err)
@@ -323,8 +343,8 @@ func TestLoadKeyRingFromDir_loadsAndSorts(t *testing.T) {
 	if ring.Size() != 2 {
 		t.Errorf("ring size = %d, want 2", ring.Size())
 	}
-	if got := ring.SigningKID(); got != "kid-b" {
-		t.Errorf("default signing kid = %q, want kid-b", got)
+	if got := ring.SigningKID(); got != "kid-a" {
+		t.Errorf("SEC-049 default signing kid = %q, want kid-a (most recently modified)", got)
 	}
 
 	// Explicit signing kid wins over the default.
@@ -352,6 +372,31 @@ func TestLoadKeyRingFromDir_emptyDirIsAFailure(t *testing.T) {
 func TestLoadKeyRingFromDir_missingDirIsAFailure(t *testing.T) {
 	if _, err := LoadKeyRing(filepath.Join(t.TempDir(), "does-not-exist"), ""); err == nil {
 		t.Fatal("expected error for missing dir, got nil")
+	}
+}
+
+// TestLoadKeyRingFromDir_SEC048_RejectsOversizedRing is the regression for
+// SEC-048: validation falls back to "try every key" when kid is missing or
+// unknown, so an unbounded ring is a CPU-amplification vector. Operators
+// who leave every retired key in the directory should hear about it at
+// startup, not silently amplify per-RPC RSA verify cost on every fallback
+// hit.
+func TestLoadKeyRingFromDir_SEC048_RejectsOversizedRing(t *testing.T) {
+	dir := t.TempDir()
+	// Write maxKeyRingSize + 1 PEM files so the loader trips the cap.
+	for i := 0; i <= maxKeyRingSize; i++ {
+		_, pem := genTestKey(t)
+		name := filepath.Join(dir, fmt.Sprintf("kid-%02d.pem", i))
+		if err := os.WriteFile(name, pem, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	_, err := LoadKeyRing(dir, "")
+	if err == nil {
+		t.Fatal("SEC-048: expected ring-size-cap error, got nil")
+	}
+	if !strings.Contains(err.Error(), "too many keys") {
+		t.Errorf("SEC-048: error must call out the cap clearly; got: %v", err)
 	}
 }
 

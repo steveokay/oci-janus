@@ -23,8 +23,12 @@ package service
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -180,15 +184,33 @@ func (r *keyRing) all() []signingKey {
 //
 // The function does not log key bytes; only kids and file names appear in
 // the returned error (when files are invalid).
-func loadKeyRingFromDir(dir string) ([]signingKey, error) {
+// loaded is the keyring-loader's intermediate row: a signingKey paired with
+// the source file's mtime. Used both by the lex/mtime selector inside
+// pickDefaultSigningKID and by callers that want to log "we picked this kid
+// because it's the most-recently-modified" at startup. Exported via the
+// loadKeyRingFromDir return so SEC-049 follow-ups (pubkey-sha boot log,
+// mtime-based default selector) can introspect the load result.
+type loaded struct {
+	key     signingKey
+	modTime time.Time
+}
+
+// maxKeyRingSize is the hard cap on key-ring members (SEC-048 follow-up).
+// Validating a token with an unknown kid falls through to "try every key
+// in the ring," which is bounded RSA verify per key. At N keys × ~3ms per
+// verify on commodity hardware, an attacker who can submit tokens at line
+// rate could chew ~3N ms of CPU per request. 16 keys (= 48ms worst case)
+// is plenty of headroom for any realistic key-rotation cadence (one new
+// key per cert rotation × ~quarterly = N ≤ 4 in practice) while keeping
+// the attacker's amplification factor bounded. Operators who genuinely
+// need more should retire old keys, not raise the cap.
+const maxKeyRingSize = 16
+
+func loadKeyRingFromDir(dir string) ([]loaded, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// Wrap so the caller's startup log shows the directory path.
 		return nil, fmt.Errorf("keyring: read dir %q: %w", dir, err)
-	}
-	type loaded struct {
-		key     signingKey
-		modTime time.Time
 	}
 	var loadedKeys []loaded
 	for _, e := range entries {
@@ -251,17 +273,22 @@ func loadKeyRingFromDir(dir string) ([]signingKey, error) {
 		// possible".
 		return nil, fmt.Errorf("keyring: no PEM files found in %q", dir)
 	}
+	if len(loadedKeys) > maxKeyRingSize {
+		// SEC-048: fail loud when the ring exceeds the cap so a future
+		// operator who left every retired key in the directory gets a
+		// clear error instead of a silent fallback-DoS amplification.
+		return nil, fmt.Errorf("keyring: too many keys in %q: got %d, max %d (retire stale keys per the rotation runbook)",
+			dir, len(loadedKeys), maxKeyRingSize)
+	}
 	// Sort by kid for deterministic ring order — useful for both stable
 	// test fixtures and for the fallback-validation loop's iteration order
-	// (deterministic order means deterministic warn logs).
+	// (deterministic order means deterministic warn logs). The mtime
+	// metadata is preserved so pickDefaultSigningKID can select by
+	// recency (SEC-049).
 	sort.Slice(loadedKeys, func(i, j int) bool {
 		return loadedKeys[i].key.kid < loadedKeys[j].key.kid
 	})
-	out := make([]signingKey, len(loadedKeys))
-	for i := range loadedKeys {
-		out[i] = loadedKeys[i].key
-	}
-	return out, nil
+	return loadedKeys, nil
 }
 
 // ── Phase 6.5 — exported surface for the server package ──────────────────────
@@ -284,18 +311,49 @@ type KeyRing = keyRing
 // Fails fast on every error path — per CLAUDE.md §7, an unreadable or empty
 // directory MUST NOT silently fall back to a single-key default.
 func LoadKeyRing(dir, signingKID string) (*KeyRing, error) {
-	keys, err := loadKeyRingFromDir(dir)
+	loadedKeys, err := loadKeyRingFromDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	if signingKID == "" {
 		// Operator did not nominate a signing kid; pick the
-		// lexicographically-greatest one. Naming conventions like
-		// timestamps or ULIDs give automatic promotion of the freshest
-		// key on the next restart.
-		signingKID = pickDefaultSigningKID(keys)
+		// most-recently-modified file (SEC-049). The previous "lex
+		// greatest" rule mis-selected for naming conventions that don't
+		// embed a timestamp (e.g. `prod-a.pem`, `prod-b.pem`,
+		// `prod-c.pem` where `prod-c` is the OLDEST file).
+		signingKID = pickDefaultSigningKID(loadedKeys)
 	}
-	return newKeyRing(keys, signingKID)
+	// SEC-049 follow-up: log a sha-256 fingerprint of each public key at
+	// startup so an operator can spot a silent same-base-name overwrite
+	// collision by comparing fingerprints against their own key inventory.
+	// Kid + fingerprint are both safe to log; key bytes are NOT.
+	for _, lk := range loadedKeys {
+		fp := publicKeyFingerprint(lk.key.publicKey)
+		slog.Info("jwt key loaded",
+			"kid", lk.key.kid,
+			"pubkey_sha256", fp,
+			"mtime", lk.modTime.UTC().Format(time.RFC3339),
+		)
+	}
+	out := make([]signingKey, len(loadedKeys))
+	for i := range loadedKeys {
+		out[i] = loadedKeys[i].key
+	}
+	return newKeyRing(out, signingKID)
+}
+
+// publicKeyFingerprint returns the hex sha-256 of a public key's DER
+// encoding. Used at boot for operator-visible identity confirmation —
+// matches the standard "ssh -lf" / openssl x509 fingerprint workflow.
+// Returns "" on marshal failure so the boot log degrades to "kid only"
+// rather than failing the whole load.
+func publicKeyFingerprint(pub *rsa.PublicKey) string {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])
 }
 
 // SigningKID returns the kid the ring uses to sign new tokens. Exported so
@@ -318,18 +376,28 @@ func (r *keyRing) Size() int {
 }
 
 // pickDefaultSigningKID returns the kid that should be used for signing when
-// the operator did not nominate one via JWT_SIGNING_KID. We pick the
-// lexicographically LAST kid (i.e. the "highest" sorted name) so operators
-// can adopt a timestamp / monotonic-id convention and have new keys auto-
-// promote to signer on restart. Same input → same output, by design.
+// the operator did not nominate one via JWT_SIGNING_KID. SEC-049 (LOW)
+// switched this from "lexicographically greatest" to "most-recently-modified
+// file" — lex order works for timestamp-prefixed kids but mis-selects when
+// operators use semantic names (e.g. `prod-a.pem`, `prod-b.pem`, `prod-c.pem`
+// where -c is the oldest). mtime is the operator's actual intent signal
+// (the file they just rotated) regardless of naming convention.
 //
-// Callers should still surface a slog.Info / Warn at startup so the chosen
-// kid is visible in the boot log.
-func pickDefaultSigningKID(keys []signingKey) string {
+// Callers should still surface a slog.Info at startup so the chosen kid is
+// visible in the boot log.
+//
+// `loaded` here is the shape produced by loadKeyRingFromDir (signingKey +
+// modTime). We don't export modTime through signingKey because the runtime
+// keyRing doesn't need it post-selection.
+func pickDefaultSigningKID(keys []loaded) string {
 	if len(keys) == 0 {
 		return ""
 	}
-	// Caller will have called loadKeyRingFromDir, which sorts by kid
-	// ascending; the last element is the lexicographically greatest.
-	return keys[len(keys)-1].kid
+	bestIdx := 0
+	for i := 1; i < len(keys); i++ {
+		if keys[i].modTime.After(keys[bestIdx].modTime) {
+			bestIdx = i
+		}
+	}
+	return keys[bestIdx].key.kid
 }
