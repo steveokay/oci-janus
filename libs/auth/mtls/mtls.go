@@ -24,12 +24,26 @@
 // will not see the new cert until it next handshakes (i.e. either reconnects
 // or completes its keepalive cycle). That's the trade we accept for a no-dep,
 // no-goroutine, no-shutdown-coordination implementation.
+//
+// SEC-046 — revocation caveat. On reload failure (malformed PEM, stat error,
+// EOF mid-write) the cache deliberately falls back to the LAST GOOD cert
+// rather than breaking the handshake. This is the right choice for the common
+// case (cert-manager renewal hits an FS glitch) but it is the WRONG channel
+// for emergency cert revocation — if you rotate specifically because a leaf
+// cert is suspected compromised, the cached cert will continue to be served
+// until either the process restarts OR the new file successfully parses on a
+// subsequent handshake. Real revocation must flow through the CA pool (CRL /
+// OCSP), not through deleting a leaf cert file from disk. The fallback path
+// emits slog.Warn so a stuck rotation is at least visible in the log; if you
+// need it visible in metrics, file a follow-up to add an
+// `mtls_reload_failure_total` counter.
 package mtls
 
 import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -120,7 +134,23 @@ func (c *certCache) current() (*tls.Certificate, error) {
 		}
 	} else if c.cert != nil {
 		// Stat failed but we have a cached cert; serve it.
+		// Log at WARN so operators can correlate "I deleted the cert file"
+		// or "cert-manager hit a permission error mid-rotation" with
+		// continued serving of an old cert. Code-review-agent follow-up
+		// on the 6.9 batch.
+		slog.Warn("mtls: cert stat failed; serving cached certificate",
+			"cert_path", c.certPath,
+			"err", err,
+		)
 		return c.cert, nil
+	} else {
+		// Stat failed AND no cached cert — the caller will get the raw
+		// error back from load() below, but log here so the operator can
+		// see "cert file went away before the first successful read".
+		slog.Warn("mtls: cert stat failed and no cached certificate available",
+			"cert_path", c.certPath,
+			"err", err,
+		)
 	}
 
 	// Slow path: fingerprint changed (or no cache yet) — reload.
@@ -130,6 +160,15 @@ func (c *certCache) current() (*tls.Certificate, error) {
 		// over breaking the handshake. cert-manager's atomic rename should
 		// make this impossible, but defence in depth.
 		if c.cert != nil {
+			// Code-review-agent follow-up on the 6.9 batch — surface the
+			// "silently served stale cert" event at WARN so operators can
+			// debug a stuck rotation. Without this log, a malformed
+			// renewal looks identical to a successful one until the cert
+			// hits NotAfter.
+			slog.Warn("mtls: cert reload failed; serving cached certificate",
+				"cert_path", c.certPath,
+				"err", err,
+			)
 			return c.cert, nil
 		}
 		return nil, err

@@ -306,3 +306,46 @@ func TestCertCache_StatFailureFallsBackToCached(t *testing.T) {
 		t.Fatalf("expected cached cert pointer on stat failure")
 	}
 }
+
+// TestCertCache_BadReloadFallsBackToCached is the SEC-047 regression test.
+// When the cert file is rewritten with garbage (malformed PEM that survives
+// the mtime/size fingerprint check but fails LoadX509KeyPair), the cache
+// must fall back to the previously-good cert rather than break the
+// handshake. Security-agent flagged this behaviour was documented but not
+// tested; this test pins it so a future refactor that removes the fallback
+// fails CI loudly.
+func TestCertCache_BadReloadFallsBackToCached(t *testing.T) {
+	dir := t.TempDir()
+	_, certPath, keyPath := writeCertPair(t, dir, "bad-reload", 7777)
+
+	cache, err := newCertCache(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	first, err := cache.current()
+	if err != nil {
+		t.Fatalf("first current: %v", err)
+	}
+
+	// Corrupt the cert file. The bytes must NOT parse as valid PEM so
+	// LoadX509KeyPair fails on the next read; the size must differ from the
+	// good cert so the fingerprint check fires (otherwise we'd hit the
+	// fast-path cache and never reach the failing reload). Bump mtime
+	// explicitly to defeat coarse-resolution filesystems.
+	garbage := []byte("not a valid PEM file — used to assert SEC-047 fallback behaviour\n")
+	if err := os.WriteFile(certPath, garbage, 0o600); err != nil {
+		t.Fatalf("write garbage cert: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(certPath, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	second, err := cache.current()
+	if err != nil {
+		t.Fatalf("current after garbage write: %v (expected cached fallback, NOT an error)", err)
+	}
+	if first != second {
+		t.Fatalf("SEC-047: expected the cached cert pointer to be returned when reload fails; reload appears to have returned a new (and presumably broken) cert")
+	}
+}
