@@ -62,6 +62,17 @@ service AuthService {
   // synthetic role name "global_admin" so the audit catalogue surfaces the
   // change in /activity. REDESIGN-001 Phase 5.1.
   rpc SetGlobalAdmin(SetGlobalAdminRequest) returns (google.protobuf.Empty);
+
+  // FUT-001 — federated workload identity. CI runners (GitHub Actions, GitLab
+  // CI, Buildkite, generic OIDC) exchange an OIDC token for a short-lived
+  // registry JWT mapped to a workspace service account. The 4 admin RPCs
+  // manage the trust configurations; ExchangeWorkloadToken performs the
+  // actual token exchange.
+  rpc ListOIDCTrusts(ListOIDCTrustsRequest) returns (ListOIDCTrustsResponse);
+  rpc CreateOIDCTrust(CreateOIDCTrustRequest) returns (OIDCTrust);
+  rpc UpdateOIDCTrust(UpdateOIDCTrustRequest) returns (OIDCTrust);
+  rpc DeleteOIDCTrust(DeleteOIDCTrustRequest) returns (google.protobuf.Empty);
+  rpc ExchangeWorkloadToken(ExchangeWorkloadTokenRequest) returns (ExchangeWorkloadTokenResponse);
 }
 
 message ValidateTokenRequest {
@@ -322,4 +333,88 @@ message SetGlobalAdminRequest {
   string user_id  = 1; // users.id of the target account
   bool   granted  = 2; // true = grant global admin; false = revoke
   string actor_id = 3; // caller's user_id — captured for the audit trail
+}
+
+// FUT-001 — federated workload identity messages.
+//
+// OIDCTrust is a row in the oidc_trust_configs table: a trust relationship
+// between a workspace service account and an external OIDC IdP (GitHub
+// Actions, GitLab CI, Buildkite, generic OIDC issuer). On a successful
+// POST /auth/token/workload, the trust's service_account_id receives a
+// short-lived RS256 registry JWT.
+message OIDCTrust {
+  string id                       = 1;
+  string tenant_id                = 2;
+  string service_account_id       = 3;
+  string display_name             = 4;
+  string issuer_url               = 5;
+  string audience                 = 6;
+  string subject_pattern          = 7;
+  int32  jwks_cache_ttl_seconds   = 8;
+  google.protobuf.Timestamp created_at   = 9;
+  google.protobuf.Timestamp updated_at   = 10;
+  google.protobuf.Timestamp last_used_at = 11;
+}
+
+// ListOIDCTrustsRequest lists trusts for one tenant.
+message ListOIDCTrustsRequest {
+  string tenant_id = 1;
+}
+
+// ListOIDCTrustsResponse returns the full trust set for the tenant. No
+// pagination — realistic workspaces have ~10s of trusts at most so the
+// pagination overhead is not worth the complexity.
+message ListOIDCTrustsResponse {
+  repeated OIDCTrust trusts = 1;
+}
+
+// CreateOIDCTrustRequest creates a new trust row. The handler validates:
+//   - display_name non-empty
+//   - issuer_url is in OIDC_ALLOWED_ISSUERS
+//   - audience non-empty
+//   - subject_pattern parses as a valid glob (no syntax errors)
+//   - service_account_id belongs to tenant_id
+message CreateOIDCTrustRequest {
+  string tenant_id              = 1;
+  string service_account_id     = 2;
+  string display_name           = 3;
+  string issuer_url             = 4;
+  string audience               = 5;
+  string subject_pattern        = 6;
+  int32  jwks_cache_ttl_seconds = 7;
+}
+
+// UpdateOIDCTrustRequest mutates display_name, subject_pattern, and
+// jwks_cache_ttl_seconds only. service_account_id, issuer_url, and audience
+// are append-only — operators must Delete+Create to change them so the
+// IdP-bound identity cannot be silently re-pointed at a different SA.
+message UpdateOIDCTrustRequest {
+  string id                     = 1;
+  string tenant_id              = 2;
+  string display_name           = 3;
+  string subject_pattern        = 4;
+  int32  jwks_cache_ttl_seconds = 5;
+}
+
+// DeleteOIDCTrustRequest removes a trust row. ON DELETE CASCADE from
+// service_accounts also removes the trust when its SA is deleted.
+message DeleteOIDCTrustRequest {
+  string id        = 1;
+  string tenant_id = 2;
+}
+
+// ExchangeWorkloadTokenRequest carries the OIDC JWT presented by the CI
+// runner. The exchange flow validates issuer + audience + subject + signature
+// + expiry before minting a registry JWT.
+message ExchangeWorkloadTokenRequest {
+  string oidc_jwt = 1;
+}
+
+// ExchangeWorkloadTokenResponse mirrors the OAuth 2.0 token response shape.
+// access_token is a short-lived (15-minute) RS256 registry JWT scoped to the
+// trust's service account. token_type is always "Bearer".
+message ExchangeWorkloadTokenResponse {
+  string access_token = 1;
+  int32  expires_in   = 2;
+  string token_type   = 3;
 }

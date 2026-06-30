@@ -20,18 +20,23 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	AuthService_ValidateToken_FullMethodName      = "/registry.auth.v1.AuthService/ValidateToken"
-	AuthService_ValidateAPIKey_FullMethodName     = "/registry.auth.v1.AuthService/ValidateAPIKey"
-	AuthService_GetUserPermissions_FullMethodName = "/registry.auth.v1.AuthService/GetUserPermissions"
-	AuthService_GrantRole_FullMethodName          = "/registry.auth.v1.AuthService/GrantRole"
-	AuthService_RevokeRole_FullMethodName         = "/registry.auth.v1.AuthService/RevokeRole"
-	AuthService_ListMembers_FullMethodName        = "/registry.auth.v1.AuthService/ListMembers"
-	AuthService_CountTenantUsers_FullMethodName   = "/registry.auth.v1.AuthService/CountTenantUsers"
-	AuthService_LookupUsernames_FullMethodName    = "/registry.auth.v1.AuthService/LookupUsernames"
-	AuthService_ListTenantUsers_FullMethodName    = "/registry.auth.v1.AuthService/ListTenantUsers"
-	AuthService_InviteUser_FullMethodName         = "/registry.auth.v1.AuthService/InviteUser"
-	AuthService_SetUserDisabled_FullMethodName    = "/registry.auth.v1.AuthService/SetUserDisabled"
-	AuthService_SetGlobalAdmin_FullMethodName     = "/registry.auth.v1.AuthService/SetGlobalAdmin"
+	AuthService_ValidateToken_FullMethodName         = "/registry.auth.v1.AuthService/ValidateToken"
+	AuthService_ValidateAPIKey_FullMethodName        = "/registry.auth.v1.AuthService/ValidateAPIKey"
+	AuthService_GetUserPermissions_FullMethodName    = "/registry.auth.v1.AuthService/GetUserPermissions"
+	AuthService_GrantRole_FullMethodName             = "/registry.auth.v1.AuthService/GrantRole"
+	AuthService_RevokeRole_FullMethodName            = "/registry.auth.v1.AuthService/RevokeRole"
+	AuthService_ListMembers_FullMethodName           = "/registry.auth.v1.AuthService/ListMembers"
+	AuthService_CountTenantUsers_FullMethodName      = "/registry.auth.v1.AuthService/CountTenantUsers"
+	AuthService_LookupUsernames_FullMethodName       = "/registry.auth.v1.AuthService/LookupUsernames"
+	AuthService_ListTenantUsers_FullMethodName       = "/registry.auth.v1.AuthService/ListTenantUsers"
+	AuthService_InviteUser_FullMethodName            = "/registry.auth.v1.AuthService/InviteUser"
+	AuthService_SetUserDisabled_FullMethodName       = "/registry.auth.v1.AuthService/SetUserDisabled"
+	AuthService_SetGlobalAdmin_FullMethodName        = "/registry.auth.v1.AuthService/SetGlobalAdmin"
+	AuthService_ListOIDCTrusts_FullMethodName        = "/registry.auth.v1.AuthService/ListOIDCTrusts"
+	AuthService_CreateOIDCTrust_FullMethodName       = "/registry.auth.v1.AuthService/CreateOIDCTrust"
+	AuthService_UpdateOIDCTrust_FullMethodName       = "/registry.auth.v1.AuthService/UpdateOIDCTrust"
+	AuthService_DeleteOIDCTrust_FullMethodName       = "/registry.auth.v1.AuthService/DeleteOIDCTrust"
+	AuthService_ExchangeWorkloadToken_FullMethodName = "/registry.auth.v1.AuthService/ExchangeWorkloadToken"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -92,6 +97,16 @@ type AuthServiceClient interface {
 	// synthetic role name "global_admin" so the audit catalogue surfaces the
 	// change in /activity. REDESIGN-001 Phase 5.1.
 	SetGlobalAdmin(ctx context.Context, in *SetGlobalAdminRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// FUT-001 — federated workload identity. CI runners (GitHub Actions, GitLab
+	// CI, Buildkite, generic OIDC) exchange an OIDC token for a short-lived
+	// registry JWT mapped to a workspace service account. The 4 admin RPCs
+	// manage the trust configurations; ExchangeWorkloadToken performs the
+	// actual token exchange.
+	ListOIDCTrusts(ctx context.Context, in *ListOIDCTrustsRequest, opts ...grpc.CallOption) (*ListOIDCTrustsResponse, error)
+	CreateOIDCTrust(ctx context.Context, in *CreateOIDCTrustRequest, opts ...grpc.CallOption) (*OIDCTrust, error)
+	UpdateOIDCTrust(ctx context.Context, in *UpdateOIDCTrustRequest, opts ...grpc.CallOption) (*OIDCTrust, error)
+	DeleteOIDCTrust(ctx context.Context, in *DeleteOIDCTrustRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ExchangeWorkloadToken(ctx context.Context, in *ExchangeWorkloadTokenRequest, opts ...grpc.CallOption) (*ExchangeWorkloadTokenResponse, error)
 }
 
 type authServiceClient struct {
@@ -222,6 +237,56 @@ func (c *authServiceClient) SetGlobalAdmin(ctx context.Context, in *SetGlobalAdm
 	return out, nil
 }
 
+func (c *authServiceClient) ListOIDCTrusts(ctx context.Context, in *ListOIDCTrustsRequest, opts ...grpc.CallOption) (*ListOIDCTrustsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOIDCTrustsResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListOIDCTrusts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) CreateOIDCTrust(ctx context.Context, in *CreateOIDCTrustRequest, opts ...grpc.CallOption) (*OIDCTrust, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OIDCTrust)
+	err := c.cc.Invoke(ctx, AuthService_CreateOIDCTrust_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) UpdateOIDCTrust(ctx context.Context, in *UpdateOIDCTrustRequest, opts ...grpc.CallOption) (*OIDCTrust, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OIDCTrust)
+	err := c.cc.Invoke(ctx, AuthService_UpdateOIDCTrust_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) DeleteOIDCTrust(ctx context.Context, in *DeleteOIDCTrustRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, AuthService_DeleteOIDCTrust_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) ExchangeWorkloadToken(ctx context.Context, in *ExchangeWorkloadTokenRequest, opts ...grpc.CallOption) (*ExchangeWorkloadTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExchangeWorkloadTokenResponse)
+	err := c.cc.Invoke(ctx, AuthService_ExchangeWorkloadToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -280,6 +345,16 @@ type AuthServiceServer interface {
 	// synthetic role name "global_admin" so the audit catalogue surfaces the
 	// change in /activity. REDESIGN-001 Phase 5.1.
 	SetGlobalAdmin(context.Context, *SetGlobalAdminRequest) (*emptypb.Empty, error)
+	// FUT-001 — federated workload identity. CI runners (GitHub Actions, GitLab
+	// CI, Buildkite, generic OIDC) exchange an OIDC token for a short-lived
+	// registry JWT mapped to a workspace service account. The 4 admin RPCs
+	// manage the trust configurations; ExchangeWorkloadToken performs the
+	// actual token exchange.
+	ListOIDCTrusts(context.Context, *ListOIDCTrustsRequest) (*ListOIDCTrustsResponse, error)
+	CreateOIDCTrust(context.Context, *CreateOIDCTrustRequest) (*OIDCTrust, error)
+	UpdateOIDCTrust(context.Context, *UpdateOIDCTrustRequest) (*OIDCTrust, error)
+	DeleteOIDCTrust(context.Context, *DeleteOIDCTrustRequest) (*emptypb.Empty, error)
+	ExchangeWorkloadToken(context.Context, *ExchangeWorkloadTokenRequest) (*ExchangeWorkloadTokenResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -321,6 +396,21 @@ func (UnimplementedAuthServiceServer) SetUserDisabled(context.Context, *SetUserD
 }
 func (UnimplementedAuthServiceServer) SetGlobalAdmin(context.Context, *SetGlobalAdminRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetGlobalAdmin not implemented")
+}
+func (UnimplementedAuthServiceServer) ListOIDCTrusts(context.Context, *ListOIDCTrustsRequest) (*ListOIDCTrustsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListOIDCTrusts not implemented")
+}
+func (UnimplementedAuthServiceServer) CreateOIDCTrust(context.Context, *CreateOIDCTrustRequest) (*OIDCTrust, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateOIDCTrust not implemented")
+}
+func (UnimplementedAuthServiceServer) UpdateOIDCTrust(context.Context, *UpdateOIDCTrustRequest) (*OIDCTrust, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateOIDCTrust not implemented")
+}
+func (UnimplementedAuthServiceServer) DeleteOIDCTrust(context.Context, *DeleteOIDCTrustRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteOIDCTrust not implemented")
+}
+func (UnimplementedAuthServiceServer) ExchangeWorkloadToken(context.Context, *ExchangeWorkloadTokenRequest) (*ExchangeWorkloadTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExchangeWorkloadToken not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -550,6 +640,96 @@ func _AuthService_SetGlobalAdmin_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListOIDCTrusts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOIDCTrustsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListOIDCTrusts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListOIDCTrusts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListOIDCTrusts(ctx, req.(*ListOIDCTrustsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_CreateOIDCTrust_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateOIDCTrustRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).CreateOIDCTrust(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_CreateOIDCTrust_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).CreateOIDCTrust(ctx, req.(*CreateOIDCTrustRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_UpdateOIDCTrust_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateOIDCTrustRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).UpdateOIDCTrust(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_UpdateOIDCTrust_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).UpdateOIDCTrust(ctx, req.(*UpdateOIDCTrustRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_DeleteOIDCTrust_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOIDCTrustRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).DeleteOIDCTrust(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_DeleteOIDCTrust_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).DeleteOIDCTrust(ctx, req.(*DeleteOIDCTrustRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_ExchangeWorkloadToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExchangeWorkloadTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ExchangeWorkloadToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ExchangeWorkloadToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ExchangeWorkloadToken(ctx, req.(*ExchangeWorkloadTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -604,6 +784,26 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetGlobalAdmin",
 			Handler:    _AuthService_SetGlobalAdmin_Handler,
+		},
+		{
+			MethodName: "ListOIDCTrusts",
+			Handler:    _AuthService_ListOIDCTrusts_Handler,
+		},
+		{
+			MethodName: "CreateOIDCTrust",
+			Handler:    _AuthService_CreateOIDCTrust_Handler,
+		},
+		{
+			MethodName: "UpdateOIDCTrust",
+			Handler:    _AuthService_UpdateOIDCTrust_Handler,
+		},
+		{
+			MethodName: "DeleteOIDCTrust",
+			Handler:    _AuthService_DeleteOIDCTrust_Handler,
+		},
+		{
+			MethodName: "ExchangeWorkloadToken",
+			Handler:    _AuthService_ExchangeWorkloadToken_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
