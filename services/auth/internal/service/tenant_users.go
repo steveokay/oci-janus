@@ -273,6 +273,22 @@ func (s *Service) SetUserDisabled(
 			slog.WarnContext(ctx, "FUT-012: revoke JTIs on disable failed (best-effort)",
 				"err", err, "user_id", userID)
 		}
+		// Phase 6.7: snapshot the user's active key IDs BEFORE we flip
+		// them inactive so we can invalidate their entries in the
+		// API-key validation cache. The cache HIT path re-checks
+		// is_active as a backstop, so a failure here is bounded by
+		// apiKeyCacheTTL — the proactive invalidation simply tightens
+		// the window from "up to TTL" to "immediately".
+		var keyIDsToInvalidate []uuid.UUID
+		if keys, listErr := s.apiKeys.ListByUser(ctx, userID); listErr != nil {
+			slog.WarnContext(ctx, "FUT-012: list user keys for cache invalidation failed",
+				"err", listErr, "user_id", userID)
+		} else {
+			keyIDsToInvalidate = make([]uuid.UUID, 0, len(keys))
+			for _, k := range keys {
+				keyIDsToInvalidate = append(keyIDsToInvalidate, k.ID)
+			}
+		}
 		n, err := s.users.DisableAPIKeysForUser(ctx, tenantID, userID)
 		if err != nil {
 			slog.WarnContext(ctx, "FUT-012: disable api keys on disable failed (best-effort)",
@@ -280,6 +296,10 @@ func (s *Service) SetUserDisabled(
 		} else if n > 0 {
 			slog.InfoContext(ctx, "FUT-012: disabled API keys for user",
 				"user_id", userID, "key_count", n)
+		}
+		// Wipe cached identities for the now-disabled keys.
+		if len(keyIDsToInvalidate) > 0 {
+			s.InvalidateAPIKeyCache(ctx, keyIDsToInvalidate...)
 		}
 	}
 
