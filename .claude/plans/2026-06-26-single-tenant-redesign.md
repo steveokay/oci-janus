@@ -1416,9 +1416,9 @@ Breaking changes:
 - Dev seed migrations gone — must run `registry-auth bootstrap` once.
 - `scope_value='*'` no longer mints platform admin — use `SetGlobalAdmin`.
 
-- [ ] CHANGELOG entry covering every breaking change.
-- [ ] Conventional commits scoped `feat(redesign)` / `fix(redesign)` make the changelog mostly auto-generatable.
-- [ ] Tag `v2.0.0-rc1` after Phase 7 ships, soak for a week, then `v2.0.0`.
+- [x] CHANGELOG entry covering every breaking change. _Shipped in `CHANGELOG.md` (2026-06-30)._
+- [x] Conventional commits scoped `feat(redesign)` / `fix(redesign)` make the changelog mostly auto-generatable. _Verified — every REDESIGN-001 PR title is a conventional commit; the v2.0.0-rc1 CHANGELOG section was harvested from `git log`._
+- [ ] Tag `v2.0.0-rc1` after Phase 7 ships, soak for a week, then `v2.0.0`. _CHANGELOG PR opened; tag requires operator confirmation before push (shared-state action)._
 
 ---
 
