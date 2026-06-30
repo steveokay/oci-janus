@@ -74,19 +74,29 @@ func RequestIDFromContext(ctx context.Context) string {
 // every gRPC server in the registry. The order is significant — recovery must
 // be outermost so it catches panics from any later interceptor or handler.
 // OTEL tracing is handled separately via OTELServerHandler() as a StatsHandler.
+//
+// The peer-CN allowlist interceptor (REDESIGN-001 Phase 6.10) runs AFTER the
+// TLS-layer CA verification (tls.RequireAndVerifyClientCert) and BEFORE the
+// business handler so a rejected peer never reaches application code. It is
+// installed via PeerCNAllowlistFromEnv() — when MTLS_PEER_CN_ALLOWLIST is
+// unset the interceptor is a per-call no-op (Option A: opt-in per service).
 func ServerInterceptors() []grpc.UnaryServerInterceptor {
 	return []grpc.UnaryServerInterceptor{
 		RecoveryInterceptor,
 		RequestIDInterceptor,
+		PeerCNAllowlistFromEnv(),
 		LoggingInterceptor,
 		MetricsInterceptor,
 	}
 }
 
 // StreamServerInterceptors returns the ordered stream interceptor chain.
+// PeerCNAllowlistStreamFromEnv() mirrors the unary chain — same opt-in
+// semantics, same fail-closed-once-enabled behaviour.
 func StreamServerInterceptors() []grpc.StreamServerInterceptor {
 	return []grpc.StreamServerInterceptor{
 		RecoveryStreamInterceptor,
+		PeerCNAllowlistStreamFromEnv(),
 		LoggingStreamInterceptor,
 	}
 }
