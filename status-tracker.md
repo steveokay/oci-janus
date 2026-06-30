@@ -22,28 +22,17 @@
 
 ## Open remediation items
 
-### REDESIGN-001 — Single-tenant self-hosted redesign
+### REDESIGN-001 — v2.0.0 soak window (residual)
 
-**Surfaced:** 2026-06-26 after a deep system review (`.claude/reviews/system-review-2026-06-26.md`) identified 5 critical findings (Top-5) flowing from drift between the multi-tenant SaaS architecture and the codebase.
+**Status:** rewrite shipped. `v2.0.0-rc1` tagged 2026-06-30 (`4dd3e63` → commit `f0896ff`, pushed to origin). Phases 0–8.2 all DONE; resolution row in [`status.md`](status.md) (2026-06-30). Plan dashboard ticked in `.claude/plans/2026-06-26-single-tenant-redesign.md`.
 
-**Decision:** Soft-hide multi-tenancy rather than fully drop or keep as-is. `DEPLOYMENT_MODE=single` becomes the default OSS posture; `=multi` preserves the SaaS capability. Drop SaaS-only features (custom domains, per-tenant SSO, plan UI, tenant signup); keep schema-level `tenant_id` for forward compat; fix the security debt as part of the redesign.
+**Remaining:** calendar-only — soak `v2.0.0-rc1` until **≥ 2026-07-07**, then tag `v2.0.0` + cut the GitHub release. Once `v2.0.0` is tagged, delete this entry.
 
-**Plan:** `.claude/plans/2026-06-26-single-tenant-redesign.md` — 8 phases. Per-phase truth (every PR, every date) lives in that file's Progress dashboard.
+**Tail SEC follow-ups (non-blocking, can be picked up alongside other work):** SEC-051 (LOW, pre-migration audit rows silently unverifiable), SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases), SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex), 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch.
 
-**Status:** ~99% complete. Phases 0–7 shipped + Phase 8.1 (migration guide) + 8.2 (README rewrite) shipped through #217. Top-5 #2/#3/#4/#5 all closed; #1 (universal RLS) deferred per Phase 0 D4. **2026-06-30 rescoping (#217):** 6.8 (SAML lib bump) DESCOPED → `futures.md` RED-FU-016; 6.11 (scanner sandbox) replaced by `infra/runbooks/scanner-isolation.md` runbook, in-process work parked at `futures.md` RED-FU-018; 6.4 KEK rotation tool anchored at RED-FU-015 (HIGH priority next pickup); 6.12 checkpoint signing anchored at RED-FU-017 (LOW). Consolidated shipped-PR row in [`status.md`](status.md).
+**Deferred to `futures.md`:** RED-FU-015 (KEK rotation tool, HIGH, next pickup), RED-FU-016 (SAML v0.5.x bump, LOW), RED-FU-017 (audit checkpoint signing, LOW), RED-FU-018 (scanner in-process sandbox, PARKED).
 
-**Open:**
-- **8.3** — Release v2.0.0: CHANGELOG covering every breaking change; tag `v2.0.0-rc1` → soak 1 week → `v2.0.0`. Sequencing only; last step.
-- **7.4 part 2** — Remove this REDESIGN-001 entry from `status-tracker.md` after 8.3 ships; append a resolution note to `status.md`.
-- Small tail follow-ups (non-blocking): 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch; SEC-051 (LOW, pre-migration audit rows silently unverifiable) + SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases); SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex).
-
-**Deferred to `futures.md`:**
-- RED-FU-015 — KEK rotation tool (HIGH, next pickup after v2.0.0)
-- RED-FU-016 — SAML v0.5.x bump (LOW, revisit on v0.4 advisory)
-- RED-FU-017 — Audit checkpoint signing (LOW, parked)
-- RED-FU-018 — Scanner in-process sandbox (PARKED, runtime CVE trigger)
-
-**Blocks:** FUT-019 Phase 3 (email channel) — unblocked once v2.0.0 ships.
+**Unblocked once v2.0.0 ships:** FUT-019 Phase 3 (email channel).
 
 ---
 
@@ -298,5 +287,5 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 
 ---
 
-> **Last updated:** 2026-06-30 — Phase 7 + 8.1 + 8.2 + held-item rescoping (#210-#217). REDESIGN-001 down to only 8.3 (release v2.0.0) + 4 RED-FU-15/16/17/18 anchored in `futures.md` (HIGH KEK rotation queued; SAML + sandbox + checkpoint parked with explicit triggering conditions).
+> **Last updated:** 2026-06-30 — REDESIGN-001 entry trimmed to a soak-window residual after `v2.0.0-rc1` cut + pushed (tag `4dd3e63` → commit `f0896ff`, PR #219). Calendar-only remainder: soak ≥ 2026-07-07 then tag `v2.0.0`. Tail SEC items + 4 RED-FU items deferred per the residual block above.
 > **Maintainer:** see `git log -- status-tracker.md`.

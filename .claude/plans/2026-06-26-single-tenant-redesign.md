@@ -97,8 +97,10 @@
 | 6.10 | mTLS peer-CN interceptor (`MTLS_PEER_CN_ALLOWLIST`) | ✅ DONE | #204 | 2026-06-30 |
 | 6.11 | Scanner plugin sandbox | ⛔ DESCOPED — in-process sandbox replaced by `infra/runbooks/scanner-isolation.md` (container read-only + cap-drop + NetworkPolicy + cgroup limits). In-process work re-listed in `futures.md` as RED-FU-018 only if container-runtime CVE forces it | runbook | 2026-06-30 |
 | 6.12 | Audit hash-chain (`chain_seq` + per-tenant linked list, **SEC-050 fix**) | ✅ DONE | #208 | 2026-06-30 |
-| 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ⬜ OPEN | — | — |
-| 8 | Migration / rollout / release prep | ⬜ OPEN | — | — |
+| 7 | Documentation + CI lint (CLAUDE.md, docs/SERVICES.md) | ✅ DONE | #210–#214 | 2026-06-30 |
+| 8.1 | Operator-facing v1→v2 migration guide | ✅ DONE | #215 | 2026-06-30 |
+| 8.2 | README rewrite (self-hosted-first positioning) | ✅ DONE | #216 | 2026-06-30 |
+| 8.3 | Release v2.0.0 (CHANGELOG + rc1 tag → soak → v2.0.0) | ✅ DONE (rc1) — soak ≥ 2026-07-07, then v2.0.0 final | #219 + tag `4dd3e63` | 2026-06-30 |
 
 **Top-5 critical findings status (4 of 5 closed):**
 
@@ -1418,7 +1420,7 @@ Breaking changes:
 
 - [x] CHANGELOG entry covering every breaking change. _Shipped in `CHANGELOG.md` (2026-06-30)._
 - [x] Conventional commits scoped `feat(redesign)` / `fix(redesign)` make the changelog mostly auto-generatable. _Verified — every REDESIGN-001 PR title is a conventional commit; the v2.0.0-rc1 CHANGELOG section was harvested from `git log`._
-- [ ] Tag `v2.0.0-rc1` after Phase 7 ships, soak for a week, then `v2.0.0`. _CHANGELOG PR opened; tag requires operator confirmation before push (shared-state action)._
+- [x] Tag `v2.0.0-rc1` after Phase 7 ships, soak for a week, then `v2.0.0`. _`v2.0.0-rc1` cut + pushed 2026-06-30 (tag `4dd3e63`, points at commit `f0896ff`). Soak target ≥ 2026-07-07; final `v2.0.0` tag is a calendar event, not a code task._
 
 ---
 
