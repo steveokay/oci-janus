@@ -16,4 +16,5 @@ use (
 	./services/storage
 	./services/tenant
 	./services/webhook
+	./tools/spec-lint
 )
