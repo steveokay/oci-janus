@@ -679,7 +679,134 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 	if err := r.checkSignatureAdmission(ctx5, tenantID, repoID, m.GetDigest()); err != nil {
 		return nil, err
 	}
+
+	// CVSS-gated admission (futures.md FUT-021). Same "after manifest
+	// fetch" ordering rationale as the signature check — a 404 stays a
+	// 404. Ordered AFTER the signature check so a repo that requires
+	// both signed AND scan-clean images surfaces the signature error
+	// first (the signature gate is the more "structural" policy — no
+	// signature at all is a bigger red flag than a HIGH finding).
+	if err := r.checkCVSSAdmission(ctx5, tenantID, repoID, m.GetDigest()); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// checkCVSSAdmission rejects pulls from repos with a non-null
+// `max_cvss_score` when the latest scan result for the manifest carries
+// a top CVSS score that exceeds the threshold. Returns
+// ErrCVSSThresholdExceeded (wrapped with numeric context) on rejection
+// so the HTTP layer can map to 403 DENIED with an operator-actionable
+// body.
+//
+// Load-bearing invariants (see TestCheckCVSSAdmission_* in
+// registry_test.go):
+//   1. Repo fetch fails (metadata blip)     → warn + allow (fail-OPEN).
+//   2. max_cvss_score is null (default)     → allow (no gate).
+//   3. Scan result missing (NotFound)       → info + allow (fail-OPEN,
+//      first pull of a manifest before the scanner catches up).
+//   4. Scan RPC unreachable                 → warn + allow (fail-OPEN;
+//      operators can flip to fail-CLOSED via env in a follow-up).
+//   5. top_cvss > threshold                 → deny (fail-CLOSED).
+//   6. top_cvss == threshold                → allow (`>` not `>=`).
+//
+// CVSS derivation for v1: the scanner's plugin.Finding shape does not
+// yet carry a numeric CVSS score, so we derive top CVSS from the
+// SeverityCounts map using standard v3.1 band midpoints (LOW=39,
+// MEDIUM=69, HIGH=89, CRITICAL=100). This means:
+//   threshold 100 → blocks nothing (opt-in default)
+//   threshold  89 → blocks CRITICAL only
+//   threshold  69 → blocks HIGH + CRITICAL
+//   threshold  39 → blocks MEDIUM + HIGH + CRITICAL
+// The plugin.Finding.CVSS numeric field is a Phase 2 follow-up; once
+// findings carry the raw score, this function switches to reading the
+// JSON directly.
+func (r *Registry) checkCVSSAdmission(ctx context.Context, tenantID, repoID, manifestDigest string) error {
+	repo, err := r.metadata.GetRepository(ctx, &metadatav1.GetRepositoryRequest{
+		RepoId:   repoID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		// Same fail-OPEN posture as checkSignatureAdmission's repo lookup.
+		slog.WarnContext(ctx, "cvss admission: GetRepository failed (failing open)",
+			"err", err, "repo_id", repoID,
+		)
+		return nil
+	}
+	// max_cvss_score is a proto Int32Value wrapper — nil means the
+	// column is NULL (no gate configured). This is the common case and
+	// short-circuits with zero extra work.
+	if repo.GetMaxCvssScore() == nil {
+		return nil
+	}
+	threshold := repo.GetMaxCvssScore().GetValue()
+
+	scan, err := r.metadata.GetScanResult(ctx, &metadatav1.GetScanResultRequest{
+		TenantId:       tenantID,
+		RepoId:         repoID,
+		ManifestDigest: manifestDigest,
+	})
+	if err != nil {
+		if isGRPCNotFound(err) {
+			// First-time pull on this manifest, or the scanner hasn't
+			// finished the initial scan yet. Fail-OPEN so operators
+			// don't block their own CI on scanner queue depth. Logged
+			// at Info because it's expected transient state, not an
+			// error worth an operator page.
+			slog.InfoContext(ctx, "cvss admission: no scan result yet, allowing pull",
+				"repo_id", repoID, "manifest_digest", manifestDigest,
+				"threshold", threshold,
+			)
+			return nil
+		}
+		// Scanner / metadata reachable failure — fail-OPEN like the
+		// signature admission path. Logged at Warn because a persistent
+		// failure here means the gate is degraded.
+		slog.WarnContext(ctx, "cvss admission: GetScanResult failed (failing open)",
+			"err", err, "repo_id", repoID, "manifest_digest", manifestDigest,
+		)
+		return nil
+	}
+
+	topCVSS := topCVSSFromSeverity(scan.GetSeverityCounts())
+	if topCVSS > threshold {
+		slog.WarnContext(ctx, "cvss admission: rejecting pull, top CVSS exceeds threshold",
+			"repo_id", repoID, "manifest_digest", manifestDigest,
+			"top_cvss", topCVSS, "threshold", threshold,
+		)
+		// Wrap with %w so callers can errors.Is(err, ErrCVSSThresholdExceeded)
+		// AND read the numeric context via err.Error(). The HTTP layer
+		// includes err.Error() in the response body so CI tooling can
+		// decide next steps (waive? patch? rebuild?).
+		return fmt.Errorf("%w: top CVSS %d exceeds threshold %d",
+			ErrCVSSThresholdExceeded, topCVSS, threshold)
+	}
+	return nil
+}
+
+// topCVSSFromSeverity derives a top CVSS integer (0-100) from the
+// scanner's SeverityCounts map using standard v3.1 band midpoints.
+// Only counts a band when it has at least one finding — an all-zero
+// map produces 0 (clean scan, always allows).
+//
+// Kept as a package-private helper so unit tests can pin the mapping
+// without a running scanner. The chosen midpoints intentionally sit
+// BELOW the band ceilings so a threshold set at the ceiling ALLOWS the
+// band (e.g. threshold=89 lets HIGH through because 89 > 89 is false).
+func topCVSSFromSeverity(counts map[string]int32) int32 {
+	if counts["CRITICAL"] > 0 {
+		return 100
+	}
+	if counts["HIGH"] > 0 {
+		return 89
+	}
+	if counts["MEDIUM"] > 0 {
+		return 69
+	}
+	if counts["LOW"] > 0 {
+		return 39
+	}
+	return 0
 }
 
 // checkSignatureAdmission rejects pulls from repos with
