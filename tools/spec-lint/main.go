@@ -84,7 +84,7 @@ func main() {
 			Check:       ruleEventCatalogueCovered,
 		},
 		{
-			Description: "CLAUDE.md §7 — every service main.go must call loader.ValidateMTLSConfig before starting servers",
+			Description: "CLAUDE.md §7 — every service main.go must call loader.ValidateMTLSConfig before starting servers OR carry a `// spec-lint: skip mtls-validate` annotation with a reason",
 			Check:       ruleEveryServiceValidatesMTLS,
 		},
 		{
@@ -406,12 +406,22 @@ func ruleEveryServiceValidatesMTLS(root string) error {
 	// or one of the BaseConfig methods that funnel through the same gate
 	// (the Phase 1.3 wiring uses a config.Validate() that runs the mTLS
 	// check inside).
+	//
+	// Escape hatch: a service that is legitimately NOT part of the gRPC
+	// mesh (e.g. services/mcp, which is a stdio/HTTP MCP server acting
+	// as a CLIENT of the BFF) may declare `// spec-lint: skip mtls-validate`
+	// in its main.go. Mirrors the `// audit: skip` precedent honoured by
+	// ruleEventCatalogueCovered above. The annotation MUST be followed by
+	// a `— <reason>` clause so a future reader understands the exemption.
 	servicesDir := filepath.Join(root, "services")
 	entries, err := os.ReadDir(servicesDir)
 	if err != nil {
 		return fmt.Errorf("read services dir: %w", err)
 	}
 	gateRE := regexp.MustCompile(`ValidateMTLSConfig|cfg\.Validate\(\)|loader\.Validate`)
+	// Skip annotation. em-dash (—) OR ASCII hyphen accepted so the rule
+	// is friendly to environments where operators can't easily type U+2014.
+	skipRE := regexp.MustCompile(`//\s*spec-lint:\s*skip\s+mtls-validate\s*[—-]\s*\S`)
 	var missing []string
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -425,12 +435,16 @@ func ruleEveryServiceValidatesMTLS(root string) error {
 			}
 			return rerr
 		}
-		if !gateRE.MatchString(body) {
-			missing = append(missing, mainPath)
+		if gateRE.MatchString(body) {
+			continue
 		}
+		if skipRE.MatchString(body) {
+			continue
+		}
+		missing = append(missing, mainPath)
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("the following service main.go files don't call ValidateMTLSConfig / Validate (Phase 1.3 invariant): %v", missing)
+		return fmt.Errorf("the following service main.go files don't call ValidateMTLSConfig / Validate (Phase 1.3 invariant) and lack a `// spec-lint: skip mtls-validate — <reason>` annotation: %v", missing)
 	}
 	return nil
 }

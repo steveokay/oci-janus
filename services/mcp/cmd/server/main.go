@@ -12,6 +12,13 @@
 //
 // FUT-031. Read-only tools only in v1; mutating tools land in Wave 2
 // with explicit consent UX.
+//
+// spec-lint: skip mtls-validate — MCP is a stdio/HTTP MCP server that
+// acts as a CLIENT of the BFF (`/api/v1/*`) using a plain-HTTPS Bearer
+// token. It runs no gRPC server, joins no gRPC mesh, and therefore has
+// no mTLS material to validate. The Phase 1.3 mTLS-config gate applies
+// only to services that terminate mTLS-fronted gRPC connections; MCP
+// does not, so the CLAUDE.md §7 invariant is legitimately N/A.
 package main
 
 import (
