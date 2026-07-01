@@ -691,7 +691,10 @@ prioritised for backlog uptake.
 - **ARCH-005** — Enforce production-mode config invariants in `libs/config/loader`.
   CLAUDE.md §7 says "reject empty cert paths when `OTEL_ENVIRONMENT=production`" —
   no service does this. Apache 2.0 release means anyone can stand this up; silent
-  insecure defaults are a footgun. **Effort:** S.
+  insecure defaults are a footgun. **Effort:** S. Fold in (Fable sec review
+  2026-07-01): refuse to boot when a known-default dev credential fingerprint
+  (`registry/registry`, `minioadmin`, `dev-root-token`) is detected in
+  production mode — same posture as the `sslmode=disable` rejection (SEC-022).
 - ~~**QA-001**~~ — DONE 2026-06-24 (PR #64). Migration `000002` adds
   `tenant_id` + composite UNIQUE `(tenant_id, manifest_digest, signer_id)`;
   `services/signer` propagates `tenant_id` through store / repo / handler;
@@ -1685,6 +1688,142 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/audit` (scheduled category), `services/
   management` (version endpoint), `frontend` (banner).
 - **Depends on:** FUT-019 phase 2 for the worker + category plumbing.
+
+---
+
+## Fable review absorption — 2026-07-01
+
+> Absorbed from three review docs (`docs/{ui,sec,backend}-suggestion-fable.md`,
+> deleted once absorbed here). Items already tracked elsewhere were skipped
+> (Cmd+K → FUT-037, ops attention strip → FUT-035, vuln triage → FUT-030,
+> MFA → Tier 1 #1, universal RLS → ARCH-001, circuit breaker → ARCH-009,
+> read replicas → ARCH-013/014, CI items → REM-014/016/020, KEK rotation →
+> RED-FU-015, FE test depth → QA-020). Three claims were verified false and
+> dropped: `infra/runbooks/secret-rotation.md` "missing" (it exists),
+> `server.exe`/`cover_*.out` "committed" (untracked + gitignored), and "no
+> rate limit on login" (`CheckIPRateLimit` already returns 429 — only the
+> per-username dimension is missing, see FUT-052).
+
+### FUT-048 — Consumer idempotency + poison-message policy
+- **Why:** ARCH-002 (transactional outbox) covers the *publish* side only.
+  Consumers have DLX + manual ack but no documented redelivery cap and no
+  idempotency convention — a crash between side-effect and ACK reprocesses
+  the event.
+- **What:** `message_id` on all published events (publisher is already
+  typed); consumer-side dedup (Redis `SETNX` or a small dedup table) per
+  service; max-redelivery via `x-delivery-count` before DLX. Document the
+  convention in `docs/EVENTS.md`.
+- **Cost estimate:** ~1 week.
+- **Affects:** `libs/rabbitmq/{publisher,consumer}`, every consumer
+  service, `docs/EVENTS.md`.
+
+### FUT-049 — Supply-chain dogfooding: sign + SBOM our own images
+- **Why:** The platform verifies signatures and generates SBOMs for
+  customer images but ships its own images unsigned and SBOM-less. Strong
+  credibility signal for a registry product to eat its own dog food.
+- **What:** Cosign keyless (GitHub OIDC) signing in CI on push to GHCR;
+  syft → SPDX SBOM per service image attached as OCI referrers (we
+  implement the referrers API — use it); `cosign verify` walkthrough in
+  `docs/SELF-HOSTING.md`. Add `go mod verify` + a license check
+  (`go-licenses`) to the shared CI path while in there.
+- **Cost estimate:** ~2-3 days of CI work.
+- **Affects:** `.github/workflows`, `docs/SELF-HOSTING.md`.
+
+### FUT-050 — Storage-driver conformance test suite
+- **Why:** storage + proxy sit directly on the data path and are
+  effectively untested (coverage is 80%+ on core/auth/audit/management/
+  webhook). The driver interface in `libs/storage/driver` makes one shared
+  contract suite natural.
+- **What:** conformance tests run against all 5 backends — testcontainers
+  MinIO + filesystem in CI; S3/GCS/Azure as optional live targets. Follow
+  on with proxy pull-through digest-verification + `store.queued` retry
+  paths, and signer Vault error paths.
+- **Cost estimate:** ~1 week.
+- **Affects:** `services/storage`, `services/proxy`, `libs/testutil`.
+
+### FUT-051 — Scheduled `VerifyChain` + audit alert rules
+- **Why:** `Repository.VerifyChain` (Phase 6.12 / REM-022) exists but
+  nothing calls it — tamper evidence is only useful if something checks
+  it. Cheaper complement to RED-FU-017 (checkpoint signing, parked).
+- **What:** cron in `services/audit` runs `VerifyChain` per tenant under
+  an advisory lock; failure emits a metric + notification. Ship starter
+  Prometheus alert rules for metrics that already exist
+  (`registry_grpc_peer_cn_denied_total`, `registry_auth_jwt_kid_fallback_total`,
+  JTI-revocation Redis failures, SIEM-export `dlx_depth` growth). Document
+  the audit retention posture (hot window + archive story).
+- **Cost estimate:** ~2-3 days.
+- **Affects:** `services/audit`, `infra/` (alert rules).
+
+### FUT-052 — Login brute-force hardening (per-username dimension)
+- **Why:** the login path already has an IP-based rate limit
+  (`CheckIPRateLimit` → 429). Missing: the per-`(username, IP)` sliding
+  window with exponential backoff (not hard lockout — avoids username-DoS)
+  and an `auth.login_failed` audit event feeding SIEM export + the
+  FUT-019 `failed_login_burst` category.
+- **Cost estimate:** ~2-3 days.
+- **Affects:** `services/auth`, `services/audit`.
+
+### FUT-053 — `SSO_SAML_TRUST_EMAIL` guardrails
+- **Why:** the flag treats an IdP assertion as email verification; a
+  hostile IdP config can mint accounts for arbitrary email addresses.
+- **What:** ensure default-false, startup warning when true, and constrain
+  trust-email to a configured allowed-domain list.
+- **Cost estimate:** ~1 day.
+- **Affects:** `services/auth`, `docs/SAML.md`.
+
+### FUT-054 — OpenAPI spec for the management BFF
+- **Why:** the BFF conditionally mounts SSO/signer/scanner/gc routes on
+  env-var presence, so the REST surface is deployment-dependent and hard
+  to document; the hand-maintained Postman collection already drifted once
+  (PENTEST-033).
+- **What:** generate an OpenAPI spec from the router, publish it, and
+  generate the Postman collection from the spec instead of by hand.
+- **Cost estimate:** ~1 week.
+- **Affects:** `services/management`, `docs/postman/`.
+
+### FUT-055 — `services/mcp` positioning decision
+- **Why:** FUT-031 shipped the read-side MCP server; the service now needs
+  a declared status. Half-status services rot.
+- **What:** decide first-class (own CI workflow, coverage targets,
+  hardening-checklist row) vs experimental (marked clearly, excluded from
+  release gating) — then do the ~1 day of follow-through either way.
+- **Affects:** `services/mcp`, `.github/workflows`, `docs/MCP.md`,
+  `docs/HARDENING-CHECKLIST.md`.
+
+### FUT-056 — Operability small-fry batch
+Each ≤1 day; pick up alongside neighbouring work:
+- **GC per-run metrics** — blobs marked/swept, bytes reclaimed, duration,
+  exposed on the existing `:9090` port so GC stalls alert before disks fill.
+- **Restore-validation drill** — scheduled restore of the latest dump into
+  a scratch DB + smoke query + `VerifyChain`. Backups never restored are
+  hope, not DR. Pairs with FUT-033.
+- **Auth shadow-user lookup** — the flagged inefficient lookup sits on the
+  token-validation hot path; index or join rewrite before it shows in p99s.
+- **Scanner report persistence** — compliance reports still write to a
+  temp file; route through the storage driver so they survive restarts.
+- **Root-doc fold** — move `local-setup.md` + `prod-flow.md` into `docs/`
+  per the "root stays slim" philosophy.
+
+### FUT-057 — UI polish batch (Fable review 2026-07-01)
+None of these justify individual FUT numbers; pick with neighbouring FE work:
+- **Copy-paste ergonomics** — `docker pull` command block on tag detail,
+  `cosign verify` snippets on signed tags, one-click copy on every digest
+  (JetBrains Mono). Registry users live in terminals.
+- **Teaching empty states** — empty repo list shows the real
+  `docker login` / `docker push` commands with the deployment's hostname.
+- **Error-message mapping** — gRPC/BFF codes → human explanations at the
+  axios layer (e.g. single-mode `FAILED_PRECONDITION` on tenant create →
+  "this deployment is single-tenant"). Raw code strings never reach a toast.
+- **Session-expiry UX** — refresh failure shows a "reconnecting…" banner
+  with retry before hard logout; don't destroy form state on a blip.
+- **Live-ish freshness** — React Query `refetchInterval` (or BFF SSE) on
+  active surfaces + "updated Ns ago" stamp so tag lists update after push.
+- **Table power features** — column sort persisted to URL search params,
+  per-surface filter persistence (localStorage).
+- **Route-level code splitting** — lazy modules for heavy surfaces (SBOM
+  viewer, audit explorer) to keep first paint fast.
+- **`frontend/DESIGN.md`** — document the Beacon OKLCH tokens, spacing,
+  motion rules, font usage before OSS contributors drift them.
 
 ---
 
