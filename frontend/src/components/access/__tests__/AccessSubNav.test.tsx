@@ -217,15 +217,16 @@ describe("AccessSubNav", () => {
     await renderSubNav();
 
     // DSGN-011 — the Preview section is collapsed by default. Verify the
-    // links are hidden, then expand and verify they appear.
+    // link is hidden, then expand and verify it appears.
     // FUT-001 shipped 2026-07-01 — "Federated trust" graduated to the
     // Workspace section and is asserted in its own test below.
     // FUT-002 shipped 2026-06-30 — "Credential helpers" graduated to the
     // Workspace section and is asserted in its own test below.
-    expect(screen.queryByText("Token policies")).not.toBeInTheDocument();
+    // FUT-003 shipped 2026-07-01 — "Token policies" graduated to the
+    // Workspace section and is asserted in its own test below.
+    expect(screen.queryByText("Access review")).not.toBeInTheDocument();
     openPreviewSection();
 
-    expect(screen.getByText("Token policies")).toBeInTheDocument();
     expect(screen.getByText("Access review")).toBeInTheDocument();
   });
 
@@ -253,6 +254,20 @@ describe("AccessSubNav", () => {
     await renderSubNav();
 
     expect(screen.getByText("Federated trust")).toBeInTheDocument();
+    const expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    expect(expander).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // FUT-003 graduation regression: Token policies must render in the
+  // always-visible Workspace section for admins, NOT inside the collapsed
+  // Preview flyout. Mirrors the FUT-001/FUT-002 assertions above.
+  test("shows Token policies in Workspace section for admins without expansion", async () => {
+    mockClaims = adminClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Token policies")).toBeInTheDocument();
     const expander = document.querySelector(
       '[aria-controls="access-subnav-preview-items"]',
     );
