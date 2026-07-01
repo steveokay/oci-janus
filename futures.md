@@ -419,6 +419,12 @@ agent-style.
 </details>
 
 ### FUT-003: Token policies (max-TTL, force-rotation, idle-revoke) — Sprint 12
+
+**DONE — see `status.md` (REM-025).** Design history preserved below.
+
+<details>
+<summary>Original FUT-003 design (pre-implementation)</summary>
+
 - **Why:** Long-lived keys with no rotation policy are the #1 lateral-movement
   vector after a breach. Operators want guardrails at the workspace level.
 - **What:** New `token_policies` table on services/auth keyed by tenant + scope
@@ -427,6 +433,8 @@ agent-style.
   Enforcement: key creation rejects TTL beyond `max_ttl_days`; a background job
   (pattern: `FOR UPDATE SKIP LOCKED`) revokes keys exceeding rotation or idle
   thresholds and publishes `auth.key_revoked` audit events.
+
+</details>
 
 ### FUT-004: Access review (quarterly stale-key nudge) — Sprint 12
 - **Why:** Without a periodic review prompt, stale keys accumulate silently.

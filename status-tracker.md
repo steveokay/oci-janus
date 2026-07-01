@@ -92,29 +92,20 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 
 ---
 
-### REM-023 — FUT-001 Federated workload identity (in flight)
+### REM-025 — FUT-003 Token policies (in flight)
 
-**Affects:** `services/auth` (new `oidc_trust_configs` table + 5 gRPC RPCs + JWKS cache + issuer allowlist + `POST /auth/token/workload` exchange endpoint + per-(iss,sub) Redis rate-limit), `services/audit` (5 new mapEvent cases), `services/management` (4 BFF admin routes at `/api/v1/access/oidc-trust*`), `frontend` (new `TrustPanel` replacing preview + `CreateOIDCTrustDialog` + client-side glob validator + sidebar graduation).
+**Affects:** `services/auth` (new `token_policies` table + `api_keys.rotation_due_at` / `revoke_reason` columns + `TokenPolicyService` + Redis-debounced `last_used_at` updater + hourly `idle_revoke` worker with per-tenant advisory lock + 2 new gRPC RPCs), `services/audit` (2 new mapEvent cases: `auth.token_policy.changed` + `auth.key_revoked` with reason enum), `services/management` (2 BFF admin routes at `/api/v1/access/token-policy`), `frontend` (new `PoliciesPanel` replacing preview + `useTokenPolicy` hooks + sidebar graduation).
 
-**Status:** IN FLIGHT on `feat/fut-001-federated-workload-identity`. Second of the FUT-001..FUT-004 batch (FUT-002 shipped in PR #221; FUT-003/004 to follow). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 2. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). Vite proxy routing fix folded inline (`25be20c`) after the FE subagent's incorrect claim that inheritance from FUT-002 was sufficient.
+**Status:** IN FLIGHT on `feat/fut-003-token-policies`. Third of the FUT-001..FUT-004 batch (FUT-002 shipped #221; FUT-001 shipped #224; FUT-004 to follow — hard-depends on this PR's `last_used_at` + `rotation_due_at` columns). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 3. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). Test-fix `045f3b4` folded inline (pre-existing regression from PR #224's SEC-063).
 
-**Plan:** `docs/superpowers/plans/2026-07-01-fut-001-federated-workload-identity.md`.
+**Plan:** `docs/superpowers/plans/2026-07-01-fut-003-token-policies.md`.
 
 **Follow-ups (non-blocking, file on merge):**
-- Trust-mutation gRPC RPCs receive `actor_id` from the BFF via gRPC metadata (or a new proto field) so `auth.oidc_trust.{created,updated,deleted}` audit events carry the calling admin's user id. BE currently emits with `ActorID = ""`; the BFF just needs to plumb the caller through. Small proto extension + BFF metadata forwarding. (BE spec-review 2026-07-01.)
-- FE kebab menu exposes Delete only; Edit deferred per plan hint. `useUpdateOIDCTrust` hook is already wired for the future consumer. (FE spec-review 2026-07-01.)
-- No FE success toast on trust create/delete (matches sibling `CreateServiceAccountDialog` — kept UX consistent). One-line sonner add if desired.
-- No `ci-management.yml` CI workflow (carried from REM-021 follow-up — same repo gap).
-- JWKS cache uses lazy-on-Fetch refresh instead of background 60s goroutine (spec mentions goroutine; functionally equivalent for the stated fail-closed invariant).
-- **SEC-058 (MEDIUM)** — JWKS SSRF via unbound `jwks_uri`. Add scheme + host equality with issuer; disable client redirects; apply the private-IP blocklist from services/webhook. `services/auth/internal/service/oidc_jwks.go:131-189`. (security-agent 2026-07-01.)
-- **SEC-059 (MEDIUM)** — no response-body cap on JWKS/discovery fetch. Wrap `resp.Body` with `io.LimitReader(resp.Body, 1<<20)` before JSON decode. `services/auth/internal/service/oidc_jwks.go:207`. (security-agent 2026-07-01.)
-- **SEC-060 (MEDIUM)** — `JWKSCacheTTLSeconds` bounds not validated. Reject `TTL < 60 || TTL > 86400` in service validation + CHECK constraint migration. `services/auth/internal/service/oidc_trust.go:validateOnCreate/Update`. (security-agent 2026-07-01.)
-- **SEC-061 (LOW)** — workload rate-limit key length uncapped. Hash the `(iss, sub)` tuple into a fixed-length key or truncate both to 256 chars. `services/auth/internal/handler/http_workload_token.go:195`. (security-agent 2026-07-01.)
-- **SEC-062 (LOW)** — JWKS HTTP client lacks granular timeouts. Add explicit `Transport` with `TLSHandshakeTimeout: 3s` + `ResponseHeaderTimeout: 3s`. `services/auth/internal/service/oidc_trust.go:94`. (security-agent 2026-07-01.)
-- JWKS cache holds `sync.Mutex` across the HTTP round-trip — serialises fetches for DIFFERENT issuers too. Swap for `singleflight.Group` keyed on issuer URL. Not urgent given 16-issuer cap. `services/auth/internal/service/oidc_jwks.go:80-107`. (code-review-agent + qa-agent 2026-07-01.)
-- JWKS cache lacks an explicit parallel-fetch coalesce regression test (N goroutines → `calls.Load() == 1`). Add to `oidc_jwks_test.go`. (qa-agent 2026-07-01.)
-- Rejection audit events for `issuer_not_allowed` / `audience_mismatch` / parse-failure carry `TenantID = ""` and are silently dropped by the audit consumer's `uuid.Parse` guard. Publish to a synthetic "platform" tenant or extend the consumer to accept nil. Loses forensic visibility on brute-force attempts against unknown audiences. (code-review-agent 2026-07-01.)
-- Rate-limit `INCR + unconditional EXPIRE` slides the TTL vs a strict fixed-window; doc comment now describes the sliding behaviour honestly. Swap for `SET NX EX 60` + `INCR` if strict fixed-window is preferred. (code-review-agent 2026-07-01.)
+- `rotation_due_at` is stamped via a follow-up `SetRotationDueAt` UPDATE rather than the initial INSERT in `CreateAPIKey`. On UPDATE failure the key is still created (best-effort with slog warn). Fold into the initial INSERT for atomicity. (BE spec-review 2026-07-01.)
+- Audit consumer's `RoutingKeyRevoked` mapping stamps `ActorID = "system"` unconditionally; the `if p.Reason == "manual"` branch is a no-op placeholder for future manual-actor plumbing. (BE spec-review 2026-07-01.)
+- `APIKey.RotationDueAt` + `RevokeReason` fields exist on the struct but are NOT threaded into existing `GetByID` / `ListByUser` / `ListByServiceAccount` scans (matches documented adaptation). Thread through when a caller needs them.
+- Missing regression test asserting a null `max_ttl_days` from the server renders the section as disabled with fallback default (FE spec-review 2026-07-01.)
+- Idle-revoke worker: no test explicitly asserts that a tenant with `idle_revoke_days = null` is skipped without acquiring the advisory lock.
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 
