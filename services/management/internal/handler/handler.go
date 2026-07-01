@@ -444,6 +444,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v1/access/oidc-trust/{id}", authMW(http.HandlerFunc(h.handleUpdateOIDCTrust)))
 	mux.Handle("DELETE /api/v1/access/oidc-trust/{id}", authMW(http.HandlerFunc(h.handleDeleteOIDCTrust)))
 
+	// FUT-003 Task 10 — per-tenant token policy (max TTL / rotation / idle-revoke).
+	// Both routes tenant-admin gated inside the handler; tenant_id sourced from
+	// JWT claims + actor_id (for audit) sourced from JWT sub.
+	mux.Handle("GET /api/v1/access/token-policy", authMW(http.HandlerFunc(h.handleGetTokenPolicy)))
+	mux.Handle("PUT /api/v1/access/token-policy", authMW(http.HandlerFunc(h.handlePutTokenPolicy)))
+
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
 
