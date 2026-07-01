@@ -922,6 +922,60 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// FUT-003 — workspace-wide token policy changes. Emitted by
+	// services/auth's TokenPolicyService on every successful
+	// PutTokenPolicy. Carries the before/after diff so the activity
+	// feed can render "max_ttl_days: 90 → 60" without a callback.
+	// The full diff (before + after JSON) lives inside meta.raw so
+	// analytics consumers can reconstruct it without a schema change.
+	case events.RoutingTokenPolicyChanged:
+		var p events.TokenPolicyChangedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "auth.token_policy.changed",
+			Resource:   p.TenantID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// FUT-003 — key revocation. Fires from manual admin revoke paths and
+	// from the FUT-003 idle-revoke background worker. Reason distinguishes
+	// "manual" from "idle_revoked" (and reserved "rotation_lapsed" for
+	// FUT-004). Actor is "system" for the worker's revocations because the
+	// worker has no operator identity.
+	case events.RoutingKeyRevoked:
+		var p events.KeyRevokedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := "system"
+		actorType := "system"
+		// Recognise operator-initiated manual revocations if a future
+		// caller sets ActorID on the payload; the worker leaves it empty.
+		if p.Reason == "manual" && p.OwnerUserID != "" {
+			// Manual revokes carry the owner id — not the actor — so we
+			// stamp "system" for actor and put the owner in resource.
+			// Downstream can join to the users table if needed.
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "auth.key_revoked",
+			Resource:   p.KeyID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil

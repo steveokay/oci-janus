@@ -91,6 +91,20 @@ const (
 	RoutingOIDCTrustDeleted       = "auth.oidc_trust.deleted"
 	RoutingWorkloadTokenExchanged = "auth.workload_token.exchanged"
 	RoutingWorkloadTokenRejected  = "auth.workload_token.rejected"
+
+	// FUT-003 — workspace-wide token policy.
+	//
+	// RoutingTokenPolicyChanged fires from services/auth's TokenPolicyService
+	// after a successful PutTokenPolicy. Carries the before/after diff so a
+	// subscriber can render "max_ttl_days: 90 → 60" without a callback.
+	//
+	// RoutingKeyRevoked fires from services/auth's ServiceAccountService (on
+	// manual revoke) and from the FUT-003 idle-revoke background worker.
+	// Reason distinguishes "manual" from "idle_revoked" from the FUT-004-
+	// reserved "rotation_lapsed" — the audit consumer surfaces it as
+	// metadata.reason so the activity feed can filter.
+	RoutingTokenPolicyChanged = "auth.token_policy.changed"
+	RoutingKeyRevoked         = "auth.key_revoked"
 )
 
 // Exchange names
@@ -378,6 +392,45 @@ type WorkloadTokenPayload struct {
 	Subject          string `json:"subject"`
 	ServiceAccountID string `json:"service_account_id,omitempty"`
 	Reason           string `json:"reason,omitempty"`
+}
+
+// FUT-003 payloads ─────────────────────────────────────────────────────
+
+// PolicySnapshot is a compact snapshot of a token_policies row used in
+// TokenPolicyChangedPayload's before/after diff. Nil pointer fields mean
+// "no cap for that dimension" (NULL in DB); the audit consumer preserves
+// nil vs zero so a subscriber can render "unset → 90 days" distinctly
+// from "0 days → 90 days" (the latter is impossible today — the service
+// rejects zero — but preserving the shape leaves the door open).
+type PolicySnapshot struct {
+	MaxTTLDays           *int32 `json:"max_ttl_days,omitempty"`
+	RotationIntervalDays *int32 `json:"rotation_interval_days,omitempty"`
+	IdleRevokeDays       *int32 `json:"idle_revoke_days,omitempty"`
+}
+
+// TokenPolicyChangedPayload is the wire shape of auth.token_policy.changed.
+// Fires after a successful PutTokenPolicy. Before is the state just before
+// the mutation (all-nil when the tenant had no policy row); After is the
+// state persisted by the same call. ActorID is the admin who made the
+// change (from the JWT sub).
+type TokenPolicyChangedPayload struct {
+	TenantID string         `json:"tenant_id"`
+	ActorID  string         `json:"actor_id"`
+	Before   PolicySnapshot `json:"before"`
+	After    PolicySnapshot `json:"after"`
+}
+
+// KeyRevokedPayload is the wire shape of auth.key_revoked. Fires from
+// manual admin revoke paths AND from the FUT-003 idle-revoke background
+// worker. Reason is one of "manual" | "idle_revoked" | "rotation_lapsed"
+// (the last is reserved for FUT-004). OwnerUserID is the human user for
+// human-owned keys or the SA's shadow user id for SA-owned keys — the
+// audit consumer's actor gate treats both the same.
+type KeyRevokedPayload struct {
+	TenantID    string `json:"tenant_id"`
+	KeyID       string `json:"key_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	Reason      string `json:"reason"`
 }
 
 // ServiceAccountLifecyclePayload is the wire shape of every SA mutation
