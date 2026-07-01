@@ -88,9 +88,12 @@ describe("PromoteTagDialog", () => {
     expect(
       (screen.getByLabelText(/destination org/i) as HTMLInputElement).value,
     ).toBe("acme");
+    // Use exact label match — the create-if-missing switch also mentions
+    // "destination repository" in its label copy.
     expect(
-      (screen.getByLabelText(/destination repository/i) as HTMLInputElement)
-        .value,
+      (
+        screen.getByLabelText("Destination repository") as HTMLInputElement
+      ).value,
     ).toBe("api");
     expect(
       (screen.getByLabelText(/destination tag/i) as HTMLInputElement).value,
@@ -156,5 +159,26 @@ describe("PromoteTagDialog", () => {
     // Rejection should NOT close the dialog — operator sees the toast +
     // a chance to correct their input.
     expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  // REM-030 — the create-if-missing switch must default to off and its
+  // ON state must flow into the mutation payload. Off state must NOT
+  // include the key so we don't churn wire payloads on the default path.
+  it("forwards create_if_missing when the switch is toggled on", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    // Flip the switch ON. Radix switches expose role="switch" so we can
+    // find it by accessible name.
+    await user.click(
+      screen.getByRole("switch", {
+        name: /create destination repository if it doesn't exist/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: /^promote$/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const arg = mockMutate.mock.calls[0][0] as { create_if_missing?: boolean };
+    expect(arg.create_if_missing).toBe(true);
   });
 });

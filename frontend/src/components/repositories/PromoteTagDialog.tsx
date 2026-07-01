@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
@@ -15,15 +15,34 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { usePromoteTag } from "@/lib/api/promotions";
+import { useMe } from "@/lib/api/me";
 
-// PromoteTagDialog — FUT-020.
+// PromoteTagDialog — FUT-020 + REM-030.
 //
 // Posts to POST /api/v1/repositories/{srcOrg}/{srcRepo}/tags/{srcTag}/promote
-// with `{dst_org, dst_repo, dst_tag, note?}`. The backend requires writer
-// role on BOTH source and destination — we don't pre-validate on the FE,
-// we just surface the 403 as a clear toast so the operator understands
-// which side they lack access to.
+// with `{dst_org, dst_repo, dst_tag, note?, create_if_missing?}`. The backend
+// requires writer role on BOTH source and destination — we don't pre-validate
+// on the FE, we just surface the 403 as a clear toast so the operator
+// understands which side they lack access to.
+//
+// REM-030 changes vs the original FUT-020 dialog:
+//   1. Destination org is a dropdown populated from useMe().memberships —
+//      the caller's writer-tier org scopes. Falls back to a free-text input
+//      when the caller is a global admin (no per-org grants) or when the
+//      me query is still loading, so the dialog remains usable in both
+//      cases.
+//   2. New "Create destination repository if it doesn't exist" switch
+//      forwards create_if_missing to the BFF. Default off — matches the
+//      original 404-on-missing behaviour so operators opt in.
 //
 // Server-side validation matches the CLAUDE.md §7 regex vocabulary:
 //   org  : ^[a-z0-9-]{2,64}$
@@ -53,9 +72,15 @@ const schema = z.object({
     .string()
     .max(256, "Keep the note under 256 characters.")
     .optional(),
+  create_if_missing: z.boolean().default(false),
 });
 
 type FormValues = z.infer<typeof schema>;
+
+// Roles that grant write access on an org scope. Anything below `writer`
+// (reader) cannot be a promotion destination, so we filter those out. The
+// order matches the RBAC hierarchy elsewhere in the FE.
+const WRITER_ROLES = new Set(["owner", "admin", "writer"]);
 
 interface PromoteTagDialogProps {
   open: boolean;
@@ -80,10 +105,41 @@ export function PromoteTagDialog({
   srcTag,
 }: PromoteTagDialogProps): React.ReactElement {
   const promote = usePromoteTag(srcOrg, srcRepo, srcTag);
+  const me = useMe();
+
+  // Derive the caller's writer-tier org scopes. A membership entry looks
+  // like { scope_type: "org", scope_value: "myorg", role: "writer" } —
+  // we filter to org scopes only and keep the union across role rows.
+  // Include the source org so the "same-org promotion" flow still has
+  // an option even if the caller's writer grant is scoped to a specific
+  // repo (in which case org-level memberships may be empty).
+  const orgOptions = React.useMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const m of me.data?.memberships ?? []) {
+      if (m.scope_type === "org" && WRITER_ROLES.has(m.role)) {
+        set.add(m.scope_value);
+      }
+    }
+    set.add(srcOrg);
+    return Array.from(set).sort();
+  }, [me.data, srcOrg]);
+
+  // Global admins skip per-org grants — they can push into any org, so
+  // the dropdown would be empty of memberships (only the srcOrg). In
+  // that case we render a free-text input so the operator can still type
+  // an org they know exists but have no per-org membership row for.
+  const isGlobalAdmin = (me.data?.roles ?? []).includes("admin");
+  // Fall back to text input when the me query hasn't resolved yet, when
+  // the caller is a global admin, or when we somehow got zero org
+  // options. Keeps the dialog usable in every state.
+  const useTextInput =
+    !me.data || isGlobalAdmin || orgOptions.length <= 1;
+
   const {
     register,
     handleSubmit,
     reset,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -92,6 +148,7 @@ export function PromoteTagDialog({
       dst_repo: srcRepo,
       dst_tag: srcTag,
       note: "",
+      create_if_missing: false,
     },
   });
 
@@ -104,6 +161,7 @@ export function PromoteTagDialog({
         dst_repo: srcRepo,
         dst_tag: srcTag,
         note: "",
+        create_if_missing: false,
       });
     }
   }, [open, reset, srcOrg, srcRepo, srcTag]);
@@ -115,6 +173,9 @@ export function PromoteTagDialog({
         dst_repo: values.dst_repo.trim(),
         dst_tag: values.dst_tag.trim(),
         note: values.note?.trim() || undefined,
+        // Only forward when true — keeps the wire payload minimal on the
+        // common (default off) path.
+        create_if_missing: values.create_if_missing || undefined,
       });
       toast.success(
         `Promoted ${srcOrg}/${srcRepo}:${srcTag} → ${prom.dst_org}/${prom.dst_repo}:${prom.dst_tag}.`,
@@ -131,7 +192,7 @@ export function PromoteTagDialog({
         status === 403
           ? "Writer role required on both source and destination repositories."
           : status === 404
-            ? "Source tag or destination repository not found."
+            ? "Source tag or destination repository not found. Toggle \"Create destination repository\" if you want the BFF to create it."
             : status === 409
               ? "Destination tag is immutable — pick a different tag name or lift the pin."
               : status === 400
@@ -165,25 +226,56 @@ export function PromoteTagDialog({
           className="space-y-6"
           noValidate
         >
-          {/* Destination org */}
+          {/* Destination org — dropdown when we have writer-tier memberships,
+              free-text otherwise (global admins, unresolved me query). */}
           <div>
             <Label htmlFor="promote-dst-org" className="mb-2 inline-block">
               Destination org
             </Label>
-            <Input
-              id="promote-dst-org"
-              autoFocus
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-              aria-invalid={Boolean(errors.dst_org) || undefined}
-              {...register("dst_org")}
-            />
+            {useTextInput ? (
+              <Input
+                id="promote-dst-org"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono"
+                aria-invalid={Boolean(errors.dst_org) || undefined}
+                {...register("dst_org")}
+              />
+            ) : (
+              <Controller
+                control={control}
+                name="dst_org"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger
+                      id="promote-dst-org"
+                      aria-invalid={Boolean(errors.dst_org) || undefined}
+                      className="w-full font-mono"
+                    >
+                      <SelectValue placeholder="Pick an org" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orgOptions.map((org) => (
+                        <SelectItem key={org} value={org} className="font-mono">
+                          {org}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            )}
             {errors.dst_org ? (
               <p className="mt-2 text-xs text-[var(--color-danger)]">
                 {errors.dst_org.message}
               </p>
-            ) : null}
+            ) : useTextInput ? null : (
+              <p className="mt-3 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
+                Orgs where you have writer-or-above role. The BFF still
+                re-checks the destination repo scope on submit.
+              </p>
+            )}
           </div>
 
           {/* Destination repo */}
@@ -229,6 +321,41 @@ export function PromoteTagDialog({
                 &quot;promote v1.0 to prod&quot; flow.
               </p>
             )}
+          </div>
+
+          {/* Create-if-missing toggle. Layout mirrors the settings-page
+              toggle rows: label + description on the left, switch on the
+              right. Wrapped in a bordered surface so it visually reads as
+              a distinct control rather than another form field. */}
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <Label
+                  htmlFor="promote-create-if-missing"
+                  className="cursor-pointer text-sm"
+                >
+                  Create destination repository if it doesn&apos;t exist
+                </Label>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
+                  Off (default) — a typo returns 404 so an accidental
+                  destination is caught up-front. On — the BFF creates
+                  the destination repo with permissive defaults inside
+                  the same transaction. The destination ORG must exist
+                  either way.
+                </p>
+              </div>
+              <Controller
+                control={control}
+                name="create_if_missing"
+                render={({ field }) => (
+                  <Switch
+                    id="promote-create-if-missing"
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
           </div>
 
           {/* Optional note */}

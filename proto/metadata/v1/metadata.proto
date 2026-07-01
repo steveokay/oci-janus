@@ -1105,6 +1105,14 @@ message PromoteTagRequest {
   string dst_tag       = 7;
   string actor_user_id = 8;
   string note          = 9;
+  // create_if_missing (REM-030 follow-up to FUT-020) — when true and the
+  // destination repository does not exist, PromoteTag creates it inside
+  // the same transaction with permissive defaults (public=false,
+  // immutable_tags=false, no signature policy, no CVSS gate). The
+  // destination ORG must already exist regardless — auto-creating orgs
+  // would silently mint RBAC-relevant surfaces from a typo. Default
+  // false preserves the fail-closed behaviour today.
+  bool   create_if_missing = 10;
 }
 
 // Promotion is the wire form of one promotions row.

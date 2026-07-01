@@ -172,6 +172,69 @@ func TestPromoteTag_DestRepoMissing(t *testing.T) {
 	}
 }
 
+// TestPromoteTag_DestRepoMissing_CreateIfMissing verifies the REM-030
+// auto-create branch: when the destination repository row does not exist
+// and CreateIfMissing=true, PromoteTag creates the repo inside the same
+// transaction and the promotion succeeds. The destination ORG must exist
+// (the seed helper provisions prom-org for both sides).
+func TestPromoteTag_DestRepoMissing_CreateIfMissing(t *testing.T) {
+	repo := buildRepo(t)
+	ctx := context.Background()
+	seed := seedPromoteFixtures(t, repo, false)
+
+	tenantUUID := uuid.MustParse(devTenantID)
+	prom, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
+		TenantID:        tenantUUID,
+		SrcOrg:          seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg:          seed.dstOrg, DstRepo: "fresh-dst-repo", DstTag: "v1",
+		CreateIfMissing: true,
+	})
+	if err != nil {
+		t.Fatalf("PromoteTag(create_if_missing=true): %v", err)
+	}
+	if prom.GetDstDigest() != seed.srcDigest {
+		t.Fatalf("dst_digest mismatch: got %s, want %s", prom.GetDstDigest(), seed.srcDigest)
+	}
+
+	// The auto-created repo must be visible via a subsequent lookup with
+	// permissive defaults (not immutable, not public). Look up via
+	// GetRepositoryByName so we can go org name → repo without knowing
+	// the freshly minted UUID.
+	orgID, err := repo.GetOrCreateOrganization(ctx, devTenantID, seed.dstOrg)
+	if err != nil {
+		t.Fatalf("GetOrCreateOrganization: %v", err)
+	}
+	got, err := repo.GetRepositoryByName(ctx, devTenantID, orgID, "fresh-dst-repo")
+	if err != nil {
+		t.Fatalf("GetRepositoryByName fresh-dst-repo: %v", err)
+	}
+	if got.GetImmutableTags() {
+		t.Fatal("auto-created repo should default to immutable_tags=false")
+	}
+	if got.GetIsPublic() {
+		t.Fatal("auto-created repo should default to is_public=false")
+	}
+}
+
+// TestPromoteTag_DestOrgMissing_CreateIfMissing verifies the auto-create
+// branch still fails closed when the destination ORG is missing. Orgs
+// are RBAC-relevant, so a typo in the org must never silently mint one.
+func TestPromoteTag_DestOrgMissing_CreateIfMissing(t *testing.T) {
+	repo := buildRepo(t)
+	ctx := context.Background()
+	seed := seedPromoteFixtures(t, repo, false)
+
+	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
+		TenantID:        uuid.MustParse(devTenantID),
+		SrcOrg:          seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg:          "does-not-exist-org", DstRepo: "any-repo", DstTag: "v1",
+		CreateIfMissing: true,
+	})
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("want ErrNotFound (org missing), got %v", err)
+	}
+}
+
 // TestPromoteTag_ImmutableDestExistingSameDigest verifies the idempotent
 // re-promotion case: the destination tag exists at the SAME digest as the
 // source, so even under immutable_tags=true the operation succeeds and

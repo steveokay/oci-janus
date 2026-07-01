@@ -42,6 +42,12 @@ type promoteRequest struct {
 	DstRepo string `json:"dst_repo"`
 	DstTag  string `json:"dst_tag"`
 	Note    string `json:"note,omitempty"`
+	// CreateIfMissing (REM-030) — when true, the metadata surface creates
+	// the destination repository if it does not exist. The BFF still
+	// requires writer role on the destination scope; the promotion path
+	// does not exempt auto-creation from RBAC. Default false preserves
+	// the original 404-on-missing-dst behaviour.
+	CreateIfMissing bool `json:"create_if_missing,omitempty"`
 }
 
 // promoteMaxNote caps operator-supplied notes at 256 chars. Kept small
@@ -161,15 +167,16 @@ func (h *Handler) handlePromoteTag(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromContext(r.Context())
 
 	prom, err := h.meta.PromoteTag(r.Context(), &metadatav1.PromoteTagRequest{
-		TenantId:    tenantID,
-		SrcOrg:      srcOrg,
-		SrcRepo:     srcRepoName,
-		SrcTag:      srcTagName,
-		DstOrg:      body.DstOrg,
-		DstRepo:     body.DstRepo,
-		DstTag:      body.DstTag,
-		ActorUserId: actorID,
-		Note:        body.Note,
+		TenantId:        tenantID,
+		SrcOrg:          srcOrg,
+		SrcRepo:         srcRepoName,
+		SrcTag:          srcTagName,
+		DstOrg:          body.DstOrg,
+		DstRepo:         body.DstRepo,
+		DstTag:          body.DstTag,
+		ActorUserId:     actorID,
+		Note:            body.Note,
+		CreateIfMissing: body.CreateIfMissing,
 	})
 	if err != nil {
 		// Map the metadata-side error codes onto HTTP. Anything else falls
