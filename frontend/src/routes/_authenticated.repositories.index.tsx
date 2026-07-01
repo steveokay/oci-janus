@@ -35,7 +35,14 @@ function RepositoriesPage(): React.ReactElement {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useRepositories({ visibility, artifactType: "image" });
+    // artifactType "all" — the /repositories catalog surfaces every repo
+    // the caller can see, including freshly-created empty ones. The prior
+    // "image" filter dropped empty repos server-side via the metadata
+    // EXISTS(manifests) clause, so operators who just clicked "Create
+    // repository" or promoted-with-create-if-missing (REM-030) saw nothing
+    // until the first push. /helm and /security keep their typed filters —
+    // they're artifact-specific catalogs, not the master list.
+  } = useRepositories({ visibility, artifactType: "all" });
 
   // Flatten infinite pages into a single list. Filtering on the client by
   // name/org is acceptable for the page sizes we expect; server-side search
