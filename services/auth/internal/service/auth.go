@@ -654,9 +654,19 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, 
 		if perr != nil {
 			return nil, "", fmt.Errorf("load token policy: %w", perr)
 		}
-		if policy.MaxTTLDays != nil && expiresAt != nil {
+		// SEC-064 (2026-07-01): the initial impl guarded on `expiresAt != nil`,
+		// which silently skipped enforcement when the caller omitted expiry.
+		// Result: any caller trivially bypassed a `max_ttl_days=30` policy by
+		// leaving the expiry field blank — the key persisted with expires_at
+		// NULL and validated forever. Now we treat nil as "caller didn't
+		// specify; clamp to the policy cap." A caller wanting the full cap
+		// worth of TTL doesn't have to compute it themselves.
+		if policy.MaxTTLDays != nil {
 			maxAllowed := time.Now().Add(time.Duration(*policy.MaxTTLDays) * 24 * time.Hour)
-			if expiresAt.After(maxAllowed) {
+			if expiresAt == nil {
+				clamped := maxAllowed
+				expiresAt = &clamped
+			} else if expiresAt.After(maxAllowed) {
 				return nil, "", status.Errorf(codes.InvalidArgument,
 					"requested TTL exceeds workspace max (%d days)", *policy.MaxTTLDays)
 			}
