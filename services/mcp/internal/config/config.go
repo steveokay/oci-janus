@@ -81,7 +81,7 @@ func Load() (*Config, error) {
 	v.SetDefault("LOG_LEVEL", "info")
 	v.SetDefault("LOG_FORMAT", "json")
 	v.SetDefault("MCP_TRANSPORT", TransportStdio)
-	v.SetDefault("MCP_HTTP_ADDR", ":8087")
+	v.SetDefault("MCP_HTTP_ADDR", ":8092")
 
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
