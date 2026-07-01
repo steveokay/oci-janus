@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-SERVICES := auth audit core gc gateway metadata proxy scanner signer storage tenant webhook
+SERVICES := auth audit core gc gateway mcp metadata proxy scanner signer storage tenant webhook
 GO := go
 BUF := buf
 

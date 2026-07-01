@@ -28,6 +28,7 @@ version: "3.9"
 #   registry-gc:        8089 (HTTP), 50060 (gRPC)
 #   registry-tenant:    8090 (HTTP), 50061 (gRPC)
 #   registry-management: 8091 (HTTP — REST/BFF, no gRPC server)
+#   registry-mcp:       8092 (HTTP — MCP protocol, opt-in via --profile mcp)
 #
 # Scanner requires a plugin binary; start it separately:
 #   docker compose --profile scanner up -d registry-scanner
@@ -926,6 +927,52 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
+
+  # ── registry-mcp (FUT-031, opt-in via --profile mcp) ────────────────────────
+  #
+  # Model Context Protocol server. Wraps the management BFF in the MCP
+  # JSON-RPC protocol so AI coding assistants (Cursor remote,
+  # continue.dev) can query the registry in natural language.
+  #
+  # Read-only tool surface in v1 — no mutations. See docs/MCP.md for the
+  # tool list + Claude Desktop stdio setup (which uses `docker run -i`
+  # directly, NOT this compose service).
+  #
+  # Bring up:
+  #   docker compose --profile mcp up -d registry-mcp
+  #
+  # An operator provisions MCP_API_KEY as a service-account key with
+  # read scopes via /api-keys in the dashboard, then puts it in
+  # infra/docker-compose/.env alongside MCP_TENANT_ID (the workspace
+  # tenant id — usually the bootstrap tenant in single-mode).
+  registry-mcp:
+    build:
+      context: ../../
+      dockerfile: services/mcp/Dockerfile
+      args:
+        SERVICE: mcp
+    profiles: ["mcp"]
+    environment:
+      # No OTEL — this service is a small HTTP client wrapper; keep it
+      # zero-instrumentation until observability tells us we need it.
+      MCP_TRANSPORT: http
+      MCP_HTTP_ADDR: ":8092"
+      MCP_MANAGEMENT_URL: http://registry-management:8085
+      # Operator provides these two via .env. Empty MCP_API_KEY makes
+      # the container fail at startup with a clean error — see
+      # services/mcp/internal/config for the validation.
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_TENANT_ID: ${MCP_TENANT_ID:-${PLATFORM_ADMIN_TENANT_ID:-98dbe36b-ef28-4903-b25c-bff1b2921c9e}}
+      LOG_FORMAT: json
+      LOG_LEVEL: info
+    ports:
+      - "8092:8092"
+    depends_on:
+      registry-management:
+        condition: service_healthy
+    networks:
+      - registry
     restart: unless-stopped
 
   # Scanner is opt-in via the `scanner` profile. Zero config required:
