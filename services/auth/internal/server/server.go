@@ -157,10 +157,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	svc.SetTokenPolicyRepo(tokenPolicyRepo)
 	tokenPolicySvc := service.NewTokenPolicyService(tokenPolicyRepo, saAudit)
 
+	// FUT-004 — access-review service consumed by the gRPC handler
+	// (ListStaleKeys + SnoozeAPIKeyReview) and by the weekly worker
+	// below. Shares the same audit emitter as the other FUT services
+	// so auth.access_review.snoozed lands on the right routing key
+	// via the FUT-003 hotfix #226 pattern.
+	accessReviewSvc := service.NewAccessReviewService(apiKeys, tokenPolicyRepo, saAudit)
+
 	authv1.RegisterAuthServiceServer(grpcSrv,
 		handler.NewGRPCHandler(svc, pub).
 			WithOIDCTrustService(oidcSvc).
-			WithTokenPolicyService(tokenPolicySvc),
+			WithTokenPolicyService(tokenPolicySvc).
+			WithAccessReviewService(accessReviewSvc),
 	)
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
@@ -175,6 +183,27 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	go idleRevokeWorker.Run(ctx)
 	slog.Info("FUT-003 idle-revoke worker started",
 		"cadence", idleRevokeWorker.RunningKeyLabel(),
+	)
+
+	// FUT-004 — weekly access-review worker. Nudge-only per spec
+	// Decision #4: emits auth.access_review.due per stale key so the
+	// FE panel + notification bell surface them; does NOT revoke
+	// (that's FUT-003's idle_revoke job). Per-tenant advisory lock
+	// keeps two auth replicas from double-firing.
+	//
+	// pub may be nil (no broker) — the worker still runs but the
+	// audit emit becomes a slog line. Passing the rabbitMQAuditEmitter
+	// via a small adapter satisfies the worker's narrow
+	// AccessReviewPublisher interface without importing the worker
+	// into the server's public surface.
+	accessReviewWorker := worker.NewAccessReview(pool,
+		accessReviewSvc,
+		worker.NewAPIKeyTenantEnumerator(pool),
+		newAccessReviewPublisher(pub),
+		slog.Default())
+	go accessReviewWorker.Run(ctx)
+	slog.Info("FUT-004 access-review worker started",
+		"cadence", accessReviewWorker.RunningKeyLabel(),
 	)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -612,10 +641,13 @@ func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) e
 		return e.publishTokenPolicyChanged(ctx, ev)
 	case events.RoutingKeyRevoked:
 		return e.publishKeyRevoked(ctx, ev)
+	case events.RoutingAccessReviewSnoozed:
+		return e.publishAccessReviewSnoozed(ctx, ev)
 	default:
 		return e.publishSALifecycle(ctx, ev)
 	}
 }
+
 
 // publishSALifecycle is the original (pre-FUT-001) lifecycle path —
 // marshals the AuditEvent into ServiceAccountLifecyclePayload and
@@ -760,6 +792,30 @@ func (e rabbitMQAuditEmitter) publishKeyRevoked(ctx context.Context, ev service.
 	return nil
 }
 
+// publishAccessReviewSnoozed marshals the pre-serialised payload from
+// Fields["payload_json"] into the auth.access_review.snoozed envelope.
+// AccessReviewService.emitSnoozed pre-encodes AccessReviewSnoozedPayload
+// as JSON and stashes it under payload_json so this helper can forward
+// verbatim without re-marshalling.
+func (e rabbitMQAuditEmitter) publishAccessReviewSnoozed(ctx context.Context, ev service.AuditEvent) error {
+	payload := []byte(stringField(ev.Fields, "payload_json"))
+	if len(payload) == 0 {
+		return fmt.Errorf("access review snoozed: empty payload_json in audit fields")
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       ev.Action,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
+		return fmt.Errorf("publish access review snoozed: %w", err)
+	}
+	return nil
+}
+
 // stringField is a small helper that extracts a string from the
 // AuditEvent.Fields map, returning "" when missing or wrong-typed.
 // Used by the FUT-001 publishers so a producer that forgets a field
@@ -806,6 +862,44 @@ func (a *idleRevokePublisher) PublishKeyRevoked(ctx context.Context, tenantID uu
 	}
 	if err := a.pub.Publish(ctx, events.RoutingKeyRevoked, envelope); err != nil {
 		return fmt.Errorf("publish key_revoked: %w", err)
+	}
+	return nil
+}
+
+// accessReviewPublisher adapts *publisher.Publisher to
+// worker.AccessReviewPublisher (FUT-004). Nil pub → nil-safe no-op so
+// dev stacks without RabbitMQ still tick the worker cleanly.
+type accessReviewPublisher struct {
+	pub *publisher.Publisher
+}
+
+// newAccessReviewPublisher wraps the process-wide publisher for the
+// weekly access-review worker.
+func newAccessReviewPublisher(pub *publisher.Publisher) *accessReviewPublisher {
+	return &accessReviewPublisher{pub: pub}
+}
+
+// PublishAccessReviewDue marshals + publishes an auth.access_review.due
+// envelope for one stale key. Called by the worker in Task 5. Fails-soft
+// on nil pub — parity with idleRevokePublisher.
+func (a *accessReviewPublisher) PublishAccessReviewDue(ctx context.Context, tenantID uuid.UUID, payload events.AccessReviewDuePayload) error {
+	if a.pub == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal access_review_due payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingAccessReviewDue,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    raw,
+	}
+	if err := a.pub.Publish(ctx, events.RoutingAccessReviewDue, envelope); err != nil {
+		return fmt.Errorf("publish access_review_due: %w", err)
 	}
 	return nil
 }

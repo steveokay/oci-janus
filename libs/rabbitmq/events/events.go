@@ -105,6 +105,25 @@ const (
 	// metadata.reason so the activity feed can filter.
 	RoutingTokenPolicyChanged = "auth.token_policy.changed"
 	RoutingKeyRevoked         = "auth.key_revoked"
+
+	// FUT-004 — access review.
+	//
+	// RoutingAccessReviewDue fires from the weekly access-review worker
+	// in services/auth once per stale API key surfaced during a tick.
+	// Carries the reason ("idle" | "rotation_lapsed" | "both") so the
+	// audit feed + notification bell can render "Key X due for review —
+	// idle 92 days" without a callback into services/auth.
+	//
+	// RoutingAccessReviewSnoozed fires from AccessReviewService.SnoozeAPIKeyReview
+	// after a successful snooze. Records the operator's explicit deferral
+	// so the audit trail links the operator (actor) to the snooze in a
+	// way that survives the key row's later revocation.
+	//
+	// Both are nudge-only events — neither one causes a mutation on any
+	// other service; they exist purely for the audit + notification
+	// surfaces.
+	RoutingAccessReviewDue     = "auth.access_review.due"
+	RoutingAccessReviewSnoozed = "auth.access_review.snoozed"
 )
 
 // Exchange names
@@ -451,4 +470,37 @@ type ServiceAccountLifecyclePayload struct {
 	ActorID  string         `json:"actor_id"`
 	Resource string         `json:"resource"`
 	Fields   map[string]any `json:"fields,omitempty"`
+}
+
+// FUT-004 payloads ─────────────────────────────────────────────────────
+
+// AccessReviewDuePayload is the wire shape of auth.access_review.due.
+// Fires from the weekly worker once per stale key surfaced during a
+// tick. Reason distinguishes "idle" (last_used_at past cutoff) from
+// "rotation_lapsed" (rotation_due_at in past) from "both". OwnerUserID
+// is the human user for human-owned keys or the SA's shadow user id
+// for SA-owned keys — the audit consumer's actor gate treats both the
+// same. DaysIdle is optional (zero when not applicable, e.g. a
+// rotation-only lapse on a fresh key).
+type AccessReviewDuePayload struct {
+	TenantID    string `json:"tenant_id"`
+	KeyID       string `json:"key_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	Name        string `json:"name"`
+	Reason      string `json:"reason"` // "idle" | "rotation_lapsed" | "both"
+	DaysIdle    int32  `json:"days_idle,omitempty"`
+}
+
+// AccessReviewSnoozedPayload is the wire shape of auth.access_review.snoozed.
+// Fires from AccessReviewService.SnoozeAPIKeyReview after a successful
+// snooze so the audit trail records who deferred the review + until when.
+// SnoozedUntil is RFC3339-formatted so the audit consumer can render it
+// without a parse step; DaysSnoozed carries the operator-picked window
+// so the FE (and analytics) can distinguish 30-day vs 90-day snoozes.
+type AccessReviewSnoozedPayload struct {
+	TenantID     string `json:"tenant_id"`
+	KeyID        string `json:"key_id"`
+	ActorID      string `json:"actor_id"`
+	SnoozedUntil string `json:"snoozed_until"`
+	DaysSnoozed  int32  `json:"days_snoozed"`
 }

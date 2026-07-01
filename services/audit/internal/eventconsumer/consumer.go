@@ -976,6 +976,46 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// FUT-004 — access-review "this key is due for review" nudge. Fired
+	// per stale key by the weekly worker; the notification bell + the
+	// /api-keys/review panel both consume this feed. Actor is "system"
+	// because the worker has no operator identity.
+	case events.RoutingAccessReviewDue:
+		var p events.AccessReviewDuePayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "auth.access_review.due",
+			Resource:   p.KeyID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	// FUT-004 — operator explicitly snoozed a stale-key review. Actor
+	// comes from the SnoozeAPIKeyReview caller's JWT sub (plumbed
+	// through the BFF); Resource is the key id so /activity groups the
+	// snooze next to the key's other events.
+	case events.RoutingAccessReviewSnoozed:
+		var p events.AccessReviewSnoozedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		if actor == "" {
+			actor = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  "user",
+			Action:     "auth.access_review.snoozed",
+			Resource:   p.KeyID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil

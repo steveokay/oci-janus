@@ -342,3 +342,117 @@ func (r *APIKeyRepository) ListIdleKeys(ctx context.Context, tenantID uuid.UUID,
 	}
 	return out, rows.Err()
 }
+
+// StaleKey is the projection ListStaleKeys returns — the columns the
+// FUT-004 access-review worker + FE both need to render the "Key X last
+// used Y days ago — Revoke / Keep / Snooze 30d" row and reason about
+// staleness. Kept narrow so a large tenant with thousands of live keys
+// doesn't pull unnecessary bytes over the wire.
+//
+// OwnerUserID is set from `user_id` for human-owned keys or from the
+// SA's shadow user id for SA-owned keys (via COALESCE at the SQL layer).
+// The BFF uses it to enforce "owner OR admin" on the snooze route
+// without a second round-trip into the SA table.
+type StaleKey struct {
+	ID                 uuid.UUID
+	TenantID           uuid.UUID
+	OwnerUserID        uuid.UUID
+	Name               string
+	LastUsedAt         *time.Time
+	RotationDueAt      *time.Time
+	ReviewSnoozedUntil *time.Time
+}
+
+// ListStaleKeys returns non-revoked keys whose last_used_at is older than
+// staleCutoff OR whose rotation_due_at is in the past. Snoozed keys
+// (review_snoozed_until in the future) are excluded so the operator's
+// explicit deferral is respected until it expires.
+//
+// A NULL last_used_at counts as stale — a key that was created but never
+// used is always due for review (mirrors the ListIdleKeys semantic in
+// FUT-003).
+//
+// OwnerUserID is COALESCEd from user_id (human-owned) or service_accounts.
+// shadow_user_id (SA-owned). Falling back to shadow_user_id lets the BFF
+// enforce "SA owner shadow-user OR admin" without a second lookup.
+//
+// Uses the partial idx_api_keys_idle_check index (WHERE is_active = true)
+// so scans are proportional to the tenant's live-key count. The worker
+// calls this once per tick per tenant with any active keys.
+func (r *APIKeyRepository) ListStaleKeys(ctx context.Context, tenantID uuid.UUID, staleCutoff time.Time) ([]StaleKey, error) {
+	const q = `
+		SELECT ak.id, ak.tenant_id,
+		       COALESCE(ak.user_id, sa.shadow_user_id) AS owner_user_id,
+		       ak.name, ak.last_used_at, ak.rotation_due_at, ak.review_snoozed_until
+		  FROM api_keys ak
+		  LEFT JOIN service_accounts sa ON sa.id = ak.service_account_id
+		 WHERE ak.tenant_id = $1
+		   AND ak.is_active = true
+		   AND (ak.review_snoozed_until IS NULL OR ak.review_snoozed_until < now())
+		   AND (
+		         ak.last_used_at IS NULL
+		         OR ak.last_used_at < $2
+		         OR (ak.rotation_due_at IS NOT NULL AND ak.rotation_due_at < now())
+		       )`
+	rows, err := r.pool.Query(ctx, q, tenantID, staleCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("list stale keys: %w", err)
+	}
+	defer rows.Close()
+	var out []StaleKey
+	for rows.Next() {
+		var k StaleKey
+		if err := rows.Scan(&k.ID, &k.TenantID, &k.OwnerUserID, &k.Name,
+			&k.LastUsedAt, &k.RotationDueAt, &k.ReviewSnoozedUntil); err != nil {
+			return nil, fmt.Errorf("scan stale key: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// SetReviewSnoozedUntil records the operator-picked deferral timestamp on
+// an API key. Passing a nil `until` clears the snooze (equivalent to
+// "review again on the next tick"). The weekly access-review worker
+// skips any row whose review_snoozed_until is in the future; the FE's
+// Snooze 30d button computes `until = now + 30d` at the BFF and passes
+// it through.
+//
+// Returns ErrNotFound when no row matches the given id — used by the BFF
+// so a stale key id cannot leak existence.
+func (r *APIKeyRepository) SetReviewSnoozedUntil(ctx context.Context, keyID uuid.UUID, until *time.Time) error {
+	const q = `UPDATE api_keys SET review_snoozed_until = $2 WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, q, keyID, until)
+	if err != nil {
+		return fmt.Errorf("set review snoozed until: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetTenantIDForKey returns (tenant_id, owner_user_id) for a given key so
+// the BFF can enforce "workspace-admin OR owner" before calling Snooze.
+// OwnerUserID is COALESCEd from user_id (human-owned) or service_accounts.
+// shadow_user_id (SA-owned) — matching the projection ListStaleKeys uses,
+// so the two paths agree on principal identity.
+//
+// Returns ErrNotFound when no row exists so the BFF can respond 404
+// without leaking existence via a discriminated error.
+func (r *APIKeyRepository) GetTenantIDForKey(ctx context.Context, keyID uuid.UUID) (uuid.UUID, uuid.UUID, error) {
+	const q = `
+		SELECT ak.tenant_id, COALESCE(ak.user_id, sa.shadow_user_id) AS owner_user_id
+		  FROM api_keys ak
+		  LEFT JOIN service_accounts sa ON sa.id = ak.service_account_id
+		 WHERE ak.id = $1`
+	var tenantID, ownerUserID uuid.UUID
+	err := r.pool.QueryRow(ctx, q, keyID).Scan(&tenantID, &ownerUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("get tenant id for key: %w", err)
+	}
+	return tenantID, ownerUserID, nil
+}

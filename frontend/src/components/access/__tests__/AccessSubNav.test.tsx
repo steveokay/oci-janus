@@ -1,4 +1,4 @@
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import {
   createRouter,
@@ -142,59 +142,37 @@ describe("AccessSubNav", () => {
   beforeEach(() => {
     // Reset claims before each test so state from a previous test doesn't leak.
     mockClaims = null;
-    // DSGN-011 — the Preview section now collapses behind a flyout that
-    // persists in localStorage. Reset between tests so a previous test's
-    // "open" state doesn't leak; tests that need it open call
-    // openPreviewSection() explicitly.
-    try {
-      window.localStorage.removeItem("accessSubNav.previewOpen");
-    } catch {
-      // jsdom always has localStorage; the try/catch matches the
-      // component's defensive read so the test mirrors prod behaviour.
-    }
   });
 
-  // openPreviewSection — finds the collapsible "Preview" expander button by
-  // its aria-controls binding and clicks it. Used by tests that need the
-  // four FUT-001..FUT-004 preview links visible.
-  function openPreviewSection(): void {
-    const button = document.querySelector(
-      '[aria-controls="access-subnav-preview-items"]',
-    );
-    if (button instanceof HTMLElement) {
-      fireEvent.click(button);
-    }
-  }
-
-  test("hides Workspace and Preview sections for non-admin users", async () => {
+  test("hides Workspace section for non-admin users", async () => {
     mockClaims = nonAdminClaims;
     await renderSubNav();
 
     // The "Yours" section is always visible — verify we rendered something.
     expect(screen.getByText("Yours")).toBeInTheDocument();
 
-    // Admin-only sections must be absent from the DOM entirely.
+    // Admin-only sections must be absent from the DOM entirely. The
+    // Preview section was retired with FUT-004's graduation on
+    // 2026-07-01 and is unconditionally absent for all users.
     expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
     expect(screen.queryByText("Preview")).not.toBeInTheDocument();
   });
 
-  test("shows Yours, Workspace, and Preview sections for admin users", async () => {
+  test("shows Yours and Workspace sections for admin users", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
-    // All three section headings must be present for platform-admins.
+    // Both remaining section headings must be present for admins.
     expect(screen.getByText("Yours")).toBeInTheDocument();
     expect(screen.getByText("Workspace")).toBeInTheDocument();
 
-    // DSGN-011 — the Preview section heading is now a collapsible <button>
-    // with `aria-controls="access-subnav-preview-items"`. Presence of the
-    // expander is what "section exists" means now; the items themselves
-    // only mount when expanded.
+    // The Preview section was retired with FUT-004's graduation on
+    // 2026-07-01. There is no expander / flyout for admins to open.
+    expect(screen.queryByText("Preview")).not.toBeInTheDocument();
     const expander = document.querySelector(
       '[aria-controls="access-subnav-preview-items"]',
     );
-    expect(expander).toBeInTheDocument();
-    expect(expander).toHaveAttribute("aria-expanded", "false");
+    expect(expander).not.toBeInTheDocument();
   });
 
   test("shows Personal keys link for all users", async () => {
@@ -212,90 +190,48 @@ describe("AccessSubNav", () => {
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
-  test("shows remaining preview links for admins after expanding the flyout", async () => {
-    mockClaims = adminClaims;
-    await renderSubNav();
-
-    // DSGN-011 — the Preview section is collapsed by default. Verify the
-    // link is hidden, then expand and verify it appears.
-    // FUT-001 shipped 2026-07-01 — "Federated trust" graduated to the
-    // Workspace section and is asserted in its own test below.
-    // FUT-002 shipped 2026-06-30 — "Credential helpers" graduated to the
-    // Workspace section and is asserted in its own test below.
-    // FUT-003 shipped 2026-07-01 — "Token policies" graduated to the
-    // Workspace section and is asserted in its own test below.
-    expect(screen.queryByText("Access review")).not.toBeInTheDocument();
-    openPreviewSection();
-
-    expect(screen.getByText("Access review")).toBeInTheDocument();
-  });
-
-  // FUT-002 graduation regression: Credential helpers must render in the
-  // always-visible Workspace section for admins, NOT inside the collapsed
-  // Preview flyout.
-  test("shows Credential helpers in Workspace section for admins without expansion", async () => {
+  // FUT-002 graduation regression: Credential helpers must render in
+  // the always-visible Workspace section for admins.
+  test("shows Credential helpers in Workspace section for admins", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
     expect(screen.getByText("Credential helpers")).toBeInTheDocument();
-    // Confirm the Preview flyout is still collapsed — the link is in the
-    // Workspace section above it, not behind the expander.
-    const expander = document.querySelector(
-      '[aria-controls="access-subnav-preview-items"]',
-    );
-    expect(expander).toHaveAttribute("aria-expanded", "false");
   });
 
   // FUT-001 graduation regression: Federated trust must render in the
-  // always-visible Workspace section for admins, NOT inside the collapsed
-  // Preview flyout. Mirrors the FUT-002 assertion above.
-  test("shows Federated trust in Workspace section for admins without expansion", async () => {
+  // always-visible Workspace section for admins.
+  test("shows Federated trust in Workspace section for admins", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
     expect(screen.getByText("Federated trust")).toBeInTheDocument();
-    const expander = document.querySelector(
-      '[aria-controls="access-subnav-preview-items"]',
-    );
-    expect(expander).toHaveAttribute("aria-expanded", "false");
   });
 
   // FUT-003 graduation regression: Token policies must render in the
-  // always-visible Workspace section for admins, NOT inside the collapsed
-  // Preview flyout. Mirrors the FUT-001/FUT-002 assertions above.
-  test("shows Token policies in Workspace section for admins without expansion", async () => {
+  // always-visible Workspace section for admins.
+  test("shows Token policies in Workspace section for admins", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
     expect(screen.getByText("Token policies")).toBeInTheDocument();
-    const expander = document.querySelector(
-      '[aria-controls="access-subnav-preview-items"]',
-    );
-    expect(expander).toHaveAttribute("aria-expanded", "false");
   });
 
-  // DSGN-011 — collapsing the Preview section persists in localStorage so
-  // an admin who explicitly closes it doesn't have to re-close on every
-  // navigation back into /api-keys.
-  test("preview flyout state persists in localStorage", async () => {
+  // FUT-004 graduation regression: Access review must render in the
+  // always-visible Workspace section for admins. FUT-004 is the LAST
+  // FUT in the FUT-001..FUT-004 batch; its graduation retires the
+  // entire Preview section.
+  test("shows Access review in Workspace section for admins", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
-    // Start collapsed (beforeEach cleared the key).
-    let expander = document.querySelector(
+    expect(screen.getByText("Access review")).toBeInTheDocument();
+    // The Preview flyout expander must be gone entirely — no expander
+    // element in the DOM.
+    const expander = document.querySelector(
       '[aria-controls="access-subnav-preview-items"]',
     );
-    expect(expander).toHaveAttribute("aria-expanded", "false");
-
-    // Open it, and verify localStorage is updated.
-    openPreviewSection();
-    expander = document.querySelector(
-      '[aria-controls="access-subnav-preview-items"]',
-    );
-    expect(expander).toHaveAttribute("aria-expanded", "true");
-    expect(window.localStorage.getItem("accessSubNav.previewOpen")).toBe(
-      "true",
-    );
+    expect(expander).not.toBeInTheDocument();
   });
 
   // DSGN-001 — verify the workspace-admin gate (not platform-admin) drives

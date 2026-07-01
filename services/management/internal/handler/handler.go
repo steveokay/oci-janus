@@ -450,6 +450,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/access/token-policy", authMW(http.HandlerFunc(h.handleGetTokenPolicy)))
 	mux.Handle("PUT /api/v1/access/token-policy", authMW(http.HandlerFunc(h.handlePutTokenPolicy)))
 
+	// FUT-004 Task 8 — API-key access-review surface. Owner-vs-admin gate is
+	// applied inside each handler: LIST filters non-admin callers to keys
+	// they own; SNOOZE requires the caller to be a workspace admin OR the
+	// key owner. Revoke goes through the existing DELETE /api-keys/:id.
+	mux.Handle("GET /api/v1/access/review/stale", authMW(http.HandlerFunc(h.handleListStaleKeys)))
+	mux.Handle("POST /api/v1/access/review/snooze", authMW(http.HandlerFunc(h.handleSnoozeAPIKeyReview)))
+
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
 
