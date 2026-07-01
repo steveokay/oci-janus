@@ -6,6 +6,7 @@ option go_package = "github.com/steveokay/oci-janus/proto/gen/go/auth/v1;authv1"
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 
 // AuthService validates tokens and API keys for internal service consumption.
 // Exposed only over mTLS gRPC — never directly to clients.
@@ -73,6 +74,15 @@ service AuthService {
   rpc UpdateOIDCTrust(UpdateOIDCTrustRequest) returns (OIDCTrust);
   rpc DeleteOIDCTrust(DeleteOIDCTrustRequest) returns (google.protobuf.Empty);
   rpc ExchangeWorkloadToken(ExchangeWorkloadTokenRequest) returns (ExchangeWorkloadTokenResponse);
+
+  // FUT-003 — workspace-wide token policy. Two admin RPCs manage a single
+  // per-tenant policy row. See the TokenPolicy message for semantics: all
+  // three limit fields are optional wrappers so NULL is distinguishable
+  // from zero. Enforcement lives at CreateAPIKey (max_ttl_days) and in the
+  // idle-revoke background worker (idle_revoke_days). rotation_interval_days
+  // sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
+  rpc GetTokenPolicy(GetTokenPolicyRequest) returns (TokenPolicy);
+  rpc PutTokenPolicy(PutTokenPolicyRequest) returns (TokenPolicy);
 }
 
 message ValidateTokenRequest {
@@ -417,4 +427,38 @@ message ExchangeWorkloadTokenResponse {
   string access_token = 1;
   int32  expires_in   = 2;
   string token_type   = 3;
+}
+
+// FUT-003 — workspace-wide token policy messages.
+//
+// TokenPolicy is the persisted per-tenant policy. All three limit fields
+// use google.protobuf.Int32Value wrappers so the caller (and the DB) can
+// distinguish "unset" (NULL — no cap for that dimension) from "zero days"
+// (which the service layer rejects at validation time). updated_at and
+// updated_by_user_id record when + who last mutated the policy so the
+// admin dashboard can show a "last changed by … at …" chip.
+message TokenPolicy {
+  string tenant_id                                  = 1;
+  google.protobuf.Int32Value max_ttl_days           = 2;
+  google.protobuf.Int32Value rotation_interval_days = 3;
+  google.protobuf.Int32Value idle_revoke_days       = 4;
+  google.protobuf.Timestamp updated_at              = 5;
+  string updated_by_user_id                         = 6;
+}
+
+// GetTokenPolicyRequest scopes the read to one tenant. Callers get the
+// current row or an empty (all-nil) TokenPolicy when no row exists yet.
+message GetTokenPolicyRequest { string tenant_id = 1; }
+
+// PutTokenPolicyRequest carries the desired new state. Nil wrapper fields
+// mean "preserve existing value" (partial update semantics enforced by
+// COALESCE in the repository UPSERT). actor_id is the admin's user id
+// (BFF plumbs it from the JWT sub) — recorded in updated_by_user_id and
+// in the auth.token_policy.changed audit event.
+message PutTokenPolicyRequest {
+  string tenant_id                                  = 1;
+  google.protobuf.Int32Value max_ttl_days           = 2;
+  google.protobuf.Int32Value rotation_interval_days = 3;
+  google.protobuf.Int32Value idle_revoke_days       = 4;
+  string actor_id                                   = 5;
 }
