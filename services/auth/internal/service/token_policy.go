@@ -175,11 +175,22 @@ func (s *TokenPolicyService) emitPolicyChanged(ctx context.Context, tenantID, ac
 	if s.audit == nil {
 		return
 	}
+	beforeSnap := snapshot(before)
+	afterSnap := snapshot(after)
+	// SEC-067 (2026-07-01): don't emit audit for a no-op change. A
+	// caller PUTting an all-nil body against a tenant with no policy
+	// produced an empty-diff audit row that read like real activity in
+	// /activity but had no policy shift behind it — credit-laundering
+	// into the audit trail. If before and after snapshots are
+	// byte-identical, skip the emit entirely.
+	if beforeSnap == afterSnap {
+		return
+	}
 	payload := events.TokenPolicyChangedPayload{
 		TenantID: tenantID.String(),
 		ActorID:  actorID.String(),
-		Before:   snapshot(before),
-		After:    snapshot(after),
+		Before:   beforeSnap,
+		After:    afterSnap,
 	}
 	// Encode once so the publisher-side dispatcher can pass raw JSON to
 	// Publish without re-marshalling. Marshal cannot fail for this shape,

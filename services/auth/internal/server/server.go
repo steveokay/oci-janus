@@ -608,6 +608,10 @@ func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) e
 		return e.publishOIDCTrust(ctx, ev)
 	case events.RoutingWorkloadTokenExchanged, events.RoutingWorkloadTokenRejected:
 		return e.publishWorkloadToken(ctx, ev)
+	case events.RoutingTokenPolicyChanged:
+		return e.publishTokenPolicyChanged(ctx, ev)
+	case events.RoutingKeyRevoked:
+		return e.publishKeyRevoked(ctx, ev)
 	default:
 		return e.publishSALifecycle(ctx, ev)
 	}
@@ -698,6 +702,60 @@ func (e rabbitMQAuditEmitter) publishWorkloadToken(ctx context.Context, ev servi
 	}
 	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
 		return fmt.Errorf("publish workload token: %w", err)
+	}
+	return nil
+}
+
+// publishTokenPolicyChanged marshals the pre-serialised payload from
+// Fields["payload_json"] into the auth.token_policy.changed envelope.
+// Fix for the FUT-003 REM-025 routing bug found by code-review-agent:
+// before this case existed, RoutingTokenPolicyChanged fell into the
+// SA-lifecycle default and shipped under the wrong routing key with the
+// wrong payload type, so any consumer bound to `auth.token_policy.*`
+// silently missed every emit.
+func (e rabbitMQAuditEmitter) publishTokenPolicyChanged(ctx context.Context, ev service.AuditEvent) error {
+	payload := []byte(stringField(ev.Fields, "payload_json"))
+	if len(payload) == 0 {
+		return fmt.Errorf("token policy: empty payload_json in audit fields")
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       ev.Action,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
+		return fmt.Errorf("publish token policy changed: %w", err)
+	}
+	return nil
+}
+
+// publishKeyRevoked marshals the KeyRevokedPayload from the AuditEvent
+// Fields into the auth.key_revoked envelope. Called from the FUT-003
+// idle-revoke worker (Reason = "idle_revoked") + future manual + FUT-004
+// rotation-lapsed paths. Same routing bug lineage as publishTokenPolicyChanged.
+func (e rabbitMQAuditEmitter) publishKeyRevoked(ctx context.Context, ev service.AuditEvent) error {
+	payload, err := json.Marshal(events.KeyRevokedPayload{
+		TenantID:    ev.TenantID,
+		KeyID:       stringField(ev.Fields, "key_id"),
+		OwnerUserID: stringField(ev.Fields, "owner_user_id"),
+		Reason:      stringField(ev.Fields, "reason"),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal key revoked payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       ev.Action,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
+		return fmt.Errorf("publish key revoked: %w", err)
 	}
 	return nil
 }

@@ -258,6 +258,10 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 |---|---|---|---|---|
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
+| **SEC-064** | HIGH | `CreateAPIKey` skips workspace `max_ttl_days` cap when caller omits `expires_at` | OPEN — **BLOCKS `feat/fut-003-token-policies` PR** | `services/auth/internal/service/auth.go:657` guards enforcement with `expiresAt != nil`; nil → cap bypass + immortal key. Fix inline before PR: clamp `expiresAt` to `now + max_ttl_days` when policy cap is set and caller omits, OR reject with `InvalidArgument`. Add regression test. See `security.md#SEC-064`. |
+| **SEC-065** | LOW | FE `PoliciesPanel` missing per-dimension `idle_revoke_days >= 7` floor | OPEN | `frontend/src/components/access/PoliciesPanel.tsx:114`; user hits raw BE 400. No security exposure — BE enforces. Follow-up. |
+| **SEC-066** | MEDIUM | `PutTokenPolicy` gRPC trusts caller-supplied `tenant_id` (multi-mode only) | OPEN | Safe in `DEPLOYMENT_MODE=single` via SingleTenantInjector. Exposure limited to multi mode + permissive `MTLS_PEER_CN_ALLOWLIST`. Cross-cutting; consider tenant-cross-check interceptor. Follow-up. |
+| **SEC-067** | LOW | Token-policy `Upsert(all-nil)` rewrites `updated_by_user_id` on no-op call | OPEN | Audit-trail credit-laundering vector. Reject all-nil input in `TokenPolicyService.Put` OR skip audit emit when snapshot unchanged. Follow-up. |
 
 ---
 

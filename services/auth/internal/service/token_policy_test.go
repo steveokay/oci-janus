@@ -263,6 +263,39 @@ func TestTokenPolicyService_Put_PartialUpdate_PreservesUnsetFields(t *testing.T)
 
 // ── CreateAPIKey enforcement tests (Task 6) ────────────────────────────
 
+// TestCreateAPIKey_NilExpiryClampedToPolicyCap — SEC-064 regression.
+// The initial FUT-003 impl guarded on `expiresAt != nil`, so a caller
+// omitting the expiry field silently bypassed a max_ttl_days policy and
+// got a forever-key. The fix clamps a nil expiry to the policy cap so
+// the operator gets the max TTL they configured, not perpetuity.
+func TestCreateAPIKey_NilExpiryClampedToPolicyCap(t *testing.T) {
+	svc, _, _, cleanup := setupServiceWithRepos(t)
+	defer cleanup()
+
+	tenantID := uuid.New()
+	userID := uuid.New()
+	policyRepo := newFakeTokenPolicyRepo()
+	// 30-day cap.
+	_, err := policyRepo.Upsert(context.Background(), repository.TokenPolicy{
+		TenantID:   tenantID,
+		MaxTTLDays: int32P(30),
+	})
+	require.NoError(t, err)
+	svc.SetTokenPolicyRepo(policyRepo)
+
+	// Caller omits expiry — pre-fix this would create a forever-key.
+	before := time.Now()
+	key, _, err := svc.CreateAPIKey(context.Background(), tenantID, userID, "nil-expiry", nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, key.ExpiresAt, "SEC-064: expires_at MUST be clamped, not left nil")
+	// The clamped expiry should be ~30 days from now (within a small
+	// clock-skew window). Assert both bounds.
+	upperBound := before.Add(30*24*time.Hour + time.Minute)
+	lowerBound := before.Add(30*24*time.Hour - time.Minute)
+	require.WithinRange(t, *key.ExpiresAt, lowerBound, upperBound,
+		"clamped expiry should be at policy cap (30 days)")
+}
+
 // TestCreateAPIKey_RejectsTTLAboveCap asserts a caller-requested TTL that
 // exceeds the workspace max is refused with InvalidArgument.
 func TestCreateAPIKey_RejectsTTLAboveCap(t *testing.T) {
