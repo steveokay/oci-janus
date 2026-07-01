@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -149,6 +150,12 @@ type metadataRepo interface {
 	MarkManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
 	ClearManifestRetentionPending(ctx context.Context, tenantID, manifestID string) error
 	ListPendingDeleteManifests(ctx context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error)
+
+	// FUT-020: image promotion. PromoteTag runs the read + upsert + insert
+	// inside one transaction so a caller observes either every write or none.
+	// ListPromotions returns recent promotions filtered by (optional) org/repo.
+	PromoteTag(ctx context.Context, in repository.PromoteTagInput) (*metadatav1.Promotion, error)
+	ListPromotions(ctx context.Context, tenantID uuid.UUID, org, repo string, limit int32) ([]*metadatav1.Promotion, error)
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.
@@ -195,6 +202,14 @@ func mapErr(err error) error {
 	}
 	if errors.Is(err, repository.ErrAlreadyExists) {
 		return status.Error(codes.AlreadyExists, "already exists")
+	}
+	// FUT-020: promotion refused because the destination tag is protected
+	// by the repo-wide immutable_tags flag OR the per-tag immutable pin.
+	// FailedPrecondition matches the checkTagImmutable precedent in
+	// services/core so a caller can distinguish "you can't do this in the
+	// current state" from generic Internal.
+	if errors.Is(err, repository.ErrImmutableTag) {
+		return status.Error(codes.FailedPrecondition, "destination tag is immutable")
 	}
 	// runtime.Caller(1) gives us the file:line + function name of the
 	// handler that invoked mapErr. callerName falls back to "unknown"
@@ -982,4 +997,70 @@ func (h *MetadataHandler) CountRepositories(ctx context.Context, req *metadatav1
 		return nil, mapErr(err)
 	}
 	return &metadatav1.CountRepositoriesResponse{Count: n}, nil
+}
+
+// ── FUT-020: image promotion ────────────────────────────────────────────────
+
+// PromoteTag copies the source tag's live manifest_digest onto a destination
+// tag inside one transaction and records a promotions history row.
+//
+// The handler is a thin wrapper: it parses tenant + actor UUIDs (surfacing
+// InvalidArgument on malformed input) and forwards the rest to the repository
+// which owns the transaction, immutability gate, and rollback contract.
+func (h *MetadataHandler) PromoteTag(ctx context.Context, req *metadatav1.PromoteTagRequest) (*metadatav1.Promotion, error) {
+	tenantUUID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	// Every string field is required — the atomic-copy operation has no
+	// sensible defaults for source / destination identifiers.
+	if req.GetSrcOrg() == "" || req.GetSrcRepo() == "" || req.GetSrcTag() == "" {
+		return nil, status.Error(codes.InvalidArgument, "src_org, src_repo, and src_tag are required")
+	}
+	if req.GetDstOrg() == "" || req.GetDstRepo() == "" || req.GetDstTag() == "" {
+		return nil, status.Error(codes.InvalidArgument, "dst_org, dst_repo, and dst_tag are required")
+	}
+
+	// actor_user_id is optional — a bot / SA promotion has no human user id.
+	// A non-empty value MUST be a valid UUID; a bad UUID is a bug in the
+	// caller (BFF), not a legitimate anonymous promotion, so we reject
+	// rather than silently coercing to nil.
+	var actorPtr *uuid.UUID
+	if req.GetActorUserId() != "" {
+		a, err := uuid.Parse(req.GetActorUserId())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "actor_user_id must be a UUID when provided")
+		}
+		actorPtr = &a
+	}
+
+	prom, err := h.repo.PromoteTag(ctx, repository.PromoteTagInput{
+		TenantID:    tenantUUID,
+		SrcOrg:      req.GetSrcOrg(),
+		SrcRepo:     req.GetSrcRepo(),
+		SrcTag:      req.GetSrcTag(),
+		DstOrg:      req.GetDstOrg(),
+		DstRepo:     req.GetDstRepo(),
+		DstTag:      req.GetDstTag(),
+		ActorUserID: actorPtr,
+		Note:        req.GetNote(),
+	})
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return prom, nil
+}
+
+// ListPromotions returns recent promotions for the tenant, optionally
+// filtered by (org, repo). Limit is clamped to [1, 200] in the repository.
+func (h *MetadataHandler) ListPromotions(ctx context.Context, req *metadatav1.ListPromotionsRequest) (*metadatav1.ListPromotionsResponse, error) {
+	tenantUUID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+	proms, err := h.repo.ListPromotions(ctx, tenantUUID, req.GetOrg(), req.GetRepo(), req.GetLimit())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.ListPromotionsResponse{Promotions: proms}, nil
 }
