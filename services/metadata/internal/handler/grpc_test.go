@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -203,6 +204,27 @@ type fakeRepo struct {
 	listPendingResult []*metadatav1.PendingDeleteManifest
 	listPendingErr    error
 	listPendingCalls  []listPendingCallArgs
+
+	// FUT-020 image promotion. promoteTagResult / err drive the two
+	// happy / error paths; promoteTagCalls captures every input so the
+	// handler test can verify the parsed tenant + actor UUIDs propagated
+	// as expected.
+	promoteTagResult     *metadatav1.Promotion
+	promoteTagErr        error
+	promoteTagCalls      []repository.PromoteTagInput
+	listPromotionsResult []*metadatav1.Promotion
+	listPromotionsErr    error
+	listPromotionsCalls  []listPromotionsCallArgs
+}
+
+// listPromotionsCallArgs captures what ListPromotions forwarded so the
+// handler test can assert wiring (tenant / filter / limit) without a real
+// database.
+type listPromotionsCallArgs struct {
+	tenantID uuid.UUID
+	org      string
+	repo     string
+	limit    int32
 }
 
 // retentionEvalCallArgs records what EvaluateRetention forwarded so the
@@ -654,6 +676,22 @@ func (f *fakeRepo) ClearManifestRetentionPending(_ context.Context, tenantID, ma
 func (f *fakeRepo) ListPendingDeleteManifests(_ context.Context, tenantID string, graceWindowSecs int64, limit int) ([]*metadatav1.PendingDeleteManifest, error) {
 	f.listPendingCalls = append(f.listPendingCalls, listPendingCallArgs{tenantID: tenantID, graceWindowSecs: graceWindowSecs, limit: limit})
 	return f.listPendingResult, f.listPendingErr
+}
+
+// FUT-020 promotion stubs. promoteTagCalls captures the input so tests can
+// assert every field the handler forwarded (particularly the ActorUserID
+// pointer nil-vs-non-nil discriminator — an anonymous CLI promotion vs a
+// human-triggered one).
+func (f *fakeRepo) PromoteTag(_ context.Context, in repository.PromoteTagInput) (*metadatav1.Promotion, error) {
+	f.promoteTagCalls = append(f.promoteTagCalls, in)
+	return f.promoteTagResult, f.promoteTagErr
+}
+
+func (f *fakeRepo) ListPromotions(_ context.Context, tenantID uuid.UUID, org, repo string, limit int32) ([]*metadatav1.Promotion, error) {
+	f.listPromotionsCalls = append(f.listPromotionsCalls, listPromotionsCallArgs{
+		tenantID: tenantID, org: org, repo: repo, limit: limit,
+	})
+	return f.listPromotionsResult, f.listPromotionsErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
@@ -2308,5 +2346,177 @@ func TestGetTenantUsage_lazyMissingTenant_returnsZero(t *testing.T) {
 	if got.GetStorageUsedBytes() != 0 || got.GetStorageQuotaBytes() != 0 ||
 		got.GetRepositoryCount() != 0 || got.GetOrganizationCount() != 0 {
 		t.Errorf("expected all zeros for lazy tenant, got %+v", got)
+	}
+}
+
+// ── FUT-020 image promotion handler tests ──────────────────────────────────
+
+// validPromoteReq returns a fully-populated PromoteTagRequest so each test
+// can override the specific field it's exercising rather than restating the
+// entire struct.
+func validPromoteReq() *metadatav1.PromoteTagRequest {
+	return &metadatav1.PromoteTagRequest{
+		TenantId:    "98dbe36b-ef28-4903-b25c-bff1b2921c9e",
+		SrcOrg:      "myorg", SrcRepo: "src", SrcTag: "v1",
+		DstOrg:      "myorg", DstRepo: "dst", DstTag: "v1",
+		ActorUserId: "6d16d55e-4f30-4b12-9d1a-4a1c9c1c1234",
+		Note:        "promote v1 to prod",
+	}
+}
+
+// TestPromoteTag_Success verifies the happy path forwards all fields to the
+// repository and returns the persisted Promotion.
+func TestPromoteTag_Success(t *testing.T) {
+	f := &fakeRepo{
+		promoteTagResult: &metadatav1.Promotion{
+			Id:       "11111111-1111-1111-1111-111111111111",
+			TenantId: "98dbe36b-ef28-4903-b25c-bff1b2921c9e",
+			SrcTag:   "v1",
+			DstTag:   "v1",
+		},
+	}
+	h := newHandler(f)
+	out, err := h.PromoteTag(context.Background(), validPromoteReq())
+	requireNoErr(t, err)
+	if out.GetId() != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("id round-trip failed: %q", out.GetId())
+	}
+	if len(f.promoteTagCalls) != 1 {
+		t.Fatalf("want 1 repo call, got %d", len(f.promoteTagCalls))
+	}
+	call := f.promoteTagCalls[0]
+	if call.SrcOrg != "myorg" || call.SrcRepo != "src" || call.SrcTag != "v1" {
+		t.Errorf("src fields dropped: %+v", call)
+	}
+	if call.DstOrg != "myorg" || call.DstRepo != "dst" || call.DstTag != "v1" {
+		t.Errorf("dst fields dropped: %+v", call)
+	}
+	if call.ActorUserID == nil {
+		t.Fatal("actor_user_id parsed as nil despite valid input")
+	}
+	if call.Note != "promote v1 to prod" {
+		t.Errorf("note dropped: %q", call.Note)
+	}
+}
+
+// TestPromoteTag_InvalidTenantUUID verifies a non-UUID tenant_id surfaces
+// InvalidArgument BEFORE the repository is called (belt-and-suspenders
+// against a caller that skipped BFF validation).
+func TestPromoteTag_InvalidTenantUUID(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	req := validPromoteReq()
+	req.TenantId = "not-a-uuid"
+	_, err := h.PromoteTag(context.Background(), req)
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.promoteTagCalls) != 0 {
+		t.Errorf("repository was called despite bad tenant: %d calls", len(f.promoteTagCalls))
+	}
+}
+
+// TestPromoteTag_InvalidActorUUID verifies a non-empty but malformed
+// actor_user_id is rejected — a bug in the caller, not a legitimate
+// anonymous promotion (empty is the anonymous discriminator).
+func TestPromoteTag_InvalidActorUUID(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	req := validPromoteReq()
+	req.ActorUserId = "garbage"
+	_, err := h.PromoteTag(context.Background(), req)
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestPromoteTag_AnonymousActor verifies an empty actor_user_id is passed
+// through as a nil pointer to the repository (bot / CLI / SA promotion).
+func TestPromoteTag_AnonymousActor(t *testing.T) {
+	f := &fakeRepo{promoteTagResult: &metadatav1.Promotion{}}
+	h := newHandler(f)
+	req := validPromoteReq()
+	req.ActorUserId = ""
+	_, err := h.PromoteTag(context.Background(), req)
+	requireNoErr(t, err)
+	if len(f.promoteTagCalls) != 1 {
+		t.Fatalf("want 1 repo call, got %d", len(f.promoteTagCalls))
+	}
+	if f.promoteTagCalls[0].ActorUserID != nil {
+		t.Errorf("anonymous actor should be nil pointer, got %v", *f.promoteTagCalls[0].ActorUserID)
+	}
+}
+
+// TestPromoteTag_ForwardsFailedPrecondition verifies ErrImmutableTag from
+// the repository surfaces as gRPC FailedPrecondition (matches services/core
+// checkTagImmutable precedent).
+func TestPromoteTag_ForwardsFailedPrecondition(t *testing.T) {
+	f := &fakeRepo{promoteTagErr: repository.ErrImmutableTag}
+	h := newHandler(f)
+	_, err := h.PromoteTag(context.Background(), validPromoteReq())
+	requireCode(t, err, codes.FailedPrecondition)
+}
+
+// TestPromoteTag_ForwardsNotFound verifies ErrNotFound (missing source tag
+// OR missing dest repo — both surface with the same sentinel) round-trips
+// to gRPC NotFound.
+func TestPromoteTag_ForwardsNotFound(t *testing.T) {
+	f := &fakeRepo{promoteTagErr: repository.ErrNotFound}
+	h := newHandler(f)
+	_, err := h.PromoteTag(context.Background(), validPromoteReq())
+	requireCode(t, err, codes.NotFound)
+}
+
+// TestPromoteTag_MissingSrcFields rejects incomplete input before hitting
+// the repository — cheap defensive gate.
+func TestPromoteTag_MissingSrcFields(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	req := validPromoteReq()
+	req.SrcTag = ""
+	_, err := h.PromoteTag(context.Background(), req)
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListPromotions_HappyPath verifies filters + limit forward as-is and
+// the returned rows are wrapped in the response envelope.
+func TestListPromotions_HappyPath(t *testing.T) {
+	tenantID := uuid.MustParse("98dbe36b-ef28-4903-b25c-bff1b2921c9e")
+	f := &fakeRepo{
+		listPromotionsResult: []*metadatav1.Promotion{
+			{Id: "aaa", DstTag: "v1"},
+			{Id: "bbb", DstTag: "v2"},
+		},
+	}
+	h := newHandler(f)
+	out, err := h.ListPromotions(context.Background(), &metadatav1.ListPromotionsRequest{
+		TenantId: tenantID.String(),
+		Org:      "myorg",
+		Repo:     "dst",
+		Limit:    25,
+	})
+	requireNoErr(t, err)
+	if len(out.GetPromotions()) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(out.GetPromotions()))
+	}
+	if len(f.listPromotionsCalls) != 1 {
+		t.Fatalf("want 1 repo call, got %d", len(f.listPromotionsCalls))
+	}
+	call := f.listPromotionsCalls[0]
+	if call.tenantID != tenantID {
+		t.Errorf("tenant forward failed: got %v, want %v", call.tenantID, tenantID)
+	}
+	if call.org != "myorg" || call.repo != "dst" || call.limit != 25 {
+		t.Errorf("filter forward failed: %+v", call)
+	}
+}
+
+// TestListPromotions_InvalidTenantUUID rejects malformed tenant before the
+// repository call.
+func TestListPromotions_InvalidTenantUUID(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.ListPromotions(context.Background(), &metadatav1.ListPromotionsRequest{
+		TenantId: "not-a-uuid",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.listPromotionsCalls) != 0 {
+		t.Errorf("repo called despite bad tenant: %d calls", len(f.listPromotionsCalls))
 	}
 }

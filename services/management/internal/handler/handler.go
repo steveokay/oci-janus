@@ -340,6 +340,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// SIGNER_GRPC_ADDR is unset; 403 unless the caller is repo admin.
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/sign", authMW(http.HandlerFunc(h.handleSignManifest)))
 
+	// FUT-020 — image promotion (atomic tag copy).
+	// POST triggers a promotion: writer role required on BOTH source AND
+	// destination repos. GET returns promotion history touching this repo
+	// (src OR dst side) with reader role.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote", authMW(http.HandlerFunc(h.handlePromoteTag)))
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/promotions", authMW(http.HandlerFunc(h.handleListPromotions)))
+
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))

@@ -13,6 +13,8 @@ import { RepoImmutabilitySection } from "@/components/repositories/repo-immutabi
 import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
 import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
+// FUT-020 — image promotion history tab.
+import { PromotionsTab } from "@/components/repositories/PromotionsTab";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
 import {
   Card,
@@ -110,6 +112,10 @@ function RepositoryDetail(): React.ReactElement {
           {/* so the destructive primitives (members, retention, future       */}
           {/* delete-repo) cluster together in the rightmost positions.      */}
           <TabsTrigger value="retention">Retention</TabsTrigger>
+          {/* FUT-020 — promotion history. Sits between Retention and       */}
+          {/* Settings so read-mostly views cluster together and the        */}
+          {/* mutating Settings tab stays in the rightmost position.        */}
+          <TabsTrigger value="promotions">Promotions</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -123,6 +129,10 @@ function RepositoryDetail(): React.ReactElement {
 
         <TabsContent value="retention">
           <RetentionPanel org={org} repo={repo} />
+        </TabsContent>
+
+        <TabsContent value="promotions">
+          <PromotionsTab org={org} repo={repo} />
         </TabsContent>
 
         <TabsContent value="settings">
