@@ -691,7 +691,10 @@ prioritised for backlog uptake.
 - **ARCH-005** — Enforce production-mode config invariants in `libs/config/loader`.
   CLAUDE.md §7 says "reject empty cert paths when `OTEL_ENVIRONMENT=production`" —
   no service does this. Apache 2.0 release means anyone can stand this up; silent
-  insecure defaults are a footgun. **Effort:** S.
+  insecure defaults are a footgun. **Effort:** S. Fold in (Fable sec review
+  2026-07-01): refuse to boot when a known-default dev credential fingerprint
+  (`registry/registry`, `minioadmin`, `dev-root-token`) is detected in
+  production mode — same posture as the `sslmode=disable` rejection (SEC-022).
 - ~~**QA-001**~~ — DONE 2026-06-24 (PR #64). Migration `000002` adds
   `tenant_id` + composite UNIQUE `(tenant_id, manifest_digest, signer_id)`;
   `services/signer` propagates `tenant_id` through store / repo / handler;
@@ -1558,6 +1561,269 @@ Docker v2 manifest list shapes are well-defined.
   workflow URL), materials list, invocation params. "Provenance"
   tab on the tag detail page. Optional: chain visualisation
   (tag ← attestation ← source commit ← previous tag).
+
+---
+
+## Self-hosted gap batch — 2026-07-01
+
+> Surfaced during a "what's still missing?" ideation pass after the
+> Wave 1 batch (FUT-020/021/031) shipped. Same lens as the platform
+> expansion section above: `DEPLOYMENT_MODE=single`, one org running
+> the stack for themselves, competing with Harbor / Nexus. Deliberately
+> excludes anything already tracked above. Recommended pickup order:
+> FUT-044 → FUT-047 (quick wins), then FUT-042 (security gap),
+> FUT-041 (differentiator), then FUT-045 / FUT-046 (sprint-sized
+> Harbor-migration bets).
+
+### FUT-041 — Base-image staleness detection ("Dependabot for images")
+- **Why:** The scanner says "you have CVEs"; the fix is almost always
+  "rebuild on a newer base." Nothing connects the two today. Detecting
+  that an image was built on `alpine:3.19` while a newer patch of that
+  base exists closes the loop — and no competitor does this well
+  in-registry.
+- **What:** Identify each manifest's base image via layer-chain digest
+  match (same primitive FUT-025 needs) + SBOM `base-image` hints where
+  present. Compare against upstream state the pull-through cache
+  already tracks. Surface as a dashboard panel ("12 prod images on a
+  stale base with 3 fixed CVEs") + a `base_image_staleness` FUT-019
+  notification category with per-repo detail.
+- **Cost estimate:** ~1-2 sprints.
+- **Affects:** `services/metadata` (base-image resolution query),
+  `services/proxy` (upstream tag freshness), `services/audit`
+  (notification category), `services/management`, `frontend`.
+- **Depends on:** FUT-019 phase 2 (scheduled-notification worker) for
+  the nudge channel; complements FUT-025 (shared base-layer analysis).
+
+### FUT-042 — Scan the pull-through cache
+- **Why:** Scan policies + the FUT-021 CVSS gate cover pushed images,
+  but proxy-cached upstream content flows through unscanned — the
+  proxy's schema is untouched by `services/metadata`, and the proxy
+  doesn't even publish `pull.image` yet (known follow-up, Tier 2 #5).
+  For a self-hoster the cache is where Docker Hub content enters the
+  network — often the *largest* unscanned attack surface.
+- **What:** Proxy publishes a `store.completed` event on each newly
+  cached manifest; `services/scanner` consumes it and scans the cached
+  image like any pushed one. Extend the FUT-021 admission check to
+  cached pulls (same fail-OPEN-until-first-scan posture). Scan status
+  column on the `/workspace/proxy-cache` table.
+- **Cost estimate:** ~1 sprint.
+- **Affects:** `services/proxy` (event publish), `services/scanner`
+  (consumer + cache-image resolution), `services/core` or proxy serve
+  path (admission), `frontend`.
+- **Depends on:** closes the Tier 2 #5 follow-up (proxy `pull.image`)
+  as a natural side effect.
+
+### FUT-043 — Storage forecast + disk-pressure alerting
+- **Why:** SaaS users never think about disk; self-hosters own it.
+  Storage-usage data, GC, and retention all exist, but nothing warns
+  "at the current growth rate your MinIO volume fills in ~38 days."
+- **What:** Time-series growth trend on the dashboard storage card +
+  a `storage_pressure` FUT-019 notification category. Alert body ranks
+  remediations by reclaim size: retention rules to tighten, biggest
+  never-pulled repos, GC dry-run estimate.
+- **Cost estimate:** ~1 week.
+- **Affects:** `services/metadata` (growth query), `services/audit`
+  (category), `frontend` (dashboard card).
+- **Depends on:** FUT-019 phase 2 for the notification channel.
+
+### FUT-044 — Maintenance / read-only mode
+- **Why:** A self-hoster running `pg_dump` mid-push gets a torn
+  snapshot. A first-class read-only toggle is what makes backups
+  consistent and upgrades safe — and it should ship *before* the
+  FUT-033 backup/restore CLI so that tooling has a safe window to
+  operate in.
+- **What:** `PUT /api/v1/admin/maintenance` (platform-admin-gated)
+  flips a `maintenance_mode` key in `tenant.deployment_metadata`.
+  `services/core` checks it in the interceptor chain: pulls succeed,
+  pushes / deletes reject with a clear OCI `UNAVAILABLE`-class error
+  body; optionally drain in-flight uploads. FE shows a persistent
+  banner + a toggle on `/admin`.
+- **Cost estimate:** ~2-3 days.
+- **Affects:** `services/tenant` (metadata key), `services/core`
+  (interceptor check), `services/management` (route), `frontend`.
+- **Depends on:** nothing. FUT-033 (backup/restore) depends on *this*.
+
+### FUT-045 — LDAP / Active Directory auth
+- **Why:** SSO covers OAuth / OIDC / SAML, but a large slice of the
+  self-hosted market (exactly the Harbor / Nexus crowd) runs plain
+  LDAP with no OIDC bridge. A hard adoption blocker for those shops.
+- **What:** LDAP bind provider alongside the existing entries in
+  `global_sso_config`: server URL + bind DN + user/group search
+  filters, StartTLS/LDAPS only, group→role mapping reusing the SAML
+  auto-provisioning path. Admin UI panel next to the OAuth/SAML
+  config; connection-test button.
+- **Cost estimate:** ~1 sprint.
+- **Affects:** `services/auth` (provider + config columns),
+  `services/management`, `frontend`, `docs/AUTH.md`.
+- **Depends on:** none; slots into the RM-003 global SSO shape.
+
+### FUT-046 — Registry-to-registry replication policies
+- **Why:** Tier 3's "geo-replication" is a storage-layer mirror; this
+  is Harbor's actual killer feature — *selective, policy-driven*
+  replication: "push everything matching `prod/*` to the edge-site /
+  DR / air-gapped-enclave registry." The biggest remaining "why Harbor
+  instead of you?" answer.
+- **What:** New `replication_policies` table (name filter glob,
+  destination registry + creds AES-256-GCM like proxy upstreams,
+  trigger: on-push | scheduled | manual). Worker reuses the proxy's
+  remote-registry client to push manifests + blobs, with digest
+  verification + retry via `FOR UPDATE SKIP LOCKED`. Composes with
+  FUT-020: promote to `prod/*` → auto-replicates. FE: `/workspace/
+  replication` policy CRUD + per-policy run history.
+- **Cost estimate:** ~2 sprints.
+- **Affects:** new worker (likely inside `services/proxy` or a small
+  `services/replicator`), `services/management`, `frontend`.
+- **Depends on:** FUT-020 (shipped) for the promote-then-replicate
+  composition; supersedes Tier 3 "Geo-replication" when picked up.
+
+### FUT-047 — Upgrade advisor
+- **Why:** Self-hosted deployments rot silently. Operators don't know
+  a release with security fixes exists until something breaks.
+- **What:** Daily check against the GitHub releases API (opt-out flag
+  for air-gapped installs): compares running version to latest,
+  surfaces "v2.1.0 available — 2 security fixes, 1 migration required"
+  as a FUT-019 notification + an `/admin` banner with inline release
+  notes. Follows the FUT-019 tone rule: actionable noun + verb first.
+- **Cost estimate:** ~2 days.
+- **Affects:** `services/audit` (scheduled category), `services/
+  management` (version endpoint), `frontend` (banner).
+- **Depends on:** FUT-019 phase 2 for the worker + category plumbing.
+
+---
+
+## Fable review absorption — 2026-07-01
+
+> Absorbed from three review docs (`docs/{ui,sec,backend}-suggestion-fable.md`,
+> deleted once absorbed here). Items already tracked elsewhere were skipped
+> (Cmd+K → FUT-037, ops attention strip → FUT-035, vuln triage → FUT-030,
+> MFA → Tier 1 #1, universal RLS → ARCH-001, circuit breaker → ARCH-009,
+> read replicas → ARCH-013/014, CI items → REM-014/016/020, KEK rotation →
+> RED-FU-015, FE test depth → QA-020). Three claims were verified false and
+> dropped: `infra/runbooks/secret-rotation.md` "missing" (it exists),
+> `server.exe`/`cover_*.out` "committed" (untracked + gitignored), and "no
+> rate limit on login" (`CheckIPRateLimit` already returns 429 — only the
+> per-username dimension is missing, see FUT-052).
+
+### FUT-048 — Consumer idempotency + poison-message policy
+- **Why:** ARCH-002 (transactional outbox) covers the *publish* side only.
+  Consumers have DLX + manual ack but no documented redelivery cap and no
+  idempotency convention — a crash between side-effect and ACK reprocesses
+  the event.
+- **What:** `message_id` on all published events (publisher is already
+  typed); consumer-side dedup (Redis `SETNX` or a small dedup table) per
+  service; max-redelivery via `x-delivery-count` before DLX. Document the
+  convention in `docs/EVENTS.md`.
+- **Cost estimate:** ~1 week.
+- **Affects:** `libs/rabbitmq/{publisher,consumer}`, every consumer
+  service, `docs/EVENTS.md`.
+
+### FUT-049 — Supply-chain dogfooding: sign + SBOM our own images
+- **Why:** The platform verifies signatures and generates SBOMs for
+  customer images but ships its own images unsigned and SBOM-less. Strong
+  credibility signal for a registry product to eat its own dog food.
+- **What:** Cosign keyless (GitHub OIDC) signing in CI on push to GHCR;
+  syft → SPDX SBOM per service image attached as OCI referrers (we
+  implement the referrers API — use it); `cosign verify` walkthrough in
+  `docs/SELF-HOSTING.md`. Add `go mod verify` + a license check
+  (`go-licenses`) to the shared CI path while in there.
+- **Cost estimate:** ~2-3 days of CI work.
+- **Affects:** `.github/workflows`, `docs/SELF-HOSTING.md`.
+
+### FUT-050 — Storage-driver conformance test suite
+- **Why:** storage + proxy sit directly on the data path and are
+  effectively untested (coverage is 80%+ on core/auth/audit/management/
+  webhook). The driver interface in `libs/storage/driver` makes one shared
+  contract suite natural.
+- **What:** conformance tests run against all 5 backends — testcontainers
+  MinIO + filesystem in CI; S3/GCS/Azure as optional live targets. Follow
+  on with proxy pull-through digest-verification + `store.queued` retry
+  paths, and signer Vault error paths.
+- **Cost estimate:** ~1 week.
+- **Affects:** `services/storage`, `services/proxy`, `libs/testutil`.
+
+### FUT-051 — Scheduled `VerifyChain` + audit alert rules
+- **Why:** `Repository.VerifyChain` (Phase 6.12 / REM-022) exists but
+  nothing calls it — tamper evidence is only useful if something checks
+  it. Cheaper complement to RED-FU-017 (checkpoint signing, parked).
+- **What:** cron in `services/audit` runs `VerifyChain` per tenant under
+  an advisory lock; failure emits a metric + notification. Ship starter
+  Prometheus alert rules for metrics that already exist
+  (`registry_grpc_peer_cn_denied_total`, `registry_auth_jwt_kid_fallback_total`,
+  JTI-revocation Redis failures, SIEM-export `dlx_depth` growth). Document
+  the audit retention posture (hot window + archive story).
+- **Cost estimate:** ~2-3 days.
+- **Affects:** `services/audit`, `infra/` (alert rules).
+
+### FUT-052 — Login brute-force hardening (per-username dimension)
+- **Why:** the login path already has an IP-based rate limit
+  (`CheckIPRateLimit` → 429). Missing: the per-`(username, IP)` sliding
+  window with exponential backoff (not hard lockout — avoids username-DoS)
+  and an `auth.login_failed` audit event feeding SIEM export + the
+  FUT-019 `failed_login_burst` category.
+- **Cost estimate:** ~2-3 days.
+- **Affects:** `services/auth`, `services/audit`.
+
+### FUT-053 — `SSO_SAML_TRUST_EMAIL` guardrails
+- **Why:** the flag treats an IdP assertion as email verification; a
+  hostile IdP config can mint accounts for arbitrary email addresses.
+- **What:** ensure default-false, startup warning when true, and constrain
+  trust-email to a configured allowed-domain list.
+- **Cost estimate:** ~1 day.
+- **Affects:** `services/auth`, `docs/SAML.md`.
+
+### FUT-054 — OpenAPI spec for the management BFF
+- **Why:** the BFF conditionally mounts SSO/signer/scanner/gc routes on
+  env-var presence, so the REST surface is deployment-dependent and hard
+  to document; the hand-maintained Postman collection already drifted once
+  (PENTEST-033).
+- **What:** generate an OpenAPI spec from the router, publish it, and
+  generate the Postman collection from the spec instead of by hand.
+- **Cost estimate:** ~1 week.
+- **Affects:** `services/management`, `docs/postman/`.
+
+### FUT-055 — `services/mcp` positioning decision
+- **Why:** FUT-031 shipped the read-side MCP server; the service now needs
+  a declared status. Half-status services rot.
+- **What:** decide first-class (own CI workflow, coverage targets,
+  hardening-checklist row) vs experimental (marked clearly, excluded from
+  release gating) — then do the ~1 day of follow-through either way.
+- **Affects:** `services/mcp`, `.github/workflows`, `docs/MCP.md`,
+  `docs/HARDENING-CHECKLIST.md`.
+
+### FUT-056 — Operability small-fry batch
+Each ≤1 day; pick up alongside neighbouring work:
+- **GC per-run metrics** — blobs marked/swept, bytes reclaimed, duration,
+  exposed on the existing `:9090` port so GC stalls alert before disks fill.
+- **Restore-validation drill** — scheduled restore of the latest dump into
+  a scratch DB + smoke query + `VerifyChain`. Backups never restored are
+  hope, not DR. Pairs with FUT-033.
+- **Auth shadow-user lookup** — the flagged inefficient lookup sits on the
+  token-validation hot path; index or join rewrite before it shows in p99s.
+- **Scanner report persistence** — compliance reports still write to a
+  temp file; route through the storage driver so they survive restarts.
+- **Root-doc fold** — move `local-setup.md` + `prod-flow.md` into `docs/`
+  per the "root stays slim" philosophy.
+
+### FUT-057 — UI polish batch (Fable review 2026-07-01)
+None of these justify individual FUT numbers; pick with neighbouring FE work:
+- **Copy-paste ergonomics** — `docker pull` command block on tag detail,
+  `cosign verify` snippets on signed tags, one-click copy on every digest
+  (JetBrains Mono). Registry users live in terminals.
+- **Teaching empty states** — empty repo list shows the real
+  `docker login` / `docker push` commands with the deployment's hostname.
+- **Error-message mapping** — gRPC/BFF codes → human explanations at the
+  axios layer (e.g. single-mode `FAILED_PRECONDITION` on tenant create →
+  "this deployment is single-tenant"). Raw code strings never reach a toast.
+- **Session-expiry UX** — refresh failure shows a "reconnecting…" banner
+  with retry before hard logout; don't destroy form state on a blip.
+- **Live-ish freshness** — React Query `refetchInterval` (or BFF SSE) on
+  active surfaces + "updated Ns ago" stamp so tag lists update after push.
+- **Table power features** — column sort persisted to URL search params,
+  per-surface filter persistence (localStorage).
+- **Route-level code splitting** — lazy modules for heavy surfaces (SBOM
+  viewer, audit explorer) to keep first paint fast.
+- **`frontend/DESIGN.md`** — document the Beacon OKLCH tokens, spacing,
+  motion rules, font usage before OSS contributors drift them.
 
 ---
 

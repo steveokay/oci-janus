@@ -220,6 +220,12 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 |---|---|---|---|---|
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
+| **SEC-057** | HIGH | OIDC issuer allowlist uses raw `HasPrefix` — attacker-registered subdomain bypasses the gate | OPEN | Compare parsed origin (scheme+host+path boundary) instead; fix the 3 compose defaults to trailing-slash form in the same PR. See `security.md#SEC-057`. |
+| **SEC-058** | MEDIUM | JWKS SSRF: `jwks_uri` from discovery doc followed without host/scheme constraint | OPEN | Require `https` + same-origin-as-issuer; reuse the SIEM-export SSRF block-list from `services/audit`. See `security.md#SEC-058`. |
+| **SEC-059** | MEDIUM | JWKS + discovery HTTP responses have no size cap → OOM DoS via hostile IdP | OPEN | `io.LimitReader` (~1 MiB) on both fetches. See `security.md#SEC-059`. |
+| **SEC-060** | MEDIUM | `JWKSCacheTTLSeconds` has no min/max bound | OPEN | Clamp to [60s, 24h] at config validation. See `security.md#SEC-060`. |
+| **SEC-061** | LOW | Workload rate-limit Redis key unbounded from untrusted `sub` claim | OPEN | 256-char cap + hash long subjects. See `security.md#SEC-061`. |
+| **SEC-062** | LOW | JWKS HTTP client only sets `Timeout` — missing handshake/header timeouts | OPEN | Full `http.Transport` timeouts. See `security.md#SEC-062`. |
 | **SEC-064** | HIGH | `CreateAPIKey` skips workspace `max_ttl_days` cap when caller omits `expires_at` | OPEN — **BLOCKS `feat/fut-003-token-policies` PR** | `services/auth/internal/service/auth.go:657` guards enforcement with `expiresAt != nil`; nil → cap bypass + immortal key. Fix inline before PR: clamp `expiresAt` to `now + max_ttl_days` when policy cap is set and caller omits, OR reject with `InvalidArgument`. Add regression test. See `security.md#SEC-064`. |
 | **SEC-065** | LOW | FE `PoliciesPanel` missing per-dimension `idle_revoke_days >= 7` floor | OPEN | `frontend/src/components/access/PoliciesPanel.tsx:114`; user hits raw BE 400. No security exposure — BE enforces. Follow-up. |
 | **SEC-066** | MEDIUM | `PutTokenPolicy` gRPC trusts caller-supplied `tenant_id` (multi-mode only) | OPEN | Safe in `DEPLOYMENT_MODE=single` via SingleTenantInjector. Exposure limited to multi mode + permissive `MTLS_PEER_CN_ALLOWLIST`. Cross-cutting; consider tenant-cross-check interceptor. Follow-up. |
@@ -313,5 +319,5 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 
 ---
 
-> **Last updated:** 2026-06-30 — REDESIGN-001 entry trimmed to a soak-window residual after `v2.0.0-rc1` cut + pushed (tag `4dd3e63` → commit `f0896ff`, PR #219). Calendar-only remainder: soak ≥ 2026-07-07 then tag `v2.0.0`. Tail SEC items + 4 RED-FU items deferred per the residual block above.
+> **Last updated:** 2026-07-02 — synced SEC-057..062 into the open security items table (all six were `Status: OPEN` in `security.md` but missing here; gap surfaced by the Fable review absorption, see `futures.md`). Prior update 2026-06-30: REDESIGN-001 entry trimmed to a soak-window residual after `v2.0.0-rc1` cut + pushed (tag `4dd3e63` → commit `f0896ff`, PR #219). Calendar-only remainder: soak ≥ 2026-07-07 then tag `v2.0.0`. Tail SEC items + 4 RED-FU items deferred per the residual block above.
 > **Maintainer:** see `git log -- status-tracker.md`.
