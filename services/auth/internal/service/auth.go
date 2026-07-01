@@ -627,7 +627,46 @@ func (s *Service) CreateUser(ctx context.Context, tenantID uuid.UUID, username, 
 
 // CreateAPIKey generates a random secret, stores its argon2id hash, and returns
 // the raw secret. The raw secret is never stored and cannot be recovered later.
+//
+// FUT-003 policy consultation:
+//
+//   - If a workspace token policy is wired AND has MaxTTLDays set, the
+//     caller-requested expires_at is rejected when it exceeds now() + max.
+//     Existing keys are NOT re-validated against a stricter policy —
+//     grandfathering keeps operators from locking themselves out of their
+//     own workspace on a tightening (Task 6 load-bearing invariant).
+//
+//   - If a workspace token policy has RotationIntervalDays set, the new key
+//     gets rotation_due_at = now() + interval so FUT-004's lapse surface has
+//     a deadline to enforce. Missed on legacy paths (policy not wired) which
+//     leaves rotation_due_at NULL — treated as "no rotation required".
+//
+// The token-policy repo is optional; when nil (test fixtures without a
+// policy wiring) we skip enforcement and behave exactly like the pre-FUT-003
+// path. Grandfathering is enforced structurally: this function only ever
+// consults the policy for the CURRENT create call.
 func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, name string, scopes []string, expiresAt *time.Time) (key *repository.APIKey, rawSecret string, err error) {
+	// FUT-003: enforce max_ttl_days BEFORE generating a secret so a rejected
+	// call doesn't waste an Argon2 round.
+	var rotationDueAt *time.Time
+	if s.tokenPolicy != nil {
+		policy, perr := s.tokenPolicy.GetOrDefault(ctx, tenantID)
+		if perr != nil {
+			return nil, "", fmt.Errorf("load token policy: %w", perr)
+		}
+		if policy.MaxTTLDays != nil && expiresAt != nil {
+			maxAllowed := time.Now().Add(time.Duration(*policy.MaxTTLDays) * 24 * time.Hour)
+			if expiresAt.After(maxAllowed) {
+				return nil, "", status.Errorf(codes.InvalidArgument,
+					"requested TTL exceeds workspace max (%d days)", *policy.MaxTTLDays)
+			}
+		}
+		if policy.RotationIntervalDays != nil {
+			due := time.Now().Add(time.Duration(*policy.RotationIntervalDays) * 24 * time.Hour)
+			rotationDueAt = &due
+		}
+	}
+
 	raw := make([]byte, rawSecretLen)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, "", fmt.Errorf("generate secret: %w", err)
@@ -659,6 +698,18 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, 
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	// If policy required a rotation deadline, stamp it now. A failure here
+	// does NOT roll back the create — the key is usable, we just log the
+	// gap so operators can detect it. FUT-004's lapse UI will still surface
+	// the key as "no deadline known" without an inbound alert path.
+	if rotationDueAt != nil {
+		if setErr := s.apiKeys.SetRotationDueAt(ctx, key.ID, rotationDueAt); setErr != nil {
+			slog.WarnContext(ctx, "CreateAPIKey: SetRotationDueAt failed; key created without deadline",
+				"key_id", key.ID, "err", setErr)
+		} else {
+			key.RotationDueAt = rotationDueAt
+		}
 	}
 	return key, rawSecret, nil
 }

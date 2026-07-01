@@ -34,6 +34,14 @@ type APIKey struct {
 	LastUsedAt       *time.Time
 	IsActive         bool
 	CreatedAt        time.Time
+	// RotationDueAt — set on CreateAPIKey when the workspace policy has
+	// rotation_interval_days configured (FUT-003). NULL means "no rotation
+	// deadline"; past-now means "overdue for rotation". Consumed by FUT-004.
+	RotationDueAt *time.Time
+	// RevokeReason — stamped on RevokeWithReason (FUT-003). One of "manual",
+	// "idle_revoked", "rotation_lapsed". NULL for still-active keys OR
+	// pre-migration revoked keys (grandfathered; the column is best-effort).
+	RevokeReason *string
 }
 
 // CreateAPIKeyRequest carries pre-validated data for inserting a new key.
