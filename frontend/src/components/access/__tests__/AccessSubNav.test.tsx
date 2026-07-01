@@ -212,18 +212,19 @@ describe("AccessSubNav", () => {
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
-  test("shows all preview links for admins after expanding the flyout", async () => {
+  test("shows remaining preview links for admins after expanding the flyout", async () => {
     mockClaims = adminClaims;
     await renderSubNav();
 
     // DSGN-011 — the Preview section is collapsed by default. Verify the
     // links are hidden, then expand and verify they appear.
+    // FUT-001 shipped 2026-07-01 — "Federated trust" graduated to the
+    // Workspace section and is asserted in its own test below.
     // FUT-002 shipped 2026-06-30 — "Credential helpers" graduated to the
     // Workspace section and is asserted in its own test below.
-    expect(screen.queryByText("Federated trust")).not.toBeInTheDocument();
+    expect(screen.queryByText("Token policies")).not.toBeInTheDocument();
     openPreviewSection();
 
-    expect(screen.getByText("Federated trust")).toBeInTheDocument();
     expect(screen.getByText("Token policies")).toBeInTheDocument();
     expect(screen.getByText("Access review")).toBeInTheDocument();
   });
@@ -238,6 +239,20 @@ describe("AccessSubNav", () => {
     expect(screen.getByText("Credential helpers")).toBeInTheDocument();
     // Confirm the Preview flyout is still collapsed — the link is in the
     // Workspace section above it, not behind the expander.
+    const expander = document.querySelector(
+      '[aria-controls="access-subnav-preview-items"]',
+    );
+    expect(expander).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // FUT-001 graduation regression: Federated trust must render in the
+  // always-visible Workspace section for admins, NOT inside the collapsed
+  // Preview flyout. Mirrors the FUT-002 assertion above.
+  test("shows Federated trust in Workspace section for admins without expansion", async () => {
+    mockClaims = adminClaims;
+    await renderSubNav();
+
+    expect(screen.getByText("Federated trust")).toBeInTheDocument();
     const expander = document.querySelector(
       '[aria-controls="access-subnav-preview-items"]',
     );
