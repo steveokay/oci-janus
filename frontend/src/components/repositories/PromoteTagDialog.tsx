@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { usePromoteTag } from "@/lib/api/promotions";
 import { useMe } from "@/lib/api/me";
+import { useRepositories } from "@/lib/api/repositories";
 
 // PromoteTagDialog — FUT-020 + REM-030.
 //
@@ -79,7 +80,9 @@ type FormValues = z.infer<typeof schema>;
 
 // Roles that grant write access on an org scope. Anything below `writer`
 // (reader) cannot be a promotion destination, so we filter those out. The
-// order matches the RBAC hierarchy elsewhere in the FE.
+// order matches the RBAC hierarchy elsewhere in the FE. Used as a fallback
+// source when the repositories list is empty (fresh tenant with only the
+// source org populated).
 const WRITER_ROLES = new Set(["owner", "admin", "writer"]);
 
 interface PromoteTagDialogProps {
@@ -106,34 +109,50 @@ export function PromoteTagDialog({
 }: PromoteTagDialogProps): React.ReactElement {
   const promote = usePromoteTag(srcOrg, srcRepo, srcTag);
   const me = useMe();
+  // Repositories the caller has visibility on. This is the widest RBAC-
+  // aware set the FE already has — every repo listed here has passed the
+  // BFF's reader-role gate on the caller. Deriving orgs from this covers
+  // (a) global admins (they see every org), (b) users with repo-scoped
+  // grants that don't include a matching org-level membership row, and
+  // (c) users with proper org memberships. All three previously fell
+  // into the text-input fallback because my earlier filter only walked
+  // org-scoped writer-tier memberships.
+  const repos = useRepositories({ perPage: 100 });
 
-  // Derive the caller's writer-tier org scopes. A membership entry looks
-  // like { scope_type: "org", scope_value: "myorg", role: "writer" } —
-  // we filter to org scopes only and keep the union across role rows.
-  // Include the source org so the "same-org promotion" flow still has
-  // an option even if the caller's writer grant is scoped to a specific
-  // repo (in which case org-level memberships may be empty).
   const orgOptions = React.useMemo<string[]>(() => {
     const set = new Set<string>();
+    // Preferred source: distinct orgs across every repository the caller
+    // can already see. This is the same list the sidebar / workspace
+    // switcher renders for "orgs I can browse", so it matches operator
+    // expectations.
+    for (const page of repos.data?.pages ?? []) {
+      for (const r of page.repositories) {
+        if (r.org) set.add(r.org);
+      }
+    }
+    // Fallback source: writer-tier org memberships from useMe. Useful for
+    // a brand-new tenant where the caller has been granted access to an
+    // empty org (no repos yet) — such an org would be missing from
+    // useRepositories but should still be a valid promotion destination.
     for (const m of me.data?.memberships ?? []) {
       if (m.scope_type === "org" && WRITER_ROLES.has(m.role)) {
         set.add(m.scope_value);
       }
     }
+    // Always include the source org so the "promote within the same
+    // repo" flow works even before either query resolves.
     set.add(srcOrg);
     return Array.from(set).sort();
-  }, [me.data, srcOrg]);
+  }, [repos.data, me.data, srcOrg]);
 
-  // Global admins skip per-org grants — they can push into any org, so
-  // the dropdown would be empty of memberships (only the srcOrg). In
-  // that case we render a free-text input so the operator can still type
-  // an org they know exists but have no per-org membership row for.
-  const isGlobalAdmin = (me.data?.roles ?? []).includes("admin");
-  // Fall back to text input when the me query hasn't resolved yet, when
-  // the caller is a global admin, or when we somehow got zero org
-  // options. Keeps the dialog usable in every state.
+  // Fall back to text input only while the repos query hasn't resolved
+  // AND me is still loading. A resolved query that legitimately produces
+  // only one option (single-org tenant) still renders the dropdown — the
+  // operator sees one enabled item + the srcOrg check. Global admins are
+  // no longer forced into text input; the repositories query already
+  // gives them the full org list.
   const useTextInput =
-    !me.data || isGlobalAdmin || orgOptions.length <= 1;
+    !me.data && !repos.data && orgOptions.length <= 1;
 
   const {
     register,
@@ -272,8 +291,8 @@ export function PromoteTagDialog({
               </p>
             ) : useTextInput ? null : (
               <p className="mt-3 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
-                Orgs where you have writer-or-above role. The BFF still
-                re-checks the destination repo scope on submit.
+                Orgs visible to you. The BFF re-checks writer role on the
+                destination repo at submit time.
               </p>
             )}
           </div>
