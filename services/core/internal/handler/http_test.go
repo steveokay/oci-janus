@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
@@ -110,6 +111,10 @@ type handlerFakeMetaServer struct {
 	repos       map[string]*metadatav1.Repository
 	manifests   map[string]*metadatav1.Manifest
 	tagToDigest map[string]string
+
+	// FUT-021 — scan results keyed by tenant+digest so the CVSS
+	// admission path can inspect them.
+	scanResults map[string]*metadatav1.ScanResult
 }
 
 func newHandlerFakeMetaServer() *handlerFakeMetaServer {
@@ -117,7 +122,36 @@ func newHandlerFakeMetaServer() *handlerFakeMetaServer {
 		repos:       make(map[string]*metadatav1.Repository),
 		manifests:   make(map[string]*metadatav1.Manifest),
 		tagToDigest: make(map[string]string),
+		scanResults: make(map[string]*metadatav1.ScanResult),
 	}
+}
+
+// GetRepository (by id) — the CVSS admission gate calls this on every
+// GetManifest to read max_cvss_score. Tests wire the field on the
+// stored Repository row directly (see the CVSS test below).
+func (s *handlerFakeMetaServer) GetRepository(_ context.Context, req *metadatav1.GetRepositoryRequest) (*metadatav1.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.repos {
+		if r.GetRepoId() == req.GetRepoId() && r.GetTenantId() == req.GetTenantId() {
+			return r, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "repository not found")
+}
+
+// GetScanResult — FUT-021 admission gate call. Tests seed by tenant +
+// manifest digest so the same test manifest can carry different scan
+// profiles.
+func (s *handlerFakeMetaServer) GetScanResult(_ context.Context, req *metadatav1.GetScanResultRequest) (*metadatav1.ScanResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := req.GetTenantId() + ":" + req.GetManifestDigest()
+	sr, ok := s.scanResults[key]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no scan result")
+	}
+	return sr, nil
 }
 
 func (s *handlerFakeMetaServer) CreateRepository(_ context.Context, req *metadatav1.CreateRepositoryRequest) (*metadatav1.Repository, error) {
@@ -1874,5 +1908,102 @@ func TestDispatchOCI_referrersWrongMethod_returns405(t *testing.T) {
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE referrers: got %d, want 405", resp.StatusCode)
+	}
+}
+
+// ── FUT-021 CVSS admission — 403 mapping ──────────────────────────────────────
+
+// TestGetManifest_cvssThresholdExceeded_returns403 exercises the full
+// HTTP pipeline: PUSH a manifest, seed a HIGH+CRITICAL scan result on
+// its digest, set the repo's max_cvss_score to 70, then GET the tag.
+// The service layer returns ErrCVSSThresholdExceeded and the HTTP layer
+// must translate that to 403 DENIED with the operator-actionable body.
+func TestGetManifest_cvssThresholdExceeded_returns403(t *testing.T) {
+	tc, cleanup := buildHandlerServer(t)
+	defer cleanup()
+
+	rawJSON := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:` + strings.Repeat("f", 64) + `","size":7},"layers":[]}`)
+
+	// Push first so the manifest + repo exist in the fake metadata.
+	putReq := bearerReq(t, http.MethodPut,
+		tc.srv.URL+"/v2/myorg/cvss-repo/manifests/v1",
+		bytes.NewReader(rawJSON),
+	)
+	putReq.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	putResp := do(t, putReq)
+	digest := putResp.Header.Get("Docker-Content-Digest")
+	putResp.Body.Close()
+	if digest == "" {
+		t.Fatal("expected Docker-Content-Digest in PUT response")
+	}
+
+	// Seed the CVSS gate. tenant-test is what the fake auth issues.
+	tc.meta.mu.Lock()
+	for _, r := range tc.meta.repos {
+		if r.GetName() == "myorg/cvss-repo" {
+			r.MaxCvssScore = wrapperspb.Int32(70)
+		}
+	}
+	tc.meta.scanResults["tenant-test:"+digest] = &metadatav1.ScanResult{
+		SeverityCounts: map[string]int32{"CRITICAL": 1},
+	}
+	tc.meta.mu.Unlock()
+
+	// GET by tag — the CVSS admission gate should fire.
+	getReq := bearerReq(t, http.MethodGet,
+		tc.srv.URL+"/v2/myorg/cvss-repo/manifests/v1", nil)
+	resp := do(t, getReq)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("GET denied by CVSS: got %d, want 403", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "DENIED") {
+		t.Errorf("expected DENIED code in body, got %q", body)
+	}
+	// The operator-actionable numeric context should surface — CI tooling
+	// parses this to decide waive / patch / rebuild.
+	if !strings.Contains(string(body), "100") || !strings.Contains(string(body), "70") {
+		t.Errorf("expected top-CVSS(100) + threshold(70) in body, got %q", body)
+	}
+}
+
+// TestHeadManifest_cvssThresholdExceeded_returns403 mirrors the GET
+// case for HEAD so OCI clients running HEAD-then-GET see a consistent
+// rejection at both steps.
+func TestHeadManifest_cvssThresholdExceeded_returns403(t *testing.T) {
+	tc, cleanup := buildHandlerServer(t)
+	defer cleanup()
+
+	rawJSON := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:` + strings.Repeat("a", 64) + `","size":7},"layers":[]}`)
+
+	putReq := bearerReq(t, http.MethodPut,
+		tc.srv.URL+"/v2/myorg/cvss-head-repo/manifests/head-tag",
+		bytes.NewReader(rawJSON),
+	)
+	putReq.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	putResp := do(t, putReq)
+	digest := putResp.Header.Get("Docker-Content-Digest")
+	putResp.Body.Close()
+
+	tc.meta.mu.Lock()
+	for _, r := range tc.meta.repos {
+		if r.GetName() == "myorg/cvss-head-repo" {
+			r.MaxCvssScore = wrapperspb.Int32(50)
+		}
+	}
+	tc.meta.scanResults["tenant-test:"+digest] = &metadatav1.ScanResult{
+		SeverityCounts: map[string]int32{"HIGH": 2},
+	}
+	tc.meta.mu.Unlock()
+
+	headReq := bearerReq(t, http.MethodHead,
+		tc.srv.URL+"/v2/myorg/cvss-head-repo/manifests/head-tag", nil)
+	resp := do(t, headReq)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("HEAD denied by CVSS: got %d, want 403", resp.StatusCode)
 	}
 }

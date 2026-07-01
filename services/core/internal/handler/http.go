@@ -373,6 +373,15 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request, name
 			"repository requires a signed manifest; sign the image or turn require_signature off")
 		return
 	}
+	// FUT-021: CVSS-gated admission. The service-layer error is wrapped
+	// with numeric context ("top CVSS N exceeds threshold M") so we pass
+	// err.Error() through verbatim — CI tooling can parse it to decide
+	// waive / patch / rebuild without a second call.
+	if errors.Is(err, service.ErrCVSSThresholdExceeded) {
+		ociError(w, http.StatusForbidden, "DENIED",
+			"repository CVSS admission policy: "+err.Error())
+		return
+	}
 	if err != nil {
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -455,6 +464,13 @@ func (h *Handler) handleHeadManifest(w http.ResponseWriter, r *http.Request, nam
 	if errors.Is(err, service.ErrSignatureRequired) {
 		ociError(w, http.StatusForbidden, "DENIED",
 			"repository requires a signed manifest; sign the image or turn require_signature off")
+		return
+	}
+	// FUT-021: CVSS admission mirrors GET so HEAD-then-GET clients
+	// (docker / crane / podman) see the same rejection at both steps.
+	if errors.Is(err, service.ErrCVSSThresholdExceeded) {
+		ociError(w, http.StatusForbidden, "DENIED",
+			"repository CVSS admission policy: "+err.Error())
 		return
 	}
 	if err != nil {
