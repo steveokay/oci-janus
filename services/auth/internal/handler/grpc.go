@@ -36,6 +36,10 @@ type GRPCHandler struct {
 	// WithTokenPolicyService at startup. May be nil in test/dev fixtures;
 	// the 2 policy RPCs return codes.Unimplemented in that case.
 	tokenPolicy *service.TokenPolicyService
+	// accessReview is the FUT-004 access-review service. Wired via
+	// WithAccessReviewService at startup. May be nil in test/dev
+	// fixtures; the 2 review RPCs return codes.Unimplemented in that case.
+	accessReview *service.AccessReviewService
 }
 
 // NewGRPCHandler creates a GRPCHandler backed by the given service.
@@ -58,6 +62,14 @@ func (h *GRPCHandler) WithOIDCTrustService(oidc *service.OIDCTrustService) *GRPC
 // to indicate the feature is off (RPCs return Unimplemented).
 func (h *GRPCHandler) WithTokenPolicyService(tp *service.TokenPolicyService) *GRPCHandler {
 	h.tokenPolicy = tp
+	return h
+}
+
+// WithAccessReviewService wires the FUT-004 service so ListStaleKeys +
+// SnoozeAPIKeyReview RPCs are served. Chained builder — pass nil to
+// indicate the feature is off (RPCs return Unimplemented).
+func (h *GRPCHandler) WithAccessReviewService(ar *service.AccessReviewService) *GRPCHandler {
+	h.accessReview = ar
 	return h
 }
 
