@@ -174,4 +174,25 @@ describe("PoliciesPanel", () => {
     );
     expect(mockMutate).not.toHaveBeenCalled();
   });
+
+  // SEC-065 (2026-07-01): idle_revoke_days has an extra 7-day floor at
+  // the BE that the FE was missing. Setting a value between 1 and 6
+  // used to slip past client validation and return the raw
+  // "Request failed with status code 400". This test pins the parity.
+  it("SEC-065: rejects idle_revoke_days < 7 inline", async () => {
+    const user = userEvent.setup();
+    mockData = fixturePolicy({ idle_revoke_days: 30 });
+    renderPanel();
+
+    const idleInput = screen.getByLabelText(/idle revocation threshold in days/i);
+    await user.clear(idleInput);
+    await user.type(idleInput, "3");
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /idle revoke.*at least 7/i,
+    );
+    expect(mockMutate).not.toHaveBeenCalled();
+  });
 });

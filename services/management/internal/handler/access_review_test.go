@@ -221,6 +221,30 @@ func TestSnoozeAPIKeyReview_nonAdmin_foreignKey_returns403(t *testing.T) {
 	}
 }
 
+// TestSnoozeAPIKeyReview_admin_unknownKey_returns404 — SEC-068 regression.
+// Before the fix, the admin branch skipped the tenant-scoped pre-flight
+// scan, letting a tenant-A admin snooze any UUID (including tenant-B
+// keys) via the RPC. The fix runs the pre-flight for every caller so an
+// unknown key id returns 404 regardless of admin-ness.
+func TestSnoozeAPIKeyReview_admin_unknownKey_returns404(t *testing.T) {
+	env := newTestEnv(t)
+	// Use a UUID that ISN'T seeded into the tenant's stale list.
+	payload, _ := json.Marshal(handler.SnoozeAPIKeyReviewRequestBody{
+		KeyID: "00000000-0000-0000-0000-000000000099",
+		Days:  30,
+	})
+	req := newTenantAdminRequest(t, env.srv.URL, http.MethodPost,
+		"/api/v1/access/review/snooze", payload)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("SEC-068: status: got %d, want 404 for unknown key even from admin", resp.StatusCode)
+	}
+}
+
 // TestSnoozeAPIKeyReview_missingKeyID_returns400 asserts an empty body
 // key_id fails fast at the BFF rather than pushing an obviously bad UUID
 // into the auth service just to bounce back as InvalidArgument.

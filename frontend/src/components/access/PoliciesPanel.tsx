@@ -37,6 +37,16 @@ import {
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
 
+// SEC-065 (2026-07-01): per-dimension floor. The BE's TokenPolicyService
+// applies an extra floor of 7 days on `idle_revoke_days` — set-and-forget
+// against a fresh policy shouldn't be able to nuke every workspace key
+// on the next hourly tick. Mirror it here so the operator gets a fast
+// inline error instead of the raw "Request failed with status code 400"
+// from the API.
+const PER_FIELD_MIN: Partial<Record<PolicyFieldKey, number>> = {
+  idle_revoke_days: 7,
+};
+
 // PolicyFieldKey enumerates the three configurable dimensions. Used as
 // the discriminator on section state so a single generic renderer can
 // drive all three.
@@ -111,13 +121,19 @@ const DEFAULTS: Record<PolicyFieldKey, number> = {
 
 // validateSection — returns null when the section is valid (either
 // disabled, or numeric within range) and an error string otherwise.
-function validateSection(state: SectionState): string | null {
+// `fieldKey` lets us apply a per-dimension floor (SEC-065: BE enforces
+// idle_revoke_days >= 7).
+function validateSection(
+  fieldKey: PolicyFieldKey,
+  state: SectionState,
+): string | null {
   if (!state.enabled) return null;
   const trimmed = state.value.trim();
   if (trimmed === "") return "Enter a value";
   const n = Number(trimmed);
   if (!Number.isInteger(n)) return "Value must be a whole number";
-  if (n < MIN_DAYS) return `Value must be at least ${MIN_DAYS}`;
+  const floor = PER_FIELD_MIN[fieldKey] ?? MIN_DAYS;
+  if (n < floor) return `Value must be at least ${floor}`;
   if (n > MAX_DAYS) return `Value must be at most ${MAX_DAYS}`;
   return null;
 }
@@ -208,7 +224,7 @@ export function PoliciesPanel(): React.ReactElement {
 
     // Validate every dimension. First error wins.
     for (const key of Object.keys(form) as PolicyFieldKey[]) {
-      const err = validateSection(form[key]);
+      const err = validateSection(key, form[key]);
       if (err) {
         setValidationError(`${SECTION_COPY[key].title}: ${err}`);
         return;
@@ -335,6 +351,8 @@ function PolicySection({
   suffix: string;
 }): React.ReactElement {
   const copy = SECTION_COPY[fieldKey];
+  // SEC-065: per-dimension floor mirrors the BE (idle_revoke_days >= 7).
+  const min = PER_FIELD_MIN[fieldKey] ?? MIN_DAYS;
   // Unique id per section — the input + toggle both need aria refs.
   const inputId = `policy-input-${fieldKey}`;
   const toggleId = `policy-toggle-${fieldKey}`;
@@ -371,7 +389,7 @@ function PolicySection({
             <input
               id={inputId}
               type="number"
-              min={MIN_DAYS}
+              min={min}
               max={MAX_DAYS}
               value={state.value}
               onChange={(e) => onValueChange(e.target.value)}
