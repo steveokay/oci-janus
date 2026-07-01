@@ -24,4 +24,17 @@ var (
 	// a clear body so the operator can act (sign the image first or
 	// turn the policy off). Futures.md Tier 1 #3.
 	ErrSignatureRequired = errors.New("repository requires a signed manifest")
+
+	// ErrCVSSThresholdExceeded is returned by GetManifest when the
+	// parent repository has a non-null `max_cvss_score` AND the latest
+	// scan result for the manifest carries a top CVSS score that
+	// exceeds the threshold. Wrapped with the numeric top-vs-threshold
+	// context so the HTTP layer can surface an operator-actionable
+	// error body ("top CVSS 92 exceeds threshold 70").
+	//
+	// Fail-OPEN paths (no scan yet, scanner unreachable, GetRepository
+	// blip) do NOT surface this error — they log and allow. Only a
+	// definitive over-threshold reading triggers rejection.
+	// Futures.md FUT-021.
+	ErrCVSSThresholdExceeded = errors.New("repository CVSS admission threshold exceeded")
 )

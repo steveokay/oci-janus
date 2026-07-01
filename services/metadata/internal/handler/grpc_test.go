@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
@@ -55,6 +56,13 @@ type fakeRepo struct {
 	// UpdateRepositoryQuota
 	updateQuotaResult *metadatav1.Repository
 	updateQuotaErr    error
+
+	// FUT-021 — captured *int32 arg passed to UpdateRepositoryCVSSPolicy
+	// so tests can assert the "clear vs set" wire semantics. Call count
+	// exists to prove the handler skipped the repo dispatch on
+	// InvalidArgument short-circuits.
+	updateCVSSCaptured *int32
+	updateCVSSCalls    int
 
 	// GetTenantStorageBreakdown (FE-API-031)
 	storageBreakdownResp *metadatav1.GetTenantStorageBreakdownResponse
@@ -398,6 +406,16 @@ func (f *fakeRepo) UpdateRepositoryImmutability(_ context.Context, _, _ string, 
 // UpdateRepositoryImmutability; both flips ride the same audit
 // security-relevant path.
 func (f *fakeRepo) UpdateRepositorySignaturePolicy(_ context.Context, _, _ string, _ bool) (*metadatav1.Repository, error) {
+	return f.updateQuotaResult, f.updateQuotaErr
+}
+
+// FUT-021 CVSS admission — captures the pointer arg so tests can assert
+// nil-vs-set semantics (clear vs update). Ties into updateQuotaResult
+// to keep the fake surface small; policy-specific tests instantiate a
+// fresh fake and set result+captured explicitly.
+func (f *fakeRepo) UpdateRepositoryCVSSPolicy(_ context.Context, _, _ string, maxCVSS *int32) (*metadatav1.Repository, error) {
+	f.updateCVSSCaptured = maxCVSS
+	f.updateCVSSCalls++
 	return f.updateQuotaResult, f.updateQuotaErr
 }
 
@@ -2519,4 +2537,98 @@ func TestListPromotions_InvalidTenantUUID(t *testing.T) {
 	if len(f.listPromotionsCalls) != 0 {
 		t.Errorf("repo called despite bad tenant: %d calls", len(f.listPromotionsCalls))
 	}
+}
+
+// ── UpdateRepositoryCVSSPolicy (FUT-021) ──────────────────────────────────────
+
+// TestUpdateRepositoryCVSSPolicy_setValue_persistsPointer verifies that a
+// non-null Int32Value on the request maps to a non-nil *int32 on the
+// repository call — the storage layer needs the "clear vs set" distinction to
+// choose between UPDATE ... = NULL and UPDATE ... = value.
+func TestUpdateRepositoryCVSSPolicy_setValue_persistsPointer(t *testing.T) {
+	want := &metadatav1.Repository{
+		RepoId:       "r1",
+		MaxCvssScore: wrapperspb.Int32(70),
+	}
+	f := &fakeRepo{updateQuotaResult: want}
+	h := newHandler(f)
+
+	got, err := h.UpdateRepositoryCVSSPolicy(context.Background(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+		TenantId:     "t1",
+		RepoId:       "r1",
+		MaxCvssScore: wrapperspb.Int32(70),
+	})
+	requireNoErr(t, err)
+	if got.GetMaxCvssScore().GetValue() != 70 {
+		t.Errorf("MaxCvssScore: got %d, want 70", got.GetMaxCvssScore().GetValue())
+	}
+	if f.updateCVSSCaptured == nil || *f.updateCVSSCaptured != 70 {
+		t.Errorf("captured pointer: got %v, want *70", f.updateCVSSCaptured)
+	}
+}
+
+// TestUpdateRepositoryCVSSPolicy_clear_persistsNilPointer verifies that an
+// omitted Int32Value maps to a nil *int32 (SQL NULL, no gate).
+func TestUpdateRepositoryCVSSPolicy_clear_persistsNilPointer(t *testing.T) {
+	f := &fakeRepo{updateQuotaResult: &metadatav1.Repository{RepoId: "r1"}}
+	h := newHandler(f)
+
+	_, err := h.UpdateRepositoryCVSSPolicy(context.Background(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+		TenantId:     "t1",
+		RepoId:       "r1",
+		MaxCvssScore: nil,
+	})
+	requireNoErr(t, err)
+	if f.updateCVSSCaptured != nil {
+		t.Errorf("captured pointer: got %d, want nil (SQL NULL)", *f.updateCVSSCaptured)
+	}
+}
+
+// TestUpdateRepositoryCVSSPolicy_belowRange_rejectsInvalidArgument verifies
+// that a negative Int32Value short-circuits with InvalidArgument BEFORE the
+// repository call — the CHECK constraint is defence in depth but a clean gRPC
+// error is a better UX than a database error surfacing through mapErr.
+func TestUpdateRepositoryCVSSPolicy_belowRange_rejectsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+
+	_, err := h.UpdateRepositoryCVSSPolicy(context.Background(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+		TenantId:     "t1",
+		RepoId:       "r1",
+		MaxCvssScore: wrapperspb.Int32(-1),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if f.updateCVSSCalls != 0 {
+		t.Errorf("repo called despite invalid input: %d calls", f.updateCVSSCalls)
+	}
+}
+
+// TestUpdateRepositoryCVSSPolicy_aboveRange_rejectsInvalidArgument verifies
+// the upper bound at 100 — the CVSS v3.1 scale rescaled to integers can never
+// exceed 100.
+func TestUpdateRepositoryCVSSPolicy_aboveRange_rejectsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+
+	_, err := h.UpdateRepositoryCVSSPolicy(context.Background(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+		TenantId:     "t1",
+		RepoId:       "r1",
+		MaxCvssScore: wrapperspb.Int32(101),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if f.updateCVSSCalls != 0 {
+		t.Errorf("repo called despite invalid input: %d calls", f.updateCVSSCalls)
+	}
+}
+
+// TestUpdateRepositoryCVSSPolicy_notFound_returnsNotFound verifies that the
+// repository's ErrNotFound flows through mapErr into codes.NotFound.
+func TestUpdateRepositoryCVSSPolicy_notFound_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{updateQuotaErr: repository.ErrNotFound})
+	_, err := h.UpdateRepositoryCVSSPolicy(context.Background(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+		TenantId:     "t1",
+		RepoId:       "missing",
+		MaxCvssScore: wrapperspb.Int32(70),
+	})
+	requireCode(t, err, codes.NotFound)
 }

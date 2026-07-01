@@ -516,6 +516,30 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
+	// FUT-021 — CVSS-gated admission policy flip. Actor is empty when
+	// the change came from a service-account API key not attached to a
+	// shadow user; treat empty as "system" for the actor_type column so
+	// the activity feed stays legible.
+	case events.RoutingRepoCVSSPolicyChanged:
+		var p events.RepoCVSSPolicyChangedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "repo.cvss_policy.changed",
+			Resource:   p.Org + "/" + p.Repo,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
 	case events.RoutingTenantCreated:
 		return &repository.AuditEvent{
 			TenantID:   tenantID,

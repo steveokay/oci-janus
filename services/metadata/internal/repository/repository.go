@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 )
+
+// cvssColumnToProto lifts a nullable INT column (repositories.max_cvss_score)
+// into the proto wrapper — nil for NULL, *Int32Value for a stored value. Kept
+// as a package-local helper so every read path (scanOneRepo, ListRepositories
+// loop) uses the same conversion (FUT-021).
+func cvssColumnToProto(v sql.NullInt32) *wrapperspb.Int32Value {
+	if !v.Valid {
+		return nil
+	}
+	return wrapperspb.Int32(v.Int32)
+}
 
 // Repository performs all database operations for the metadata service.
 type Repository struct {
@@ -64,7 +77,8 @@ const repoSelectCols = `r.id, r.org_id, r.tenant_id, r.name, r.is_public,
 	r.storage_quota,
 	COALESCE((SELECT SUM(image_size_bytes) FROM manifests WHERE repo_id = r.id), 0) AS storage_used,
 	r.created_at, o.name, r.description,
-	r.immutable_tags, r.require_signature`
+	r.immutable_tags, r.require_signature,
+	r.max_cvss_score`
 
 // CreateRepository inserts a new repository row.
 func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name, description string, isPublic bool, storageQuota int64) (*metadatav1.Repository, error) {
@@ -78,7 +92,7 @@ func (r *Repository) CreateRepository(ctx context.Context, tenantID, orgID, name
 		WITH inserted AS (
 			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
 		)
 		SELECT ` + repoSelectCols + `
 		FROM inserted r
@@ -234,18 +248,23 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 	for rows.Next() {
 		var repo metadatav1.Repository
 		var createdAt time.Time
+		// FUT-021 — mirror scanOneRepo: max_cvss_score is a nullable INT
+		// so use sql.NullInt32 and lift via cvssColumnToProto.
+		var maxCVSS sql.NullInt32
 		// FE-API-006 added r.description to repoSelectCols; the scan needs to
-		// drain all 10 columns or pgx returns "number of field descriptions
+		// drain all columns or pgx returns "number of field descriptions
 		// must equal number of destinations". Keep field order aligned with
 		// repoSelectCols and scanOneRepo.
 		if err := rows.Scan(&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 			&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
 			&repo.Description,
 			&repo.ImmutableTags,
-			&repo.RequireSignature); err != nil {
+			&repo.RequireSignature,
+			&maxCVSS); err != nil {
 			return nil, fmt.Errorf("scan repository: %w", err)
 		}
 		repo.CreatedAt = timestamppb.New(createdAt)
+		repo.MaxCvssScore = cvssColumnToProto(maxCVSS)
 		repos = append(repos, &repo)
 	}
 	return repos, rows.Err()
@@ -275,7 +294,7 @@ func (r *Repository) UpdateRepositoryQuota(ctx context.Context, tenantID, repoID
 		WITH updated AS (
 			UPDATE repositories SET storage_quota = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
@@ -294,12 +313,43 @@ func (r *Repository) UpdateRepositorySignaturePolicy(ctx context.Context, tenant
 		WITH updated AS (
 			UPDATE repositories SET require_signature = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
 		JOIN   organizations o ON o.id = r.org_id`
 	return r.scanOneRepo(ctx, q, requireSignature, repoID, tenantID)
+}
+
+// UpdateRepositoryCVSSPolicy flips the repo-wide `max_cvss_score`
+// threshold (FUT-021). Nil clears the gate (SQL NULL — no admission
+// check); a non-nil value 0-100 activates the gate at that threshold.
+// Handler-side validation enforces the 0-100 range before we reach
+// here; the CHECK constraint on the column is defence in depth for the
+// direct-DB / migration-replay scenario.
+//
+// Same audit-trail posture as UpdateRepositorySignaturePolicy: separate
+// RPC so the security-relevant flip is visible in the audit log
+// distinct from mere description edits.
+func (r *Repository) UpdateRepositoryCVSSPolicy(ctx context.Context, tenantID, repoID string, maxCVSS *int32) (*metadatav1.Repository, error) {
+	// nil (Go) → SQL NULL by passing an untyped nil through pgx; a bound
+	// *int32 with a value passes the value. Keeps the "clear vs set"
+	// distinction on the wire aligned with the proto Int32Value shape
+	// (unset wrapper → nil pointer here → NULL column).
+	var arg any
+	if maxCVSS != nil {
+		arg = *maxCVSS
+	}
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET max_cvss_score = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	return r.scanOneRepo(ctx, q, arg, repoID, tenantID)
 }
 
 // ListRepositoryTrustedKeys returns every approved signing key for a
@@ -410,7 +460,7 @@ func (r *Repository) UpdateRepositoryImmutability(ctx context.Context, tenantID,
 		WITH updated AS (
 			UPDATE repositories SET immutable_tags = $1
 			WHERE  id = $2 AND tenant_id = $3
-			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r
@@ -454,12 +504,18 @@ func (r *Repository) UpdateTagImmutable(ctx context.Context, tenantID, repoID, n
 func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any) (*metadatav1.Repository, error) {
 	var repo metadatav1.Repository
 	var createdAt time.Time
+	// FUT-021 — max_cvss_score is a nullable column; use sql.NullInt32 to
+	// distinguish "no gate configured" (NULL) from "gate set to 0" (which
+	// would deny every scan that surfaces any severity). cvssColumnToProto
+	// lifts the sql wrapper into the proto Int32Value wrapper the wire uses.
+	var maxCVSS sql.NullInt32
 	err := r.pool.QueryRow(ctx, query, args...).Scan(
 		&repo.RepoId, &repo.OrgId, &repo.TenantId, &repo.Name,
 		&repo.IsPublic, &repo.StorageQuota, &repo.StorageUsed, &createdAt, &repo.Org,
 		&repo.Description,
 		&repo.ImmutableTags,
 		&repo.RequireSignature,
+		&maxCVSS,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -468,6 +524,7 @@ func (r *Repository) scanOneRepo(ctx context.Context, query string, args ...any)
 		return nil, err
 	}
 	repo.CreatedAt = timestamppb.New(createdAt)
+	repo.MaxCvssScore = cvssColumnToProto(maxCVSS)
 	return &repo, nil
 }
 

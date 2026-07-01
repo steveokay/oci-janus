@@ -29,6 +29,7 @@ const (
 	MetadataService_UpdateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateRepository"
 	MetadataService_UpdateRepositoryImmutability_FullMethodName    = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
 	MetadataService_UpdateRepositorySignaturePolicy_FullMethodName = "/registry.metadata.v1.MetadataService/UpdateRepositorySignaturePolicy"
+	MetadataService_UpdateRepositoryCVSSPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateRepositoryCVSSPolicy"
 	MetadataService_ListRepositoryTrustedKeys_FullMethodName       = "/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys"
 	MetadataService_AddRepositoryTrustedKey_FullMethodName         = "/registry.metadata.v1.MetadataService/AddRepositoryTrustedKey"
 	MetadataService_RemoveRepositoryTrustedKey_FullMethodName      = "/registry.metadata.v1.MetadataService/RemoveRepositoryTrustedKey"
@@ -98,6 +99,14 @@ type MetadataServiceClient interface {
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
 	UpdateRepositorySignaturePolicy(ctx context.Context, in *UpdateRepositorySignaturePolicyRequest, opts ...grpc.CallOption) (*Repository, error)
+	// FUT-021 — CVSS-gated admission policy. Flips the repo-wide
+	// `max_cvss_score` threshold. Nullable Int32Value: null clears the
+	// gate (no threshold enforced); a value 0-100 sets the threshold at
+	// which services/core will refuse pulls whose top scan CVSS score
+	// exceeds it. Same audit-trail-clarity reasoning as
+	// UpdateRepositorySignaturePolicy — dedicated RPC so the security-
+	// relevant transition is easy to spot in the audit log.
+	UpdateRepositoryCVSSPolicy(ctx context.Context, in *UpdateRepositoryCVSSPolicyRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
 	// trusted-key allowlist. When `require_signature=true` AND the list
 	// is non-empty, services/core narrows the admission gate to only
@@ -406,6 +415,16 @@ func (c *metadataServiceClient) UpdateRepositorySignaturePolicy(ctx context.Cont
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositorySignaturePolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateRepositoryCVSSPolicy(ctx context.Context, in *UpdateRepositoryCVSSPolicyRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryCVSSPolicy_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -962,6 +981,14 @@ type MetadataServiceServer interface {
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
 	UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error)
+	// FUT-021 — CVSS-gated admission policy. Flips the repo-wide
+	// `max_cvss_score` threshold. Nullable Int32Value: null clears the
+	// gate (no threshold enforced); a value 0-100 sets the threshold at
+	// which services/core will refuse pulls whose top scan CVSS score
+	// exceeds it. Same audit-trail-clarity reasoning as
+	// UpdateRepositorySignaturePolicy — dedicated RPC so the security-
+	// relevant transition is easy to spot in the audit log.
+	UpdateRepositoryCVSSPolicy(context.Context, *UpdateRepositoryCVSSPolicyRequest) (*Repository, error)
 	// Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
 	// trusted-key allowlist. When `require_signature=true` AND the list
 	// is non-empty, services/core narrows the admission gate to only
@@ -1185,6 +1212,9 @@ func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.C
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositorySignaturePolicy not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateRepositoryCVSSPolicy(context.Context, *UpdateRepositoryCVSSPolicyRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryCVSSPolicy not implemented")
 }
 func (UnimplementedMetadataServiceServer) ListRepositoryTrustedKeys(context.Context, *ListRepositoryTrustedKeysRequest) (*ListRepositoryTrustedKeysResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListRepositoryTrustedKeys not implemented")
@@ -1497,6 +1527,24 @@ func _MetadataService_UpdateRepositorySignaturePolicy_Handler(srv interface{}, c
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositorySignaturePolicy(ctx, req.(*UpdateRepositorySignaturePolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateRepositoryCVSSPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryCVSSPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateRepositoryCVSSPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateRepositoryCVSSPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateRepositoryCVSSPolicy(ctx, req.(*UpdateRepositoryCVSSPolicyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2376,6 +2424,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositorySignaturePolicy",
 			Handler:    _MetadataService_UpdateRepositorySignaturePolicy_Handler,
+		},
+		{
+			MethodName: "UpdateRepositoryCVSSPolicy",
+			Handler:    _MetadataService_UpdateRepositoryCVSSPolicy_Handler,
 		},
 		{
 			MethodName: "ListRepositoryTrustedKeys",

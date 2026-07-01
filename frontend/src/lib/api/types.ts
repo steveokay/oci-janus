@@ -43,6 +43,13 @@ export interface Repository {
   // closed so the operator must sign (cosign) or turn the policy
   // off explicitly.
   require_signature?: boolean;
+  // FUT-021 — CVSS admission threshold. Nullable integer 0-100
+  // (standard CVSS v3.1 range rescaled to ints). `null` = no gate
+  // (pull-through). A non-null value activates the threshold —
+  // pulls whose top scan CVSS score exceeds this number fail with
+  // 403 DENIED. Flipped via the RepoCVSSPolicySection card on the
+  // repo Settings tab; sending `null` clears the gate.
+  max_cvss_score?: number | null;
 }
 
 // Signed-image admission Phase 2 (futures.md Tier 1 #3). One entry
