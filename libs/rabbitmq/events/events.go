@@ -140,6 +140,16 @@ const (
 	// logged but does NOT fail the response — the promotion is already
 	// durable and audit can be replayed from the promotions table.
 	RoutingImagePromoted = "image.promoted"
+
+	// FUT-021 — CVSS-gated admission policy.
+	//
+	// RoutingRepoCVSSPolicyChanged fires from services/management's BFF
+	// after a successful metadata.UpdateRepositoryCVSSPolicy call. The
+	// audit consumer records the before/after threshold so the audit
+	// trail can answer "who slackened the policy on prod-repo?".
+	// Publish failure is logged but does NOT fail the response — the
+	// durable state is already updated. Same posture as image.promoted.
+	RoutingRepoCVSSPolicyChanged = "repo.cvss_policy.changed"
 )
 
 // Exchange names
@@ -532,6 +542,28 @@ type ImagePromotedPayload struct {
 	DstDigest   string `json:"dst_digest"`
 	ActorUserID string `json:"actor_user_id,omitempty"`
 	Note        string `json:"note,omitempty"`
+}
+
+// RepoCVSSPolicyChangedPayload is the wire shape of
+// repo.cvss_policy.changed (FUT-021).
+//
+// Before / After are pointer *int32 so nil renders as JSON `null` on
+// the wire — that's how the audit consumer distinguishes "gate was
+// cleared" from "gate set to 0". The audit event records both sides so
+// the trail can render "70 → cleared" or "cleared → 90" transitions
+// with the same event shape.
+//
+// ActorID may be empty when the change came from a service-account
+// API key that isn't attached to a shadow user (rare, but possible on
+// legacy keys). The audit consumer treats empty as "system" for the
+// actor_type column.
+type RepoCVSSPolicyChangedPayload struct {
+	TenantID string `json:"tenant_id"`
+	Org      string `json:"org"`
+	Repo     string `json:"repo"`
+	ActorID  string `json:"actor_id,omitempty"`
+	Before   *int32 `json:"before,omitempty"`
+	After    *int32 `json:"after,omitempty"`
 }
 
 // AccessReviewSnoozedPayload is the wire shape of auth.access_review.snoozed.
