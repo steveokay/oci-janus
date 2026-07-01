@@ -163,34 +163,33 @@ func (h *Handler) handleSnoozeAPIKeyReview(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Non-admin callers must own the key. We look it up via ListStaleKeys
-	// rather than a dedicated GetAPIKey RPC (which doesn't exist yet) so
-	// the ownership resolution stays tenant-scoped and defence-against-
-	// cross-tenant-id-enumeration falls out for free — a key that isn't
-	// in the caller's tenant's stale list gets a 404 regardless of who
-	// owns it in reality.
-	if !isAdmin {
-		listResp, err := h.auth.ListStaleKeys(r.Context(), &authv1.ListStaleKeysRequest{
-			TenantId: tenantID,
-		})
-		if err != nil {
-			mapAccessReviewGRPCError(w, "resolve key ownership", err)
-			return
-		}
-		owner, found := ownerOfKey(listResp.GetKeys(), body.KeyID)
-		if !found {
-			// Either the key doesn't exist, exists in another tenant, or
-			// exists in this tenant but isn't currently stale. In every
-			// case, the caller has no business snoozing it — return 404
-			// so an attacker can't distinguish the cases.
-			writeError(w, http.StatusNotFound, "api key not found")
-			return
-		}
-		if owner != callerID {
-			writeError(w, http.StatusForbidden,
-				"only the key owner or a workspace admin can snooze this key")
-			return
-		}
+	// SEC-068 (2026-07-01): every caller — admin OR non-admin — must
+	// resolve the key against the CALLER's tenant before hitting
+	// SnoozeAPIKeyReview, because that RPC has no tenant_id in its
+	// request shape (SEC-069 follow-up). Without this pre-flight scan,
+	// a tenant-A admin could snooze a tenant-B key by knowing its UUID
+	// — exploitable only in DEPLOYMENT_MODE=multi but still HIGH.
+	// The pre-flight ALSO enforces the non-admin ownership rule.
+	listResp, err := h.auth.ListStaleKeys(r.Context(), &authv1.ListStaleKeysRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		mapAccessReviewGRPCError(w, "resolve key ownership", err)
+		return
+	}
+	owner, found := ownerOfKey(listResp.GetKeys(), body.KeyID)
+	if !found {
+		// Either the key doesn't exist, lives in another tenant, or
+		// exists in this tenant but isn't currently stale. In every
+		// case the caller has no business snoozing it — 404 so an
+		// attacker can't distinguish the branches.
+		writeError(w, http.StatusNotFound, "api key not found")
+		return
+	}
+	if !isAdmin && owner != callerID {
+		writeError(w, http.StatusForbidden,
+			"only the key owner or a workspace admin can snooze this key")
+		return
 	}
 
 	updated, err := h.auth.SnoozeAPIKeyReview(r.Context(), &authv1.SnoozeAPIKeyReviewRequest{

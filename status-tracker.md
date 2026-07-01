@@ -106,6 +106,9 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 - No fake-clock worker cadence test asserting the weekly period + immediate first tick. (BE spec-review 2026-07-01.)
 - Sidebar `readPreviewOpen` + `PREVIEW_OPEN_KEY` state fully removed (past adaptation); `SubNavItem.preview` flag on the type retained for future preview surfaces. Retirement is complete.
 - Spec's "Send review reminders to owners" footer button not implemented — plan §Task 10 explicitly narrowed scope; treat as documented divergence, revisit when FUT-019 email channel lands.
+- **SEC-068 (HIGH)** — `handleSnoozeAPIKeyReview` admin path skips tenant-scoping; workspace admin of tenant A can snooze tenant B's key + corrupt tenant B's audit trail. Fix: mirror the non-admin `ListStaleKeys` pre-flight on the admin branch, OR add `tenant_id` to `SnoozeAPIKeyReviewRequest` + cross-check in service layer. See `security.md#SEC-068`. **Follow-up branch required — PR #227 already merged.**
+- **SEC-069 (MEDIUM)** — `SnoozeAPIKeyReviewRequest` gRPC surface has no `tenant_id` and trusts caller-supplied `actor_id`. Multi-mode + permissive `MTLS_PEER_CN_ALLOWLIST` exposed to a direct-gRPC caller with a valid mTLS cert. Same class as SEC-066 but worse (tenant scoping impossible without proto change). See `security.md#SEC-069`.
+- **SEC-070 (LOW)** — Audit consumer swallows `json.Unmarshal` errors for `AccessReview{Due,Snoozed}Payload`. Consistent with pre-existing pattern; not a regression. Consider rolling a hardening pass across all `mapEvent` cases. See `security.md#SEC-070`.
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 
