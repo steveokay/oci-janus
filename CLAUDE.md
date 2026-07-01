@@ -17,9 +17,9 @@
 7. [Authentication & Security](#7-authentication--security) — rules only; mechanics in [`docs/AUTH.md`](docs/AUTH.md)
 8. [Storage Layer](#8-storage-layer)
 9. [Multi-Tenancy](#9-multi-tenancy)
-10. [Observability](#10-observability)
-11. [Database Conventions](#11-database-conventions)
-12. [gRPC Conventions](#12-grpc-conventions)
+10. [Observability](#10-observability) — rules only; mechanics in [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
+11. [Database Conventions](#11-database-conventions) — rules only; mechanics in [`docs/DATABASE.md`](docs/DATABASE.md)
+12. [gRPC Conventions](#12-grpc-conventions) — rules only; mechanics in [`docs/GRPC-CONVENTIONS.md`](docs/GRPC-CONVENTIONS.md)
 13. [Security Hardening Rules](#13-security-hardening-rules) — pointer to [`docs/HARDENING-CHECKLIST.md`](docs/HARDENING-CHECKLIST.md)
 14. [Decision Log](#14-decision-log) — pointer to [`docs/adr/`](docs/adr/)
 15. [Workflow Gates](#15-workflow-gates)
@@ -27,6 +27,9 @@
 External references:
 - [`docs/SERVICES.md`](docs/SERVICES.md) — per-service detail (endpoints, gRPC, schemas, env vars)
 - [`docs/AUTH.md`](docs/AUTH.md) — auth mechanics (mTLS hot reload, JWT key ring, peer-CN allowlist, API-key cache, Bearer dispatch)
+- [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — OTEL env vars, metrics catalogue, log-field contract
+- [`docs/DATABASE.md`](docs/DATABASE.md) — pgx pool config, DSN format, migration mechanics, read-replica routing
+- [`docs/GRPC-CONVENTIONS.md`](docs/GRPC-CONVENTIONS.md) — proto layout, server + client interceptor chains
 - [`docs/EVENTS.md`](docs/EVENTS.md) — RabbitMQ routing keys + payloads
 - [`docs/HARDENING-CHECKLIST.md`](docs/HARDENING-CHECKLIST.md) — per-service security hardening checklist
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (one per decision, indexed in `docs/adr/README.md`)
@@ -54,18 +57,17 @@ Storage schemas keep `tenant_id` columns in both modes — single mode just popu
 
 ### Core Capabilities
 
-- Full OCI Distribution Spec v1.1 compliance (push, pull, delete, list, referrers)
-- JWT (RS256) + API key authentication; mTLS between all internal services with hot reload (§7) + per-server peer-CN allowlist (§7)
-- Multi-key JWT signing + JWKS rotation via `JWT_KEY_RING_PATH` (REDESIGN-001 Phase 6.5)
-- Global SSO config: OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP (auto-provisioning, AES-256-GCM-encrypted client secrets, `SSO_SAML_TRUST_EMAIL` flag) — see [`docs/SAML.md`](docs/SAML.md). REDESIGN-001 Decision #27 retired the per-tenant SSO model.
-- Pluggable storage: MinIO, AWS S3, GCP Cloud Storage, Azure Blob
-- Pluggable vulnerability scanner interface (external-process JSON-RPC) with per-tenant scan policies + compliance reports (SPDX SBOM + PDF)
-- Image signing via Cosign (Sigstore) and Notary v2 — see [`docs/SIGNING.md`](docs/SIGNING.md)
-- Pull-through proxy cache for upstream registries with upstream digest verification (Top-5 #4)
-- RBAC at org / repo level (owner / admin / writer / reader); typed `users.is_global_admin` primitive replaces the legacy `(admin, org, '*')` marker scope (REDESIGN-001 Decision #26)
-- Webhook delivery with retries and HMAC signing
-- Tamper-evident append-only audit trail: Postgres FORCE RLS + low-privilege `registry_audit_app` role + per-tenant sha-256 hash-chain (`chain_seq` + `prev_hash` + `row_hash`) so a compromised audit service cannot rewrite or fork the chain (REDESIGN-001 Phase 6.12)
-- Pluggable observability: OpenTelemetry → Jaeger, Grafana Tempo, or Datadog
+- Full OCI Distribution Spec v1.1 (push, pull, delete, list, referrers).
+- **Auth:** JWT (RS256, multi-key ring + JWKS rotation) + API keys; mTLS everywhere between services with hot reload and per-server peer-CN allowlist. See §7 + [`docs/AUTH.md`](docs/AUTH.md).
+- **SSO:** global OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP with auto-provisioning + AES-256-GCM-encrypted secrets. See [`docs/SAML.md`](docs/SAML.md).
+- **Storage:** pluggable — MinIO / S3 / GCS / Azure / filesystem.
+- **Scanner:** pluggable external-process JSON-RPC interface + per-tenant scan policies + SPDX SBOM & PDF compliance reports.
+- **Signing:** Cosign (Sigstore) and Notary v2. See [`docs/SIGNING.md`](docs/SIGNING.md).
+- **Pull-through cache** for upstream registries with digest verification.
+- **RBAC** at org / repo level (owner / admin / writer / reader); typed `users.is_global_admin` primitive (Decision #26).
+- **Webhooks** with retries + HMAC signing.
+- **Tamper-evident audit trail:** Postgres FORCE RLS + low-privilege `registry_audit_app` role + per-tenant sha-256 hash-chain so a compromised audit service cannot rewrite or fork the chain (Phase 6.12 + REM-022; see §10).
+- **Observability:** OpenTelemetry → Jaeger / Grafana Tempo / Datadog.
 
 ### Language & Runtime
 
@@ -394,149 +396,61 @@ Application sets `SET LOCAL app.tenant_id = '<id>'` in each transaction. Treat t
 
 ## 10. Observability
 
-### OpenTelemetry Setup
+> **Mechanics + implementation detail** live in
+> [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) (OTEL env vars,
+> Bootstrap contract, metrics catalogue, otel-collector wiring,
+> structured-log field contract). This section holds the rules only.
 
-All services instrument with OpenTelemetry Go SDK. Exporter is pluggable via environment variable.
+### Rules
 
-**`OTEL_EXPORTER`** controls the backend: `jaeger` | `tempo` | `datadog` | `stdout`.
+- All services instrument with OpenTelemetry via `libs/observability/otel.Bootstrap`. Call in `main.go` **before** starting any server; always call the returned `shutdown` on process exit or spans/metrics are lost.
+- `OTEL_EXPORTER` selects the backend: `jaeger` | `tempo` | `datadog` | `stdout`.
+- Every service exposes Prometheus metrics at `GET /metrics` on a **dedicated port `:9090`** (SEC-025) — separated from the business port so NetworkPolicy can grant Prometheus access without exposing the OCI API.
+- The full metric catalogue lives in `libs/observability/metrics/metrics.go`. A spec-lint rule enforces that every metric documented in `docs/OBSERVABILITY.md` is declared there — adding a new metric requires updating both.
+- Logger: `log/slog` (JSON in production, text in dev; `LOG_LEVEL=debug|info|warn|error`). Every entry must include `trace_id`, `span_id`, `tenant_id` (where available), `service`.
+- **Never log:** passwords, tokens, API keys, private key material, full request bodies.
 
-**Common env vars (all services):**
+### Audit Trail (security-critical rules)
 
-```
-OTEL_EXPORTER=                   # required: jaeger|tempo|datadog|stdout
-OTEL_ENDPOINT=                   # OTLP endpoint URL
-OTEL_SERVICE_NAME=               # set per-service in Dockerfile
-OTEL_ENVIRONMENT=                # production|staging|development
-OTEL_SAMPLING_RATE=1.0           # 0.0 to 1.0, default 1.0
-OTEL_INSECURE=                   # true only in local dev with no TLS on collector
-```
-
-**Bootstrap pattern (from `libs/observability/otel`):**
-
-```go
-func Bootstrap(ctx context.Context, cfg Config) (shutdown func(context.Context) error, err error)
-```
-
-Call in `main.go` **before** starting any server. Always call `shutdown` on process exit to flush spans/metrics. Missing this call is the root cause of "no traces in Jaeger" — every service entrypoint must include it.
-
-**HTTP tracing:** Wrap the HTTP handler tree with `otelhttp.NewHandler(...)` so HTTP requests create root spans. gRPC tracing is wired via `grpcmw.OTELServerHandler()` as a `StatsHandler`.
-
-### Metrics
-
-Every service exposes Prometheus metrics at `GET /metrics` on a **dedicated port `:9090`** (SEC-025) — separated from the business port so NetworkPolicy can grant Prometheus access without exposing the OCI API.
-
-**Standard metrics (from `libs/observability/metrics`):**
-- `registry_http_request_duration_seconds` — histogram, labels: service, method, path, status
-- `registry_grpc_request_duration_seconds` — histogram, labels: service, method, status
-- `registry_rabbitmq_messages_consumed_total` — counter, labels: service, queue, status
-- `registry_storage_operation_duration_seconds` — histogram, labels: driver, operation, status
-- `registry_active_uploads_total` — gauge
-- `registry_grpc_peer_cn_denied_total` — counter, labels: method, reason (`missing_cn` / `cn_not_allowed`) — REDESIGN-001 Phase 6.10
-- `registry_grpc_peer_cn_allowlist_enabled` — gauge (1 when `MTLS_PEER_CN_ALLOWLIST` is non-empty for the local server; 0 = no enforcement) — REDESIGN-001 Phase 6.10
-- `registry_auth_jwt_kid_fallback_total` — counter, labels: reason (`missing_kid` / `unknown_kid`) — REDESIGN-001 Phase 6.5
-
-The local stack uses otel-collector → Prometheus → Jaeger SPM. The otel-collector requires:
-- An `otlp` receiver pipeline for `metrics` (not only `traces`), otherwise SDK metric pushes fail with `Unimplemented MetricsService`.
-- The prometheus exporter `namespace: registry` is reflected in Jaeger's `PROMETHEUS_QUERY_NAMESPACE=registry` env var so SPM queries the right metric names.
-
-### Audit Trail
-
-- `services/audit` consumes typed events from RabbitMQ (`registry.events` topic exchange) and persists them to `audit_events` via the `eventconsumer` package. Every event type registered in `libs/rabbitmq/events` must either map to a row in `audit_events` (via a case in `mapEvent`) OR carry an explicit `// audit: skip` annotation in `events.go`. A Go test enforces this invariant — adding a new event without one of those treatments fails CI (REDESIGN-001 Phase 6.3).
-- Storage posture (Decision #15): `audit_events` table has `FORCE ROW LEVEL SECURITY` so even the table owner cannot bypass the policy; the runtime role `registry_audit_app` is INSERT-only on `audit_events` (no UPDATE, no DELETE). The pgx connection pool authenticates as that role.
-- **Hash chain** (Decision #30, REDESIGN-001 Phase 6.12): each row carries `prev_hash` + `row_hash` (`sha256(prev_hash || canonical_row_bytes)`) and a `chain_seq BIGINT GENERATED ALWAYS AS IDENTITY`. Per-tenant chain serialised by `pg_advisory_xact_lock(tenant_id)`. The tip is derived from `audit_events` itself (`SELECT row_hash FROM audit_events WHERE tenant_id = $1 ORDER BY chain_seq DESC LIMIT 1`) rather than a separate writable table, so the runtime role keeps INSERT-only and cannot rewrite the tip. `Repository.VerifyChain(ctx, tenantID)` walks the linked list and returns the first tampered/forked row's `(id, occurred_at)`.
-
-### Structured Logging
-
-- Logger: `log/slog` (Go 1.21+ standard library).
-- Format: JSON in production, text in development (`LOG_FORMAT=json|text`).
-- Level: `LOG_LEVEL=debug|info|warn|error`.
-- Every log entry must include: `trace_id`, `span_id`, `tenant_id` (where available), `service`.
-- Never log: passwords, tokens, API keys, private key material, full request bodies.
+- `services/audit` consumes typed events from RabbitMQ (`registry.events` topic exchange) and persists them to `audit_events` via the `eventconsumer` package. Every event type registered in `libs/rabbitmq/events` must either map to a row in `audit_events` (via a case in `mapEvent`) OR carry an explicit `// audit: skip` annotation in `events.go`. A spec-lint rule enforces this invariant.
+- Storage posture (Decision #15): `audit_events` has `FORCE ROW LEVEL SECURITY` so even the table owner cannot bypass the policy; the runtime role `registry_audit_app` is INSERT-only on `audit_events` (no UPDATE, no DELETE). The pgx connection pool authenticates as that role.
+- **Hash chain** (Decision #30, REDESIGN-001 Phase 6.12): each row carries `prev_hash` + `row_hash` (`sha256(prev_hash || canonical_row_bytes)`) and a `chain_seq BIGINT` populated via a per-table sequence (REM-022 replaced the original `GENERATED ALWAYS AS IDENTITY` form to work on the partitioned parent). Per-tenant chain serialised by `pg_advisory_xact_lock(tenant_id)`. The tip is derived from `audit_events` itself (`SELECT row_hash FROM audit_events WHERE tenant_id = $1 ORDER BY chain_seq DESC LIMIT 1`) so the runtime role cannot rewrite it. `Repository.VerifyChain(ctx, tenantID)` walks the linked list and returns the first tampered/forked row.
 
 ---
 
 ## 11. Database Conventions
 
-### General Rules
+> **Mechanics + implementation detail** live in
+> [`docs/DATABASE.md`](docs/DATABASE.md) (pgx pool config, DSN format,
+> migration mechanics, read-replica routing). This section holds the
+> rules only.
 
-- ORM: **none**. Use `pgx/v5` directly with `pgxpool`. Raw SQL only.
-- All queries parameterised. Never use `fmt.Sprintf` to build SQL.
-- Migrations: `pressly/goose` with SQL migrations embedded via `embed.FS` (`migrations/migrations.go`).
-- Only `registry-metadata` has direct PostgreSQL access for metadata; `registry-auth`, `registry-tenant`, `registry-proxy`, `registry-webhook`, `registry-audit` have their own separate databases.
-- Connection pool: built from `libs/config/loader.DBConfig.PoolConfig()` which sets `ConnectTimeout: 5s`, `MaxConnLifetime: 30m`, `MaxConnIdleTime: 5m`. `MaxConns` is read from `DB_MAX_CONNS` (default 20).
-- Every query must use the request context for cancellation.
-- Transactions: always use `defer tx.Rollback(ctx)` — only commit explicitly on success.
-- Connection-pool exhaustion is mapped to `codes.ResourceExhausted` via `libs/errors/codes.MapDBError` (SEC-006).
-
-### Migration Rules
-
-- Never drop a column in a migration — add a new column and migrate data in a separate step.
-- Every migration must be reversible (down migration required).
-- Migration naming: `YYYYMMDDHHMMSS_<description>.sql`.
-- Run migrations at startup in a separate step before serving traffic (use `goose up`).
-
-### Connection String
-
-```
-DB_DSN=postgres://<user>:<password>@<host>:<port>/<database>?sslmode=require
-```
-
-`sslmode=require` is mandatory in production; `sslmode=disable` is rejected at startup (SEC-022). `sslmode=prefer` is permitted only in the local dev Compose stack.
-
-### Read Replica Routing (REM-008)
-
-- `DB_DSN_REPLICA` (optional) configures a read pool routed by `repository.reader()`.
-- `ListRepositories`, `ListTags`, `ListOrphanedBlobs` use the replica.
-- Without a replica DSN, all queries fall through to the primary pool.
+- **ORM: none.** Use `pgx/v5` directly with `pgxpool`. Raw SQL only. All queries parameterised — never use `fmt.Sprintf` to build SQL.
+- **Migrations:** `pressly/goose` with SQL migrations embedded via `embed.FS`. Naming: `YYYYMMDDHHMMSS_<description>.sql`. Never drop a column in a single migration — add a new column and migrate data in a separate step. Every migration must have a down migration.
+- **Per-service databases:** only `registry-metadata` holds metadata; `registry-auth`, `registry-tenant`, `registry-proxy`, `registry-webhook`, `registry-audit` each own a separate database.
+- **Connection pool** is built from `libs/config/loader.DBConfig.PoolConfig()` — see `docs/DATABASE.md` §2 for the concrete timeouts.
+- **Context + transactions:** every query uses the request context for cancellation. Transactions always use `defer tx.Rollback(ctx)` and only commit explicitly on success.
+- **DSN format:** `postgres://…?sslmode=require`. `sslmode=disable` is rejected at startup (SEC-022); `sslmode=prefer` is permitted only in local dev.
+- **Connection-pool exhaustion** is mapped to `codes.ResourceExhausted` via `libs/errors/codes.MapDBError` (SEC-006).
+- **Read replicas (REM-008):** `DB_DSN_REPLICA` opts a service into a read pool routed by `repository.reader()`. When unset, `reader()` returns the primary pool as a passthrough.
 
 ---
 
 ## 12. gRPC Conventions
 
-### Proto File Rules (in `proto/`)
+> **Mechanics + implementation detail** live in
+> [`docs/GRPC-CONVENTIONS.md`](docs/GRPC-CONVENTIONS.md) (proto file
+> layout, full package-naming convention, ordered server/client
+> interceptor chains). This section holds the rules only.
 
-```
-proto/
-├── auth/v1/auth.proto
-├── storage/v1/storage.proto
-├── metadata/v1/metadata.proto
-├── proxy/v1/proxy.proto
-├── scanner/v1/scanner.proto
-├── signer/v1/signer.proto
-├── tenant/v1/tenant.proto
-├── webhook/v1/webhook.proto
-├── audit/v1/audit.proto
-├── gen/go/                    # Generated stubs — committed, not gitignored
-└── buf.yaml
-```
-
-- Package naming: `registry.<service>.v1`.
-- Go package option: `option go_package = "github.com/steveokay/oci-janus/proto/gen/go/<service>/v1;<service>v1";`.
-- All fields use `snake_case`.
-- All RPCs return errors using `google.rpc.Status` (import `google/rpc/status.proto`).
-- Pagination: use `page_token` (string) + `page_size` (int32) pattern, not offset.
-- All timestamps: `google.protobuf.Timestamp`.
-- UUIDs: `string` (not bytes).
-- Breaking changes: never modify existing field numbers. Add new fields only.
-
-### Interceptors (applied to every gRPC server via `libs/middleware/grpc`)
-
-**Server-side, in this order (outermost first):**
-1. Recovery (panic → gRPC Internal error)
-2. Request ID injection
-3. mTLS peer verification (CN check)
-4. Auth token validation (for external-facing services)
-5. Tenant ID extraction + context injection
-6. OpenTelemetry tracing (via `OTELServerHandler` `StatsHandler`)
-7. Structured logging
-8. Metrics
-9. Server-side gRPC cache interceptor on `registry-metadata` (REM-007)
-
-**Client-side:**
-1. mTLS credential attachment
-2. OpenTelemetry trace propagation
-3. Deadline injection
-4. Retry (UNAVAILABLE, DEADLINE_EXCEEDED only)
+- **Proto packages:** `registry.<service>.v1`; Go package option `github.com/steveokay/oci-janus/proto/gen/go/<service>/v1;<service>v1`. Fields are `snake_case`; timestamps use `google.protobuf.Timestamp`; UUIDs are `string`.
+- **Pagination:** always `page_token` (string) + `page_size` (int32) — never offset.
+- **Errors:** RPCs return `google.rpc.Status` (import `google/rpc/status.proto`).
+- **Breaking changes:** never modify existing field numbers — add new fields only. The `breaking` CI job enforces this against the previous main commit.
+- **Generated stubs:** `proto/gen/go/**` is **committed**, not gitignored. Regenerate with `buf generate` from `proto/`.
+- **Server interceptors** applied via `libs/middleware/grpc.ServerInterceptors()` — the ordered chain (Recovery → RequestID → mTLS peer verify → Auth → Tenant → OTEL → logging → metrics → optional REM-007 cache) is documented in `docs/GRPC-CONVENTIONS.md` §2. Do not add interceptors ad-hoc in a service's `main.go`; extend the shared builder.
+- **Client interceptors** via the same package attach mTLS creds, propagate OTEL trace context, inject deadlines, and retry (3 attempts, exponential backoff, only on `UNAVAILABLE` and `DEADLINE_EXCEEDED`).
+- Use `grpc.NewClient` (not the deprecated `grpc.Dial`) with a timeout context — never silently hang. Trigger `conn.Connect()` at startup so the first inbound request does not stall during the TLS/HTTP-2 handshake.
 
 ---
 
@@ -583,10 +497,7 @@ npm run test        # vitest run, all pass
 npm run build       # vite build + tsc -b, builds cleanly
 ```
 
-**Why this exists:** Established 2026-06-28 after PR #152 failed every frontend CI stage despite local `tsc` + `vitest` coming back green. Two latent issues:
-
-- `frontend/src/routeTree.gen.ts` is gitignored — only Vite generates it. `tsc --noEmit` doesn't run Vite, so CI's typecheck/test jobs had no routeTree to import. Fixed by `npm run routes:generate` + `prelint`/`pretypecheck`/`pretest` hooks that produce the file from `@tanstack/router-generator`'s `Generator` class. The hooks run automatically on every `npm run lint`/`typecheck`/`test`.
-- Two pre-existing lint errors had been masked by never running `npm run lint`: `'_e' is defined but never used` in a catch clause, and `React.useMemo` called after an early-return.
+The `pre{lint,typecheck,test}` npm hooks regenerate the gitignored `routeTree.gen.ts` from `@tanstack/router-generator` — running the 4 commands above closes the "green locally, red in CI" gap surfaced by PR #152 (2026-06-28).
 
 **How to apply:** Run all 4 commands listed above. If lint reports an error in code you didn't touch, fix it inline — the rule is "before push, CI is green," not "before push, my diff is clean."
 
