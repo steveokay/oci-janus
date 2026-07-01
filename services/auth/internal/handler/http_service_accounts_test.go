@@ -292,6 +292,20 @@ func (r *saTestKeyRepo) DeleteByServiceAccount(_ context.Context, id, saID uuid.
 
 func (r *saTestKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error { return nil }
 
+// FUT-003 stubs — no-op for existing handler tests.
+func (r *saTestKeyRepo) UpdateLastUsedAt(_ context.Context, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (r *saTestKeyRepo) SetRotationDueAt(_ context.Context, _ uuid.UUID, _ *time.Time) error {
+	return nil
+}
+func (r *saTestKeyRepo) RevokeWithReason(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (r *saTestKeyRepo) ListIdleKeys(_ context.Context, _ uuid.UUID, _ time.Time) ([]repository.IdleKey, error) {
+	return nil, nil
+}
+
 // ── SA test server builder ────────────────────────────────────────────────────
 
 // saTestEnv bundles all the pieces needed to drive SA handler tests.

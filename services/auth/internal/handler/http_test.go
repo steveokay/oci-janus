@@ -436,6 +436,20 @@ func (f *handlerFakeAPIKeyRepo) DeleteByServiceAccount(_ context.Context, _, _ u
 
 func (f *handlerFakeAPIKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error { return nil }
 
+// FUT-003 stubs — no-op for existing handler tests.
+func (f *handlerFakeAPIKeyRepo) UpdateLastUsedAt(_ context.Context, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (f *handlerFakeAPIKeyRepo) SetRotationDueAt(_ context.Context, _ uuid.UUID, _ *time.Time) error {
+	return nil
+}
+func (f *handlerFakeAPIKeyRepo) RevokeWithReason(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *handlerFakeAPIKeyRepo) ListIdleKeys(_ context.Context, _ uuid.UUID, _ time.Time) ([]repository.IdleKey, error) {
+	return nil, nil
+}
+
 // ── Test service builder ──────────────────────────────────────────────────────
 
 // testCtx bundles test infrastructure for HTTP handler tests.

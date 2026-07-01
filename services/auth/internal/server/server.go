@@ -39,6 +39,7 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	authsaml "github.com/steveokay/oci-janus/services/auth/internal/saml"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
+	"github.com/steveokay/oci-janus/services/auth/internal/worker"
 	authmigrations "github.com/steveokay/oci-janus/services/auth/migrations"
 )
 
@@ -149,8 +150,32 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		saAudit,
 		service.ParseIssuerAllowlist(cfg.OIDCAllowedIssuers),
 	)
-	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc, pub).WithOIDCTrustService(oidcSvc))
+	// FUT-003 — wire the token-policy repository + service so CreateAPIKey
+	// consults max_ttl_days / rotation_interval_days, and PutTokenPolicy is
+	// reachable via the auth gRPC surface.
+	tokenPolicyRepo := repository.NewTokenPolicyRepo(pool)
+	svc.SetTokenPolicyRepo(tokenPolicyRepo)
+	tokenPolicySvc := service.NewTokenPolicyService(tokenPolicyRepo, saAudit)
+
+	authv1.RegisterAuthServiceServer(grpcSrv,
+		handler.NewGRPCHandler(svc, pub).
+			WithOIDCTrustService(oidcSvc).
+			WithTokenPolicyService(tokenPolicySvc),
+	)
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
+
+	// FUT-003 — start the idle-revoke background worker in a goroutine.
+	// The worker sweeps api_keys.last_used_at against the workspace policy
+	// hourly and revokes any that have crossed the threshold. Cancels on
+	// ctx.Done from the outer Run(). pub may be nil in dev — the worker
+	// still revokes but the audit trail is degraded to slog.
+	idleRevokeWorker := worker.New(pool,
+		apiKeys, tokenPolicyRepo,
+		newIdleRevokePublisher(pub), slog.Default())
+	go idleRevokeWorker.Run(ctx)
+	slog.Info("FUT-003 idle-revoke worker started",
+		"cadence", idleRevokeWorker.RunningKeyLabel(),
+	)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -687,6 +712,44 @@ func stringField(m map[string]any, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
+}
+
+// idleRevokePublisher adapts *publisher.Publisher to worker.Publisher.
+// When the underlying *publisher.Publisher is nil (dev stacks without
+// RabbitMQ), Publish is a no-op — the worker still revokes DB rows.
+type idleRevokePublisher struct {
+	pub *publisher.Publisher
+}
+
+// newIdleRevokePublisher wraps the process-wide publisher for the
+// idle-revoke worker. Nil pub → nil-safe adapter (Publish returns nil).
+func newIdleRevokePublisher(pub *publisher.Publisher) *idleRevokePublisher {
+	return &idleRevokePublisher{pub: pub}
+}
+
+// PublishKeyRevoked marshals + publishes an auth.key_revoked envelope.
+// Fails-soft on nil pub so the worker doesn't need to know whether the
+// broker is wired.
+func (a *idleRevokePublisher) PublishKeyRevoked(ctx context.Context, tenantID uuid.UUID, payload events.KeyRevokedPayload) error {
+	if a.pub == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal key_revoked payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       events.RoutingKeyRevoked,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    raw,
+	}
+	if err := a.pub.Publish(ctx, events.RoutingKeyRevoked, envelope); err != nil {
+		return fmt.Errorf("publish key_revoked: %w", err)
+	}
+	return nil
 }
 
 // redisCmdableAdapter wraps *redis.Client so its Set/Del methods satisfy

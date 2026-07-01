@@ -75,18 +75,18 @@ const SECTIONS: SubNavSection[] = [
         label: "Federated trust",
         icon: ShieldCheck,
       },
+      {
+        // FUT-003 shipped 2026-07-01 — graduated out of the Preview section.
+        to: "/api-keys/policies",
+        label: "Token policies",
+        icon: FileKey,
+      },
     ],
   },
   {
     title: "Preview",
     adminOnly: true,
     items: [
-      {
-        to: "/api-keys/policies",
-        label: "Token policies",
-        icon: FileKey,
-        preview: true,
-      },
       {
         to: "/api-keys/review",
         label: "Access review",

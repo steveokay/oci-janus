@@ -37,6 +37,8 @@ const (
 	AuthService_UpdateOIDCTrust_FullMethodName       = "/registry.auth.v1.AuthService/UpdateOIDCTrust"
 	AuthService_DeleteOIDCTrust_FullMethodName       = "/registry.auth.v1.AuthService/DeleteOIDCTrust"
 	AuthService_ExchangeWorkloadToken_FullMethodName = "/registry.auth.v1.AuthService/ExchangeWorkloadToken"
+	AuthService_GetTokenPolicy_FullMethodName        = "/registry.auth.v1.AuthService/GetTokenPolicy"
+	AuthService_PutTokenPolicy_FullMethodName        = "/registry.auth.v1.AuthService/PutTokenPolicy"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -107,6 +109,14 @@ type AuthServiceClient interface {
 	UpdateOIDCTrust(ctx context.Context, in *UpdateOIDCTrustRequest, opts ...grpc.CallOption) (*OIDCTrust, error)
 	DeleteOIDCTrust(ctx context.Context, in *DeleteOIDCTrustRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ExchangeWorkloadToken(ctx context.Context, in *ExchangeWorkloadTokenRequest, opts ...grpc.CallOption) (*ExchangeWorkloadTokenResponse, error)
+	// FUT-003 — workspace-wide token policy. Two admin RPCs manage a single
+	// per-tenant policy row. See the TokenPolicy message for semantics: all
+	// three limit fields are optional wrappers so NULL is distinguishable
+	// from zero. Enforcement lives at CreateAPIKey (max_ttl_days) and in the
+	// idle-revoke background worker (idle_revoke_days). rotation_interval_days
+	// sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
+	GetTokenPolicy(ctx context.Context, in *GetTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error)
+	PutTokenPolicy(ctx context.Context, in *PutTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error)
 }
 
 type authServiceClient struct {
@@ -287,6 +297,26 @@ func (c *authServiceClient) ExchangeWorkloadToken(ctx context.Context, in *Excha
 	return out, nil
 }
 
+func (c *authServiceClient) GetTokenPolicy(ctx context.Context, in *GetTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TokenPolicy)
+	err := c.cc.Invoke(ctx, AuthService_GetTokenPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) PutTokenPolicy(ctx context.Context, in *PutTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TokenPolicy)
+	err := c.cc.Invoke(ctx, AuthService_PutTokenPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -355,6 +385,14 @@ type AuthServiceServer interface {
 	UpdateOIDCTrust(context.Context, *UpdateOIDCTrustRequest) (*OIDCTrust, error)
 	DeleteOIDCTrust(context.Context, *DeleteOIDCTrustRequest) (*emptypb.Empty, error)
 	ExchangeWorkloadToken(context.Context, *ExchangeWorkloadTokenRequest) (*ExchangeWorkloadTokenResponse, error)
+	// FUT-003 — workspace-wide token policy. Two admin RPCs manage a single
+	// per-tenant policy row. See the TokenPolicy message for semantics: all
+	// three limit fields are optional wrappers so NULL is distinguishable
+	// from zero. Enforcement lives at CreateAPIKey (max_ttl_days) and in the
+	// idle-revoke background worker (idle_revoke_days). rotation_interval_days
+	// sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
+	GetTokenPolicy(context.Context, *GetTokenPolicyRequest) (*TokenPolicy, error)
+	PutTokenPolicy(context.Context, *PutTokenPolicyRequest) (*TokenPolicy, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -411,6 +449,12 @@ func (UnimplementedAuthServiceServer) DeleteOIDCTrust(context.Context, *DeleteOI
 }
 func (UnimplementedAuthServiceServer) ExchangeWorkloadToken(context.Context, *ExchangeWorkloadTokenRequest) (*ExchangeWorkloadTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExchangeWorkloadToken not implemented")
+}
+func (UnimplementedAuthServiceServer) GetTokenPolicy(context.Context, *GetTokenPolicyRequest) (*TokenPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTokenPolicy not implemented")
+}
+func (UnimplementedAuthServiceServer) PutTokenPolicy(context.Context, *PutTokenPolicyRequest) (*TokenPolicy, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutTokenPolicy not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -730,6 +774,42 @@ func _AuthService_ExchangeWorkloadToken_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_GetTokenPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTokenPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GetTokenPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GetTokenPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GetTokenPolicy(ctx, req.(*GetTokenPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_PutTokenPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutTokenPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).PutTokenPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_PutTokenPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).PutTokenPolicy(ctx, req.(*PutTokenPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -804,6 +884,14 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExchangeWorkloadToken",
 			Handler:    _AuthService_ExchangeWorkloadToken_Handler,
+		},
+		{
+			MethodName: "GetTokenPolicy",
+			Handler:    _AuthService_GetTokenPolicy_Handler,
+		},
+		{
+			MethodName: "PutTokenPolicy",
+			Handler:    _AuthService_PutTokenPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

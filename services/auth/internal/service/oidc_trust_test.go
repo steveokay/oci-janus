@@ -380,7 +380,7 @@ func TestExchangeWorkloadToken(t *testing.T) {
 	defer srv.Close()
 
 	allowed := []string{srv.URL}
-	svc, _, saRepo, audit := newTrustServiceFakes(t, allowed)
+	svc, trustRepo, saRepo, audit := newTrustServiceFakes(t, allowed)
 
 	// Seed an SA with allowed_scopes so IssueWorkloadToken returns a
 	// real Access list.
@@ -392,16 +392,20 @@ func TestExchangeWorkloadToken(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Seed a trust pointing at that SA. The issuer is the stub IdP's URL
-	// (not the realistic GH URL) so JWKS fetches go to the test server.
-	_, err = svc.Create(ctx, CreateOIDCTrustInput{
-		TenantID:         tenantA,
-		ServiceAccountID: sa.ID,
-		DisplayName:      "GH Actions",
-		IssuerURL:        srv.URL,
-		Audience:         "registry.example.com",
-		SubjectPattern:   "repo:steveokay/oci-janus:ref:refs/heads/main",
-		ActorID:          "admin",
+	// Seed a trust pointing at that SA via the fake repo directly. We
+	// bypass svc.Create here because the SEC-063 HTTPS-issuer validator
+	// (PR #224) legitimately rejects the stub IdP's http://127.0.0.1
+	// URL — that create-time invariant is exercised by
+	// TestOIDCTrustService_Create_Validations. This test is about the
+	// EXCHANGE path, so we skip the front door and seed a valid row.
+	_, err = trustRepo.Create(ctx, repository.OIDCTrust{
+		TenantID:            tenantA,
+		ServiceAccountID:    sa.ID,
+		DisplayName:         "GH Actions",
+		IssuerURL:           srv.URL,
+		Audience:            "registry.example.com",
+		SubjectPattern:      "repo:steveokay/oci-janus:ref:refs/heads/main",
+		JWKSCacheTTLSeconds: 3600,
 	})
 	require.NoError(t, err)
 

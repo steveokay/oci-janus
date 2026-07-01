@@ -67,6 +67,10 @@ export default defineConfig({
       // catchall below (Vite matches the first key) or the FE hits auth
       // and gets a silent 404.
       "/api/v1/access/oidc-trust": { target: "http://localhost:8091", changeOrigin: true },
+      // FUT-003 — the token-policy admin route lives on the management
+      // BFF too. Same first-match rule: must come BEFORE the generic
+      // /api/v1/access catchall or the FE hits auth (:8080) and 404s.
+      "/api/v1/access/token-policy": { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/access":          { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1":                 { target: "http://localhost:8091", changeOrigin: true },
       "/healthz":               { target: "http://localhost:8091", changeOrigin: true },

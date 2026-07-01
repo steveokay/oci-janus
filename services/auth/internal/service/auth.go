@@ -148,6 +148,22 @@ type Service struct {
 	// unchanged for the single-key path (the helpers wrap the single key
 	// into a 1-element ring transparently).
 	keys *keyRing
+	// tokenPolicy is the FUT-003 policy repo used by CreateAPIKey to enforce
+	// max_ttl_days + stamp rotation_due_at on new keys. May be nil in test
+	// fixtures — when nil, CreateAPIKey behaves as if no policy is set (the
+	// grandfathering / legacy behaviour).
+	tokenPolicy tokenPolicyReader
+	// lastUsed is the FUT-003 Redis-debounced last_used_at updater. When
+	// nil (legacy fakes), ValidateAPIKey falls back to the pre-FUT-003
+	// touchLastUsedAsync path so old tests keep passing.
+	lastUsed *lastUsedUpdater
+}
+
+// tokenPolicyReader is the narrow interface Service uses to consult the
+// workspace token policy on CreateAPIKey. Small so tests can supply a fake
+// without a real DB pool.
+type tokenPolicyReader interface {
+	GetOrDefault(ctx context.Context, tenantID uuid.UUID) (*repository.TokenPolicy, error)
 }
 
 // New constructs a Service by parsing the base64-encoded PEM keys from config.
@@ -173,14 +189,21 @@ func New(
 	if sa != nil {
 		saR = sa
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: saR,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	// Auto-wire the FUT-003 debounced last_used_at updater when the caller
+	// passed a non-nil api-key repo (production path). Tests that construct
+	// via NewWithFakes drive the updater through the setter.
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
 }
 
 // NewWithKeyRing constructs a Service from an already-built multi-key ring
@@ -206,14 +229,18 @@ func NewWithKeyRing(
 	if sa != nil {
 		saR = sa
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: saR,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
 }
 
 // singleKeyRingFromB64 wraps a single base64-encoded PEM key pair into a
@@ -600,7 +627,46 @@ func (s *Service) CreateUser(ctx context.Context, tenantID uuid.UUID, username, 
 
 // CreateAPIKey generates a random secret, stores its argon2id hash, and returns
 // the raw secret. The raw secret is never stored and cannot be recovered later.
+//
+// FUT-003 policy consultation:
+//
+//   - If a workspace token policy is wired AND has MaxTTLDays set, the
+//     caller-requested expires_at is rejected when it exceeds now() + max.
+//     Existing keys are NOT re-validated against a stricter policy —
+//     grandfathering keeps operators from locking themselves out of their
+//     own workspace on a tightening (Task 6 load-bearing invariant).
+//
+//   - If a workspace token policy has RotationIntervalDays set, the new key
+//     gets rotation_due_at = now() + interval so FUT-004's lapse surface has
+//     a deadline to enforce. Missed on legacy paths (policy not wired) which
+//     leaves rotation_due_at NULL — treated as "no rotation required".
+//
+// The token-policy repo is optional; when nil (test fixtures without a
+// policy wiring) we skip enforcement and behave exactly like the pre-FUT-003
+// path. Grandfathering is enforced structurally: this function only ever
+// consults the policy for the CURRENT create call.
 func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, name string, scopes []string, expiresAt *time.Time) (key *repository.APIKey, rawSecret string, err error) {
+	// FUT-003: enforce max_ttl_days BEFORE generating a secret so a rejected
+	// call doesn't waste an Argon2 round.
+	var rotationDueAt *time.Time
+	if s.tokenPolicy != nil {
+		policy, perr := s.tokenPolicy.GetOrDefault(ctx, tenantID)
+		if perr != nil {
+			return nil, "", fmt.Errorf("load token policy: %w", perr)
+		}
+		if policy.MaxTTLDays != nil && expiresAt != nil {
+			maxAllowed := time.Now().Add(time.Duration(*policy.MaxTTLDays) * 24 * time.Hour)
+			if expiresAt.After(maxAllowed) {
+				return nil, "", status.Errorf(codes.InvalidArgument,
+					"requested TTL exceeds workspace max (%d days)", *policy.MaxTTLDays)
+			}
+		}
+		if policy.RotationIntervalDays != nil {
+			due := time.Now().Add(time.Duration(*policy.RotationIntervalDays) * 24 * time.Hour)
+			rotationDueAt = &due
+		}
+	}
+
 	raw := make([]byte, rawSecretLen)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, "", fmt.Errorf("generate secret: %w", err)
@@ -632,6 +698,18 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID, userID uuid.UUID, 
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	// If policy required a rotation deadline, stamp it now. A failure here
+	// does NOT roll back the create — the key is usable, we just log the
+	// gap so operators can detect it. FUT-004's lapse UI will still surface
+	// the key as "no deadline known" without an inbound alert path.
+	if rotationDueAt != nil {
+		if setErr := s.apiKeys.SetRotationDueAt(ctx, key.ID, rotationDueAt); setErr != nil {
+			slog.WarnContext(ctx, "CreateAPIKey: SetRotationDueAt failed; key created without deadline",
+				"key_id", key.ID, "err", setErr)
+		} else {
+			key.RotationDueAt = rotationDueAt
+		}
 	}
 	return key, rawSecret, nil
 }
@@ -746,7 +824,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 
 	case key.UserID != nil:
 		// Human-owned key: fire-and-forget last_used update, return immediately.
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		vk := &ValidatedKey{
 			UserID:          *key.UserID,
 			TenantID:        key.TenantID,
@@ -816,7 +894,7 @@ func (s *Service) applyKeyChecksFromCache(ctx context.Context, key *repository.A
 		if len(eff) == 0 {
 			return nil, fmt.Errorf("%w: all key scopes removed from SA allowlist; rotate key", ErrInvalidCredentials)
 		}
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		return &ValidatedKey{
 			UserID:           sa.ShadowUserID,
 			TenantID:         sa.TenantID,
@@ -832,7 +910,7 @@ func (s *Service) applyKeyChecksFromCache(ctx context.Context, key *repository.A
 		// so a stale EffectiveScopes — for example if an operator narrowed
 		// the key's scopes after the cache entry was written — cannot leak.
 		_ = cached
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		return &ValidatedKey{
 			UserID:          *key.UserID,
 			TenantID:        key.TenantID,
@@ -889,7 +967,7 @@ func (s *Service) validateSAKey(ctx context.Context, key *repository.APIKey, req
 	}
 
 	// Fire-and-forget last_used writeback (same as human path).
-	s.touchLastUsedAsync(key.ID)
+	s.touchLastUsed(key.ID)
 
 	return &ValidatedKey{
 		UserID:           sa.ShadowUserID,
@@ -926,10 +1004,20 @@ func (s *Service) emitCrossTenantAttempt(ctx context.Context, sa *repository.Ser
 	}
 }
 
-// touchLastUsedAsync fires a background goroutine to update last_used_at. It
-// uses a detached context with a 5-second timeout so that a slow or unavailable
-// database never delays the auth response. Errors are silently discarded.
-func (s *Service) touchLastUsedAsync(keyID uuid.UUID) {
+// touchLastUsed dispatches a last_used_at bump through the FUT-003
+// Redis-debounced updater. Fire-and-forget: returns immediately, the
+// actual write (if the debounce window is open) happens on a goroutine
+// owned by the updater.
+//
+// When the updater is not wired (legacy fakes constructed without an
+// api-key repo), we fall through to the pre-FUT-003 goroutine-based
+// TouchLastUsed so those tests still see a bumped timestamp — the
+// debounce is a performance optimisation, not a correctness gate.
+func (s *Service) touchLastUsed(keyID uuid.UUID) {
+	if s.lastUsed != nil {
+		s.lastUsed.Touch(context.Background(), keyID)
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
