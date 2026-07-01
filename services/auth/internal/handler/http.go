@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -103,6 +104,14 @@ type HTTPHandler struct {
 	// causes GET /api/v1/access/activity to return 501 NOT_IMPLEMENTED.
 	// Set via WithActivityService.
 	activityService *service.ActivityService
+	// oidc is the FUT-001 trust + workload-token-exchange service. nil
+	// causes POST /auth/token/workload to return 503 with a clear
+	// "feature off" message. Set via WithWorkloadExchange.
+	oidc *service.OIDCTrustService
+	// workloadRedis backs the per-(issuer, subject) Redis rate-limit on
+	// /auth/token/workload. nil disables rate-limiting; the exchange
+	// still works (fail-OPEN). Set via WithWorkloadExchange.
+	workloadRedis *redis.Client
 }
 
 // NewHTTPHandler creates an HTTPHandler backed by the given service.
@@ -169,6 +178,10 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/token", h.token)
 	mux.HandleFunc("GET /auth/token", h.token)
 	mux.HandleFunc("GET /.well-known/jwks.json", h.jwks)
+	// FUT-001 — federated workload identity exchange. Public (the OIDC
+	// JWT itself is the credential), gated by per-(iss, sub) Redis
+	// rate-limit and the deploy-time OIDC_ALLOWED_ISSUERS allowlist.
+	mux.HandleFunc("POST /auth/token/workload", h.HandleWorkloadTokenExchange)
 	mux.HandleFunc("POST /api/v1/users", h.createUser)
 	mux.HandleFunc("POST /api/v1/login", h.login)
 	mux.HandleFunc("POST /api/v1/logout", h.logout)

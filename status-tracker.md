@@ -92,20 +92,29 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 
 ---
 
-### REM-021 — FUT-002 Credential helpers (in flight)
+### REM-023 — FUT-001 Federated workload identity (in flight)
 
-**Affects:** `services/management` (new `/api/v1/registry-info` route + `PLATFORM_HOST` env), `frontend` (new `HelpersPanel` replacing the preview).
+**Affects:** `services/auth` (new `oidc_trust_configs` table + 5 gRPC RPCs + JWKS cache + issuer allowlist + `POST /auth/token/workload` exchange endpoint + per-(iss,sub) Redis rate-limit), `services/audit` (5 new mapEvent cases), `services/management` (4 BFF admin routes at `/api/v1/access/oidc-trust*`), `frontend` (new `TrustPanel` replacing preview + `CreateOIDCTrustDialog` + client-side glob validator + sidebar graduation).
 
-**Status:** IN FLIGHT on `feat/fut-002-credential-helpers`. Smallest of the FUT-001..FUT-004 batch (`/api-keys/helpers` going from preview to live). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md`. No DB / proto change. Spec-compliance reviewed; auth-gating fix folded inline (`23d67e9`) after BFF spec reviewer caught a missing `authMW` wrap.
+**Status:** IN FLIGHT on `feat/fut-001-federated-workload-identity`. Second of the FUT-001..FUT-004 batch (FUT-002 shipped in PR #221; FUT-003/004 to follow). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 2. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). Vite proxy routing fix folded inline (`25be20c`) after the FE subagent's incorrect claim that inheritance from FUT-002 was sufficient.
 
-**Plan:** `docs/superpowers/plans/2026-06-30-fut-002-credential-helpers.md`.
+**Plan:** `docs/superpowers/plans/2026-07-01-fut-001-federated-workload-identity.md`.
 
 **Follow-ups (non-blocking, file on merge):**
-- HelpersPanel test produces noisy `AggregateError` stderr in jsdom (no MSW handler). Tests pass deterministically; cosmetic noise only.
-- HelpersPanel test coverage is shell-only (loading branch + heading assertion). 4 render branches (loading / error / no-SA / rendered) → 1 covered. Add `vi.mock('@/lib/api/registry-info')` + `vi.mock('@/lib/api/service-accounts')` and assert rendered snippet contains hostname for at least one format. (qa-agent SHOULD-FIX, 2026-06-30.)
-- No `ci-management.yml` CI workflow. `.github/workflows/` has 18 ci-*.yml files; only `ci-tidy-check.yml` references the management module. New BFF handler doesn't run lint/vet/`go test`/`-race` in CI. Pre-existing repo gap exposed by FUT-002 being the first material services/management change in a while. File chore PR mirroring `ci-webhook.yml`. (qa-agent SHOULD-FIX, 2026-06-30.)
-- `HelpersPanel.tsx:88-164` JSX inside the `<>...</>` fragment indents at column 6 instead of column 8/10. Cosmetic; no prettier gate in CI; heals on next `npm run format`. (code-review-agent nit, 2026-06-30.)
-- `HelpersPanel.tsx:55-64` `handleCopy` swallows clipboard errors silently. Adding a one-shot toast ("Clipboard unavailable — select and copy manually") would be nicer UX. (code-review-agent nit, 2026-06-30.)
+- Trust-mutation gRPC RPCs receive `actor_id` from the BFF via gRPC metadata (or a new proto field) so `auth.oidc_trust.{created,updated,deleted}` audit events carry the calling admin's user id. BE currently emits with `ActorID = ""`; the BFF just needs to plumb the caller through. Small proto extension + BFF metadata forwarding. (BE spec-review 2026-07-01.)
+- FE kebab menu exposes Delete only; Edit deferred per plan hint. `useUpdateOIDCTrust` hook is already wired for the future consumer. (FE spec-review 2026-07-01.)
+- No FE success toast on trust create/delete (matches sibling `CreateServiceAccountDialog` — kept UX consistent). One-line sonner add if desired.
+- No `ci-management.yml` CI workflow (carried from REM-021 follow-up — same repo gap).
+- JWKS cache uses lazy-on-Fetch refresh instead of background 60s goroutine (spec mentions goroutine; functionally equivalent for the stated fail-closed invariant).
+- **SEC-058 (MEDIUM)** — JWKS SSRF via unbound `jwks_uri`. Add scheme + host equality with issuer; disable client redirects; apply the private-IP blocklist from services/webhook. `services/auth/internal/service/oidc_jwks.go:131-189`. (security-agent 2026-07-01.)
+- **SEC-059 (MEDIUM)** — no response-body cap on JWKS/discovery fetch. Wrap `resp.Body` with `io.LimitReader(resp.Body, 1<<20)` before JSON decode. `services/auth/internal/service/oidc_jwks.go:207`. (security-agent 2026-07-01.)
+- **SEC-060 (MEDIUM)** — `JWKSCacheTTLSeconds` bounds not validated. Reject `TTL < 60 || TTL > 86400` in service validation + CHECK constraint migration. `services/auth/internal/service/oidc_trust.go:validateOnCreate/Update`. (security-agent 2026-07-01.)
+- **SEC-061 (LOW)** — workload rate-limit key length uncapped. Hash the `(iss, sub)` tuple into a fixed-length key or truncate both to 256 chars. `services/auth/internal/handler/http_workload_token.go:195`. (security-agent 2026-07-01.)
+- **SEC-062 (LOW)** — JWKS HTTP client lacks granular timeouts. Add explicit `Transport` with `TLSHandshakeTimeout: 3s` + `ResponseHeaderTimeout: 3s`. `services/auth/internal/service/oidc_trust.go:94`. (security-agent 2026-07-01.)
+- JWKS cache holds `sync.Mutex` across the HTTP round-trip — serialises fetches for DIFFERENT issuers too. Swap for `singleflight.Group` keyed on issuer URL. Not urgent given 16-issuer cap. `services/auth/internal/service/oidc_jwks.go:80-107`. (code-review-agent + qa-agent 2026-07-01.)
+- JWKS cache lacks an explicit parallel-fetch coalesce regression test (N goroutines → `calls.Load() == 1`). Add to `oidc_jwks_test.go`. (qa-agent 2026-07-01.)
+- Rejection audit events for `issuer_not_allowed` / `audience_mismatch` / parse-failure carry `TenantID = ""` and are silently dropped by the audit consumer's `uuid.Parse` guard. Publish to a synthetic "platform" tenant or extend the consumer to accept nil. Loses forensic visibility on brute-force attempts against unknown audiences. (code-review-agent 2026-07-01.)
+- Rate-limit `INCR + unconditional EXPIRE` slides the TTL vs a strict fixed-window; doc comment now describes the sliding behaviour honestly. Swap for `SET NX EX 60` + `INCR` if strict fixed-window is preferred. (code-review-agent 2026-07-01.)
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 

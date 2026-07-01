@@ -383,6 +383,12 @@ agent-style.
 > with dummy data. Backend work is what remains.
 
 ### FUT-001: Federated workload identity (OIDC trust) — Sprint 11
+
+**DONE — see `status.md` (REM-023).** Design history preserved below.
+
+<details>
+<summary>Original FUT-001 design (pre-implementation)</summary>
+
 - **Why:** GitHub Actions, GKE Workload Identity, and similar OIDC-capable
   CI systems can authenticate without a stored secret at all. A trust
   relationship removes the "rotation reminder" problem entirely.
@@ -391,6 +397,8 @@ agent-style.
   a `POST /auth/token/workload` exchange endpoint: validates the OIDC
   assertion against the configured JWKS URL + audience, issues a short-lived
   JWT mapped to a service account.
+
+</details>
 
 ### FUT-002: Credential helpers (docker login / k8s YAML / terraform / GHA snippets) — Sprint 11
 

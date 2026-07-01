@@ -69,6 +69,15 @@ type Claims struct {
 	// guards every other field, so downstream gates may trust it after a
 	// successful ValidateToken.
 	PrincipalKind string `json:"principal_kind,omitempty"`
+	// Source identifies how the token was issued: "" (default = password
+	// login or API-key dispatch) or "workload_oidc" (FUT-001 federated
+	// workload identity). Downstream audit + analytics can group sessions
+	// by origin without parsing the trust_id. Empty for legacy tokens.
+	Source string `json:"source,omitempty"`
+	// TrustID is the oidc_trust_configs.id that minted this token (FUT-001).
+	// Empty unless Source == "workload_oidc". Lets operators trace a
+	// running CI job back to the trust config that approved it.
+	TrustID string `json:"trust_id,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -286,6 +295,54 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 	}
 	return signed, nil
 }
+
+// IssueWorkloadToken signs a 15-minute RS256 registry JWT for a FUT-001
+// workload identity exchange. Sets source="workload_oidc" and trust_id to
+// the matched trust so the audit trail and downstream services can
+// distinguish workload-minted tokens from password-login tokens.
+//
+// The TTL is intentionally longer than tokenTTL (5 min) so a long-running
+// CI job (build + push + scan) doesn't need to re-exchange on every step.
+// 15 minutes is the GitHub Actions recommendation for OIDC-derived
+// credentials. The JTI is registered in the same active-token set as
+// password-login tokens so a SA disable revokes it immediately.
+func (s *Service) IssueWorkloadToken(ctx context.Context, userID, tenantID, trustID string, access []RepositoryAccess) (string, error) {
+	now := time.Now()
+	const workloadTokenTTL = 15 * time.Minute
+	claims := Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "registry-auth",
+			Subject:   userID,
+			Audience:  jwt.ClaimStrings{"registry-core"},
+			ExpiresAt: jwt.NewNumericDate(now.Add(workloadTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ID:        uuid.New().String(),
+		},
+		TenantID:      tenantID,
+		Access:        access,
+		Roles:         nil,
+		IsGlobalAdmin: false,
+		PrincipalKind: "service_account",
+		Source:        "workload_oidc",
+		TrustID:       trustID,
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signingKID, signingPriv := s.keys.signer()
+	tok.Header["kid"] = signingKID
+	signed, err := tok.SignedString(signingPriv)
+	if err != nil {
+		return "", fmt.Errorf("sign workload token: %w", err)
+	}
+	if err := s.recordIssuedJTI(ctx, userID, claims.ID); err != nil {
+		slog.WarnContext(ctx, "auth: failed to record workload JTI", "user_id", userID, "error", err)
+	}
+	return signed, nil
+}
+
+// WorkloadTokenLifetimeSeconds is the TTL in seconds returned in the
+// OAuth-style ExchangeWorkloadToken response (expires_in). Centralised so
+// the handler and the service agree on the value.
+const WorkloadTokenLifetimeSeconds = 15 * 60
 
 // ValidateToken parses and validates the token string, then checks the Redis
 // revocation list. Returns the parsed claims on success.

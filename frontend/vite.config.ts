@@ -62,6 +62,11 @@ export default defineConfig({
       "/api/v1/users/me/notification-preferences": { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/users":           { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1/service-accounts": { target: "http://localhost:8080", changeOrigin: true },
+      // FUT-001 — the OIDC trust admin routes live on services/management
+      // (BFF), not services/auth. Must come BEFORE the /api/v1/access
+      // catchall below (Vite matches the first key) or the FE hits auth
+      // and gets a silent 404.
+      "/api/v1/access/oidc-trust": { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/access":          { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1":                 { target: "http://localhost:8091", changeOrigin: true },
       "/healthz":               { target: "http://localhost:8091", changeOrigin: true },

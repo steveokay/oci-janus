@@ -81,6 +81,16 @@ const (
 	// to audit_events rows with action == payload.Action so the activity
 	// feed (FE-API-048 FUT-005) surfaces SA lifecycle alongside push/pull.
 	RoutingServiceAccountLifecycle = "service_account.lifecycle"
+
+	// FUT-001 — federated workload identity. Three admin mutation events
+	// + two exchange events. All five land in audit_events via the
+	// eventconsumer (CLAUDE.md §10) so operators see trust changes and
+	// every workload token exchange + rejection in /activity.
+	RoutingOIDCTrustCreated       = "auth.oidc_trust.created"
+	RoutingOIDCTrustUpdated       = "auth.oidc_trust.updated"
+	RoutingOIDCTrustDeleted       = "auth.oidc_trust.deleted"
+	RoutingWorkloadTokenExchanged = "auth.workload_token.exchanged"
+	RoutingWorkloadTokenRejected  = "auth.workload_token.rejected"
 )
 
 // Exchange names
@@ -335,6 +345,39 @@ type RetentionGraceCompletedPayload struct {
 	BlobsFreed       int64     `json:"blobs_freed"`
 	BytesFreed       int64     `json:"bytes_freed"`
 	TriggeredBy      string    `json:"triggered_by"`
+}
+
+// OIDCTrustPayload is the wire shape of the FUT-001 trust admin events
+// (created / updated / deleted). Carries the full trust identity so a
+// subscriber can render the audit row without a callback into auth.
+//
+// ActorID is the admin who made the change — empty for events emitted
+// by the cascade-delete-on-SA-delete path (the deleter is implicit).
+type OIDCTrustPayload struct {
+	TrustID          string `json:"trust_id"`
+	TenantID         string `json:"tenant_id"`
+	ServiceAccountID string `json:"service_account_id"`
+	DisplayName      string `json:"display_name"`
+	IssuerURL        string `json:"issuer_url"`
+	Audience         string `json:"audience"`
+	SubjectPattern   string `json:"subject_pattern"`
+	ActorID          string `json:"actor_id,omitempty"`
+}
+
+// WorkloadTokenPayload is the wire shape of the FUT-001 exchange events
+// (exchanged / rejected). TrustID is empty on rejections that happened
+// before a trust could be matched (issuer not in allowlist, audience
+// mismatch). Reason is set ONLY on rejection events; the exchanged
+// event leaves it empty.
+//
+// Subject is the OIDC `sub` claim, truncated to 256 chars by the
+// emitter so a hostile caller cannot inflate audit row size.
+type WorkloadTokenPayload struct {
+	TrustID          string `json:"trust_id,omitempty"`
+	IssuerURL        string `json:"issuer_url"`
+	Subject          string `json:"subject"`
+	ServiceAccountID string `json:"service_account_id,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 // ServiceAccountLifecyclePayload is the wire shape of every SA mutation

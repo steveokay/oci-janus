@@ -853,6 +853,75 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			Metadata:   meta,
 			OccurredAt: now,
 		}
+
+	// FUT-001 — federated workload identity. Three admin events (the
+	// trust create/update/delete) plus the two exchange outcomes
+	// (exchanged/rejected). The admin events carry the actor_id from
+	// the JWT-derived admin; rejection events use "anonymous" because
+	// the rejection happened BEFORE we could authenticate the caller.
+	case events.RoutingOIDCTrustCreated, events.RoutingOIDCTrustUpdated, events.RoutingOIDCTrustDeleted:
+		var p events.OIDCTrustPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		// Map the routing key to the audit action verbatim — the
+		// activity feed already knows how to group on the "auth."
+		// prefix; we don't translate to a shorter verb here because
+		// the routing key is the most stable identifier.
+		action := event.Type
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     action,
+			Resource:   p.TrustID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingWorkloadTokenExchanged:
+		var p events.WorkloadTokenPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		// Exchanged events carry the SA's shadow user id (set by the
+		// emitter); fall back to "system" if the publisher didn't set it
+		// (defence in depth — should not happen in practice).
+		actor := p.ServiceAccountID
+		actorType := "service_account"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "auth.workload_token.exchanged",
+			Resource:   p.TrustID,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingWorkloadTokenRejected:
+		var p events.WorkloadTokenPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		// Rejections are anonymous by definition — the rejection
+		// happened before we could authenticate the caller.
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "anonymous",
+			ActorType:  "anonymous",
+			Action:     "auth.workload_token.rejected",
+			Resource:   p.TrustID,
+			Outcome:    "failure",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
 	}
 
 	return nil

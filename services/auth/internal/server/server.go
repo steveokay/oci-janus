@@ -133,7 +133,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	healthSrv := grpchealth.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
-	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc, pub))
+	// FUT-001: build the audit emitter + OIDC trust service early so
+	// both the gRPC handler and (later in §5a) the HTTP handler share
+	// the same instance. The audit emitter is the same one used by
+	// ServiceAccountService — it dispatches on AuditEvent.Action to
+	// pick the right routing key + payload shape (see rabbitMQAuditEmitter).
+	var saAudit service.AuditEmitter = slogAuditEmitter{}
+	if pub != nil {
+		saAudit = rabbitMQAuditEmitter{pub: pub}
+	}
+	oidcSvc := service.NewOIDCTrustService(
+		repository.NewOIDCTrustRepo(pool),
+		repository.NewServiceAccountRepo(pool),
+		svc,
+		saAudit,
+		service.ParseIssuerAllowlist(cfg.OIDCAllowedIssuers),
+	)
+	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc, pub).WithOIDCTrustService(oidcSvc))
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -157,16 +173,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// The audit emitter is a slog-only placeholder for now; durable audit
 	// emission via RabbitMQ is a follow-up (FUT) item. The router accepts
 	// *redis.Client directly — it satisfies the RedisCmdable interface.
-	// FE-API-048 FUT-007: when a RabbitMQ publisher is wired, every SA
+	// FE-API-048 FUT-007: the saAudit emitter was built earlier (above
+	// gRPC registration) so it could be shared with the FUT-001 OIDC
+	// trust service. When a RabbitMQ publisher is wired, every SA
 	// lifecycle event lands on events.RoutingServiceAccountLifecycle so
 	// registry-audit can persist them as audit_events rows. Without a
 	// broker (dev stacks) the slog stand-in keeps the trail visible in
 	// container logs at INFO level — useful for local debugging but
 	// invisible to the activity feed and audit dashboards.
-	var saAudit service.AuditEmitter = slogAuditEmitter{}
-	if pub != nil {
-		saAudit = rabbitMQAuditEmitter{pub: pub}
-	}
 	saSvc := service.NewServiceAccountService(
 		repository.NewServiceAccountRepo(pool),
 		users,
@@ -182,6 +196,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// to "immediately").
 	saSvc.SetAPIKeyCacheInvalidator(svc.InvalidateAPIKeyCache)
 	httpH = httpH.WithServiceAccountService(saSvc)
+
+	// ── 5a.1. Wire the FUT-001 OIDC trust service into the HTTP handler.
+	// The service itself was constructed before the gRPC server (so the
+	// gRPC handler could pick it up); we just attach it to the HTTP
+	// handler here so POST /auth/token/workload is served.
+	httpH = httpH.WithWorkloadExchange(oidcSvc, rdb)
+	slog.Info("OIDC trust service wired",
+		"allowed_issuers", cfg.OIDCAllowedIssuers,
+	)
 
 	// ── 5b. Activity service (FE-API-048 FUT-005) ────────────────────────
 	// Dial registry-audit's gRPC server so /api/v1/access/activity can
@@ -535,25 +558,43 @@ func (slogAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) error {
 	return nil
 }
 
-// rabbitMQAuditEmitter publishes ServiceAccount lifecycle audit events to
-// the registry.events topic exchange on the
-// events.RoutingServiceAccountLifecycle routing key. registry-audit's
-// eventconsumer translates each message to an audit_events row with
-// action == payload.Action so spec §5.7's lifecycle vocabulary becomes a
-// real, queryable audit trail.
+// rabbitMQAuditEmitter publishes audit events to the registry.events
+// topic exchange. It dispatches on the AuditEvent.Action to pick the
+// right routing key + payload shape:
 //
-// Publish errors are returned to the caller (ServiceAccountService treats
-// audit emit failures as hard errors per spec §5.7) — a broker outage will
-// fail the SA mutation rather than silently lose the lifecycle row.
+//   - FUT-001 OIDC trust + workload exchange actions land on the
+//     matching auth.* routing keys with their own payload types.
+//   - Every other action (the existing FE-API-048 SA lifecycle
+//     vocabulary) lands on RoutingServiceAccountLifecycle as before.
+//
+// Publish errors are returned to the caller — spec §5.7 treats audit
+// emit failures as hard errors; a broker outage fails the mutation
+// rather than silently losing the audit row.
 type rabbitMQAuditEmitter struct {
 	pub *publisher.Publisher
 }
 
-// Emit marshals the AuditEvent into a ServiceAccountLifecyclePayload, wraps
-// it in the standard events.Event envelope, and publishes to the lifecycle
-// routing key. TenantID is carried on the outer envelope so a future
-// per-tenant audit consumer can filter without unmarshalling the payload.
+// Emit dispatches on ev.Action to pick the routing key + payload shape.
+// TenantID is carried on the outer envelope so a future per-tenant
+// audit consumer can filter without unmarshalling the payload.
 func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) error {
+	switch ev.Action {
+	case events.RoutingOIDCTrustCreated, events.RoutingOIDCTrustUpdated, events.RoutingOIDCTrustDeleted:
+		return e.publishOIDCTrust(ctx, ev)
+	case events.RoutingWorkloadTokenExchanged, events.RoutingWorkloadTokenRejected:
+		return e.publishWorkloadToken(ctx, ev)
+	default:
+		return e.publishSALifecycle(ctx, ev)
+	}
+}
+
+// publishSALifecycle is the original (pre-FUT-001) lifecycle path —
+// marshals the AuditEvent into ServiceAccountLifecyclePayload and
+// publishes to RoutingServiceAccountLifecycle. registry-audit's
+// eventconsumer translates each message to an audit_events row with
+// action == payload.Action so spec §5.7's lifecycle vocabulary becomes a
+// real, queryable audit trail.
+func (e rabbitMQAuditEmitter) publishSALifecycle(ctx context.Context, ev service.AuditEvent) error {
 	payload, err := json.Marshal(events.ServiceAccountLifecyclePayload{
 		Action:   ev.Action,
 		ActorID:  ev.ActorID,
@@ -575,6 +616,77 @@ func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) e
 		return fmt.Errorf("publish SA lifecycle: %w", err)
 	}
 	return nil
+}
+
+// publishOIDCTrust marshals the trust-mutation Fields into an
+// OIDCTrustPayload and publishes to the matching auth.oidc_trust.*
+// routing key (the routing key IS the Action).
+func (e rabbitMQAuditEmitter) publishOIDCTrust(ctx context.Context, ev service.AuditEvent) error {
+	payload, err := json.Marshal(events.OIDCTrustPayload{
+		TrustID:          stringField(ev.Fields, "trust_id"),
+		TenantID:         ev.TenantID,
+		ServiceAccountID: stringField(ev.Fields, "service_account_id"),
+		DisplayName:      stringField(ev.Fields, "display_name"),
+		IssuerURL:        stringField(ev.Fields, "issuer_url"),
+		Audience:         stringField(ev.Fields, "audience"),
+		SubjectPattern:   stringField(ev.Fields, "subject_pattern"),
+		ActorID:          ev.ActorID,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal oidc trust payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       ev.Action,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
+		return fmt.Errorf("publish oidc trust: %w", err)
+	}
+	return nil
+}
+
+// publishWorkloadToken marshals the exchange/rejected Fields into a
+// WorkloadTokenPayload and publishes to the matching
+// auth.workload_token.* routing key.
+func (e rabbitMQAuditEmitter) publishWorkloadToken(ctx context.Context, ev service.AuditEvent) error {
+	payload, err := json.Marshal(events.WorkloadTokenPayload{
+		TrustID:          stringField(ev.Fields, "trust_id"),
+		IssuerURL:        stringField(ev.Fields, "issuer_url"),
+		Subject:          stringField(ev.Fields, "subject"),
+		ServiceAccountID: stringField(ev.Fields, "service_account_id"),
+		Reason:           stringField(ev.Fields, "reason"),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal workload token payload: %w", err)
+	}
+	envelope := events.Event{
+		ID:         uuid.New().String(),
+		Type:       ev.Action,
+		TenantID:   ev.TenantID,
+		OccurredAt: time.Now(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	if err := e.pub.Publish(ctx, ev.Action, envelope); err != nil {
+		return fmt.Errorf("publish workload token: %w", err)
+	}
+	return nil
+}
+
+// stringField is a small helper that extracts a string from the
+// AuditEvent.Fields map, returning "" when missing or wrong-typed.
+// Used by the FUT-001 publishers so a producer that forgets a field
+// doesn't crash the publish.
+func stringField(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
 }
 
 // redisCmdableAdapter wraps *redis.Client so its Set/Del methods satisfy

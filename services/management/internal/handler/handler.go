@@ -435,6 +435,15 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/tenant/users/{user_id}/elevate/{org}",
 		authMW(http.HandlerFunc(h.handleElevateToOrgAdmin)))
 
+	// FUT-001 Task 13 — federated workload identity admin surface. CRUD on
+	// OIDC trust rows. All 4 routes are gated on tenant-admin OR platform-
+	// admin inside each handler (isTenantAdminOrPlatformAdmin). tenant_id
+	// is always sourced from the JWT claims, never from the request body.
+	mux.Handle("GET /api/v1/access/oidc-trust", authMW(http.HandlerFunc(h.handleListOIDCTrusts)))
+	mux.Handle("POST /api/v1/access/oidc-trust", authMW(http.HandlerFunc(h.handleCreateOIDCTrust)))
+	mux.Handle("PATCH /api/v1/access/oidc-trust/{id}", authMW(http.HandlerFunc(h.handleUpdateOIDCTrust)))
+	mux.Handle("DELETE /api/v1/access/oidc-trust/{id}", authMW(http.HandlerFunc(h.handleDeleteOIDCTrust)))
+
 	// Security overview (FE-API-020) — single tenant-scoped aggregate.
 	h.RegisterSecurity(mux, authMW)
 

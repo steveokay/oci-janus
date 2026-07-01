@@ -27,12 +27,26 @@ type GRPCHandler struct {
 	authv1.UnimplementedAuthServiceServer
 	svc *service.Service
 	pub *publisher.Publisher // may be nil in test/dev environments without RabbitMQ
+	// oidc is the FUT-001 trust + workload-token-exchange service. May be
+	// nil when OIDC_ALLOWED_ISSUERS is unset; the 5 OIDC RPCs return
+	// codes.Unimplemented in that case so callers learn the feature is
+	// off rather than seeing a generic 5xx.
+	oidc *service.OIDCTrustService
 }
 
 // NewGRPCHandler creates a GRPCHandler backed by the given service.
 // pub may be nil; if nil, RBAC events are logged but not published (e.g. test environments).
 func NewGRPCHandler(svc *service.Service, pub *publisher.Publisher) *GRPCHandler {
 	return &GRPCHandler{svc: svc, pub: pub}
+}
+
+// WithOIDCTrustService wires the FUT-001 service so the 5 OIDC RPCs are
+// served. Returns the receiver so the call chains cleanly off
+// NewGRPCHandler. Pass nil at construction time to indicate the feature
+// is off (the OIDC RPCs return Unimplemented).
+func (h *GRPCHandler) WithOIDCTrustService(oidc *service.OIDCTrustService) *GRPCHandler {
+	h.oidc = oidc
+	return h
 }
 
 // ValidateToken parses the JWT, checks the revocation list, and returns the claims.
