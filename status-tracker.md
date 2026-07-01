@@ -36,47 +36,6 @@
 
 ---
 
-### REM-022 — Phase 6.12 audit hash-chain migration fails on partitioned `audit_events`
-
-**Surfaced:** 2026-07-01 during a fresh `docker compose build && up -d` against an existing dev volume. `registry-audit` enters a crashloop with:
-
-```
-ERROR 20260630120000_audit_hash_chain.sql: failed to run SQL migration:
-"ALTER TABLE audit_events ADD COLUMN ... chain_seq BIGINT GENERATED ALWAYS AS IDENTITY;"
-SQLSTATE 42P16: cannot recursively add identity column to table that has child tables
-```
-
-**Root cause:** `audit_events` is a PARTITIONED table (`PARTITION BY RANGE (occurred_at)` with `audit_events_default` as the default partition). PR #208 (REDESIGN-001 Phase 6.12) shipped the hash-chain migration assuming a non-partitioned `audit_events`, so `ADD COLUMN ... GENERATED ALWAYS AS IDENTITY` (which PostgreSQL forbids on partitioned parents) blows up the moment any dev/prod DB has the partition.
-
-**Impact:** registry-audit can't start. registry-management is gated on `service_healthy: registry-audit` in `docker-compose.yml:907`, so the management container is also blocked. Workaround: `docker compose up -d --no-deps registry-management` brings management up without audit (used 2026-07-01 to unblock the FUT-002 demo). Hash-chain INSERTs (`audit_events` rows from `registry-audit`) are absent until the migration succeeds — every other audit-emitting service (auth, core, etc.) still publishes to RabbitMQ but `registry-audit` isn't there to consume.
-
-**Fix shape (~10-line SQL):** replace the IDENTITY column with an explicit sequence + DEFAULT (which IS allowed on partitioned tables):
-
-```sql
--- services/audit/migrations/20260630120000_audit_hash_chain.sql
-
-ALTER TABLE audit_events
-    ADD COLUMN prev_hash BYTEA NOT NULL DEFAULT decode('00', 'hex'),
-    ADD COLUMN row_hash  BYTEA NOT NULL DEFAULT decode('00', 'hex');
-ALTER TABLE audit_events ALTER COLUMN row_hash DROP DEFAULT;
-
-CREATE SEQUENCE audit_events_chain_seq;
-ALTER TABLE audit_events
-    ADD COLUMN chain_seq BIGINT NOT NULL DEFAULT nextval('audit_events_chain_seq');
-ALTER SEQUENCE audit_events_chain_seq OWNED BY audit_events.chain_seq;
-
-CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_chain_seq
-    ON audit_events (tenant_id, chain_seq DESC);
-```
-
-Behaviour identical to the IDENTITY column (single shared sequence across all partitions, monotonic per row, never reused). `Repository.VerifyChain`'s `ORDER BY chain_seq DESC LIMIT 1` tip query is unchanged.
-
-**Test:** add a Go integration test (`testcontainers` pattern from `libs/testutil`) that creates a partitioned `audit_events` matching the prod schema, then runs the migration + asserts an INSERT + `VerifyChain` round-trip works. Pin SEC-051 (pre-migration audit rows unverifiable) as a follow-up because this rewrite changes the migration's row-set ordering.
-
-**Owner:** TBD. Small + targeted; recommend a `fix/rem-022-audit-partition` branch with the SQL rewrite + the regression test. Pre-PR 3-agent batch per `feedback_review_agents_batch`.
-
----
-
 ### REM-013 — Retention surface backend gaps
 
 **Affects:** `services/metadata` (proto + repo + handler), `services/management` (BFF).
