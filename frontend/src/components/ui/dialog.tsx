@@ -36,18 +36,34 @@ export const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         data-beacon-content=""
+        // 2026-07-01 (user report): tall dialogs (Create Webhook, Create
+        // Trust, etc.) overflowed the viewport and clipped the footer
+        // Save button below the fold. The outer container now caps at
+        // 100dvh - 2rem and lays out as a flex column so the inner
+        // scroll region can take flex-1 + overflow-y-auto. The close
+        // button stays absolute on the OUTER container so it doesn't
+        // scroll with the inner children — visible even at scroll
+        // position N. Existing consumers don't need to change; they
+        // just get scrollable content for free.
         className={cn(
           "fixed left-1/2 top-1/2 z-50 w-full max-w-[480px] -translate-x-1/2 -translate-y-1/2",
+          "flex max-h-[calc(100dvh-2rem)] flex-col",
           "rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]",
-          "p-6 shadow-[var(--shadow-floating)]",
+          "shadow-[var(--shadow-floating)]",
           className,
         )}
         {...props}
       >
-        {children}
+        <div className="flex-1 overflow-y-auto overscroll-contain p-6">
+          {children}
+        </div>
         <DialogPrimitive.Close
           className={cn(
             "absolute right-4 top-4 rounded-md p-1 text-[var(--color-fg-muted)]",
+            // Ensure the close button sits above the scrollable inner
+            // region (which uses relative positioning implicitly). z-10
+            // is enough to escape without competing with the outer z-50.
+            "z-10 bg-[var(--color-surface)]",
             "transition-colors hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]",
             // Visible focus ring (DSGN-017). Offset 1 because the button sits
             // tight against the dialog corner; a wider offset would clip.
