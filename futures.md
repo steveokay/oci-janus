@@ -1290,6 +1290,277 @@ Docker v2 manifest list shapes are well-defined.
 
 ---
 
+## Platform expansion (self-hosted-first — 2026-07-01)
+
+> **Framing:** these items were surfaced during a "what's amazing but
+> missing?" review after the FUT-001..FUT-004 access-surface batch
+> shipped. Re-scoped through the **`DEPLOYMENT_MODE=single`** lens
+> (one organisation running the whole stack for themselves, competing
+> with Harbor / Nexus / plain Docker Registry — NOT ECR/GCR/ACR-style
+> SaaS). SaaS-flavoured items (cross-region replication, marketplaces,
+> billing surfaces) are intentionally absent. `DEPLOYMENT_MODE=multi`
+> stays a supported posture but is not the design driver here.
+>
+> Everything below is forward-looking. None of it is on a sprint yet
+> — pick, spec, and pull into `status-tracker.md` when picked up.
+
+### Tier 1 — I'd sit down and build these tomorrow
+
+#### FUT-020 — Image promotion workflow (`dev → staging → prod`)
+- **Why:** Every team hand-rolls this in CI today. A first-class
+  registry primitive removes 40+ lines of `docker tag && docker push`
+  glue per pipeline + captures provenance in the audit trail.
+- **What:** `POST /repositories/{org}/{src}/tags/{tag}/promote?to={org}/{dst}:{tag}`
+  — atomic tag copy with digest verification. Optional approval gate
+  (workspace-admin required for `→ prod/*`). Emits `image.promoted`
+  audit event carrying the origin digest so provenance survives the
+  copy. FE: "Promote this tag" button on the tag detail page +
+  Promotions history tab per repo. Reuses existing tag proto + RBAC.
+- **Cost estimate:** ~2 days. Every ingredient exists.
+- **Affects:** `services/core` (new endpoint), `services/metadata`
+  (record promotions), `services/management` (BFF), `frontend`.
+
+#### FUT-021 — CVSS-gated admission policy (finish the scanner loop)
+- **Why:** The scanner produces reports but nothing blocks on them.
+  You paid for Trivy + SBOM generation; the value multiplies when
+  the gate can act on the finding at pull time.
+- **What:** New `repositories.max_cvss_score INT` column (nullable =
+  no gate). `services/core.checkAccess` extended: pull → look up scan
+  result → reject with `403 IMAGE_BLOCKED_BY_POLICY` if
+  `max_cvss > threshold`. Fail-OPEN when the scan hasn't run yet
+  (don't block first pulls) + fail-CLOSED once the row exists.
+  Operator can flip fail-OPEN posture per repo. FE: toggle next to
+  "require signature" on the Settings tab.
+- **Cost estimate:** ~1 sprint including migration + tests.
+- **Affects:** `services/core`, `services/metadata`, `services/scanner`
+  (may need to publish scan-complete events reliably), `frontend`.
+
+#### FUT-022 — OCI artifacts as first-class citizens
+- **Why:** The registry is already OCI v1.1 compliant with referrers
+  support — Helm charts, Wasm modules, SBOMs, OPA bundles, Cosign
+  signatures, in-toto attestations all push cleanly today, but the
+  FE renders them as opaque `application/vnd.*` blobs. That's a
+  distribution-platform-shaped hole with a registry-shaped bandage.
+- **What:** New `/artifacts` route with a mediaType-aware list view
+  (icon per type). `helm push oci://registry/charts/mychart` renders
+  a per-chart page with `helm show values` inline. Cosign
+  signatures + SBOMs + attestations render on the tag detail's
+  "Referrers" tab instead of hidden behind proto JSON. Optional:
+  policy bundle inspection (OPA / Cedar).
+- **Cost estimate:** ~2 weeks (mostly FE + a small metadata proto
+  extension for mediaType discovery).
+- **Affects:** `services/metadata`, `services/management` (BFF),
+  `frontend`.
+- **Positioning:** turns "an image registry" into "a distribution
+  platform." Harbor does a subset; you'd match/exceed.
+
+#### FUT-023 — Ephemeral PR-scoped registries
+- **Why:** CI teams pollute their main tag namespaces with `pr-123`,
+  `pr-456`, etc. — cleanup is manual, retention rules skip them.
+  Auto-provisioned per-PR namespaces with auto-cleanup on close is
+  genuinely novel; most competitors don't do this cleanly.
+- **What:** New `services/management` webhook receiver for GitHub /
+  GitLab PR events. On PR open → auto-provision `pr-<N>/*` namespace
+  with retention `until = merge_or_close_at`. On merge → promote
+  (via FUT-020) + delete namespace. On close without merge → delete
+  namespace. Perfect fit for the FUT-001 OIDC federation you just
+  shipped — the GHA workflow's federated identity grants scoped
+  push access to its own `pr-<N>/*` namespace only.
+- **Cost estimate:** ~1 sprint.
+- **Affects:** `services/management` (webhook receiver), retention
+  (already shipped), FUT-001 OIDC federation (already shipped),
+  `frontend` (namespace visualisation).
+- **Depends on:** FUT-020 (promotion) for the merge → promote step.
+
+### Tier 2 — Amazing but bigger commitment
+
+#### FUT-024 — Web-based layer / file inspector
+- **Why:** "See what's inside this image without pulling it." Debug
+  workflows on constrained / air-gapped networks; SBOM-adjacent
+  investigation without local `tar` gymnastics.
+- **What:** Stream a layer, `tar` it in-browser, render the file
+  tree. Files viewable inline (Dockerfile, license, package.json,
+  go.mod). Diff between two tags: layer add/remove, file changes,
+  dep-version deltas.
+- **Cost estimate:** ~2 weeks of careful FE + a streaming blob
+  handler on the BFF.
+- **Affects:** `services/management` (streaming), `frontend`
+  (tar.js library integration).
+
+#### FUT-025 — Storage / pull dependency graph
+- **Why:** "Which of my images depend on `base/alpine:3.19`?"
+  Operators can't retire base images without this. Also unlocks
+  "which images are your biggest storage cost, and who's still
+  pulling them?" ops analysis.
+- **What:** Parse manifest → layer chain → identify shared base
+  layers by digest match. Graph visualisation (roots = base images,
+  edges = "layer-shared-by"). Table view: base image → downstream
+  count + total downstream storage attributed. Complements the
+  existing Tier 2 #4 (image lineage) but goes further.
+- **Cost estimate:** ~2 weeks.
+- **Affects:** `services/metadata` (new query), `services/management`,
+  `frontend` (graph library).
+
+### Tier 3 — Nice-to-haves that would delight
+
+#### FUT-026 — Import from public registries
+- **Why:** Adoption unblocker. New self-hoster wants "mirror the top
+  500 pulls from Docker Hub" or "import this exact list from GHCR."
+  Combined with the existing pull-through cache = zero-touch outage
+  tolerance.
+- **What:** `registryctl import --from docker.io/library --top 500` +
+  a dashboard equivalent. Supports both bulk (top-N by pull count) and
+  explicit list (from YAML). Handles digest verification, rate
+  limiting, upstream cred prompts.
+
+#### FUT-027 — Terraform provider
+- **Why:** Ops teams want their registry declared as code. Moves the
+  product from "self-hosted app" to "infra platform." Real
+  contributors ask for this on day one.
+- **What:** `terraform-provider-oci-janus` — resources for
+  `oci_janus_repository`, `oci_janus_token_policy`, `oci_janus_webhook`,
+  `oci_janus_oidc_trust`, `oci_janus_scan_policy`, etc.
+
+#### FUT-028 — Kubernetes operator
+- **Why:** k8s-first orgs want CRDs instead of Terraform. Same
+  leverage as FUT-027, different constituency.
+- **What:** CRDs for `Repository`, `TokenPolicy`, `Webhook`,
+  `OIDCTrust`. Operator reconciles by calling the management BFF.
+
+#### FUT-029 — `registryctl` CLI (one binary)
+- **Why:** Operators live in the shell, not always the dashboard.
+  Self-hosted ops teams especially. Bulk scripted ops beat clicking.
+- **What:** Single Go binary. `registryctl repo create`,
+  `registryctl policy set`, `registryctl scan trigger`,
+  `registryctl backup ...`, `registryctl import ...`,
+  `registryctl users invite`. Uses the same BFF as the dashboard.
+  Supersedes the small `oci-janus` CLI stub in the existing Tier 3
+  polish section — this is the full realisation.
+
+#### FUT-030 — Vulnerability triage workflow
+- **Why:** Scan results are noise without a workflow. "Accept this
+  CVE for now with justification", "snooze until upstream fixes",
+  "assign to $user". Turns scan output from a wall of red into an
+  actionable queue with an audit trail.
+- **What:** New `vulnerability_findings` table: `finding_id`
+  (CVE + package + digest) + `status` (open / accepted / snoozed /
+  fixed) + `assignee_user_id` + `justification` + timeline. FE:
+  "Triage" tab on the security surface with filter chips. Audit
+  events per state transition. Ties into FUT-021 (a
+  currently-accepted finding SHOULDN'T block admission).
+- **Depends on:** FUT-021 for the "accepted-CVE bypasses gate"
+  contract.
+
+#### FUT-031 — MCP server for the registry
+- **Why:** AI coding assistants (Claude, Cursor, GitHub Copilot
+  Workspace, etc.) increasingly speak MCP (Model Context Protocol).
+  Exposing the registry as an MCP server lets an operator's LLM ask
+  "which of our images have log4j 2.14?", "trigger a rescan of every
+  tag in `prod/*`", "revoke every API key not used in 60 days" — all
+  via natural language grounded in real state. Genuinely novel for a
+  registry.
+- **What:** New `services/mcp` binary implementing the MCP protocol.
+  Read tools: `list_repositories`, `list_tags`, `search_images`,
+  `get_scan_report`, `list_stale_keys`, `get_audit_events`. Write
+  tools (behind explicit consent flags): `trigger_scan`,
+  `snooze_review`, `revoke_key`, `promote_tag`. Authenticates via a
+  service-account key; runs alongside the management BFF; docs on
+  wiring up Claude Desktop / Cursor / etc.
+- **Cost estimate:** ~1 sprint for read-side; +1 sprint for write
+  tools with proper consent UX.
+
+### Tier 4 — Self-hosted-specific operational tooling
+
+#### FUT-032 — Air-gapped install bundle
+- **Why:** Regulated environments (defence, healthcare, banking)
+  cannot pull dependencies from the internet at install time. An
+  offline-friendly bundle unlocks this whole customer segment.
+- **What:** `oci-janus-airgapped.tar.gz` — all container images
+  pre-populated for one command install; embedded Docker Hub / GHCR
+  mirror seeded with the top 500 base images; offline docs; scripted
+  cert generation. Companion `docs/AIRGAPPED-INSTALL.md`.
+
+#### FUT-033 — Backup / restore CLI + procedure
+- **Why:** Self-hosters own their DR — SaaS provides this transparently,
+  self-hosters need first-class tooling or they'll roll it themselves
+  badly. Real risk mitigation.
+- **What:** `registryctl backup --to s3://bucket/prefix` — captures
+  Postgres dumps (per-service DBs), blob storage manifest,
+  `token_policies`, secrets metadata, cert bundle. `registryctl
+  restore --from s3://bucket/prefix` — one command to recover on a
+  fresh host. Runbook: `infra/runbooks/dr-restore.md`.
+- **Depends on:** FUT-029 for the CLI surface.
+
+#### FUT-034 — Bootstrap wizard (GUI-driven first run)
+- **Why:** The existing `registry-auth bootstrap` CLI is great for
+  automation but the first-run UX for a fresh self-hoster clicking
+  through the dashboard is a JSON-error wall. A guided wizard —
+  "point me at your S3 bucket + your OIDC IdP and I'll do the rest"
+  — closes the "installed but not configured" gap.
+- **What:** Detect fresh-install state (no bootstrap tenant yet)
+  → serve a `/setup` wizard route with 5 steps: (1) admin creds
+  (2) storage backend (3) SSO (optional) (4) certificate posture
+  (5) sanity checks + finish. Wraps the existing bootstrap CLI as
+  a BFF-side function; disables itself after first run.
+
+#### FUT-035 — Actionable operator dashboard homepage
+- **Why:** The current dashboard homepage is a marketing-ish landing
+  page. Self-hoster IS the ops team — they need "what broke? what's
+  expiring? what's spending storage?" surfaced immediately.
+- **What:** Replace the homepage with a ops-focused feed: cert
+  expiries in <30 days, stale keys from FUT-004, failed webhook
+  deliveries from FUT-019 territory, storage growth chart, scan
+  queue depth, retention pending-delete counts, unassigned CVE
+  findings from FUT-030. Every card links to its detail surface.
+
+#### FUT-036 — Config export / drift detection
+- **Why:** IaC-adjacent. Self-hosters want "what changed in my
+  token policies over the last month?" — snapshot state, diff
+  snapshots, alert on drift.
+- **What:** `registryctl config export > config.yaml` captures
+  every operator-owned setting (repos, policies, RBAC, webhooks,
+  OIDC trusts). `registryctl config diff` compares two exports.
+  Optional: nightly export + git commit for a full audit trail.
+
+#### FUT-037 — Command palette (Cmd+K)
+- **Why:** Fast navigation. Every modern developer tool has it now.
+  Half a day of FE work; big polish delta.
+- **What:** Cmd+K opens a palette. Search across: repos, tags,
+  digests (paste and jump), users, service accounts, settings
+  routes, scan reports. Uses existing TanStack Router route table.
+
+#### FUT-038 — Bulk multi-repo operations
+- **Why:** Ops teams love bulk. "Delete every tag matching `dev-*`
+  older than 30 days across every repo." Currently requires custom
+  scripts against the API.
+- **What:** New BFF route `POST /api/v1/bulk/tag-delete` accepting
+  a JSON selector (name glob + tenant + retention). Dashboard:
+  "Bulk operations" section under `/admin` with pre-flight
+  preview + confirm + audit trail. Also: bulk assign RBAC, bulk
+  scan trigger, bulk retention apply.
+
+#### FUT-039 — Just-in-time (JIT) access grants
+- **Why:** Internal deploy bots don't need forever-credentials.
+  "Give this bot pull access to `prod/*` for 45 minutes" — auto-expire,
+  full audit. Complements FUT-004 (which surfaces stale keys) with the
+  opposite posture (short-lived by construction).
+- **What:** New `access_grants` table: `principal_id`, `scope`,
+  `expires_at`. FE: `/settings → Security → JIT grants` with a
+  "grant temporary access" form. Auth service consults `access_grants`
+  on ValidateAPIKey (as an OR clause alongside role_assignments).
+
+#### FUT-040 — SLSA attestation viewer + provenance chain
+- **Why:** Cosign / in-toto attestations already work through the
+  referrers API, but rendering them in the FE currently is raw JSON.
+  A proper viewer completes the supply-chain story.
+- **What:** FE parses SLSA v1.0 provenance predicates + renders
+  build metadata: source repo + commit, builder (GitHub Actions
+  workflow URL), materials list, invocation params. "Provenance"
+  tab on the tag detail page. Optional: chain visualisation
+  (tag ← attestation ← source commit ← previous tag).
+
+---
+
 ## Tier 3 — Nice-to-have polish
 
 Real value, but easy to defer.
