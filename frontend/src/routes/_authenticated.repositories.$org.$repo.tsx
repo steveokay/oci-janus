@@ -12,6 +12,7 @@ import { RepoScanPolicySection } from "@/components/repositories/repo-scan-polic
 import { RepoImmutabilitySection } from "@/components/repositories/repo-immutability-section";
 import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
 import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
+import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-policy-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
 import { PromotionsTab } from "@/components/repositories/PromotionsTab";
@@ -162,6 +163,11 @@ function RepositoryDetail(): React.ReactElement {
                 {/* flags with the same shape; they compose independently   */}
                 {/* (signed + immutable, signed + mutable, etc.).           */}
                 <RepoSignaturePolicySection org={org} repo={repo} />
+                {/* FUT-021 — CVSS-gated pull admission. Composes with     */}
+                {/* signed-image admission: an operator can require       */}
+                {/* signed AND scan-clean images by turning both on.      */}
+                {/* Fails OPEN on no-scan-yet so first pulls never break. */}
+                <RepoCVSSPolicySection org={org} repo={repo} />
                 {/* Futures.md Tier 1 #3 Phase 2 — per-repo trusted-key    */}
                 {/* allowlist. Sits directly under the policy toggle       */}
                 {/* because the two compose: the toggle gates pulls on     */}

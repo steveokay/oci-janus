@@ -137,6 +137,14 @@ interface UpdateRepoArgs {
   // alone, send to flip" contract as `immutable_tags` — a missing key
   // never accidentally resets the security policy.
   require_signature?: boolean;
+  // FUT-021 — CVSS admission threshold. Three-state field:
+  //   - undefined  → omitted from the PATCH body (leave alone)
+  //   - null       → clear the threshold (SQL NULL on the row)
+  //   - integer    → set the threshold (0-100 CVSS band midpoints)
+  // Sent as JSON `null` when the caller explicitly clears; `undefined`
+  // is skipped by the Object.assign path below so the BFF receives no
+  // key at all.
+  max_cvss_score?: number | null;
 }
 
 export function useUpdateRepository() {
@@ -148,11 +156,16 @@ export function useUpdateRepository() {
       description,
       immutable_tags,
       require_signature,
+      max_cvss_score,
     }: UpdateRepoArgs): Promise<Repository> => {
       const body: Record<string, unknown> = {};
       if (description !== undefined) body.description = description;
       if (immutable_tags !== undefined) body.immutable_tags = immutable_tags;
       if (require_signature !== undefined) body.require_signature = require_signature;
+      // FUT-021 — distinguish explicit `null` (clear the gate) from
+      // `undefined` (leave alone). The `in` check preserves the
+      // three-state contract on the wire.
+      if (max_cvss_score !== undefined) body.max_cvss_score = max_cvss_score;
       const { data } = await apiClient.patch<Repository>(
         `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`,
         body,
