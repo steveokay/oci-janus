@@ -32,6 +32,10 @@ type GRPCHandler struct {
 	// codes.Unimplemented in that case so callers learn the feature is
 	// off rather than seeing a generic 5xx.
 	oidc *service.OIDCTrustService
+	// tokenPolicy is the FUT-003 workspace token policy service. Wired via
+	// WithTokenPolicyService at startup. May be nil in test/dev fixtures;
+	// the 2 policy RPCs return codes.Unimplemented in that case.
+	tokenPolicy *service.TokenPolicyService
 }
 
 // NewGRPCHandler creates a GRPCHandler backed by the given service.
@@ -46,6 +50,14 @@ func NewGRPCHandler(svc *service.Service, pub *publisher.Publisher) *GRPCHandler
 // is off (the OIDC RPCs return Unimplemented).
 func (h *GRPCHandler) WithOIDCTrustService(oidc *service.OIDCTrustService) *GRPCHandler {
 	h.oidc = oidc
+	return h
+}
+
+// WithTokenPolicyService wires the FUT-003 service so Get/PutTokenPolicy
+// RPCs are served. Chained builder like WithOIDCTrustService — pass nil
+// to indicate the feature is off (RPCs return Unimplemented).
+func (h *GRPCHandler) WithTokenPolicyService(tp *service.TokenPolicyService) *GRPCHandler {
+	h.tokenPolicy = tp
 	return h
 }
 
