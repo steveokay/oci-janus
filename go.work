@@ -9,6 +9,7 @@ use (
 	./services/gateway
 	./services/gc
 	./services/management
+	./services/mcp
 	./services/metadata
 	./services/proxy
 	./services/scanner

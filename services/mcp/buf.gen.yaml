@@ -1,0 +1,5 @@
+# Placeholder buf.gen.yaml — kept for consistency with other services even
+# though services/mcp does NOT own any proto files. The MCP surface calls
+# the management BFF over HTTP; there is no new gRPC contract.
+version: v2
+plugins: []
