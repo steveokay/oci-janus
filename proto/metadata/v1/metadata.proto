@@ -6,6 +6,7 @@ option go_package = "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1;met
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 
 service MetadataService {
   // Repositories
@@ -25,6 +26,15 @@ service MetadataService {
   // `require_signature` flag. Separate RPC from UpdateRepository for
   // the same audit-trail-clarity reason as UpdateRepositoryImmutability.
   rpc UpdateRepositorySignaturePolicy(UpdateRepositorySignaturePolicyRequest) returns (Repository);
+
+  // FUT-021 — CVSS-gated admission policy. Flips the repo-wide
+  // `max_cvss_score` threshold. Nullable Int32Value: null clears the
+  // gate (no threshold enforced); a value 0-100 sets the threshold at
+  // which services/core will refuse pulls whose top scan CVSS score
+  // exceeds it. Same audit-trail-clarity reasoning as
+  // UpdateRepositorySignaturePolicy — dedicated RPC so the security-
+  // relevant transition is easy to spot in the audit log.
+  rpc UpdateRepositoryCVSSPolicy(UpdateRepositoryCVSSPolicyRequest) returns (Repository);
 
   // Signed-image admission Phase 2 (futures.md Tier 1 #3) — per-repo
   // trusted-key allowlist. When `require_signature=true` AND the list
@@ -289,6 +299,24 @@ message Repository {
   // trusted-key allowlist is a Phase 2 enhancement tracked in
   // futures.md.
   bool   require_signature = 12;
+
+  // FUT-021 — CVSS-gated admission. Nullable INT (0-100 scale,
+  // standard CVSS v3.1 range rescaled to integers for finer
+  // granularity). Null = no gate. Non-null = pulls fail with 403
+  // DENIED when the top scan finding's CVSS score exceeds this
+  // threshold. Standard severity band mapping when a scanner has
+  // recorded only a severity label (no numeric score): LOW=39,
+  // MEDIUM=69, HIGH=89, CRITICAL=100 — chosen so that a threshold
+  // of 69 blocks HIGH+CRITICAL, 89 blocks CRITICAL only, 100
+  // effectively blocks nothing (opt-in default posture).
+  //
+  // Load-bearing invariants (see services/core admission check):
+  //   - null                       → no gate, always allow
+  //   - non-null, no scan yet      → fail-OPEN (allow, log Info)
+  //   - non-null, scanner error    → fail-OPEN (allow, log Warn)
+  //   - non-null, top_cvss > value → deny (ErrCVSSThresholdExceeded)
+  //   - non-null, top_cvss == value→ ALLOW (`>` not `>=`)
+  google.protobuf.Int32Value max_cvss_score = 13;
 }
 
 message Tag {
@@ -453,6 +481,17 @@ message UpdateRepositorySignaturePolicyRequest {
   string repo_id           = 1;
   string tenant_id         = 2;
   bool   require_signature = 3;
+}
+
+// FUT-021 — CVSS-gated admission. `max_cvss_score=null` clears the
+// threshold (repo returns to open pulls). A non-null value 0-100
+// activates the gate at that threshold. Validation: 0 <= value <=
+// 100 is enforced at the gRPC handler AND by a CHECK constraint on
+// the repositories table (defence in depth).
+message UpdateRepositoryCVSSPolicyRequest {
+  string repo_id                          = 1;
+  string tenant_id                        = 2;
+  google.protobuf.Int32Value max_cvss_score = 3;
 }
 
 // Signed-image admission Phase 2 (futures.md Tier 1 #3). A single
