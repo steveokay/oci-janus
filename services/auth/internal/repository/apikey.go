@@ -247,3 +247,90 @@ func (r *APIKeyRepository) TouchLastUsed(ctx context.Context, id uuid.UUID) erro
 	_, err := r.pool.Exec(ctx, q, id)
 	return err
 }
+
+// UpdateLastUsedAt bumps the timestamp on the given key to the caller-supplied
+// time. Preferred over TouchLastUsed on the FUT-003 debounced updater path so
+// tests can pin the wall clock. Misses (e.g. Redis unreachable + debounce
+// skipped concurrently) are tolerated because the worst-case impact is a
+// slightly-later idle-revoke evaluation — the security boundary is the DB
+// row-state check on the auth hot path, not the last_used_at value.
+func (r *APIKeyRepository) UpdateLastUsedAt(ctx context.Context, id uuid.UUID, at time.Time) error {
+	const q = `UPDATE api_keys SET last_used_at = $2 WHERE id = $1`
+	_, err := r.pool.Exec(ctx, q, id, at)
+	return err
+}
+
+// SetRotationDueAt records the deadline for a required rotation. Called
+// during CreateAPIKey when the workspace policy has rotation_interval_days.
+// A nil `at` clears the deadline (e.g. after an operator rotates the key
+// manually and wants to opt-out of further reminders).
+func (r *APIKeyRepository) SetRotationDueAt(ctx context.Context, id uuid.UUID, at *time.Time) error {
+	const q = `UPDATE api_keys SET rotation_due_at = $2 WHERE id = $1`
+	_, err := r.pool.Exec(ctx, q, id, at)
+	return err
+}
+
+// RevokeWithReason soft-deletes an API key by flipping is_active=false and
+// recording a reason string ("manual" | "idle_revoked" | "rotation_lapsed").
+// Unlike Delete/DeleteByServiceAccount, this method is NOT scoped to an
+// owner — it's used by the FUT-003 idle-revoke worker which iterates by
+// tenant and doesn't know the owner shape in advance.
+//
+// Returns ErrNotFound when no row matches. The two-column UPDATE (is_active
+// + revoke_reason) runs in a single statement so a concurrent read never
+// sees the "revoked without a reason" transient.
+func (r *APIKeyRepository) RevokeWithReason(ctx context.Context, id uuid.UUID, reason string) error {
+	const q = `UPDATE api_keys SET is_active = false, revoke_reason = $2 WHERE id = $1 AND is_active = true`
+	tag, err := r.pool.Exec(ctx, q, id, reason)
+	if err != nil {
+		return fmt.Errorf("revoke api key: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// IdleKey is the projection ListIdleKeys returns — the columns the idle-
+// revoke worker + audit emitter both need. Kept narrow so a large tenant
+// with tens of thousands of live keys doesn't pull unnecessary bytes over
+// the wire.
+type IdleKey struct {
+	ID               uuid.UUID
+	TenantID         uuid.UUID
+	UserID           *uuid.UUID
+	ServiceAccountID *uuid.UUID
+	LastUsedAt       *time.Time
+}
+
+// ListIdleKeys returns active (non-revoked) keys whose last_used_at is
+// older than the given cutoff, restricted to the given tenant. Rows with
+// NULL last_used_at are ALSO returned — a key that was created but never
+// used is idle by definition, and letting it linger indefinitely would
+// defeat the purpose of the idle-revoke policy.
+//
+// Uses the partial idx_api_keys_idle_check index (WHERE is_active = true)
+// so scans are proportional to the tenant's live-key count. The worker
+// calls this once per tick per configured tenant.
+func (r *APIKeyRepository) ListIdleKeys(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) ([]IdleKey, error) {
+	const q = `
+		SELECT id, tenant_id, user_id, service_account_id, last_used_at
+		  FROM api_keys
+		 WHERE tenant_id = $1
+		   AND is_active = true
+		   AND (last_used_at IS NULL OR last_used_at < $2)`
+	rows, err := r.pool.Query(ctx, q, tenantID, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("list idle keys: %w", err)
+	}
+	defer rows.Close()
+	var out []IdleKey
+	for rows.Next() {
+		var k IdleKey
+		if err := rows.Scan(&k.ID, &k.TenantID, &k.UserID, &k.ServiceAccountID, &k.LastUsedAt); err != nil {
+			return nil, fmt.Errorf("scan idle key: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
