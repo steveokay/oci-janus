@@ -19,9 +19,19 @@ package service
 
 import "strings"
 
-// issuerAllowed reports whether `issuer` is a prefix-match of ANY entry
-// in `allow`. Comparison is byte-identical (no case folding — the OIDC
-// spec is case-sensitive on issuer URLs).
+// issuerAllowed reports whether `issuer` is a boundary-safe prefix-match
+// of ANY entry in `allow`. Comparison is byte-identical (no case folding —
+// the OIDC spec is case-sensitive on issuer URLs).
+//
+// **SEC-057 (2026-07-01):** the initial implementation was a bare
+// `strings.HasPrefix`, which allows `iss=https://token.actions.githubusercontent.com.evil.com`
+// to match an allowlist entry of `https://token.actions.githubusercontent.com`.
+// To close the subdomain-lookalike bypass, we require the character
+// immediately AFTER the matched prefix to be `/` or end-of-string.
+// This makes the match a "prefix that ends on a URL-path boundary" —
+// legitimate issuers with per-installation paths (e.g. GitLab's
+// `https://gitlab.com/group/project`) still match a shorter prefix,
+// but a hostile suffix that extends the hostname does not.
 //
 // Empty `allow` means NOTHING is allowed (fail-closed default).
 func issuerAllowed(allow []string, issuer string) bool {
@@ -36,7 +46,21 @@ func issuerAllowed(allow []string, issuer string) bool {
 		if prefix == "" {
 			continue
 		}
-		if strings.HasPrefix(issuer, prefix) {
+		if !strings.HasPrefix(issuer, prefix) {
+			continue
+		}
+		// SEC-057: boundary check — reject `.evil.com` suffix extension.
+		// If the allowlist entry itself ends in `/`, the prefix already
+		// terminates the hostname, so any character (including nothing)
+		// after it is safe. Otherwise the next character must be `/` or
+		// the strings must be equal length.
+		if strings.HasSuffix(prefix, "/") {
+			return true
+		}
+		if len(issuer) == len(prefix) {
+			return true
+		}
+		if issuer[len(prefix)] == '/' {
 			return true
 		}
 	}

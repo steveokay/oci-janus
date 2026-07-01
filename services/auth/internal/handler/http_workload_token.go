@@ -40,8 +40,17 @@ import (
 // step). Bumping this without considering DoS amplification is unwise.
 const workloadRateLimitPerMin = 100
 
-// workloadRateLimitWindow is the bucket window length. Matches the
-// per-min budget — buckets reset every 60s rather than rolling.
+// workloadRateLimitWindow is the bucket window length. Note: the
+// implementation calls `INCR` + `EXPIRE` unconditionally per request,
+// which SLIDES the TTL forward on each hit — this is effectively a
+// keep-alive fixed-window (a caller sustaining ≥ 1 req/s past 100 stays
+// locked out until they pause for a full 60s), not a strict fixed-window
+// where the bucket resets on wall-clock boundaries. Both variants still
+// bound throughput to 100/60s; the sliding form is friendlier to
+// legitimate bursty CI at the cost of stricter behaviour against
+// aggressive brute-force retries. If a strict fixed-window is desired,
+// swap the pipeline for `SET NX EX 60 <first-hit>` + `INCR` — see
+// REM-023 follow-up.
 const workloadRateLimitWindow = 60 * time.Second
 
 // workloadRequestBodyLimit caps the JSON body we'll parse. A workload

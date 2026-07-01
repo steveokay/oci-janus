@@ -1,5 +1,7 @@
 # Security Issues
 
+> Last updated: 2026-07-01 — SEC-057..SEC-063 logged (1 HIGH, 3 MEDIUM, 2 LOW, 1 INFO) from the pre-PR review of `feat/fut-001-federated-workload-identity`. **PR STATUS: BLOCKED on SEC-057** — issuer allowlist uses `strings.HasPrefix` without a boundary check, so `https://token.actions.githubusercontent.com` in `OIDC_ALLOWED_ISSUERS` also matches attacker-registered `https://token.actions.githubusercontent.com.evil.example`, letting the attacker's IdP sign OIDC tokens that pass the trust gate. Compounded by the docker-compose default already shipping three vulnerable no-trailing-slash prefixes. MEDIUM: SEC-058 (JWKS SSRF — `jwks_uri` returned by discovery doc is followed without host/scheme constraint), SEC-059 (JWKS + discovery HTTP GET has no response body size cap → OOM), SEC-060 (`JWKSCacheTTLSeconds` has no min/max bound → DoS against IdP and against our JWKS cache). LOW: SEC-061 (workload rate-limit Redis key length uncapped from untrusted `sub`), SEC-062 (§13 hardening — JWKS `http.Client` only sets `Timeout`, not `TLSHandshakeTimeout`/`ResponseHeaderTimeout`). INFO: SEC-063 (issuer URL scheme not enforced HTTPS on backend — FE dialog checks but curl bypass allows `http://`). Two false-positives ruled out on review: fail-closed JWKS TTL semantics verified (line 92-107 fall through returns error, does NOT serve stale); BFF admin routes verified to take tenant_id from JWT via `middleware.TenantIDFromContext(r.Context())` at `access_oidc_trust.go:97/123/158/195`, body-field tenant_id ignored.
+>
 > Last updated: 2026-06-30 — SEC-055 + SEC-056 logged (both LOW) from the pre-PR review of `feat/fut-002-credential-helpers`. PR PASSES — no CRITICAL/HIGH. SEC-055: `frontend/src/lib/credential-snippets.ts` `sanitiseSAName` strips only `["\`$\\]` while the rendered snippets contain unquoted shell args (`--username ${safe}`, `--docker-username=${safe}`) and a YAML scalar (`username: ${safe}`); today this is safe because the server-side SA-name regex `^[a-z0-9]+([._-][a-z0-9]+)*$` admits no shell metacharacters, so the FE sanitizer is genuine defence-in-depth — but if the create-time regex is ever loosened, the FE silently regresses. SEC-056: `services/management/internal/handler/registry_info_test.go:11-13` docstring claims the endpoint is "unauthenticated by design (parallels handleDeploymentInfo)" but `handler.go:302` wraps it in `authMW`. Stale comment, not a code defect — but invites a future reviewer to "fix" the route by removing `authMW` to match the test claim. Both accepted as should-fix follow-ups.
 >
 > Last updated: 2026-06-30 — SEC-053 + SEC-054 logged (both LOW) from the pre-PR review of `feat/redesign-7.3-spec-lint` (REDESIGN-001 Phase 7.3). The spec-lint tool itself is benign (read-only, no `os.Create`/`exec.Command`/network; workflow uses `pull_request` not `pull_request_target`). Two false-negative paths flagged: (1) Rule #11 `// audit: skip` annotation has no allowlist so a bad-faith PR can silently exempt a sensitive event by adding the comment in the same diff that adds the event; (2) Rule #12 mTLS-validate gate matches the generic regex `cfg\.Validate\(\)` which any service-local `Validate()` satisfies, regardless of whether it actually runs the mTLS path check. Both accepted as should-fix follow-ups — they do not block the Phase 7.3 PR but should be tightened in a subsequent spec-lint hardening pass. Rule #4 (audit_chain_tip CREATE TABLE forbidden) was reviewed and is sufficient: any literal re-introduction is caught, and a rename would be visible in PR diff against §10 docs that name the column-derived tip.
@@ -53,7 +55,7 @@
 
 ## Open Issues
 
-> 2 OPEN SEC findings as of 2026-06-30 — SEC-055 + SEC-056 (both LOW, FUT-002 credential-helpers pre-PR review). SEC-040, SEC-041, SEC-042, SEC-043 RESOLVED in `fix/sec-040-041-042-sso-followups`; SEC-053 + SEC-054 OPEN follow-ups from spec-lint. See SEC-NNN entries below for full triage notes.
+> 9 OPEN SEC findings as of 2026-07-01 — SEC-055 + SEC-056 (LOW, FUT-002 credential-helpers) + SEC-057 (HIGH BLOCKER, FUT-001 issuer allowlist prefix bug) + SEC-058/059/060 (MEDIUM, FUT-001 JWKS SSRF + OOM + TTL bounds) + SEC-061/062 (LOW, FUT-001 rate-limit key + hardening) + SEC-063 (INFO, FUT-001 HTTPS scheme not enforced BE-side). SEC-040, SEC-041, SEC-042, SEC-043 RESOLVED in `fix/sec-040-041-042-sso-followups`; SEC-053 + SEC-054 OPEN follow-ups from spec-lint. See SEC-NNN entries below for full triage notes.
 >
 > Backend feature gaps (KMS signing backends, Notary v2, etc.) are tracked in
 > `status.md` Sprint 6 — those are unimplemented features rather than
@@ -112,6 +114,111 @@
   3. Add handler-level regression tests in `services/auth/internal/handler/sso_test.go` and `saml_test.go` that drive an SSO callback with a mismatched subject and assert `401 UNAUTHORIZED` + body string contains the generic phrasing + body does NOT contain the email.
   4. Tighten the SEC-041 guard to refuse whenever `ident.Subject != "" && byEmail.SSOSubject != ident.Subject` (drop the `byEmail.SSOSubject != ""` precondition; empty-subject race-recovery should still re-bind via `SetSSOSubject` after verifying no other row in the tenant already claims `ident.Subject`).
 - **References:** SEC-040, SEC-041, SEC-042, CLAUDE.md §7 (HTTP Bearer Auth — clean 401 vs 500), CWE-755 (Improper Handling of Exceptional Conditions), CWE-209 (Information Exposure Through an Error Message — partial; the email itself is stripped, but the 500 status code is itself a signal).
+
+### SEC-057 — OIDC issuer allowlist uses raw `HasPrefix`; attacker-registered subdomain bypasses the gate
+- **Severity:** HIGH
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/service/oidc_issuer.go:27-44` implements the `OIDC_ALLOWED_ISSUERS` gate as `strings.HasPrefix(issuer, prefix)` with no boundary check. If the operator sets `OIDC_ALLOWED_ISSUERS=https://token.actions.githubusercontent.com` (the exact string the operator would paste from GitHub's OIDC docs — no trailing slash), an attacker who can register `token.actions.githubusercontent.com.evil.example` and stand up an OIDC IdP there will pass the allowlist because `strings.HasPrefix("https://token.actions.githubusercontent.com.evil.example", "https://token.actions.githubusercontent.com")` returns true. The attacker then hosts a well-formed discovery + JWKS document, mints an RS256 token with matching `iss`, `sub`, `aud` values, and drives the exchange to `IssueWorkloadToken` — minting a 15-minute registry JWT for whichever SA the trust maps to. Compounded by `infra/docker-compose/docker-compose.yml:373` shipping three vulnerable defaults out-of-the-box: `https://token.actions.githubusercontent.com,https://gitlab.com,https://agent.buildkite.com` — every one is a raw origin with no trailing slash. Attack still requires an existing trust in the DB, so exploitability is limited to workspaces that have already federated (an admin action). But once federated, any external domain attacker who can register `gitlab.com.*` gets an OIDC-mint bypass without touching the workspace's IdP.
+- **Remediation:**
+  1. In `issuerAllowed`, treat each allowlist entry as a URL prefix that ends at a `/` boundary: require the character AT `len(prefix)` in `issuer` to be either the end-of-string or `/`. Concretely: `if strings.HasPrefix(issuer, prefix) && (len(issuer) == len(prefix) || issuer[len(prefix)] == '/') { return true }`.
+  2. Reject prefixes without an explicit scheme (`http://`|`https://`) at `ParseIssuerAllowlist` time — an entry like `token.actions.githubusercontent.com` (bare host) is almost certainly a config typo.
+  3. Update `infra/docker-compose/docker-compose.yml:373` to add trailing slashes to every default entry: `https://token.actions.githubusercontent.com/,https://gitlab.com/,https://agent.buildkite.com/`.
+  4. Extend `TestIssuerAllowed` with the boundary case: `{"subdomain suffix rejected", []string{"https://token.actions.githubusercontent.com"}, "https://token.actions.githubusercontent.com.evil.example", false}`.
+- **References:** CLAUDE.md §7 (Input Validation — allowlist gates), CWE-20 (Improper Input Validation), CWE-284 (Improper Access Control), OWASP ASVS 4.0 V13.2.3 (open-redirect / trust-boundary prefix confusion).
+
+### SEC-058 — JWKS SSRF: `jwks_uri` from discovery doc followed without host/scheme constraint
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/service/oidc_jwks.go:131-189` reads the issuer's `/.well-known/openid-configuration`, extracts the `jwks_uri` string field, and calls `getJSON` on it (line 148). No validation is performed on the returned URL — the attacker-controlled discovery doc can set `jwks_uri` to any URL, including an internal RFC-1918 address or a cloud metadata endpoint. Realistic exploit paths:
+  1. **Legitimate-but-compromised IdP** — an IdP with a compromised discovery endpoint (or an operator-configured mis-issued cert) redirects `jwks_uri` at `http://169.254.169.254/latest/meta-data/iam/security-credentials/` (AWS IMDS). Our `getJSON` fetches, gets a plaintext response, JSON-decodes it (fails on plaintext but the request is sent), and the auth service has just leaked its outbound IP + potentially triggered a credential lookup.
+  2. **Redirects** — Go's default `http.Client` follows up to 10 redirects; the initial JWKS URI can 302 to an internal endpoint.
+  3. **Combined with SEC-057** — an attacker who bypasses the issuer allowlist controls the discovery doc entirely, so `jwks_uri` can point at anything.
+
+  The prior `webhook` service already implements a private-IP blocklist (per CLAUDE.md §17.5); the same primitive should apply here.
+- **Remediation:**
+  1. Validate `jwks_uri` against the issuer origin: parse both URLs and require `jwksURL.Scheme == "https"` AND `jwksURL.Host == issuerURL.Host`. Realistic IdPs host the JWKS on the same host as the discovery endpoint; any deviation is a red flag.
+  2. Disable client redirects on the JWKS client: `Client.CheckRedirect = func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }`.
+  3. Reuse the webhook SSRF helper (`libs/net/ssrf`) if it exists, or inline a private-IP blocklist for 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, ::1.
+  4. Extend `oidc_jwks_test.go` with a stub IdP that returns a `jwks_uri` pointing at a different host, and assert `Fetch` returns an error.
+- **References:** CLAUDE.md §17.5 (SSRF checks + private-IP blocklist), CWE-918 (Server-Side Request Forgery), OWASP Top-10 A10 (SSRF).
+
+### SEC-059 — JWKS + discovery HTTP responses have no size cap → OOM DoS via a hostile IdP
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/service/oidc_jwks.go:207` reads the response body via `json.NewDecoder(resp.Body).Decode(&out)` with no `io.LimitReader` wrap. `resp.Body` streams unbounded — a hostile (or compromised) IdP can serve a discovery doc or JWKS document of arbitrary size (multi-GB or infinite). The 5-second `Timeout` on the HTTP client caps wall-clock time but not memory: within 5 seconds an attacker on a fast link can push hundreds of MB. Combined with the 16-issuer cache cap (each entry holds parsed keys), the attacker can also inflate the JSON structure (deeply nested arrays) to trigger `encoding/json` allocation storms. No workaround at the caller — this must be fixed inside `getJSON`.
+- **Remediation:**
+  1. Wrap `resp.Body` with `io.LimitReader(resp.Body, jwksMaxResponseBytes)` where `jwksMaxResponseBytes = 1 << 20` (1 MiB). A realistic JWKS with 10 keys is ~5 KiB; 1 MiB is 200× headroom without letting a single response drive OOM.
+  2. Return a clear error `"jwks response exceeded 1 MiB"` when the read hits the cap.
+  3. Optional but recommended: cap the JSON decoder depth via a custom `json.Decoder` with a max-depth check (mitigates the deep-nesting allocation storm class).
+  4. Add `TestJWKS_OversizeResponse_Rejected` — stub IdP serves 2 MiB of `{"junk": "..."}` and the fetch must error.
+- **References:** CLAUDE.md §13 (Request body size limits), CWE-400 (Uncontrolled Resource Consumption), CWE-770 (Allocation of Resources Without Limits).
+
+### SEC-060 — `JWKSCacheTTLSeconds` has no min/max bound; attacker-admin can force JWKS refetch storm
+- **Severity:** MEDIUM
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/service/oidc_trust.go:130-181` (Create + Update) never validates `JWKSCacheTTLSeconds`. Repository layer at `repository/oidc_trust.go:67-69` and `:203-205` only defaults 0 → 3600. Downstream `oidc_jwks.go:83-84` computes `ttl := time.Duration(matched.JWKSCacheTTLSeconds) * time.Second` and gates `time.Since(entry.fetchedAt) < ttl`. Two attack shapes:
+  1. **TTL = negative or 0** — `ttl == 0` means `time.Since(...) < 0` is always false → every exchange refetches JWKS. A tenant-admin (whose account has been compromised, or a malicious insider) can set TTL to `-1` on every trust and turn our auth service into a JWKS-request amplifier against the upstream IdP (compromising us with GitHub / GitLab).
+  2. **TTL = MaxInt32 (~68 years)** — the cache retains keys indefinitely. Combined with the SEC-058 SSRF, this lets an attacker who transiently controls the JWKS endpoint pin their key for the lifetime of the deployment.
+
+  Sane bounds per OIDC industry practice: 60s min (IdPs typically publish TTLs of 300s–3600s; 60s tolerates operators dropping to a low value for a temporary IdP rotation), 86400s max (24h — beyond this and a legit IdP key rotation is missed).
+- **Remediation:**
+  1. In `oidc_trust.go` `validateOnCreate` and `Update`, reject `JWKSCacheTTLSeconds < 60 || JWKSCacheTTLSeconds > 86400`. Preserve the `== 0 → default 3600` shortcut for backwards compat with the repo's own defaulting.
+  2. Consider adding a CHECK constraint `CHECK (jwks_cache_ttl_seconds BETWEEN 60 AND 86400)` in the migration (belt-and-braces).
+  3. Extend `oidc_trust_test.go` with `TestCreate_RejectsExtremeTTL`.
+- **References:** CLAUDE.md §7 (Input Validation), CWE-1284 (Improper Validation of Specified Quantity in Input), CWE-770 (rate-limit + resource-exhaustion class).
+
+### SEC-061 — Workload rate-limit Redis key has no bound on untrusted `sub` claim length
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/handler/http_workload_token.go:195` builds `key := "workload:rate:" + iss + ":" + sub` from `peekIssuerAndSubject` — the raw claims of an unverified JWT. Neither `iss` nor `sub` is capped at that point (the 256-char cap in `oidc_exchange.go` is for the audit log, not the Redis key). A hostile caller can submit an unsigned JWT with a `sub` of megabytes → the Redis key becomes megabytes; every request adds ~$sub bytes to Redis memory (per bucket TTL 60s). Not a bypass of the rate limit (the attacker only bloats their own bucket), but a controllable Redis-memory consumption vector — a hostile client can allocate ~100 MiB in Redis for the cost of ~50 exchange requests. Mitigated by the 60s TTL and by Redis eviction policies (`maxmemory-policy`) but shouldn't be left unbounded.
+- **Remediation:**
+  1. Truncate `iss` and `sub` to the same 256-char cap `maxSubjectLogLen` before building the key. Rate-limit collisions on truncated buckets are acceptable — a subject longer than 256 chars is almost certainly not a legitimate CI runner.
+  2. Alternatively, hash the (iss, sub) tuple: `key := "workload:rate:" + hex.EncodeToString(sha256(iss + "\x00" + sub))` — fixed 64-byte key regardless of claim length, plus resolves the `:`-separator ambiguity noted in the comment.
+  3. Add `TestWorkloadHandler_LongSubjectDoesNotBloatKey`.
+- **References:** CLAUDE.md §7 (Input Validation), CWE-770 (Allocation of Resources Without Limits or Throttling).
+
+### SEC-062 — JWKS HTTP client only sets `Timeout`, missing `TLSHandshakeTimeout` + `ResponseHeaderTimeout`
+- **Severity:** LOW
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `services/auth/internal/service/oidc_trust.go:94` constructs `&http.Client{Timeout: 5 * time.Second}` with no explicit `Transport`. CLAUDE.md §13 requires all three timeouts to be set explicitly (`Timeout`, `TLSHandshakeTimeout`, `ResponseHeaderTimeout`) so a stalled TLS handshake or a slow header-write can't burn the full request budget silently. The 5-second wall-clock cap does provide an overall bound, so the risk is graduated — but the hardening rule exists precisely because operators reading `Timeout: 5s` don't realise a hostile server can consume 4.9s of TLS handshake before sending the first response byte.
+- **Remediation:**
+  1. Replace the `&http.Client{Timeout: 5 * time.Second}` literal with a fully-configured client:
+     ```go
+     jwksClient := &http.Client{
+       Timeout: 5 * time.Second,
+       Transport: &http.Transport{
+         TLSHandshakeTimeout:   3 * time.Second,
+         ResponseHeaderTimeout: 3 * time.Second,
+         MaxIdleConns:          10,
+         IdleConnTimeout:       90 * time.Second,
+       },
+     }
+     ```
+  2. Consider factoring this into `libs/net/httpclient` if a matching helper doesn't already exist.
+- **References:** CLAUDE.md §13 (HTTP clients: always set timeouts).
+
+### SEC-063 — Backend does not enforce HTTPS scheme on `issuer_url`; FE-only defense
+- **Severity:** INFO
+- **Status:** OPEN
+- **Service:** `services/auth`
+- **Raised:** 2026-07-01 (pre-PR review of `feat/fut-001-federated-workload-identity`)
+- **Description:** `frontend/src/components/access/CreateOIDCTrustDialog.tsx:123` enforces `issuerUrl.startsWith("https://")` client-side. The backend at `services/auth/internal/service/oidc_trust.go:validateOnCreate` and `oidc_issuer.go:issuerAllowed` accepts any scheme — a caller who bypasses the FE (curl with a bearer token) can register a trust with `http://` and the auth service will fetch the discovery + JWKS in plaintext. Currently not exploitable because the operator would also have to add the same `http://` prefix to `OIDC_ALLOWED_ISSUERS` env, which is an explicit operator opt-in. Defence-in-depth gap only — but the FE dialog's implicit contract ("BE agrees HTTPS is required") is broken.
+- **Remediation:**
+  1. In `validateOnCreate`, reject `!strings.HasPrefix(in.IssuerURL, "https://")` before the allowlist check. Same rule in `Update` if we ever open `issuer_url` for mutation.
+  2. Optionally reject `http://` entries at `ParseIssuerAllowlist` time (see SEC-057 remediation #2).
+- **References:** CLAUDE.md §17 (Secrets/network hardening — no plaintext egress), OWASP ASVS V9.1 (TLS everywhere), CWE-319 (Cleartext Transmission of Sensitive Information).
 
 ---
 

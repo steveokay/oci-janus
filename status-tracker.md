@@ -106,7 +106,15 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 - No FE success toast on trust create/delete (matches sibling `CreateServiceAccountDialog` — kept UX consistent). One-line sonner add if desired.
 - No `ci-management.yml` CI workflow (carried from REM-021 follow-up — same repo gap).
 - JWKS cache uses lazy-on-Fetch refresh instead of background 60s goroutine (spec mentions goroutine; functionally equivalent for the stated fail-closed invariant).
-- Rate-limit `INCR + unconditional EXPIRE` slides the TTL vs a strict fixed-window; still bounds to 100/60s.
+- **SEC-058 (MEDIUM)** — JWKS SSRF via unbound `jwks_uri`. Add scheme + host equality with issuer; disable client redirects; apply the private-IP blocklist from services/webhook. `services/auth/internal/service/oidc_jwks.go:131-189`. (security-agent 2026-07-01.)
+- **SEC-059 (MEDIUM)** — no response-body cap on JWKS/discovery fetch. Wrap `resp.Body` with `io.LimitReader(resp.Body, 1<<20)` before JSON decode. `services/auth/internal/service/oidc_jwks.go:207`. (security-agent 2026-07-01.)
+- **SEC-060 (MEDIUM)** — `JWKSCacheTTLSeconds` bounds not validated. Reject `TTL < 60 || TTL > 86400` in service validation + CHECK constraint migration. `services/auth/internal/service/oidc_trust.go:validateOnCreate/Update`. (security-agent 2026-07-01.)
+- **SEC-061 (LOW)** — workload rate-limit key length uncapped. Hash the `(iss, sub)` tuple into a fixed-length key or truncate both to 256 chars. `services/auth/internal/handler/http_workload_token.go:195`. (security-agent 2026-07-01.)
+- **SEC-062 (LOW)** — JWKS HTTP client lacks granular timeouts. Add explicit `Transport` with `TLSHandshakeTimeout: 3s` + `ResponseHeaderTimeout: 3s`. `services/auth/internal/service/oidc_trust.go:94`. (security-agent 2026-07-01.)
+- JWKS cache holds `sync.Mutex` across the HTTP round-trip — serialises fetches for DIFFERENT issuers too. Swap for `singleflight.Group` keyed on issuer URL. Not urgent given 16-issuer cap. `services/auth/internal/service/oidc_jwks.go:80-107`. (code-review-agent + qa-agent 2026-07-01.)
+- JWKS cache lacks an explicit parallel-fetch coalesce regression test (N goroutines → `calls.Load() == 1`). Add to `oidc_jwks_test.go`. (qa-agent 2026-07-01.)
+- Rejection audit events for `issuer_not_allowed` / `audience_mismatch` / parse-failure carry `TenantID = ""` and are silently dropped by the audit consumer's `uuid.Parse` guard. Publish to a synthetic "platform" tenant or extend the consumer to accept nil. Loses forensic visibility on brute-force attempts against unknown audiences. (code-review-agent 2026-07-01.)
+- Rate-limit `INCR + unconditional EXPIRE` slides the TTL vs a strict fixed-window; doc comment now describes the sliding behaviour honestly. Swap for `SET NX EX 60` + `INCR` if strict fixed-window is preferred. (code-review-agent 2026-07-01.)
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 

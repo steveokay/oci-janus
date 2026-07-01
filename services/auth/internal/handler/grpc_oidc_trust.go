@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -192,8 +191,3 @@ func oidcTrustToProto(t *repository.OIDCTrust) *authv1.OIDCTrust {
 	}
 }
 
-// Compile-time guarantee that we use errors.Is somewhere — keeps the
-// import live without adding behaviour. The service layer relies on
-// errors.Is for sentinel matching; the handler delegates to it via
-// status.FromError instead.
-var _ = errors.Is

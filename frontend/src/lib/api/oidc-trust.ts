@@ -6,11 +6,14 @@ import {
 import { apiClient } from "./client";
 
 // oidc-trust — TanStack Query hooks over the FUT-001 OIDC-trust REST
-// surface exposed by registry-auth at /api/v1/access/oidc-trust.
+// surface exposed by services/management (BFF) at /api/v1/access/oidc-trust.
 //
-// Vite dev proxy: /api/v1/access → http://localhost:8080 (registry-auth)
-// so no additional entry is needed in vite.config.ts — the existing
-// /api/v1/access rule covers this subtree.
+// The BFF proxies each call to services/auth via gRPC. Vite dev proxy has
+// an EXPLICIT `/api/v1/access/oidc-trust` → http://localhost:8091 entry
+// (management BFF) that MUST come before the more general
+// `/api/v1/access` → :8080 (auth) catchall, or Vite's first-match rule
+// sends the request to auth and every call silently 404s. See
+// vite.config.ts + commit 25be20c.
 //
 // Route reference (BE):
 //   GET    /api/v1/access/oidc-trust        List all trusts for the tenant

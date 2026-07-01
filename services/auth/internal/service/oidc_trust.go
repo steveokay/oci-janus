@@ -217,6 +217,14 @@ func (s *OIDCTrustService) validateOnCreate(ctx context.Context, in CreateOIDCTr
 	if strings.TrimSpace(in.IssuerURL) == "" {
 		return status.Error(codes.InvalidArgument, "issuer_url is required")
 	}
+	// SEC-063: reject plaintext HTTP issuers before the allowlist check.
+	// An HTTP issuer would leak the JWKS discovery to on-path attackers,
+	// and OIDC's discovery + signature-verification contracts assume TLS.
+	// The allowlist gate runs first if any prefix accidentally allows
+	// `http://`; the explicit check here is defence in depth.
+	if !strings.HasPrefix(in.IssuerURL, "https://") {
+		return status.Error(codes.InvalidArgument, "issuer_url must use https://")
+	}
 	if !issuerAllowed(s.allowedIssuers, in.IssuerURL) {
 		return status.Error(codes.InvalidArgument, "issuer_url not in OIDC_ALLOWED_ISSUERS")
 	}

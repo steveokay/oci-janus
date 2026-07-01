@@ -28,6 +28,27 @@ func TestIssuerAllowed(t *testing.T) {
 		{"any of multiple", []string{"https://a.example", "https://b.example"}, "https://b.example/foo", true},
 		{"empty issuer never allowed", []string{"https://token.actions.githubusercontent.com"}, "", false},
 		{"empty allowlist entry must not match everything", []string{""}, "https://token.actions.githubusercontent.com", false},
+
+		// SEC-057 regression tests — bare HasPrefix let an attacker
+		// register an issuer of `<allowed-prefix>.evil.com` and pass
+		// the allowlist gate. Fixed by requiring the character after
+		// the matched prefix to be `/` or end-of-string.
+		{"SEC-057: suffix-extended hostname rejected",
+			[]string{"https://token.actions.githubusercontent.com"},
+			"https://token.actions.githubusercontent.com.evil.com", false},
+		{"SEC-057: dashed suffix rejected",
+			[]string{"https://token.actions.githubusercontent.com"},
+			"https://token.actions.githubusercontent.com-evil.com", false},
+		{"SEC-057: subdomain lookalike rejected",
+			[]string{"https://gitlab.com"},
+			"https://gitlab.com.attacker.example", false},
+		{"SEC-057: legit path suffix still allowed (URL-path boundary)",
+			[]string{"https://gitlab.com"},
+			"https://gitlab.com/group/project", true},
+		{"SEC-057: exact match still allowed (end-of-string boundary)",
+			[]string{"https://gitlab.com"}, "https://gitlab.com", true},
+		{"SEC-057: trailing-slash allowlist matches deeper path",
+			[]string{"https://gitlab.com/"}, "https://gitlab.com/group", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

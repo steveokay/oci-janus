@@ -70,10 +70,19 @@ func newJWKSCache(client *http.Client) *jwksCache {
 }
 
 // Fetch returns the issuer's public keys keyed by `kid`. Hits the network
-// on first request or after TTL expiry; mutex-guarded so concurrent
-// callers share a single inflight fetch.
+// on first request or after TTL expiry.
 //
-// Fail-closed on network errors: returns an error rather than serving
+// **Concurrency:** the cache is guarded by a single mutex held across the
+// HTTP fetch. Concurrent callers for the SAME issuer therefore serialise +
+// share one HTTP round-trip (the second caller re-checks the cache after
+// acquiring the mutex and finds the refreshed entry). Concurrent callers
+// for DIFFERENT issuers also serialise, which is a throughput cost that
+// only bites at high concurrency across many distinct issuers — the
+// typical self-hoster shape (1–2 issuers total, well under the 16-issuer
+// cap) makes this a non-issue in practice. See REM-023 follow-up for the
+// `singleflight.Group` upgrade path if a multi-issuer deployment starves.
+//
+// **Fail-closed on network errors:** returns an error rather than serving
 // stale entries. Callers translate the error to codes.Unavailable so the
 // CI runner gets a retryable response.
 func (c *jwksCache) Fetch(ctx context.Context, issuer string, ttl time.Duration) (map[string]*rsa.PublicKey, error) {
