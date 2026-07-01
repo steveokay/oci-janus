@@ -72,6 +72,8 @@ const (
 	MetadataService_MarkManifestRetentionPending_FullMethodName    = "/registry.metadata.v1.MetadataService/MarkManifestRetentionPending"
 	MetadataService_ClearManifestRetentionPending_FullMethodName   = "/registry.metadata.v1.MetadataService/ClearManifestRetentionPending"
 	MetadataService_ListPendingDeleteManifests_FullMethodName      = "/registry.metadata.v1.MetadataService/ListPendingDeleteManifests"
+	MetadataService_PromoteTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/PromoteTag"
+	MetadataService_ListPromotions_FullMethodName                  = "/registry.metadata.v1.MetadataService/ListPromotions"
 	MetadataService_LookupOrgIDByName_FullMethodName               = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
 )
 
@@ -264,6 +266,21 @@ type MetadataServiceClient interface {
 	// which already cascades to blob cleanup via the orphan path. Keeps this
 	// RPC a single-table scan instead of an N-way join against blob_links.
 	ListPendingDeleteManifests(ctx context.Context, in *ListPendingDeleteManifestsRequest, opts ...grpc.CallOption) (*ListPendingDeleteManifestsResponse, error)
+	// ─── FUT-020: image promotion (atomic tag copy with digest verify) ─────────
+	//
+	// A promotion copies a source tag's manifest digest onto a destination
+	// {org}/{repo}:{tag} in ONE transaction and records a `promotions` row for
+	// history + audit. No blobs are copied — both tags reference the same
+	// manifest digest so storage stays deduplicated.
+	//
+	// Errors surface as:
+	//   - NotFound: source tag or destination repository does not exist.
+	//   - FailedPrecondition: destination has immutable_tags AND the destination
+	//     tag already exists at a DIFFERENT manifest digest (i.e. would be a
+	//     move). Idempotent — a re-promotion onto the same digest succeeds and
+	//     records a second promotions row for audit continuity.
+	PromoteTag(ctx context.Context, in *PromoteTagRequest, opts ...grpc.CallOption) (*Promotion, error)
+	ListPromotions(ctx context.Context, in *ListPromotionsRequest, opts ...grpc.CallOption) (*ListPromotionsResponse, error)
 	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
 	// Read-only — unlike the repository-internal GetOrCreateOrganization
 	// which has insert semantics, this RPC returns NotFound when the org
@@ -894,6 +911,26 @@ func (c *metadataServiceClient) ListPendingDeleteManifests(ctx context.Context, 
 	return out, nil
 }
 
+func (c *metadataServiceClient) PromoteTag(ctx context.Context, in *PromoteTagRequest, opts ...grpc.CallOption) (*Promotion, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Promotion)
+	err := c.cc.Invoke(ctx, MetadataService_PromoteTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListPromotions(ctx context.Context, in *ListPromotionsRequest, opts ...grpc.CallOption) (*ListPromotionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPromotionsResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListPromotions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) LookupOrgIDByName(ctx context.Context, in *LookupOrgIDByNameRequest, opts ...grpc.CallOption) (*LookupOrgIDByNameResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupOrgIDByNameResponse)
@@ -1093,6 +1130,21 @@ type MetadataServiceServer interface {
 	// which already cascades to blob cleanup via the orphan path. Keeps this
 	// RPC a single-table scan instead of an N-way join against blob_links.
 	ListPendingDeleteManifests(context.Context, *ListPendingDeleteManifestsRequest) (*ListPendingDeleteManifestsResponse, error)
+	// ─── FUT-020: image promotion (atomic tag copy with digest verify) ─────────
+	//
+	// A promotion copies a source tag's manifest digest onto a destination
+	// {org}/{repo}:{tag} in ONE transaction and records a `promotions` row for
+	// history + audit. No blobs are copied — both tags reference the same
+	// manifest digest so storage stays deduplicated.
+	//
+	// Errors surface as:
+	//   - NotFound: source tag or destination repository does not exist.
+	//   - FailedPrecondition: destination has immutable_tags AND the destination
+	//     tag already exists at a DIFFERENT manifest digest (i.e. would be a
+	//     move). Idempotent — a re-promotion onto the same digest succeeds and
+	//     records a second promotions row for audit continuity.
+	PromoteTag(context.Context, *PromoteTagRequest) (*Promotion, error)
+	ListPromotions(context.Context, *ListPromotionsRequest) (*ListPromotionsResponse, error)
 	// LookupOrgIDByName resolves an org name to its UUID within a tenant.
 	// Read-only — unlike the repository-internal GetOrCreateOrganization
 	// which has insert semantics, this RPC returns NotFound when the org
@@ -1262,6 +1314,12 @@ func (UnimplementedMetadataServiceServer) ClearManifestRetentionPending(context.
 }
 func (UnimplementedMetadataServiceServer) ListPendingDeleteManifests(context.Context, *ListPendingDeleteManifestsRequest) (*ListPendingDeleteManifestsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPendingDeleteManifests not implemented")
+}
+func (UnimplementedMetadataServiceServer) PromoteTag(context.Context, *PromoteTagRequest) (*Promotion, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PromoteTag not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListPromotions(context.Context, *ListPromotionsRequest) (*ListPromotionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPromotions not implemented")
 }
 func (UnimplementedMetadataServiceServer) LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupOrgIDByName not implemented")
@@ -2226,6 +2284,42 @@ func _MetadataService_ListPendingDeleteManifests_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_PromoteTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PromoteTagRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PromoteTag(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PromoteTag_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PromoteTag(ctx, req.(*PromoteTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListPromotions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPromotionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListPromotions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListPromotions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListPromotions(ctx, req.(*ListPromotionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_LookupOrgIDByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LookupOrgIDByNameRequest)
 	if err := dec(in); err != nil {
@@ -2442,6 +2536,14 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPendingDeleteManifests",
 			Handler:    _MetadataService_ListPendingDeleteManifests_Handler,
+		},
+		{
+			MethodName: "PromoteTag",
+			Handler:    _MetadataService_PromoteTag_Handler,
+		},
+		{
+			MethodName: "ListPromotions",
+			Handler:    _MetadataService_ListPromotions_Handler,
 		},
 		{
 			MethodName: "LookupOrgIDByName",

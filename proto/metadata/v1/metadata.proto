@@ -232,6 +232,22 @@ service MetadataService {
   // RPC a single-table scan instead of an N-way join against blob_links.
   rpc ListPendingDeleteManifests(ListPendingDeleteManifestsRequest) returns (ListPendingDeleteManifestsResponse);
 
+  // ─── FUT-020: image promotion (atomic tag copy with digest verify) ─────────
+  //
+  // A promotion copies a source tag's manifest digest onto a destination
+  // {org}/{repo}:{tag} in ONE transaction and records a `promotions` row for
+  // history + audit. No blobs are copied — both tags reference the same
+  // manifest digest so storage stays deduplicated.
+  //
+  // Errors surface as:
+  //   - NotFound: source tag or destination repository does not exist.
+  //   - FailedPrecondition: destination has immutable_tags AND the destination
+  //     tag already exists at a DIFFERENT manifest digest (i.e. would be a
+  //     move). Idempotent — a re-promotion onto the same digest succeeds and
+  //     records a second promotions row for audit continuity.
+  rpc PromoteTag(PromoteTagRequest) returns (Promotion);
+  rpc ListPromotions(ListPromotionsRequest) returns (ListPromotionsResponse);
+
   // LookupOrgIDByName resolves an org name to its UUID within a tenant.
   // Read-only — unlike the repository-internal GetOrCreateOrganization
   // which has insert semantics, this RPC returns NotFound when the org
@@ -1031,4 +1047,66 @@ message PendingDeleteManifest {
   string                    digest        = 4;
   int64                     size_bytes    = 5;
   google.protobuf.Timestamp pending_since = 6;
+}
+
+// ─── FUT-020: image promotion messages ─────────────────────────────────────
+
+// PromoteTagRequest carries every field the metadata RPC needs to resolve the
+// source tag → destination tag copy inside one transaction. Src_* names the
+// source; dst_* names the destination. actor_user_id is the JWT-derived user
+// id from the BFF; note is an optional operator-visible comment surfaced in
+// the promotion history table and mirrored into the audit event metadata.
+message PromoteTagRequest {
+  string tenant_id     = 1;
+  string src_org       = 2;
+  string src_repo      = 3;
+  string src_tag       = 4;
+  string dst_org       = 5;
+  string dst_repo      = 6;
+  string dst_tag       = 7;
+  string actor_user_id = 8;
+  string note          = 9;
+}
+
+// Promotion is the wire form of one promotions row.
+//
+// src_digest is captured at promotion time from the source tag's live
+// manifest_digest — this is intentionally NOT re-resolved on read so a later
+// retag of the source doesn't rewrite the promotion history. dst_digest is
+// the manifest_digest set on the destination tag by this promotion; today it
+// equals src_digest (the point IS atomic tag copy) but the columns are split
+// so a future re-sign / retag workflow can diverge them without a schema
+// migration.
+message Promotion {
+  string                     id            = 1;
+  string                     tenant_id     = 2;
+  string                     src_org       = 3;
+  string                     src_repo      = 4;
+  string                     src_tag       = 5;
+  string                     src_digest    = 6;
+  string                     dst_org       = 7;
+  string                     dst_repo      = 8;
+  string                     dst_tag       = 9;
+  string                     dst_digest    = 10;
+  string                     actor_user_id = 11;
+  string                     note          = 12;
+  google.protobuf.Timestamp  promoted_at   = 13;
+}
+
+// ListPromotionsRequest scopes to tenant and (optionally) an org+repo pair.
+// A non-empty org (or org+repo) filter matches rows where EITHER the source
+// OR the destination matches — the "promotions touching this repo" question
+// wants both sides of the copy, so a single-sided WHERE would surface only
+// half the history for the repo detail page.
+//
+// limit is clamped server-side to [1, 200] with a default of 50.
+message ListPromotionsRequest {
+  string tenant_id = 1;
+  string org       = 2;
+  string repo      = 3;
+  int32  limit     = 4;
+}
+
+message ListPromotionsResponse {
+  repeated Promotion promotions = 1;
 }
