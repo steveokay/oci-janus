@@ -92,20 +92,20 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 
 ---
 
-### REM-025 — FUT-003 Token policies (in flight)
+### REM-026 — FUT-004 Access review (in flight)
 
-**Affects:** `services/auth` (new `token_policies` table + `api_keys.rotation_due_at` / `revoke_reason` columns + `TokenPolicyService` + Redis-debounced `last_used_at` updater + hourly `idle_revoke` worker with per-tenant advisory lock + 2 new gRPC RPCs), `services/audit` (2 new mapEvent cases: `auth.token_policy.changed` + `auth.key_revoked` with reason enum), `services/management` (2 BFF admin routes at `/api/v1/access/token-policy`), `frontend` (new `PoliciesPanel` replacing preview + `useTokenPolicy` hooks + sidebar graduation).
+**Affects:** `services/auth` (new `api_keys.review_snoozed_until` column + `AccessReviewService` + weekly worker with per-tenant advisory lock + 2 new gRPC RPCs + 2 new audit events), `services/audit` (2 new mapEvent cases), `services/management` (2 BFF admin routes at `/api/v1/access/review/*`), `frontend` (new `ReviewPanel` replacing preview + `useStaleKeys` / `useSnoozeKey` hooks + Preview section FULL RETIREMENT).
 
-**Status:** IN FLIGHT on `feat/fut-003-token-policies`. Third of the FUT-001..FUT-004 batch (FUT-002 shipped #221; FUT-001 shipped #224; FUT-004 to follow — hard-depends on this PR's `last_used_at` + `rotation_due_at` columns). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 3. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). Test-fix `045f3b4` folded inline (pre-existing regression from PR #224's SEC-063).
+**Status:** IN FLIGHT on `feat/fut-004-access-review`. FINAL of the FUT-001..FUT-004 batch (FUT-002 #221, FUT-001 #224, FUT-003 #225+#226 hotfix). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 4. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). **This PR retires the entire Preview section from the sidebar** — Preview count 1 → 0.
 
-**Plan:** `docs/superpowers/plans/2026-07-01-fut-003-token-policies.md`.
+**Plan:** `docs/superpowers/plans/2026-07-01-fut-004-access-review.md`.
 
 **Follow-ups (non-blocking, file on merge):**
-- `rotation_due_at` is stamped via a follow-up `SetRotationDueAt` UPDATE rather than the initial INSERT in `CreateAPIKey`. On UPDATE failure the key is still created (best-effort with slog warn). Fold into the initial INSERT for atomicity. (BE spec-review 2026-07-01.)
-- Audit consumer's `RoutingKeyRevoked` mapping stamps `ActorID = "system"` unconditionally; the `if p.Reason == "manual"` branch is a no-op placeholder for future manual-actor plumbing. (BE spec-review 2026-07-01.)
-- `APIKey.RotationDueAt` + `RevokeReason` fields exist on the struct but are NOT threaded into existing `GetByID` / `ListByUser` / `ListByServiceAccount` scans (matches documented adaptation). Thread through when a caller needs them.
-- Missing regression test asserting a null `max_ttl_days` from the server renders the section as disabled with fallback default (FE spec-review 2026-07-01.)
-- Idle-revoke worker: no test explicitly asserts that a tenant with `idle_revoke_days = null` is skipped without acquiring the advisory lock.
+- BFF SNOOZE gate resolves key ownership via a `ListStaleKeys` pre-flight scan (no `GetAPIKey` RPC exists). Extra RPC + O(n) scan per non-admin snooze. If stale-set size grows, add a dedicated `GetAPIKey` or thread `owner_user_id` back through `SnoozeAPIKeyReview`. (BFF adaptation, 2026-07-01.)
+- No advisory-lock unit test (structurally correct in code; only test coverage gap). (BE spec-review 2026-07-01.)
+- No fake-clock worker cadence test asserting the weekly period + immediate first tick. (BE spec-review 2026-07-01.)
+- Sidebar `readPreviewOpen` + `PREVIEW_OPEN_KEY` state fully removed (past adaptation); `SubNavItem.preview` flag on the type retained for future preview surfaces. Retirement is complete.
+- Spec's "Send review reminders to owners" footer button not implemented — plan §Task 10 explicitly narrowed scope; treat as documented divergence, revisit when FUT-019 email channel lands.
 
 **On merge:** remove this entry; append a resolution row to `status.md`.
 

@@ -437,6 +437,12 @@ agent-style.
 </details>
 
 ### FUT-004: Access review (quarterly stale-key nudge) — Sprint 12
+
+**DONE — see `status.md` (REM-026).** Design history preserved below.
+
+<details>
+<summary>Original FUT-004 design (pre-implementation)</summary>
+
 - **Why:** Without a periodic review prompt, stale keys accumulate silently.
   Security auditors expect to see evidence that access is re-certified.
 - **What:** Scheduled job emits `auth.access_review_due` audit events (and
@@ -444,6 +450,8 @@ agent-style.
   keys not used in that window. `/api-keys` Review tab (preview surface already
   shipped) surfaces the list with bulk-revoke action. Platform admin can
   configure the interval per tenant via a new settings field.
+
+</details>
 
 ### FUT-005: Wire ActivityService audit gRPC client — DONE (sprint-11 maint batch 1)
 - **Resolution:** Closed 2026-06-22. Added `AUDIT_GRPC_ADDR` to
