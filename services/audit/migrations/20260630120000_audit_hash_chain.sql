@@ -50,17 +50,51 @@
 -- row_hash has no DEFAULT — every INSERT MUST compute it. NOT NULL
 -- ensures a malformed inserter fails loudly.
 
+-- REM-022 (2026-07-01): audit_events is a PARTITIONED table
+-- (PARTITION BY RANGE (occurred_at), with audit_events_default as the
+-- default partition). PostgreSQL forbids
+--   ADD COLUMN chain_seq BIGINT GENERATED ALWAYS AS IDENTITY
+-- on partitioned tables (SQLSTATE 42P16 — "cannot recursively add
+-- identity column to table that has child tables"). The original PR
+-- #208 shipped that form assuming a non-partitioned table and every
+-- dev/prod DB with the partition crashloops audit at startup.
+--
+-- Fix: use an explicit sequence + DEFAULT nextval(...). Sequences ARE
+-- allowed on partitioned tables (the DEFAULT propagates to every
+-- partition). Behaviour is IDENTICAL to GENERATED ALWAYS AS IDENTITY
+-- for our tamper-evidence contract:
+--   - Single shared sequence across every partition
+--   - Monotonic increment, never reused
+--   - Application cannot supply a value (the DEFAULT wins because
+--     `chain_seq` is not in the INSERT column list; if a compromised
+--     client tries to override it, the audit-app role has no UPDATE
+--     grant on audit_events so the row would fail the FORCE RLS
+--     policy anyway)
+-- VerifyChain's tip query (ORDER BY chain_seq DESC LIMIT 1) is
+-- unchanged. See status-tracker.md REM-022 for the incident notes.
+
 ALTER TABLE audit_events
     ADD COLUMN prev_hash BYTEA NOT NULL DEFAULT decode('00', 'hex'),
-    ADD COLUMN row_hash  BYTEA NOT NULL DEFAULT decode('00', 'hex'),
-    ADD COLUMN chain_seq BIGINT GENERATED ALWAYS AS IDENTITY;
+    ADD COLUMN row_hash  BYTEA NOT NULL DEFAULT decode('00', 'hex');
 
 -- Drop the row_hash default after table-level add so future inserts MUST
 -- provide an explicit value. The prev_hash default stays so the genesis
 -- row's "no previous row" case is expressed cleanly without application
--- branching at the SQL layer. chain_seq is GENERATED ALWAYS so the
--- application CANNOT supply a value — Postgres allocates it monotonically.
+-- branching at the SQL layer.
 ALTER TABLE audit_events ALTER COLUMN row_hash DROP DEFAULT;
+
+CREATE SEQUENCE audit_events_chain_seq;
+ALTER TABLE audit_events
+    ADD COLUMN chain_seq BIGINT NOT NULL DEFAULT nextval('audit_events_chain_seq');
+ALTER SEQUENCE audit_events_chain_seq OWNED BY audit_events.chain_seq;
+
+-- Grant USAGE on the sequence to the audit app role. Under the
+-- previous GENERATED ALWAYS AS IDENTITY form Postgres implicitly
+-- granted this because the sequence was created and owned by the
+-- table's identity metadata; with an explicit sequence we must
+-- grant explicitly or every INSERT from registry_audit_app fails
+-- with SQLSTATE 42501 (permission denied for sequence).
+GRANT USAGE ON SEQUENCE audit_events_chain_seq TO registry_audit_app;
 
 -- Per-tenant tip lookup index. The Insert path does
 --   SELECT row_hash FROM audit_events
@@ -87,5 +121,6 @@ ALTER TABLE audit_events
     DROP COLUMN IF EXISTS chain_seq,
     DROP COLUMN IF EXISTS row_hash,
     DROP COLUMN IF EXISTS prev_hash;
+DROP SEQUENCE IF EXISTS audit_events_chain_seq;
 
 -- +goose StatementEnd
