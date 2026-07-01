@@ -19,11 +19,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -731,6 +733,18 @@ type RepoResponse struct {
 	// false; flip via PATCH /repositories/{org}/{repo} with
 	// `{"require_signature": true}`.
 	RequireSignature bool `json:"require_signature"`
+	// FUT-021 — CVSS-gated admission. Nullable integer 0-100 (standard
+	// CVSS v3.1 range rescaled to ints). Null = no gate; a non-null
+	// value activates the threshold — pulls fail with 403 DENIED when
+	// the top scan CVSS score exceeds it. Flip via PATCH
+	// /repositories/{org}/{repo} with `{"max_cvss_score": 70}` (set)
+	// or `{"max_cvss_score": null}` (clear).
+	//
+	// Wire form is a *int32 so encoding/json distinguishes "omitted"
+	// from "explicit null" AND from "0". The response uses omitempty
+	// on the plain int32 field would collapse 0 with unset — the
+	// pointer preserves the distinction.
+	MaxCVSSScore *int32 `json:"max_cvss_score"`
 }
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +868,64 @@ type updateRepositoryBody struct {
 	// ImmutableTags above — a separate RPC fires so the audit log
 	// shows the security-relevant transition explicitly.
 	RequireSignature *bool `json:"require_signature,omitempty"`
+
+	// FUT-021 — CVSS admission threshold. Three-state field:
+	//   - key absent (MaxCVSSScoreSet=false)    → leave unchanged
+	//   - key present with null / integer      → apply as clear / set
+	//
+	// encoding/json alone can't distinguish "explicit null" from
+	// "key missing" for a nullable pointer, so we pair the pointer
+	// with a Set flag populated in a custom UnmarshalJSON below.
+	// This mirrors the FUT-004 access-review "extend indefinitely"
+	// pattern that landed in PR #227.
+	MaxCVSSScore    *int32 `json:"-"`
+	MaxCVSSScoreSet bool   `json:"-"`
+}
+
+// UnmarshalJSON is a hand-rolled decoder that distinguishes "field not
+// present in the body" from "field set to null" for MaxCVSSScore.
+// encoding/json's default behaviour maps both to a nil pointer, which
+// would prevent operators from clearing the threshold via a PATCH — the
+// handler couldn't tell "leave alone" from "clear".
+//
+// Implementation note: `map[string]json.RawMessage` is the reliable way
+// to detect key presence — a struct-tagged *json.RawMessage with
+// `omitempty` collapses "explicit null" into "absent", which would defeat
+// the three-state contract this file exists to enforce.
+func (u *updateRepositoryBody) UnmarshalJSON(data []byte) error {
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if v, ok := raw["description"]; ok {
+		if err := json.Unmarshal(v, &u.Description); err != nil {
+			return fmt.Errorf("description: %w", err)
+		}
+	}
+	if v, ok := raw["immutable_tags"]; ok {
+		if err := json.Unmarshal(v, &u.ImmutableTags); err != nil {
+			return fmt.Errorf("immutable_tags: %w", err)
+		}
+	}
+	if v, ok := raw["require_signature"]; ok {
+		if err := json.Unmarshal(v, &u.RequireSignature); err != nil {
+			return fmt.Errorf("require_signature: %w", err)
+		}
+	}
+	if v, ok := raw["max_cvss_score"]; ok {
+		u.MaxCVSSScoreSet = true
+		trimmed := strings.TrimSpace(string(v))
+		if trimmed == "null" {
+			u.MaxCVSSScore = nil
+			return nil
+		}
+		var n int32
+		if err := json.Unmarshal(v, &n); err != nil {
+			return fmt.Errorf("max_cvss_score: %w", err)
+		}
+		u.MaxCVSSScore = &n
+	}
+	return nil
 }
 
 func (h *Handler) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
@@ -1444,7 +1516,7 @@ func (h *Handler) findRepo(r *http.Request, tenantID, org, repoName string) (*me
 
 // repoToResponse converts a proto Repository message to its JSON wire form.
 func repoToResponse(r *metadatav1.Repository) RepoResponse {
-	return RepoResponse{
+	resp := RepoResponse{
 		RepoID:           r.GetRepoId(),
 		OrgID:            r.GetOrgId(),
 		Org:              r.GetOrg(),
@@ -1457,6 +1529,14 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 		ImmutableTags:    r.GetImmutableTags(),
 		RequireSignature: r.GetRequireSignature(),
 	}
+	// FUT-021 — surface the CVSS threshold when set; nil pointer keeps
+	// the response field as JSON `null` so the FE can render "no gate"
+	// distinctly from "threshold 0".
+	if r.GetMaxCvssScore() != nil {
+		v := r.GetMaxCvssScore().GetValue()
+		resp.MaxCVSSScore = &v
+	}
+	return resp
 }
 
 // ---------------------------------------------------------------------------
@@ -1541,6 +1621,74 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		repo = updated
+	}
+
+	// FUT-021 — CVSS admission threshold flip. Three-state pointer:
+	//   MaxCVSSScoreSet=false            → leave alone (key absent)
+	//   Set=true, MaxCVSSScore=nil       → clear the gate (JSON null)
+	//   Set=true, MaxCVSSScore=&value    → set threshold
+	//
+	// Range validation happens both here (fast 400) and on the metadata
+	// gRPC handler (safety net + CHECK constraint on the column). The
+	// duplication is intentional — the FE gets a clean 400 instead of a
+	// 500 wrapping the gRPC error.
+	if body.MaxCVSSScoreSet {
+		var wrapper *wrapperspb.Int32Value
+		if body.MaxCVSSScore != nil {
+			v := *body.MaxCVSSScore
+			if v < 0 || v > 100 {
+				writeError(w, http.StatusBadRequest, "max_cvss_score must be in [0, 100]")
+				return
+			}
+			wrapper = wrapperspb.Int32(v)
+		}
+		// captureBefore captures the pre-flip value from the last known
+		// repo state so the audit event can render "70 → 90" style
+		// transitions. Uses `existing` because `repo` may already be a
+		// version with unrelated updates (description + immutability +
+		// signature) applied above.
+		var before *int32
+		if existing.GetMaxCvssScore() != nil {
+			b := existing.GetMaxCvssScore().GetValue()
+			before = &b
+		}
+		updated, err := h.meta.UpdateRepositoryCVSSPolicy(r.Context(), &metadatav1.UpdateRepositoryCVSSPolicyRequest{
+			TenantId:     tenantID,
+			RepoId:       existing.GetRepoId(),
+			MaxCvssScore: wrapper,
+		})
+		if err != nil {
+			slog.Error("UpdateRepositoryCVSSPolicy", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update CVSS policy")
+			return
+		}
+		repo = updated
+		// Fire the audit event. Publish failure is logged but doesn't
+		// fail the response — the durable state is already updated.
+		// (Same posture as the FUT-020 promotion publisher.)
+		if h.pub != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			payload, _ := json.Marshal(events.RepoCVSSPolicyChangedPayload{
+				TenantID: tenantID,
+				Org:      org,
+				Repo:     repoName,
+				ActorID:  middleware.UserIDFromContext(r.Context()),
+				Before:   before,
+				After:    body.MaxCVSSScore,
+			})
+			ev := events.Event{
+				ID:         uuid.New().String(),
+				Type:       events.RoutingRepoCVSSPolicyChanged,
+				TenantID:   tenantID,
+				OccurredAt: time.Now(),
+				Version:    "1.0",
+				Payload:    payload,
+			}
+			if pubErr := h.pub.Publish(ctx, events.RoutingRepoCVSSPolicyChanged, ev); pubErr != nil {
+				slog.Warn("publish repo.cvss_policy.changed", "err", pubErr, "repo_id", existing.GetRepoId())
+			}
+			cancel()
+		}
 	}
 
 	writeJSON(w, http.StatusOK, repoToResponse(repo))
