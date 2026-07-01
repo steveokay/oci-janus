@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Tag as TagIcon,
   ShieldCheck,
+  Ship,
   Trash2,
   RefreshCw,
   Pin,
@@ -15,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CopyButton } from "@/components/ui/copy-button";
+import { PromoteTagDialog } from "@/components/repositories/PromoteTagDialog";
 import { formatAbsoluteDate, formatBytes } from "@/lib/format";
 import { usePinTag, useUnpinTag } from "@/lib/api/tags";
 import type { Tag } from "@/lib/api/types";
@@ -52,6 +54,9 @@ export function TagHeader({
   const unpin = useUnpinTag();
   const pinning = pin.isPending || unpin.isPending;
   const pinned = Boolean(tag?.immutable);
+  // FUT-020 — promote dialog. Kept local to the header so the button
+  // that opens it and the dialog itself stay co-located.
+  const [promoteOpen, setPromoteOpen] = React.useState(false);
 
   async function togglePin(): Promise<void> {
     try {
@@ -163,6 +168,21 @@ export function TagHeader({
             )}
             {scanRunning ? "Scan in flight" : "Rescan"}
           </Button>
+          {/* FUT-020 — Promote. Opens the PromoteTagDialog which posts to */}
+          {/* POST /promote. Hidden until the tag row loads so the button   */}
+          {/* action reflects a real digest (the dialog only shows the tag  */}
+          {/* name, but the mutation targets the current manifest).         */}
+          {tag ? (
+            <Button
+              variant="outline"
+              onClick={() => setPromoteOpen(true)}
+              disabled={pinning}
+              title="Promote this tag onto a destination tag (atomic copy — no blobs are duplicated)."
+            >
+              <Ship className="size-4" />
+              Promote
+            </Button>
+          ) : null}
           {/* Futures.md Tier 1 #2 — Pin / Unpin. Hidden until the tag */}
           {/* loads so the button doesn't briefly render in the wrong  */}
           {/* state on first paint.                                    */}
@@ -197,6 +217,16 @@ export function TagHeader({
           </Button>
         </div>
       </div>
+
+      {/* FUT-020 — PromoteTagDialog is mounted here so the trigger button */}
+      {/* and dialog element live in one file. Only renders when open.    */}
+      <PromoteTagDialog
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+        srcOrg={org}
+        srcRepo={repo}
+        srcTag={tagName}
+      />
     </div>
   );
 }
