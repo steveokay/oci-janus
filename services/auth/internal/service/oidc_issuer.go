@@ -43,6 +43,13 @@ func issuerAllowed(allow []string, issuer string) bool {
 	return false
 }
 
+// ParseIssuerAllowlist is the exported alias of parseIssuerAllowlist.
+// Server startup uses this to translate the OIDC_ALLOWED_ISSUERS env
+// CSV into a slice the constructor can consume.
+func ParseIssuerAllowlist(csv string) []string {
+	return parseIssuerAllowlist(csv)
+}
+
 // parseIssuerAllowlist splits a comma-separated env value into a list of
 // trusted issuer prefixes. Whitespace-only entries are dropped; the rest
 // are returned in original order. Used by the Service constructor and

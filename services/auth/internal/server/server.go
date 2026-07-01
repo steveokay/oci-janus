@@ -133,7 +133,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	healthSrv := grpchealth.NewServer()
 	healthpb.RegisterHealthServer(grpcSrv, healthSrv)
-	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc, pub))
+	// FUT-001: build the audit emitter + OIDC trust service early so
+	// both the gRPC handler and (later in §5a) the HTTP handler share
+	// the same instance. The audit emitter is the same one used by
+	// ServiceAccountService — it dispatches on AuditEvent.Action to
+	// pick the right routing key + payload shape (see rabbitMQAuditEmitter).
+	var saAudit service.AuditEmitter = slogAuditEmitter{}
+	if pub != nil {
+		saAudit = rabbitMQAuditEmitter{pub: pub}
+	}
+	oidcSvc := service.NewOIDCTrustService(
+		repository.NewOIDCTrustRepo(pool),
+		repository.NewServiceAccountRepo(pool),
+		svc,
+		saAudit,
+		service.ParseIssuerAllowlist(cfg.OIDCAllowedIssuers),
+	)
+	authv1.RegisterAuthServiceServer(grpcSrv, handler.NewGRPCHandler(svc, pub).WithOIDCTrustService(oidcSvc))
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -157,16 +173,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// The audit emitter is a slog-only placeholder for now; durable audit
 	// emission via RabbitMQ is a follow-up (FUT) item. The router accepts
 	// *redis.Client directly — it satisfies the RedisCmdable interface.
-	// FE-API-048 FUT-007: when a RabbitMQ publisher is wired, every SA
+	// FE-API-048 FUT-007: the saAudit emitter was built earlier (above
+	// gRPC registration) so it could be shared with the FUT-001 OIDC
+	// trust service. When a RabbitMQ publisher is wired, every SA
 	// lifecycle event lands on events.RoutingServiceAccountLifecycle so
 	// registry-audit can persist them as audit_events rows. Without a
 	// broker (dev stacks) the slog stand-in keeps the trail visible in
 	// container logs at INFO level — useful for local debugging but
 	// invisible to the activity feed and audit dashboards.
-	var saAudit service.AuditEmitter = slogAuditEmitter{}
-	if pub != nil {
-		saAudit = rabbitMQAuditEmitter{pub: pub}
-	}
 	saSvc := service.NewServiceAccountService(
 		repository.NewServiceAccountRepo(pool),
 		users,
@@ -182,6 +196,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// to "immediately").
 	saSvc.SetAPIKeyCacheInvalidator(svc.InvalidateAPIKeyCache)
 	httpH = httpH.WithServiceAccountService(saSvc)
+
+	// ── 5a.1. Wire the FUT-001 OIDC trust service into the HTTP handler.
+	// The service itself was constructed before the gRPC server (so the
+	// gRPC handler could pick it up); we just attach it to the HTTP
+	// handler here so POST /auth/token/workload is served.
+	httpH = httpH.WithWorkloadExchange(oidcSvc, rdb)
+	slog.Info("OIDC trust service wired",
+		"allowed_issuers", cfg.OIDCAllowedIssuers,
+	)
 
 	// ── 5b. Activity service (FE-API-048 FUT-005) ────────────────────────
 	// Dial registry-audit's gRPC server so /api/v1/access/activity can

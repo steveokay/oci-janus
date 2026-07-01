@@ -159,6 +159,18 @@ type Config struct {
 	//
 	// QA-006: env reads moved here from an init() in the handler package.
 	TrustedProxyCIDRs string `mapstructure:"TRUSTED_PROXY_CIDRS"`
+
+	// OIDCAllowedIssuers is the CSV of trusted OIDC issuer URL prefixes
+	// for FUT-001 federated workload identity. The same allowlist gates
+	// BOTH trust-create (at admin time) AND token-exchange (at runtime),
+	// so removing an issuer here stops minting on the next exchange even
+	// without a DB change.
+	//
+	// Empty/unset rejects ALL trust creation and ALL exchange requests
+	// (fail-closed default for self-hosters who haven't named their CI
+	// runners' IdPs yet). No production validation — empty is a valid
+	// "feature off" state.
+	OIDCAllowedIssuers string `mapstructure:"OIDC_ALLOWED_ISSUERS"`
 }
 
 // Load binds environment variables into Config and validates required fields.
