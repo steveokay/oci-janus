@@ -124,6 +124,22 @@ const (
 	// surfaces.
 	RoutingAccessReviewDue     = "auth.access_review.due"
 	RoutingAccessReviewSnoozed = "auth.access_review.snoozed"
+
+	// FUT-020 — image promotion.
+	//
+	// RoutingImagePromoted fires from services/management's BFF handler
+	// after a successful metadata.PromoteTag call. Carries the full
+	// promotion identity (src + dst side + digests + actor + note) so the
+	// audit consumer + notification bell + webhook receiver can render the
+	// event without a callback into services/metadata.
+	//
+	// Publish-side is BFF, not metadata, because emitting from inside the
+	// tx would deliver a "promotion happened" event for a promotion that
+	// might not actually commit — waiting until after Commit but before
+	// return keeps the durable state authoritative. Publish failure is
+	// logged but does NOT fail the response — the promotion is already
+	// durable and audit can be replayed from the promotions table.
+	RoutingImagePromoted = "image.promoted"
 )
 
 // Exchange names
@@ -489,6 +505,33 @@ type AccessReviewDuePayload struct {
 	Name        string `json:"name"`
 	Reason      string `json:"reason"` // "idle" | "rotation_lapsed" | "both"
 	DaysIdle    int32  `json:"days_idle,omitempty"`
+}
+
+// ImagePromotedPayload is the wire shape of image.promoted (FUT-020).
+//
+// Captures the full promotion identity at emit time so the audit + webhook
+// consumers don't need to callback into services/metadata. src_digest and
+// dst_digest are stamped separately so a future re-sign / retag workflow
+// where the destination diverges from the source has a clean data path.
+// Today src_digest == dst_digest by design (see the promotions table
+// migration for details).
+//
+// ActorUserID is empty on CLI / bot-driven promotions where the API-key
+// owner is a service account with no human user attribution. The audit
+// consumer treats empty as "system" for the actor_type column so the
+// activity feed has a stable value rather than a blank cell.
+type ImagePromotedPayload struct {
+	TenantID    string `json:"tenant_id"`
+	SrcOrg      string `json:"src_org"`
+	SrcRepo     string `json:"src_repo"`
+	SrcTag      string `json:"src_tag"`
+	SrcDigest   string `json:"src_digest"`
+	DstOrg      string `json:"dst_org"`
+	DstRepo     string `json:"dst_repo"`
+	DstTag      string `json:"dst_tag"`
+	DstDigest   string `json:"dst_digest"`
+	ActorUserID string `json:"actor_user_id,omitempty"`
+	Note        string `json:"note,omitempty"`
 }
 
 // AccessReviewSnoozedPayload is the wire shape of auth.access_review.snoozed.

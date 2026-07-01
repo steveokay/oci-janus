@@ -485,6 +485,37 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
+	// FUT-020: image promotion. Actor comes from the payload (JWT-derived
+	// user_id from the BFF) rather than being system-attributed — a
+	// promotion is an explicit operator action; the audit trail is
+	// meaningless if it always attributes to "system". Empty actor
+	// (bot / SA / CLI) falls back to system so the actor_type column has
+	// a stable value.
+	//
+	// Resource pins to the destination side ("dst_org/dst_repo:dst_tag")
+	// because operators reading /activity ask "what got promoted INTO
+	// this repo?" — the source is captured in metadata.raw for auditors
+	// who need the full picture without a separate query.
+	case events.RoutingImagePromoted:
+		var p events.ImagePromotedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor := p.ActorUserID
+		actorType := "user"
+		if actor == "" {
+			actor = "system"
+			actorType = "system"
+		}
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    actor,
+			ActorType:  actorType,
+			Action:     "image.promoted",
+			Resource:   p.DstOrg + "/" + p.DstRepo + ":" + p.DstTag,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
 	case events.RoutingTenantCreated:
 		return &repository.AuditEvent{
 			TenantID:   tenantID,
