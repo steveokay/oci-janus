@@ -545,6 +545,21 @@ func (f *fakeAPIKeyRepo) TouchLastUsed(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
+// FUT-003 stubs — no-op implementations sufficient for existing tests. Tests
+// that need to observe the FUT-003 behaviour supply their own fake.
+func (f *fakeAPIKeyRepo) UpdateLastUsedAt(_ context.Context, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (f *fakeAPIKeyRepo) SetRotationDueAt(_ context.Context, _ uuid.UUID, _ *time.Time) error {
+	return nil
+}
+func (f *fakeAPIKeyRepo) RevokeWithReason(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+func (f *fakeAPIKeyRepo) ListIdleKeys(_ context.Context, _ uuid.UUID, _ time.Time) ([]repository.IdleKey, error) {
+	return nil, nil
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // setupServiceWithRepos creates a Service backed by fake repos and miniredis.

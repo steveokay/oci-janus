@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,6 +94,19 @@ type apiKeyRepo interface {
 	// owner-column cannot authorise a delete.
 	DeleteByServiceAccount(ctx context.Context, id, saID uuid.UUID) error
 	TouchLastUsed(ctx context.Context, id uuid.UUID) error
+	// FUT-003 additions.
+	// UpdateLastUsedAt is called by the Redis-debounced last_used_at updater
+	// with a caller-supplied timestamp so tests can pin the wall clock.
+	UpdateLastUsedAt(ctx context.Context, id uuid.UUID, at time.Time) error
+	// SetRotationDueAt records the rotation deadline set by CreateAPIKey
+	// when the workspace policy configures rotation_interval_days.
+	SetRotationDueAt(ctx context.Context, id uuid.UUID, at *time.Time) error
+	// RevokeWithReason soft-deletes a key and stamps the reason string.
+	// Used by the idle-revoke background worker (owner-agnostic revoke).
+	RevokeWithReason(ctx context.Context, id uuid.UUID, reason string) error
+	// ListIdleKeys returns non-revoked keys whose last_used_at is older
+	// than the cutoff (or NULL). Used by the idle-revoke worker.
+	ListIdleKeys(ctx context.Context, tenantID uuid.UUID, cutoff time.Time) ([]repository.IdleKey, error)
 }
 
 // saRepo is the subset of *repository.ServiceAccountRepo methods used by
@@ -124,6 +138,9 @@ type redisClient interface {
 	// revokeUserErrRedis) embed *redis.Client and pick them up transparently.
 	SAdd(ctx context.Context, key string, members ...interface{}) *redis.IntCmd
 	Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd
+	// SetNX is used by the FUT-003 last_used_at debouncer to coalesce
+	// per-key updates inside a 5-minute window without a full Redis SET.
+	SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.BoolCmd
 }
 
 // Ensure the concrete repository types satisfy the interfaces at compile time.
@@ -164,14 +181,21 @@ func NewWithFakes(
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: sa,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	// FUT-003: wire the debounced last_used_at updater so ValidateAPIKey
+	// tests exercise the same touch-path as production. rdb may be nil for
+	// fakes that don't need Redis; the updater tolerates that.
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
 }
 
 // NewWithFakesAndRing is the multi-key analogue of NewWithFakes. Phase 6.5
@@ -191,12 +215,24 @@ func NewWithFakesAndRing(
 	if ring == nil {
 		return nil, fmt.Errorf("auth: key ring is required")
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: sa,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
+}
+
+// SetTokenPolicyRepo wires the FUT-003 token-policy repository so CreateAPIKey
+// enforces max_ttl_days and stamps rotation_due_at. Nil clears the wiring
+// (equivalent to "no policy configured"). Kept as a setter so existing
+// constructors don't need signature changes.
+func (s *Service) SetTokenPolicyRepo(r tokenPolicyReader) {
+	s.tokenPolicy = r
 }

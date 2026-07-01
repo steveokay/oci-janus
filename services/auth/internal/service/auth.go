@@ -148,6 +148,22 @@ type Service struct {
 	// unchanged for the single-key path (the helpers wrap the single key
 	// into a 1-element ring transparently).
 	keys *keyRing
+	// tokenPolicy is the FUT-003 policy repo used by CreateAPIKey to enforce
+	// max_ttl_days + stamp rotation_due_at on new keys. May be nil in test
+	// fixtures — when nil, CreateAPIKey behaves as if no policy is set (the
+	// grandfathering / legacy behaviour).
+	tokenPolicy tokenPolicyReader
+	// lastUsed is the FUT-003 Redis-debounced last_used_at updater. When
+	// nil (legacy fakes), ValidateAPIKey falls back to the pre-FUT-003
+	// touchLastUsedAsync path so old tests keep passing.
+	lastUsed *lastUsedUpdater
+}
+
+// tokenPolicyReader is the narrow interface Service uses to consult the
+// workspace token policy on CreateAPIKey. Small so tests can supply a fake
+// without a real DB pool.
+type tokenPolicyReader interface {
+	GetOrDefault(ctx context.Context, tenantID uuid.UUID) (*repository.TokenPolicy, error)
 }
 
 // New constructs a Service by parsing the base64-encoded PEM keys from config.
@@ -173,14 +189,21 @@ func New(
 	if sa != nil {
 		saR = sa
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: saR,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	// Auto-wire the FUT-003 debounced last_used_at updater when the caller
+	// passed a non-nil api-key repo (production path). Tests that construct
+	// via NewWithFakes drive the updater through the setter.
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
 }
 
 // NewWithKeyRing constructs a Service from an already-built multi-key ring
@@ -206,14 +229,18 @@ func NewWithKeyRing(
 	if sa != nil {
 		saR = sa
 	}
-	return &Service{
+	s := &Service{
 		users:           users,
 		apiKeys:         apiKeys,
 		serviceAccounts: saR,
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
-	}, nil
+	}
+	if apiKeys != nil {
+		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
+	}
+	return s, nil
 }
 
 // singleKeyRingFromB64 wraps a single base64-encoded PEM key pair into a
@@ -746,7 +773,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, opts ValidateAPIKeyOpts) (
 
 	case key.UserID != nil:
 		// Human-owned key: fire-and-forget last_used update, return immediately.
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		vk := &ValidatedKey{
 			UserID:          *key.UserID,
 			TenantID:        key.TenantID,
@@ -816,7 +843,7 @@ func (s *Service) applyKeyChecksFromCache(ctx context.Context, key *repository.A
 		if len(eff) == 0 {
 			return nil, fmt.Errorf("%w: all key scopes removed from SA allowlist; rotate key", ErrInvalidCredentials)
 		}
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		return &ValidatedKey{
 			UserID:           sa.ShadowUserID,
 			TenantID:         sa.TenantID,
@@ -832,7 +859,7 @@ func (s *Service) applyKeyChecksFromCache(ctx context.Context, key *repository.A
 		// so a stale EffectiveScopes — for example if an operator narrowed
 		// the key's scopes after the cache entry was written — cannot leak.
 		_ = cached
-		s.touchLastUsedAsync(key.ID)
+		s.touchLastUsed(key.ID)
 		return &ValidatedKey{
 			UserID:          *key.UserID,
 			TenantID:        key.TenantID,
@@ -889,7 +916,7 @@ func (s *Service) validateSAKey(ctx context.Context, key *repository.APIKey, req
 	}
 
 	// Fire-and-forget last_used writeback (same as human path).
-	s.touchLastUsedAsync(key.ID)
+	s.touchLastUsed(key.ID)
 
 	return &ValidatedKey{
 		UserID:           sa.ShadowUserID,
@@ -926,10 +953,20 @@ func (s *Service) emitCrossTenantAttempt(ctx context.Context, sa *repository.Ser
 	}
 }
 
-// touchLastUsedAsync fires a background goroutine to update last_used_at. It
-// uses a detached context with a 5-second timeout so that a slow or unavailable
-// database never delays the auth response. Errors are silently discarded.
-func (s *Service) touchLastUsedAsync(keyID uuid.UUID) {
+// touchLastUsed dispatches a last_used_at bump through the FUT-003
+// Redis-debounced updater. Fire-and-forget: returns immediately, the
+// actual write (if the debounce window is open) happens on a goroutine
+// owned by the updater.
+//
+// When the updater is not wired (legacy fakes constructed without an
+// api-key repo), we fall through to the pre-FUT-003 goroutine-based
+// TouchLastUsed so those tests still see a bumped timestamp — the
+// debounce is a performance optimisation, not a correctness gate.
+func (s *Service) touchLastUsed(keyID uuid.UUID) {
+	if s.lastUsed != nil {
+		s.lastUsed.Touch(context.Background(), keyID)
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
