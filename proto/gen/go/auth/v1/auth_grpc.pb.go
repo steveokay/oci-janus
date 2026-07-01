@@ -39,6 +39,8 @@ const (
 	AuthService_ExchangeWorkloadToken_FullMethodName = "/registry.auth.v1.AuthService/ExchangeWorkloadToken"
 	AuthService_GetTokenPolicy_FullMethodName        = "/registry.auth.v1.AuthService/GetTokenPolicy"
 	AuthService_PutTokenPolicy_FullMethodName        = "/registry.auth.v1.AuthService/PutTokenPolicy"
+	AuthService_ListStaleKeys_FullMethodName         = "/registry.auth.v1.AuthService/ListStaleKeys"
+	AuthService_SnoozeAPIKeyReview_FullMethodName    = "/registry.auth.v1.AuthService/SnoozeAPIKeyReview"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -117,6 +119,13 @@ type AuthServiceClient interface {
 	// sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
 	GetTokenPolicy(ctx context.Context, in *GetTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error)
 	PutTokenPolicy(ctx context.Context, in *PutTokenPolicyRequest, opts ...grpc.CallOption) (*TokenPolicy, error)
+	// FUT-004 — access review (nudge-only stale-key surface). A weekly
+	// background worker flags API keys whose last_used_at is older than the
+	// tenant's idle-revoke threshold OR whose rotation_due_at is in the
+	// past. Operators pick Revoke / Keep / Snooze 30d per row. The worker
+	// does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
+	ListStaleKeys(ctx context.Context, in *ListStaleKeysRequest, opts ...grpc.CallOption) (*ListStaleKeysResponse, error)
+	SnoozeAPIKeyReview(ctx context.Context, in *SnoozeAPIKeyReviewRequest, opts ...grpc.CallOption) (*StaleKey, error)
 }
 
 type authServiceClient struct {
@@ -317,6 +326,26 @@ func (c *authServiceClient) PutTokenPolicy(ctx context.Context, in *PutTokenPoli
 	return out, nil
 }
 
+func (c *authServiceClient) ListStaleKeys(ctx context.Context, in *ListStaleKeysRequest, opts ...grpc.CallOption) (*ListStaleKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStaleKeysResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListStaleKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) SnoozeAPIKeyReview(ctx context.Context, in *SnoozeAPIKeyReviewRequest, opts ...grpc.CallOption) (*StaleKey, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StaleKey)
+	err := c.cc.Invoke(ctx, AuthService_SnoozeAPIKeyReview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -393,6 +422,13 @@ type AuthServiceServer interface {
 	// sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
 	GetTokenPolicy(context.Context, *GetTokenPolicyRequest) (*TokenPolicy, error)
 	PutTokenPolicy(context.Context, *PutTokenPolicyRequest) (*TokenPolicy, error)
+	// FUT-004 — access review (nudge-only stale-key surface). A weekly
+	// background worker flags API keys whose last_used_at is older than the
+	// tenant's idle-revoke threshold OR whose rotation_due_at is in the
+	// past. Operators pick Revoke / Keep / Snooze 30d per row. The worker
+	// does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
+	ListStaleKeys(context.Context, *ListStaleKeysRequest) (*ListStaleKeysResponse, error)
+	SnoozeAPIKeyReview(context.Context, *SnoozeAPIKeyReviewRequest) (*StaleKey, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -455,6 +491,12 @@ func (UnimplementedAuthServiceServer) GetTokenPolicy(context.Context, *GetTokenP
 }
 func (UnimplementedAuthServiceServer) PutTokenPolicy(context.Context, *PutTokenPolicyRequest) (*TokenPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutTokenPolicy not implemented")
+}
+func (UnimplementedAuthServiceServer) ListStaleKeys(context.Context, *ListStaleKeysRequest) (*ListStaleKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListStaleKeys not implemented")
+}
+func (UnimplementedAuthServiceServer) SnoozeAPIKeyReview(context.Context, *SnoozeAPIKeyReviewRequest) (*StaleKey, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SnoozeAPIKeyReview not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -810,6 +852,42 @@ func _AuthService_PutTokenPolicy_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListStaleKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStaleKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListStaleKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListStaleKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListStaleKeys(ctx, req.(*ListStaleKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_SnoozeAPIKeyReview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnoozeAPIKeyReviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).SnoozeAPIKeyReview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_SnoozeAPIKeyReview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).SnoozeAPIKeyReview(ctx, req.(*SnoozeAPIKeyReviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -892,6 +970,14 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutTokenPolicy",
 			Handler:    _AuthService_PutTokenPolicy_Handler,
+		},
+		{
+			MethodName: "ListStaleKeys",
+			Handler:    _AuthService_ListStaleKeys_Handler,
+		},
+		{
+			MethodName: "SnoozeAPIKeyReview",
+			Handler:    _AuthService_SnoozeAPIKeyReview_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

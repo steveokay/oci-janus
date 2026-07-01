@@ -83,6 +83,14 @@ service AuthService {
   // sets a rotation_due_at on new keys; FUT-004 surfaces lapsed keys.
   rpc GetTokenPolicy(GetTokenPolicyRequest) returns (TokenPolicy);
   rpc PutTokenPolicy(PutTokenPolicyRequest) returns (TokenPolicy);
+
+  // FUT-004 — access review (nudge-only stale-key surface). A weekly
+  // background worker flags API keys whose last_used_at is older than the
+  // tenant's idle-revoke threshold OR whose rotation_due_at is in the
+  // past. Operators pick Revoke / Keep / Snooze 30d per row. The worker
+  // does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
+  rpc ListStaleKeys(ListStaleKeysRequest) returns (ListStaleKeysResponse);
+  rpc SnoozeAPIKeyReview(SnoozeAPIKeyReviewRequest) returns (StaleKey);
 }
 
 message ValidateTokenRequest {
@@ -461,4 +469,64 @@ message PutTokenPolicyRequest {
   google.protobuf.Int32Value rotation_interval_days = 3;
   google.protobuf.Int32Value idle_revoke_days       = 4;
   string actor_id                                   = 5;
+}
+
+// FUT-004 — access review messages.
+//
+// A weekly worker flags stale keys (last_used_at older than the tenant's
+// idle_revoke_days threshold OR rotation_due_at in the past). The
+// suggested_action heuristic drives the FE's visual emphasis on Revoke /
+// Keep / Snooze buttons per row; reason distinguishes "idle" vs
+// "rotation_lapsed" vs "both". Nudge-only — the worker does NOT
+// auto-revoke; FUT-003's idle_revoke is the auto-action.
+
+// SuggestedAction is the human-friendly recommendation the service layer
+// attaches to each StaleKey per the spec §Feature 4 heuristic. The FE
+// uses it purely to bias the visual emphasis on the row's action
+// buttons — it never blocks the operator from picking any action.
+enum SuggestedAction {
+  SUGGESTED_ACTION_UNSPECIFIED = 0;
+  SUGGESTED_ACTION_REVOKE      = 1;
+  SUGGESTED_ACTION_KEEP        = 2;
+  SUGGESTED_ACTION_SNOOZE      = 3;
+}
+
+// StaleKey is one row of the /access/review/stale list. Carries just
+// enough context (name, owner id, timestamps, reason) for the FE to
+// render "Key foo last used 92 days ago — Revoke / Keep / Snooze 30d"
+// without a second round-trip.
+message StaleKey {
+  string id                                       = 1;
+  string tenant_id                                = 2;
+  string owner_user_id                            = 3;
+  string name                                     = 4;
+  google.protobuf.Timestamp last_used_at          = 5;
+  google.protobuf.Timestamp rotation_due_at       = 6;
+  google.protobuf.Timestamp review_snoozed_until  = 7;
+  SuggestedAction suggested_action                = 8;
+  // reason is one of "idle" | "rotation_lapsed" | "both".
+  string reason                                   = 9;
+}
+
+// ListStaleKeysRequest scopes the query to one tenant. The service layer
+// resolves the tenant's idle_revoke_days from token_policies (defaulting
+// to 90 when unset) and computes the cutoff.
+message ListStaleKeysRequest {
+  string tenant_id = 1;
+}
+
+// ListStaleKeysResponse returns every non-revoked key that crossed the
+// staleness threshold and is not currently snoozed. Ordering is not
+// guaranteed — the FE sorts by whichever column the operator picked.
+message ListStaleKeysResponse {
+  repeated StaleKey keys = 1;
+}
+
+// SnoozeAPIKeyReviewRequest defers the next weekly review nudge for the
+// given key by `days` (must be in [1, 90]). actor_id is the caller's
+// user_id (plumbed from the JWT sub) — recorded in the audit event.
+message SnoozeAPIKeyReviewRequest {
+  string key_id   = 1;
+  int32  days     = 2;
+  string actor_id = 3;
 }
