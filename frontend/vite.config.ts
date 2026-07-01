@@ -71,6 +71,11 @@ export default defineConfig({
       // BFF too. Same first-match rule: must come BEFORE the generic
       // /api/v1/access catchall or the FE hits auth (:8080) and 404s.
       "/api/v1/access/token-policy": { target: "http://localhost:8091", changeOrigin: true },
+      // FUT-004 — the access-review routes (stale + snooze) live on the
+      // management BFF. Same first-match rule: must come BEFORE the
+      // generic /api/v1/access catchall or the FE hits auth (:8080) and
+      // 404s.
+      "/api/v1/access/review":  { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/access":          { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1":                 { target: "http://localhost:8091", changeOrigin: true },
       "/healthz":               { target: "http://localhost:8091", changeOrigin: true },
