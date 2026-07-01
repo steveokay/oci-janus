@@ -36,6 +36,11 @@ type metadataRepo interface {
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
 	UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error)
+	// FUT-021 — CVSS-gated admission. Pointer semantics on maxCVSS:
+	// nil = clear the threshold (SQL NULL), non-nil = set it. Range
+	// enforcement happens at the gRPC handler above (0-100), and the
+	// CHECK constraint on the column is the belt-and-braces backstop.
+	UpdateRepositoryCVSSPolicy(ctx context.Context, tenantID, repoID string, maxCVSS *int32) (*metadatav1.Repository, error)
 	// Trusted-key allowlist (futures.md Tier 1 #3 Phase 2). Three
 	// CRUD verbs; List is read-heavy and called from services/core's
 	// admission gate on every pull. Add/Remove fire from BFF only.
@@ -350,6 +355,43 @@ func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req 
 // and lets unsigned pulls slip through.
 func (h *MetadataHandler) UpdateRepositorySignaturePolicy(ctx context.Context, req *metadatav1.UpdateRepositorySignaturePolicyRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositorySignaturePolicy(ctx, req.GetTenantId(), req.GetRepoId(), req.GetRequireSignature())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return repo, mapErr(err)
+}
+
+// UpdateRepositoryCVSSPolicy flips the repo-wide max_cvss_score
+// threshold (FUT-021). Same posture as UpdateRepositorySignaturePolicy:
+// BFF gates by repo admin role and emits the audit event; this handler
+// is a thin structural pass-through with validation on the range.
+//
+// Validation: 0 <= max_cvss_score <= 100 when non-null. The CHECK
+// constraint on the column already enforces this at the storage layer,
+// but rejecting here surfaces a clean InvalidArgument to the BFF
+// instead of a database error, and skips a round-trip on obviously bad
+// input.
+//
+// Cache bust is important — without it, services/core's admission gate
+// reads a stale max_cvss_score for up to the GetRepository REM-007 TTL
+// after the flip, so a threshold tightening won't take effect
+// immediately.
+func (h *MetadataHandler) UpdateRepositoryCVSSPolicy(ctx context.Context, req *metadatav1.UpdateRepositoryCVSSPolicyRequest) (*metadatav1.Repository, error) {
+	// Lift the proto Int32Value → *int32 for the repository layer:
+	// nil wrapper (unset) → nil pointer → SQL NULL; non-nil wrapper →
+	// pointer to value → stored int.
+	var maxCVSS *int32
+	if req.GetMaxCvssScore() != nil {
+		v := req.GetMaxCvssScore().GetValue()
+		// Clean InvalidArgument for out-of-range inputs (defence in
+		// depth with the CHECK constraint on the column).
+		if v < 0 || v > 100 {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"max_cvss_score must be in [0, 100], got %d", v)
+		}
+		maxCVSS = &v
+	}
+	repo, err := h.repo.UpdateRepositoryCVSSPolicy(ctx, req.GetTenantId(), req.GetRepoId(), maxCVSS)
 	if err == nil {
 		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
 	}
