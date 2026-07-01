@@ -336,6 +336,38 @@ func TestPromoteTag_NoteTooLong(t *testing.T) {
 	}
 }
 
+// TestPromoteTag_CreateIfMissingForwarded — REM-030 regression. When the
+// FE ticks the "create destination repository if missing" checkbox, the
+// BFF must forward create_if_missing=true through to the metadata gRPC
+// call. Anything less means the flag silently drops and the auto-create
+// branch never fires. Also covers the default (false) case.
+func TestPromoteTag_CreateIfMissingForwarded(t *testing.T) {
+	env := newPromoteTestEnv(t)
+
+	// Case 1: default body — no create_if_missing key — must land as false.
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2"}`
+	if resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("default body: want 201, got %d", resp.StatusCode)
+	}
+	// Case 2: explicit true.
+	bodyOn := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v3","create_if_missing":true}`
+	if resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, bodyOn); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("on body: want 201, got %d", resp.StatusCode)
+	}
+
+	env.meta.mu.Lock()
+	defer env.meta.mu.Unlock()
+	if len(env.meta.promoteCalls) != 2 {
+		t.Fatalf("want 2 metadata calls, got %d", len(env.meta.promoteCalls))
+	}
+	if env.meta.promoteCalls[0].GetCreateIfMissing() {
+		t.Errorf("default request should forward create_if_missing=false, got true")
+	}
+	if !env.meta.promoteCalls[1].GetCreateIfMissing() {
+		t.Errorf("explicit-true request should forward create_if_missing=true, got false")
+	}
+}
+
 // TestPromoteTag_PublishFailureDoesNotFailRequest — if the publisher
 // returns an error, the request must still return 201 (the promotion is
 // already durable in the DB; audit can be replayed from the promotions

@@ -44,6 +44,11 @@ export interface PromoteInput {
   dst_repo: string;
   dst_tag: string;
   note?: string;
+  // REM-030 — when true, the BFF asks the metadata surface to create
+  // the destination repository if it doesn't exist. Default false
+  // preserves the original 404-on-missing-dst behaviour so callers who
+  // don't opt in don't accidentally create empty repos on typos.
+  create_if_missing?: boolean;
 }
 
 // promotionKeys centralises the react-query cache keys so hooks can

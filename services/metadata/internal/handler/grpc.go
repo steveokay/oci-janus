@@ -1077,15 +1077,16 @@ func (h *MetadataHandler) PromoteTag(ctx context.Context, req *metadatav1.Promot
 	}
 
 	prom, err := h.repo.PromoteTag(ctx, repository.PromoteTagInput{
-		TenantID:    tenantUUID,
-		SrcOrg:      req.GetSrcOrg(),
-		SrcRepo:     req.GetSrcRepo(),
-		SrcTag:      req.GetSrcTag(),
-		DstOrg:      req.GetDstOrg(),
-		DstRepo:     req.GetDstRepo(),
-		DstTag:      req.GetDstTag(),
-		ActorUserID: actorPtr,
-		Note:        req.GetNote(),
+		TenantID:        tenantUUID,
+		SrcOrg:          req.GetSrcOrg(),
+		SrcRepo:         req.GetSrcRepo(),
+		SrcTag:          req.GetSrcTag(),
+		DstOrg:          req.GetDstOrg(),
+		DstRepo:         req.GetDstRepo(),
+		DstTag:          req.GetDstTag(),
+		ActorUserID:     actorPtr,
+		Note:            req.GetNote(),
+		CreateIfMissing: req.GetCreateIfMissing(),
 	})
 	if err != nil {
 		return nil, mapErr(err)

@@ -77,6 +77,25 @@ Behaviour identical to the IDENTITY column (single shared sequence across all pa
 
 ---
 
+### REM-030 — FUT-020 promote UX: dst-org dropdown + create-if-missing (in flight)
+
+**Surfaced:** 2026-07-01 user question — "for promote → destination org should be dropdown from the orgs created by user/tenant account. does Destination repository get created if it doesn't exist?" No, the destination repo currently 404s.
+
+**Affects:** `proto/metadata/v1/metadata.proto` (`PromoteTagRequest.create_if_missing`), `services/metadata/internal/repository/promotions.go` (auto-create branch inside the same tx), `services/metadata/internal/handler/grpc.go` (forward the flag), `services/management/internal/handler/promote_tag.go` (accept `create_if_missing` in JSON body), `frontend/src/components/repositories/PromoteTagDialog.tsx` (org dropdown from writer-tier memberships + toggle), `frontend/src/lib/api/promotions.ts` (`PromoteInput.create_if_missing`), `frontend/src/test/setup.ts` (ResizeObserver polyfill for Radix Switch under jsdom).
+
+**Status:** IN FLIGHT on `fix/fut-020-promote-dropdown-and-create-if-missing`. BE + BFF + FE + tests all green (metadata handler unit tests, management BFF `TestPromoteTag_CreateIfMissingForwarded`, FE `PromoteTagDialog` 7/7 tests, npm build, npm typecheck, npm lint 0 errors, integration test `TestPromoteTag_DestRepoMissing_CreateIfMissing` compiles + vets — full run requires testcontainers Postgres).
+
+**Design notes:**
+- Destination ORG must exist regardless — auto-creating orgs would silently mint RBAC-relevant surfaces from a typo. Missing org still surfaces as `ErrNotFound`.
+- Auto-created repos default to `is_public=false`, `immutable_tags=false`, 10 GiB quota — mirrors the `CreateRepository` fallback path.
+- Concurrent-create race handled: `isUniqueViolation` re-selects the row so a lost race still resolves cleanly inside the same tx.
+- FE dropdown sources orgs from `useMe().memberships` filtered to `scope_type=org` + writer-tier role (`owner`/`admin`/`writer`). Falls back to free-text input when caller is a global admin (no per-org memberships) OR when `me` hasn't resolved yet — keeps the dialog usable in every state.
+- Existing dialog tests updated to disambiguate the "Destination repository" label from the new create-if-missing switch copy.
+
+**On merge:** remove this entry; append a resolution row to `status.md`.
+
+---
+
 ### REM-013 — Retention surface backend gaps
 
 **Affects:** `services/metadata` (proto + repo + handler), `services/management` (BFF).

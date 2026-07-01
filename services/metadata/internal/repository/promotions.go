@@ -42,6 +42,14 @@ type PromoteTagInput struct {
 	DstTag      string
 	ActorUserID *uuid.UUID
 	Note        string
+	// CreateIfMissing (REM-030) — when true and the destination repository
+	// row is missing, PromoteTag creates it inside the same transaction
+	// with permissive defaults (public=false, immutable_tags=false,
+	// storage_quota=default). Fails closed with ErrOrgNotFound if the
+	// destination ORG does not exist — we never auto-create orgs because
+	// RBAC assignments hang off them. Default false preserves the
+	// original fail-closed contract that surfaces a typo as 404.
+	CreateIfMissing bool
 }
 
 // promoteFullName joins an org + repo pair into the "org/repo" composite
@@ -104,10 +112,19 @@ func (r *Repository) PromoteTag(ctx context.Context, in PromoteTagInput) (*metad
 		return nil, fmt.Errorf("resolve source tag: %w", err)
 	}
 
-	// 2. Resolve the destination repository. Fail closed on NotFound so a
-	//    typo in the URL never accidentally creates a repo. The immutable
-	//    flag comes back on the same row so we can enforce the immutability
-	//    gate without a second round-trip.
+	// 2. Resolve the destination repository. Fail closed on NotFound by
+	//    default so a typo in the URL never accidentally creates a repo.
+	//    When CreateIfMissing is true (REM-030 follow-up) and the row is
+	//    genuinely absent, we create a repo with permissive defaults
+	//    inside the same transaction — but only if the destination ORG
+	//    already exists (auto-creating orgs would silently mint an
+	//    RBAC-relevant scope from a typo).
+	//
+	//    The immutable flag comes back on the same row so we can enforce
+	//    the immutability gate without a second round-trip. A freshly
+	//    created repo is immutable=false by default (the CreateRepository
+	//    path uses the column default too), so the immutability gate can
+	//    only fire on pre-existing repos with the flag set.
 	dstFull := promoteFullName(in.DstOrg, in.DstRepo)
 	const dstRepoQ = `
 		SELECT r.id, r.immutable_tags
@@ -118,10 +135,42 @@ func (r *Repository) PromoteTag(ctx context.Context, in PromoteTagInput) (*metad
 	var dstRepoID string
 	var dstRepoImmutable bool
 	if err := tx.QueryRow(ctx, dstRepoQ, in.TenantID, dstFull).Scan(&dstRepoID, &dstRepoImmutable); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("resolve destination repository: %w", err)
+		}
+		if !in.CreateIfMissing {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("resolve destination repository: %w", err)
+		// Auto-create branch. Look up the destination org id first — an
+		// unknown org still surfaces as NotFound so the caller sees the
+		// same failure code as a bare typo.
+		const orgQ = `SELECT id FROM organizations WHERE tenant_id = $1 AND name = $2`
+		var dstOrgID string
+		if err := tx.QueryRow(ctx, orgQ, in.TenantID, in.DstOrg).Scan(&dstOrgID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("resolve destination org: %w", err)
+		}
+		// Insert with permissive defaults. is_public=false is the safer
+		// default; the operator can flip it after the promotion. The
+		// 10 GiB quota mirrors CreateRepository's zero-quota fallback.
+		const createQ = `
+			INSERT INTO repositories (org_id, tenant_id, name, is_public, storage_quota, description)
+			VALUES ($1, $2, $3, false, $4, '')
+			RETURNING id, immutable_tags`
+		if err := tx.QueryRow(ctx, createQ, dstOrgID, in.TenantID, in.DstRepo, int64(10)<<30).Scan(&dstRepoID, &dstRepoImmutable); err != nil {
+			// A concurrent create (same tenant + org + repo name) trips the
+			// unique index — treat as "already exists" and re-select. Rare
+			// but possible when two promotes race into the same fresh repo.
+			if isUniqueViolation(err) {
+				if err := tx.QueryRow(ctx, dstRepoQ, in.TenantID, dstFull).Scan(&dstRepoID, &dstRepoImmutable); err != nil {
+					return nil, fmt.Errorf("re-resolve destination repository after race: %w", err)
+				}
+			} else {
+				return nil, fmt.Errorf("auto-create destination repository: %w", err)
+			}
+		}
 	}
 
 	// 3. Check destination tag state — does it already exist? What digest?
