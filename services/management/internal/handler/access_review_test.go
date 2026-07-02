@@ -329,9 +329,17 @@ func (s *fakeAuthServer) ListStaleKeys(_ context.Context, req *authv1.ListStaleK
 // plumbed the JWT sub into ActorID (and NOT from the request body).
 // review_snoozed_until is set to a canned future timestamp so the FE
 // wire-shape's *time.Time handling is exercised.
+//
+// SEC-069: the fake also requires TenantId == testTenantID. The real
+// auth service only cross-checks when the field is non-empty, so an
+// empty value would silently pass there — rejecting it here makes
+// every snooze happy-path test prove the BFF plumbs the JWT tenant.
 func (s *fakeAuthServer) SnoozeAPIKeyReview(_ context.Context, req *authv1.SnoozeAPIKeyReviewRequest) (*authv1.StaleKey, error) {
 	if req.GetActorId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "actor_id is required")
+	}
+	if req.GetTenantId() != testTenantID {
+		return nil, status.Error(codes.NotFound, "api key not found")
 	}
 	return &authv1.StaleKey{
 		Id:                 req.GetKeyId(),

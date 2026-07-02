@@ -1036,9 +1036,18 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 	// per stale key by the weekly worker; the notification bell + the
 	// /api-keys/review panel both consume this feed. Actor is "system"
 	// because the worker has no operator identity.
+	//
+	// SEC-070: a malformed payload is dropped (nil → ACK, no insert)
+	// instead of stamping a blank-Resource row into audit_events. The
+	// same hardening is pending for the older mapEvent cases — tracked
+	// as a consumer-wide follow-up in security.md#SEC-070.
 	case events.RoutingAccessReviewDue:
 		var p events.AccessReviewDuePayload
-		_ = json.Unmarshal(event.Payload, &p)
+		if err := json.Unmarshal(event.Payload, &p); err != nil {
+			slog.Warn("audit: malformed access_review.due payload — dropping",
+				"event_id", event.ID, "err", err)
+			return nil
+		}
 		return &repository.AuditEvent{
 			TenantID:   tenantID,
 			ActorID:    "system",
@@ -1056,7 +1065,12 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 	// snooze next to the key's other events.
 	case events.RoutingAccessReviewSnoozed:
 		var p events.AccessReviewSnoozedPayload
-		_ = json.Unmarshal(event.Payload, &p)
+		// SEC-070: drop malformed payloads (see access_review.due above).
+		if err := json.Unmarshal(event.Payload, &p); err != nil {
+			slog.Warn("audit: malformed access_review.snoozed payload — dropping",
+				"event_id", event.ID, "err", err)
+			return nil
+		}
 		actor := p.ActorID
 		if actor == "" {
 			actor = "system"

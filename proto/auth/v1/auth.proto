@@ -525,8 +525,16 @@ message ListStaleKeysResponse {
 // SnoozeAPIKeyReviewRequest defers the next weekly review nudge for the
 // given key by `days` (must be in [1, 90]). actor_id is the caller's
 // user_id (plumbed from the JWT sub) — recorded in the audit event.
+//
+// tenant_id (SEC-069) is the caller's tenant from the JWT claims. When
+// non-empty, the auth service cross-checks it against the key's own
+// tenant and returns NOT_FOUND on mismatch — so even a BFF regression
+// (the SEC-068 class) cannot snooze another tenant's key. Empty is
+// tolerated for rolling-deploy compatibility; direct-gRPC callers are
+// gated by MTLS_PEER_CN_ALLOWLIST (see docs/AUTH.md).
 message SnoozeAPIKeyReviewRequest {
-  string key_id   = 1;
-  int32  days     = 2;
-  string actor_id = 3;
+  string key_id    = 1;
+  int32  days      = 2;
+  string actor_id  = 3;
+  string tenant_id = 4;
 }

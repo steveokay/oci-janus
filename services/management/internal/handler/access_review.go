@@ -192,10 +192,14 @@ func (h *Handler) handleSnoozeAPIKeyReview(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// TenantId (SEC-069): assert the caller's tenant on the wire so the
+	// auth service can cross-check it against the key's own tenant —
+	// defence-in-depth behind the pre-flight scan above (SEC-068).
 	updated, err := h.auth.SnoozeAPIKeyReview(r.Context(), &authv1.SnoozeAPIKeyReviewRequest{
-		KeyId:   body.KeyID,
-		Days:    body.Days,
-		ActorId: callerID,
+		KeyId:    body.KeyID,
+		Days:     body.Days,
+		ActorId:  callerID,
+		TenantId: tenantID,
 	})
 	if err != nil {
 		mapAccessReviewGRPCError(w, "snooze api key review", err)

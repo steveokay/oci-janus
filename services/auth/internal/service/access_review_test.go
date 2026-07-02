@@ -36,10 +36,10 @@ import (
 // responses. Sub-tests set `rows` to seed the projection; snooze writes
 // land in `snoozes` (keyed by key id) for assertion.
 type fakeAccessReviewRepo struct {
-	mu       sync.Mutex
-	rows     []repository.StaleKey
-	snoozes  map[uuid.UUID]*time.Time
-	lookups  map[uuid.UUID]struct {
+	mu      sync.Mutex
+	rows    []repository.StaleKey
+	snoozes map[uuid.UUID]*time.Time
+	lookups map[uuid.UUID]struct {
 		tenantID uuid.UUID
 		ownerID  uuid.UUID
 	}
@@ -340,6 +340,55 @@ func TestAccessReviewService_SnoozeAPIKeyReview_ReturnsNotFoundForMissingKey(t *
 	require.Error(t, err)
 	s, _ := status.FromError(err)
 	require.Equal(t, codes.NotFound, s.Code())
+}
+
+// TestAccessReviewService_SnoozeAPIKeyReview_TenantMismatchReturnsNotFound
+// (SEC-069) asserts that a caller asserting tenant B cannot snooze a key
+// that belongs to tenant A: the call fails with codes.NotFound (opaque —
+// no existence leak), no snooze is written, and no audit event fires for
+// the foreign tenant.
+func TestAccessReviewService_SnoozeAPIKeyReview_TenantMismatchReturnsNotFound(t *testing.T) {
+	repo := newFakeAccessReviewRepo()
+	audit := &capturingAuditEmitter{}
+	svc := NewAccessReviewService(repo, newFakeAccessReviewPolicyRepo(), audit)
+
+	keyID := uuid.New()
+	keyTenant := uuid.New()
+	repo.registerLookup(keyID, keyTenant, uuid.New())
+
+	_, err := svc.SnoozeAPIKeyReview(context.Background(), SnoozeAPIKeyReviewInput{
+		KeyID:    keyID,
+		Days:     30,
+		ActorID:  uuid.New(),
+		TenantID: uuid.New(), // attacker's tenant ≠ key's tenant
+	})
+	require.Error(t, err)
+	s, _ := status.FromError(err)
+	require.Equal(t, codes.NotFound, s.Code(), "mismatch must be opaque NotFound")
+	require.Empty(t, repo.snoozes, "no snooze may be written on tenant mismatch")
+	require.Empty(t, audit.Events, "no audit event may fire for the foreign tenant")
+}
+
+// TestAccessReviewService_SnoozeAPIKeyReview_MatchingTenantSucceeds
+// (SEC-069) pins the happy path: asserting the key's own tenant behaves
+// exactly like the legacy no-tenant call.
+func TestAccessReviewService_SnoozeAPIKeyReview_MatchingTenantSucceeds(t *testing.T) {
+	repo := newFakeAccessReviewRepo()
+	svc := NewAccessReviewService(repo, newFakeAccessReviewPolicyRepo(), nil)
+
+	keyID := uuid.New()
+	keyTenant := uuid.New()
+	repo.registerLookup(keyID, keyTenant, uuid.New())
+
+	got, err := svc.SnoozeAPIKeyReview(context.Background(), SnoozeAPIKeyReviewInput{
+		KeyID:    keyID,
+		Days:     30,
+		ActorID:  uuid.New(),
+		TenantID: keyTenant,
+	})
+	require.NoError(t, err)
+	require.Equal(t, keyTenant, got.TenantID)
+	require.Contains(t, repo.snoozes, keyID, "snooze must be written when tenants match")
 }
 
 // TestAccessReviewService_SnoozeAPIKeyReview_EmitsAuditWithPayload asserts

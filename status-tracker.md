@@ -51,28 +51,6 @@
 
 ---
 
-### REM-026 — FUT-004 Access review (in flight)
-
-**Affects:** `services/auth` (new `api_keys.review_snoozed_until` column + `AccessReviewService` + weekly worker with per-tenant advisory lock + 2 new gRPC RPCs + 2 new audit events), `services/audit` (2 new mapEvent cases), `services/management` (2 BFF admin routes at `/api/v1/access/review/*`), `frontend` (new `ReviewPanel` replacing preview + `useStaleKeys` / `useSnoozeKey` hooks + Preview section FULL RETIREMENT).
-
-**Status:** IN FLIGHT on `feat/fut-004-access-review`. FINAL of the FUT-001..FUT-004 batch (FUT-002 #221, FUT-001 #224, FUT-003 #225+#226 hotfix). Spec: `docs/superpowers/specs/2026-06-30-api-keys-tier2-backend-design.md` §Feature 4. Two spec-compliance reviews complete (BE PASS 2026-07-01; FE+BFF PASS 2026-07-01). **This PR retires the entire Preview section from the sidebar** — Preview count 1 → 0.
-
-**Plan:** `docs/superpowers/plans/2026-07-01-fut-004-access-review.md`.
-
-**Follow-ups (non-blocking, file on merge):**
-- BFF SNOOZE gate resolves key ownership via a `ListStaleKeys` pre-flight scan (no `GetAPIKey` RPC exists). Extra RPC + O(n) scan per non-admin snooze. If stale-set size grows, add a dedicated `GetAPIKey` or thread `owner_user_id` back through `SnoozeAPIKeyReview`. (BFF adaptation, 2026-07-01.)
-- No advisory-lock unit test (structurally correct in code; only test coverage gap). (BE spec-review 2026-07-01.)
-- No fake-clock worker cadence test asserting the weekly period + immediate first tick. (BE spec-review 2026-07-01.)
-- Sidebar `readPreviewOpen` + `PREVIEW_OPEN_KEY` state fully removed (past adaptation); `SubNavItem.preview` flag on the type retained for future preview surfaces. Retirement is complete.
-- Spec's "Send review reminders to owners" footer button not implemented — plan §Task 10 explicitly narrowed scope; treat as documented divergence, revisit when FUT-019 email channel lands.
-- **SEC-068 (HIGH)** — `handleSnoozeAPIKeyReview` admin path skips tenant-scoping; workspace admin of tenant A can snooze tenant B's key + corrupt tenant B's audit trail. Fix: mirror the non-admin `ListStaleKeys` pre-flight on the admin branch, OR add `tenant_id` to `SnoozeAPIKeyReviewRequest` + cross-check in service layer. See `security.md#SEC-068`. **Follow-up branch required — PR #227 already merged.**
-- **SEC-069 (MEDIUM)** — `SnoozeAPIKeyReviewRequest` gRPC surface has no `tenant_id` and trusts caller-supplied `actor_id`. Multi-mode + permissive `MTLS_PEER_CN_ALLOWLIST` exposed to a direct-gRPC caller with a valid mTLS cert. Same class as SEC-066 but worse (tenant scoping impossible without proto change). See `security.md#SEC-069`.
-- **SEC-070 (LOW)** — Audit consumer swallows `json.Unmarshal` errors for `AccessReview{Due,Snoozed}Payload`. Consistent with pre-existing pattern; not a regression. Consider rolling a hardening pass across all `mapEvent` cases. See `security.md#SEC-070`.
-
-**On merge:** remove this entry; append a resolution row to `status.md`.
-
----
-
 ### REM-014 — Lint findings unmasked by Go 1.25 toolchain upgrade
 
 **Surfaced:** 2026-06-28 after PR #156 (`fix(ci): goinstall golangci-lint`) made golangci-lint reachable past its typecheck stage. Prior to #156 the action's bundled Go 1.24 binary couldn't parse Go 1.25 source, so every linter was short-circuited; PR #156 fixed that, which unmasked a real backlog.
@@ -226,10 +204,7 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 | **SEC-060** | MEDIUM | `JWKSCacheTTLSeconds` has no min/max bound | OPEN | Clamp to [60s, 24h] at config validation. See `security.md#SEC-060`. |
 | **SEC-061** | LOW | Workload rate-limit Redis key unbounded from untrusted `sub` claim | OPEN | 256-char cap + hash long subjects. See `security.md#SEC-061`. |
 | **SEC-062** | LOW | JWKS HTTP client only sets `Timeout` — missing handshake/header timeouts | OPEN | Full `http.Transport` timeouts. See `security.md#SEC-062`. |
-| **SEC-064** | HIGH | `CreateAPIKey` skips workspace `max_ttl_days` cap when caller omits `expires_at` | OPEN — **BLOCKS `feat/fut-003-token-policies` PR** | `services/auth/internal/service/auth.go:657` guards enforcement with `expiresAt != nil`; nil → cap bypass + immortal key. Fix inline before PR: clamp `expiresAt` to `now + max_ttl_days` when policy cap is set and caller omits, OR reject with `InvalidArgument`. Add regression test. See `security.md#SEC-064`. |
-| **SEC-065** | LOW | FE `PoliciesPanel` missing per-dimension `idle_revoke_days >= 7` floor | OPEN | `frontend/src/components/access/PoliciesPanel.tsx:114`; user hits raw BE 400. No security exposure — BE enforces. Follow-up. |
-| **SEC-066** | MEDIUM | `PutTokenPolicy` gRPC trusts caller-supplied `tenant_id` (multi-mode only) | OPEN | Safe in `DEPLOYMENT_MODE=single` via SingleTenantInjector. Exposure limited to multi mode + permissive `MTLS_PEER_CN_ALLOWLIST`. Cross-cutting; consider tenant-cross-check interceptor. Follow-up. |
-| **SEC-067** | LOW | Token-policy `Upsert(all-nil)` rewrites `updated_by_user_id` on no-op call | OPEN | Audit-trail credit-laundering vector. Reject all-nil input in `TokenPolicyService.Put` OR skip audit emit when snapshot unchanged. Follow-up. |
+| **SEC-066** | MEDIUM | `PutTokenPolicy` gRPC trusts caller-supplied `tenant_id` (multi-mode only) | OPEN | Safe in `DEPLOYMENT_MODE=single` via SingleTenantInjector. Exposure limited to multi mode + permissive `MTLS_PEER_CN_ALLOWLIST`. Durable fix: shared `PeerTenantCheck`/`PeerActorCheck` interceptor across FUT-001..004 RPCs (also absorbs SEC-069's residual `actor_id`-spoof concern). Until then operators MUST set `MTLS_PEER_CN_ALLOWLIST=registry-management` on `services/auth`. |
 
 ---
 
@@ -319,5 +294,5 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 
 ---
 
-> **Last updated:** 2026-07-02 — synced SEC-057..062 into the open security items table (all six were `Status: OPEN` in `security.md` but missing here; gap surfaced by the Fable review absorption, see `futures.md`). Prior update 2026-06-30: REDESIGN-001 entry trimmed to a soak-window residual after `v2.0.0-rc1` cut + pushed (tag `4dd3e63` → commit `f0896ff`, PR #219). Calendar-only remainder: soak ≥ 2026-07-07 then tag `v2.0.0`. Tail SEC items + 4 RED-FU items deferred per the residual block above.
+> **Last updated:** 2026-07-02 — retired REM-026 (FUT-004 shipped #227 + hotfix #228; resolution row in `status.md`); cleared SEC-064/065/067 (resolved #226/#228 — statuses were stale) + SEC-068/069/070 (resolved #228 + `fix/sec-068-access-review-tenant-scoping`) from the open table; SEC-066 note updated to point at the shared peer-check interceptor as the durable fix. Earlier same day: synced SEC-057..062 into the open security items table (all six were `Status: OPEN` in `security.md` but missing here; gap surfaced by the Fable review absorption, see `futures.md`). Prior update 2026-06-30: REDESIGN-001 entry trimmed to a soak-window residual after `v2.0.0-rc1` cut + pushed (tag `4dd3e63` → commit `f0896ff`, PR #219). Calendar-only remainder: soak ≥ 2026-07-07 then tag `v2.0.0`. Tail SEC items + 4 RED-FU items deferred per the residual block above.
 > **Maintainer:** see `git log -- status-tracker.md`.
