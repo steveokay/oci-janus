@@ -79,6 +79,14 @@ func TestParseIssuerAllowlist(t *testing.T) {
 		{"trailing comma dropped", "https://gh.io,", []string{"https://gh.io"}},
 		{"only commas → empty", ",,,", []string{}},
 		{"only whitespace → empty", "   ", []string{}},
+
+		// SEC-057 #2: scheme-less entries are config typos and are
+		// dropped (fail-closed) — a bare host could never prefix-match a
+		// real `https://` issuer anyway.
+		{"bare host dropped", "token.actions.githubusercontent.com", []string{}},
+		{"bare host dropped, https kept", "badhost.com,https://gh.io", []string{"https://gh.io"}},
+		{"http scheme kept (local dev IdP)", "http://localhost:8080", []string{"http://localhost:8080"}},
+		{"scheme substring in path is not a scheme", "ttps://gh.io", []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

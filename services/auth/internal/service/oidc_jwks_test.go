@@ -144,3 +144,65 @@ func TestJWKSCacheFailsClosedOnNetworkError(t *testing.T) {
 		t.Error("expired entry + dead server must return an error (fail closed)")
 	}
 }
+
+// TestJWKS_SSRF_ForeignHostRejected verifies SEC-058: a hostile discovery
+// document that points jwks_uri at a DIFFERENT host (the classic SSRF
+// primitive — aim it at 169.254.169.254 or an internal service) must be
+// rejected before any fetch of that URL.
+func TestJWKS_SSRF_ForeignHostRejected(t *testing.T) {
+	// A "victim" server we do NOT want to be tricked into calling. It
+	// counts hits so we can assert it was never reached.
+	var victimHits atomic.Int64
+	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		victimHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
+	}))
+	defer victim.Close()
+
+	// The malicious IdP: its discovery doc redirects jwks_uri at the
+	// victim host instead of its own.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": victim.URL + "/jwks"})
+	})
+	evil := httptest.NewServer(mux)
+	defer evil.Close()
+
+	cache := newJWKSCache(http.DefaultClient)
+	if _, err := cache.Fetch(context.Background(), evil.URL, time.Hour); err == nil {
+		t.Fatal("expected error: jwks_uri on a foreign host must be rejected")
+	}
+	if h := victimHits.Load(); h != 0 {
+		t.Errorf("victim host was contacted %d times; SSRF guard failed", h)
+	}
+}
+
+// TestJWKS_OversizeResponse_Rejected verifies SEC-059: a JWKS (or
+// discovery) body larger than jwksMaxResponseBytes must error rather than
+// buffer unbounded memory. The stub streams > 1 MiB on the discovery
+// endpoint so the cap trips on the first fetch.
+func TestJWKS_OversizeResponse_Rejected(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Write a valid-JSON-prefix followed by megabytes of filler so the
+		// LimitReader trips well before any decode could complete.
+		_, _ = w.Write([]byte(`{"jwks_uri":"`))
+		filler := make([]byte, 64*1024)
+		for i := range filler {
+			filler[i] = 'a'
+		}
+		for written := 0; written < (jwksMaxResponseBytes + 256*1024); written += len(filler) {
+			if _, err := w.Write(filler); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cache := newJWKSCache(http.DefaultClient)
+	if _, err := cache.Fetch(context.Background(), srv.URL, time.Hour); err == nil {
+		t.Fatal("expected error: oversize discovery/JWKS response must be rejected")
+	}
+}

@@ -88,10 +88,31 @@ type UpdateOIDCTrustInput struct {
 // CSV from OIDC_ALLOWED_ISSUERS — typically built via
 // parseIssuerAllowlist(cfg.OIDCAllowedIssuers) at server startup.
 //
-// The HTTP client used for JWKS fetches has a 5-second timeout so a hung
-// IdP cannot stall the exchange flow indefinitely.
+// The HTTP client used for JWKS fetches is hardened per CLAUDE.md §13:
+//
+//   - Timeout (5s) bounds the whole request so a hung IdP cannot stall
+//     the exchange flow indefinitely.
+//   - TLSHandshakeTimeout + ResponseHeaderTimeout (SEC-062) bound the
+//     sub-phases so a hostile server cannot burn ~4.9s stalling the TLS
+//     handshake or dribbling response headers under the overall cap.
+//   - CheckRedirect returns ErrUseLastResponse (SEC-058) so a discovery
+//     or JWKS response cannot 30x-redirect us onto an internal endpoint —
+//     we treat the first response as authoritative and never chase a
+//     Location header off the vetted host.
 func NewOIDCTrustService(repo trustRepo, sa saRepo, auth *Service, audit AuditEmitter, allowedIssuers []string) *OIDCTrustService {
-	jwksClient := &http.Client{Timeout: 5 * time.Second}
+	jwksClient := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   3 * time.Second,
+			ResponseHeaderTimeout: 3 * time.Second,
+		},
+		// SEC-058: do not follow redirects. Return the 30x response as-is
+		// so getJSON sees a non-200 and fails, rather than chasing the
+		// Location header to a potentially internal address.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return &OIDCTrustService{
 		repo:            repo,
 		serviceAccounts: sa,
@@ -160,6 +181,9 @@ func (s *OIDCTrustService) Update(ctx context.Context, in UpdateOIDCTrustInput) 
 	if err := validateGlobSyntax(in.SubjectPattern); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "subject_pattern: %v", err)
 	}
+	if err := validateJWKSCacheTTL(in.JWKSCacheTTLSeconds); err != nil {
+		return nil, err
+	}
 	row, err := s.repo.Update(ctx, repository.OIDCTrust{
 		ID:                  in.ID,
 		TenantID:            in.TenantID,
@@ -207,6 +231,35 @@ func (s *OIDCTrustService) Delete(ctx context.Context, tenantID, id uuid.UUID, a
 // validateOnCreate centralises the input gates that run before the DB
 // INSERT. Every gate returns a clean codes.InvalidArgument so the gRPC
 // handler doesn't need to translate.
+// jwksCacheTTL bounds (SEC-060). IdPs typically publish key-rotation TTLs
+// of 300s–3600s; 60s tolerates an operator dropping low for a temporary
+// rotation, and 86400s (24h) is the ceiling beyond which a legitimate IdP
+// key rotation would be missed. 0 is a sentinel meaning "use the repo
+// default (3600)" — preserved so existing callers that omit the field
+// keep working.
+const (
+	jwksCacheTTLMinSeconds = 60
+	jwksCacheTTLMaxSeconds = 86400
+)
+
+// validateJWKSCacheTTL rejects an out-of-band cache TTL. Unbounded values
+// are a resource-exhaustion vector in both directions (SEC-060): a
+// negative/tiny TTL turns us into a JWKS-refetch amplifier against the
+// upstream IdP, while an enormous TTL pins a (possibly transiently
+// attacker-controlled) key set for the life of the deployment. 0 passes
+// through untouched — the repository layer maps it to the 3600s default.
+func validateJWKSCacheTTL(ttl int32) error {
+	if ttl == 0 {
+		return nil
+	}
+	if ttl < jwksCacheTTLMinSeconds || ttl > jwksCacheTTLMaxSeconds {
+		return status.Errorf(codes.InvalidArgument,
+			"jwks_cache_ttl_seconds must be 0 (default) or between %d and %d",
+			jwksCacheTTLMinSeconds, jwksCacheTTLMaxSeconds)
+	}
+	return nil
+}
+
 func (s *OIDCTrustService) validateOnCreate(ctx context.Context, in CreateOIDCTrustInput) error {
 	if strings.TrimSpace(in.DisplayName) == "" {
 		return status.Error(codes.InvalidArgument, "display_name is required")
@@ -230,6 +283,9 @@ func (s *OIDCTrustService) validateOnCreate(ctx context.Context, in CreateOIDCTr
 	}
 	if err := validateGlobSyntax(in.SubjectPattern); err != nil {
 		return status.Errorf(codes.InvalidArgument, "subject_pattern: %v", err)
+	}
+	if err := validateJWKSCacheTTL(in.JWKSCacheTTLSeconds); err != nil {
+		return err
 	}
 	if in.ServiceAccountID == uuid.Nil {
 		return status.Error(codes.InvalidArgument, "service_account_id is required")
@@ -290,4 +346,3 @@ func (s *OIDCTrustService) emitTrustEvent(ctx context.Context, action, actorID s
 		)
 	}
 }
-

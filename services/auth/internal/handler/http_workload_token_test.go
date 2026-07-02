@@ -240,6 +240,38 @@ func TestPeekIssuerAndSubject(t *testing.T) {
 	})
 }
 
+// TestWorkloadRateLimitKey covers SEC-061: the Redis bucket key is a
+// fixed-length hash of the (iss, sub) tuple, so an attacker cannot bloat
+// Redis memory with a multi-megabyte `sub` claim, and the NUL separator
+// keeps otherwise-colliding tuples distinct.
+func TestWorkloadRateLimitKey(t *testing.T) {
+	const prefix = "workload:rate:"
+
+	t.Run("length is bounded regardless of claim size", func(t *testing.T) {
+		huge := strings.Repeat("A", 5<<20) // 5 MiB subject
+		key := workloadRateLimitKey("https://gh.io", huge)
+		// prefix + 64 hex chars, never proportional to the input.
+		require.Equal(t, len(prefix)+64, len(key))
+		require.True(t, strings.HasPrefix(key, prefix))
+	})
+
+	t.Run("separator ambiguity resolved", func(t *testing.T) {
+		// ("a", "b:c") and ("a:b", "c") must NOT collide — the old
+		// `iss + ":" + sub` form mapped both to "a:b:c".
+		require.NotEqual(t,
+			workloadRateLimitKey("a", "b:c"),
+			workloadRateLimitKey("a:b", "c"),
+		)
+	})
+
+	t.Run("deterministic for the same tuple", func(t *testing.T) {
+		require.Equal(t,
+			workloadRateLimitKey("https://gh.io", "repo:org/r"),
+			workloadRateLimitKey("https://gh.io", "repo:org/r"),
+		)
+	})
+}
+
 // workloadPlaceholder is a non-nil but zero-valued *service.OIDCTrustService
 // pointer that test cases assign to h.oidc to escape the 503 short-circuit
 // without booting a real service. The pointed-to memory is never

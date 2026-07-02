@@ -89,6 +89,17 @@ func parseIssuerAllowlist(csv string) []string {
 		if p == "" {
 			continue
 		}
+		// SEC-057: drop entries without an explicit http(s):// scheme.
+		// A bare host like `token.actions.githubusercontent.com` is almost
+		// certainly a config typo — and because every real issuer_url is
+		// `https://…` (enforced at trust-create), a scheme-less prefix
+		// could never match anyway, so it is pure dead weight. Dropping it
+		// is fail-closed: a mistyped entry simply won't authorise its
+		// issuer, surfacing as a clean "not in OIDC_ALLOWED_ISSUERS" at
+		// trust-create rather than silently widening the trust boundary.
+		if !strings.HasPrefix(p, "https://") && !strings.HasPrefix(p, "http://") {
+			continue
+		}
 		out = append(out, p)
 	}
 	return out
