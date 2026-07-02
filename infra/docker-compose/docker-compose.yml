@@ -371,6 +371,13 @@ services:
       # creates and ALL exchanges (fail-closed default). Dev list is
       # the three major CI IdPs so developers can exercise the flow
       # without editing the compose file.
+      # SEC-057: the subdomain-lookalike bypass (e.g. gitlab.com.evil.example
+      # matching a gitlab.com prefix) is closed in code by issuerAllowed's
+      # URL-path-boundary check. Do NOT append trailing slashes here: the
+      # real issuer `iss` claims are slash-less (GitHub Actions is exactly
+      # `https://token.actions.githubusercontent.com`), and a trailing-slash
+      # allowlist entry is a strict prefix of nothing the IdP actually sends,
+      # so it would reject every legitimate token.
       OIDC_ALLOWED_ISSUERS: "https://token.actions.githubusercontent.com,https://gitlab.com,https://agent.buildkite.com"
     volumes:
       - certs_data:/certs:ro

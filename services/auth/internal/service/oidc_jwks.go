@@ -26,8 +26,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,6 +39,12 @@ import (
 // holds in memory. Mirrors SEC-048's keyring cap (16) — operators who
 // genuinely need more should retire stale trusts, not raise the cap.
 const maxJWKSCacheSize = 16
+
+// jwksMaxResponseBytes caps the discovery + JWKS response bodies (SEC-059).
+// A realistic JWKS with ~10 keys is ~5 KiB; 1 MiB is 200× headroom while
+// preventing a hostile IdP from streaming an unbounded body to drive OOM
+// within the 5s request window. Enforced inside getJSON via io.LimitReader.
+const jwksMaxResponseBytes = 1 << 20 // 1 MiB
 
 // cachedJWKS is a single issuer's keys plus the fetched-at timestamp
 // used to gate TTL expiry.
@@ -153,6 +162,18 @@ func (c *jwksCache) fetchJWKS(ctx context.Context, issuer string) (map[string]*r
 		return nil, fmt.Errorf("discovery document missing jwks_uri")
 	}
 
+	// SEC-058: the discovery document is attacker-influenceable (a
+	// compromised or hostile IdP controls its body), so jwks_uri is
+	// untrusted input. Constrain it to https AND the SAME host as the
+	// issuer before fetching — every real IdP serves its JWKS on the
+	// discovery host, so any deviation (an RFC-1918 address, a cloud
+	// metadata endpoint, a different public host) is an SSRF attempt.
+	// Combined with the no-redirect client (NewOIDCTrustService) this
+	// removes the "point us at an internal endpoint" primitive entirely.
+	if err := validateJWKSURI(issuer, jwksURI); err != nil {
+		return nil, err
+	}
+
 	// Step 2 — JWKS.
 	raw, err := c.getJSON(ctx, jwksURI)
 	if err != nil {
@@ -197,10 +218,52 @@ func (c *jwksCache) fetchJWKS(ctx context.Context, issuer string) (map[string]*r
 	return out, nil
 }
 
+// validateJWKSURI enforces that the discovery-supplied jwks_uri shares the
+// issuer's ORIGIN — same scheme and same host (SEC-058). The issuer itself
+// is already vetted (allowlisted before we ever fetch, and https-only for
+// real trusts per SEC-063), so pinning jwks_uri to the issuer's origin
+// transitively requires https in production while still permitting the
+// http origins used by local-dev / test IdPs. This is stricter and more
+// principled than a bare `scheme == "https"` literal: it also blocks a
+// scheme *downgrade* relative to the issuer, and it rejects any exotic
+// scheme (file://, gopher://, …) since those can never equal the issuer's
+// http/https scheme.
+//
+// Host comparison is case-insensitive per RFC 3986 §3.2.2 and includes the
+// port, so an attacker-controlled discovery doc cannot point jwks_uri at
+// issuer-host:alternate-port, a different public host, or an RFC-1918
+// address either. Combined with the no-redirect client this removes the
+// SSRF primitive entirely.
+func validateJWKSURI(issuer, jwksURI string) error {
+	issuerURL, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("parse issuer url: %w", err)
+	}
+	jwksURL, err := url.Parse(jwksURI)
+	if err != nil {
+		return fmt.Errorf("parse jwks_uri: %w", err)
+	}
+	if jwksURL.Scheme != issuerURL.Scheme {
+		return fmt.Errorf("jwks_uri scheme %q does not match issuer scheme %q", jwksURL.Scheme, issuerURL.Scheme)
+	}
+	if !strings.EqualFold(jwksURL.Host, issuerURL.Host) {
+		return fmt.Errorf("jwks_uri host %q does not match issuer host %q", jwksURL.Host, issuerURL.Host)
+	}
+	return nil
+}
+
 // getJSON does a GET and decodes the body as a JSON object. Used twice
 // per refresh: once for discovery, once for the JWKS itself.
-func (c *jwksCache) getJSON(ctx context.Context, url string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+//
+// SEC-059: the body is read through an io.LimitReader capped at
+// jwksMaxResponseBytes so a hostile IdP cannot stream an unbounded body
+// to exhaust memory. We read one byte past the cap and error if the
+// stream is still going, so a body exactly at the limit succeeds but an
+// oversize one is rejected rather than silently truncated (a truncated
+// JSON doc would fail to decode anyway, but the explicit cap gives a
+// clear error and stops the allocation early).
+func (c *jwksCache) getJSON(ctx context.Context, rawURL string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -212,8 +275,16 @@ func (c *jwksCache) getJSON(ctx context.Context, url string) (map[string]any, er
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
+	limited := io.LimitReader(resp.Body, jwksMaxResponseBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > jwksMaxResponseBytes {
+		return nil, fmt.Errorf("response exceeded %d bytes", jwksMaxResponseBytes)
+	}
 	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

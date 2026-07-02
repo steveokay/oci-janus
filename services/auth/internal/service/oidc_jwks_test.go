@@ -144,3 +144,135 @@ func TestJWKSCacheFailsClosedOnNetworkError(t *testing.T) {
 		t.Error("expired entry + dead server must return an error (fail closed)")
 	}
 }
+
+// TestJWKS_SSRF_ForeignHostRejected verifies SEC-058: a hostile discovery
+// document that points jwks_uri at a DIFFERENT host (the classic SSRF
+// primitive — aim it at 169.254.169.254 or an internal service) must be
+// rejected before any fetch of that URL.
+func TestJWKS_SSRF_ForeignHostRejected(t *testing.T) {
+	// A "victim" server we do NOT want to be tricked into calling. It
+	// counts hits so we can assert it was never reached.
+	var victimHits atomic.Int64
+	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		victimHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
+	}))
+	defer victim.Close()
+
+	// The malicious IdP: its discovery doc redirects jwks_uri at the
+	// victim host instead of its own.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": victim.URL + "/jwks"})
+	})
+	evil := httptest.NewServer(mux)
+	defer evil.Close()
+
+	cache := newJWKSCache(http.DefaultClient)
+	if _, err := cache.Fetch(context.Background(), evil.URL, time.Hour); err == nil {
+		t.Fatal("expected error: jwks_uri on a foreign host must be rejected")
+	}
+	if h := victimHits.Load(); h != 0 {
+		t.Errorf("victim host was contacted %d times; SSRF guard failed", h)
+	}
+}
+
+// TestJWKS_RedirectNotFollowed verifies SEC-058's SECOND defense (the
+// no-redirect client), which is distinct from validateJWKSURI: a jwks_uri
+// that passes the same-origin host check can still 30x-redirect at the
+// HTTP layer onto an internal host. The production client sets
+// CheckRedirect = ErrUseLastResponse so getJSON sees the 30x as a non-200
+// and errors, never chasing the Location header. This test drives the
+// REAL production client (newJWKSHTTPClient) rather than http.DefaultClient
+// so a regression that drops CheckRedirect is caught.
+func TestJWKS_RedirectNotFollowed(t *testing.T) {
+	var victimHits atomic.Int64
+	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		victimHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
+	}))
+	defer victim.Close()
+
+	// IdP whose jwks_uri is SAME-ORIGIN (passes validateJWKSURI) but whose
+	// /jwks endpoint 302-redirects to the victim host.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		host := "http://" + r.Host
+		_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": host + "/jwks"})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/jwks", http.StatusFound)
+	})
+	idp := httptest.NewServer(mux)
+	defer idp.Close()
+
+	// Build the cache with the ACTUAL production client.
+	cache := newJWKSCache(newJWKSHTTPClient())
+	if _, err := cache.Fetch(context.Background(), idp.URL, time.Hour); err == nil {
+		t.Fatal("expected error: a redirecting jwks_uri must not be followed")
+	}
+	if h := victimHits.Load(); h != 0 {
+		t.Errorf("victim was reached %d times; redirect guard (CheckRedirect) failed", h)
+	}
+}
+
+// TestValidateJWKSURI covers the SEC-058 origin check directly, including
+// the scheme-downgrade and exotic-scheme cases the helper's doc-comment
+// claims but the higher-level tests don't isolate.
+func TestValidateJWKSURI(t *testing.T) {
+	const issuer = "https://idp.example.com"
+	cases := []struct {
+		name    string
+		jwksURI string
+		wantErr bool
+	}{
+		{"same origin ok", "https://idp.example.com/keys", false},
+		{"same origin, host case-insensitive", "https://IDP.example.com/keys", false},
+		{"foreign host rejected", "https://attacker.example.com/keys", true},
+		{"scheme downgrade to http rejected", "http://idp.example.com/keys", true},
+		{"explicit alternate port rejected", "https://idp.example.com:8443/keys", true},
+		{"userinfo trick — real host is the SSRF target", "https://idp.example.com@169.254.169.254/keys", true},
+		{"exotic scheme rejected", "file:///etc/passwd", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJWKSURI(issuer, tc.jwksURI)
+			if tc.wantErr && err == nil {
+				t.Errorf("validateJWKSURI(%q, %q) = nil, want error", issuer, tc.jwksURI)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validateJWKSURI(%q, %q) = %v, want nil", issuer, tc.jwksURI, err)
+			}
+		})
+	}
+}
+
+// TestJWKS_OversizeResponse_Rejected verifies SEC-059: a JWKS (or
+// discovery) body larger than jwksMaxResponseBytes must error rather than
+// buffer unbounded memory. The stub streams > 1 MiB on the discovery
+// endpoint so the cap trips on the first fetch.
+func TestJWKS_OversizeResponse_Rejected(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Write a valid-JSON-prefix followed by megabytes of filler so the
+		// LimitReader trips well before any decode could complete.
+		_, _ = w.Write([]byte(`{"jwks_uri":"`))
+		filler := make([]byte, 64*1024)
+		for i := range filler {
+			filler[i] = 'a'
+		}
+		for written := 0; written < (jwksMaxResponseBytes + 256*1024); written += len(filler) {
+			if _, err := w.Write(filler); err != nil {
+				return
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cache := newJWKSCache(http.DefaultClient)
+	if _, err := cache.Fetch(context.Background(), srv.URL, time.Hour); err == nil {
+		t.Fatal("expected error: oversize discovery/JWKS response must be rejected")
+	}
+}

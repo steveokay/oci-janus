@@ -198,12 +198,6 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 |---|---|---|---|---|
 | **PENTEST-030** | LOW | Per-endpoint test-dispatch throttle missing on webhook `Test` action | OPEN | `handleTestWebhook` (`services/management/internal/handler/webhooks.go:348`) only checks `requireWebhookAdmin` then forwards. No per `(tenant_id, endpoint_id)` Redis bucket or daily budget. Per-user 20 rps still amplifies. Tracked for a global rate-limit pass. |
 | **PENTEST-033** | LOW | Postman dev passwords still inlined | PARTIAL | Login uses `{{password}}` (`type: secret`) — done. Still open: (a) `NewUser1234!` baked into `createUser` request body at `registry-management.postman_collection.json:114`; (b) dev tenant UUID `98dbe36b-…` defaulted in the env file. Cosmetic cleanup. |
-| **SEC-057** | HIGH | OIDC issuer allowlist uses raw `HasPrefix` — attacker-registered subdomain bypasses the gate | OPEN | Compare parsed origin (scheme+host+path boundary) instead; fix the 3 compose defaults to trailing-slash form in the same PR. See `security.md#SEC-057`. |
-| **SEC-058** | MEDIUM | JWKS SSRF: `jwks_uri` from discovery doc followed without host/scheme constraint | OPEN | Require `https` + same-origin-as-issuer; reuse the SIEM-export SSRF block-list from `services/audit`. See `security.md#SEC-058`. |
-| **SEC-059** | MEDIUM | JWKS + discovery HTTP responses have no size cap → OOM DoS via hostile IdP | OPEN | `io.LimitReader` (~1 MiB) on both fetches. See `security.md#SEC-059`. |
-| **SEC-060** | MEDIUM | `JWKSCacheTTLSeconds` has no min/max bound | OPEN | Clamp to [60s, 24h] at config validation. See `security.md#SEC-060`. |
-| **SEC-061** | LOW | Workload rate-limit Redis key unbounded from untrusted `sub` claim | OPEN | 256-char cap + hash long subjects. See `security.md#SEC-061`. |
-| **SEC-062** | LOW | JWKS HTTP client only sets `Timeout` — missing handshake/header timeouts | OPEN | Full `http.Transport` timeouts. See `security.md#SEC-062`. |
 | **SEC-066** | MEDIUM | `PutTokenPolicy` gRPC trusts caller-supplied `tenant_id` (multi-mode only) | OPEN | Safe in `DEPLOYMENT_MODE=single` via SingleTenantInjector. Exposure limited to multi mode + permissive `MTLS_PEER_CN_ALLOWLIST`. Durable fix: shared `PeerTenantCheck`/`PeerActorCheck` interceptor across FUT-001..004 RPCs (also absorbs SEC-069's residual `actor_id`-spoof concern). Until then operators MUST set `MTLS_PEER_CN_ALLOWLIST=registry-management` on `services/auth`. |
 
 ---

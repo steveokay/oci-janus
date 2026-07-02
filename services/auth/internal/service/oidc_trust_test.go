@@ -272,6 +272,56 @@ func TestOIDCTrustService_Create_Validations(t *testing.T) {
 		_, err := svc.Create(ctx, mkBase())
 		requireCode(t, err, codes.AlreadyExists)
 	})
+
+	// SEC-060: JWKS cache TTL must be bounded so a compromised/malicious
+	// admin cannot set a negative/tiny TTL (JWKS-refetch amplifier against
+	// the upstream IdP) or an enormous one (pin a transiently-controlled
+	// key set for the deployment lifetime). 0 stays valid (repo default).
+	t.Run("TTL zero is accepted (repo default)", func(t *testing.T) {
+		in := mkBase()
+		in.SubjectPattern = "repo:other:ref:refs/heads/ttl-zero"
+		in.JWKSCacheTTLSeconds = 0
+		_, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+	})
+
+	t.Run("TTL below floor rejected", func(t *testing.T) {
+		in := mkBase()
+		in.SubjectPattern = "repo:other:ref:refs/heads/ttl-low"
+		in.JWKSCacheTTLSeconds = 59
+		_, err := svc.Create(ctx, in)
+		requireCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("TTL negative rejected", func(t *testing.T) {
+		in := mkBase()
+		in.SubjectPattern = "repo:other:ref:refs/heads/ttl-neg"
+		in.JWKSCacheTTLSeconds = -1
+		_, err := svc.Create(ctx, in)
+		requireCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("TTL above ceiling rejected", func(t *testing.T) {
+		in := mkBase()
+		in.SubjectPattern = "repo:other:ref:refs/heads/ttl-high"
+		in.JWKSCacheTTLSeconds = 86401
+		_, err := svc.Create(ctx, in)
+		requireCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("TTL at bounds accepted", func(t *testing.T) {
+		in := mkBase()
+		in.SubjectPattern = "repo:other:ref:refs/heads/ttl-floor"
+		in.JWKSCacheTTLSeconds = 60
+		_, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+
+		in2 := mkBase()
+		in2.SubjectPattern = "repo:other:ref:refs/heads/ttl-ceil"
+		in2.JWKSCacheTTLSeconds = 86400
+		_, err = svc.Create(ctx, in2)
+		require.NoError(t, err)
+	})
 }
 
 // TestOIDCTrustService_Update_Delete exercises the mutation paths so the
@@ -323,6 +373,29 @@ func TestOIDCTrustService_Update_Delete(t *testing.T) {
 		ActorID:        "admin",
 	})
 	requireCode(t, err, codes.InvalidArgument)
+
+	// SEC-060: the TTL bound is wired into Update too, not just Create —
+	// an out-of-range TTL on Update must be rejected before the repo write.
+	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
+		ID:                  created.ID,
+		TenantID:            tenantA,
+		DisplayName:         "x",
+		SubjectPattern:      "repo:org/r:ref:refs/heads/ttl",
+		JWKSCacheTTLSeconds: 5, // below the 60s floor
+		ActorID:             "admin",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+
+	// Update with an in-bounds TTL still succeeds.
+	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
+		ID:                  created.ID,
+		TenantID:            tenantA,
+		DisplayName:         "x",
+		SubjectPattern:      "repo:org/r:ref:refs/heads/ttl-ok",
+		JWKSCacheTTLSeconds: 300,
+		ActorID:             "admin",
+	})
+	require.NoError(t, err)
 
 	// Update wrong tenant returns NotFound.
 	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
