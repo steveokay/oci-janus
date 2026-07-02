@@ -374,6 +374,29 @@ func TestOIDCTrustService_Update_Delete(t *testing.T) {
 	})
 	requireCode(t, err, codes.InvalidArgument)
 
+	// SEC-060: the TTL bound is wired into Update too, not just Create —
+	// an out-of-range TTL on Update must be rejected before the repo write.
+	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
+		ID:                  created.ID,
+		TenantID:            tenantA,
+		DisplayName:         "x",
+		SubjectPattern:      "repo:org/r:ref:refs/heads/ttl",
+		JWKSCacheTTLSeconds: 5, // below the 60s floor
+		ActorID:             "admin",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+
+	// Update with an in-bounds TTL still succeeds.
+	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
+		ID:                  created.ID,
+		TenantID:            tenantA,
+		DisplayName:         "x",
+		SubjectPattern:      "repo:org/r:ref:refs/heads/ttl-ok",
+		JWKSCacheTTLSeconds: 300,
+		ActorID:             "admin",
+	})
+	require.NoError(t, err)
+
 	// Update wrong tenant returns NotFound.
 	_, err = svc.Update(ctx, UpdateOIDCTrustInput{
 		ID:             created.ID,

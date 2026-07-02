@@ -100,7 +100,22 @@ type UpdateOIDCTrustInput struct {
 //     we treat the first response as authoritative and never chase a
 //     Location header off the vetted host.
 func NewOIDCTrustService(repo trustRepo, sa saRepo, auth *Service, audit AuditEmitter, allowedIssuers []string) *OIDCTrustService {
-	jwksClient := &http.Client{
+	return &OIDCTrustService{
+		repo:            repo,
+		serviceAccounts: sa,
+		jwks:            newJWKSCache(newJWKSHTTPClient()),
+		allowedIssuers:  allowedIssuers,
+		auth:            auth,
+		audit:           audit,
+	}
+}
+
+// newJWKSHTTPClient builds the hardened HTTP client used for OIDC
+// discovery + JWKS fetches. Extracted from NewOIDCTrustService so the
+// SEC-058 no-redirect and SEC-062 timeout guarantees can be asserted in a
+// unit test against the exact production configuration.
+func newJWKSHTTPClient() *http.Client {
+	return &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSHandshakeTimeout:   3 * time.Second,
@@ -112,14 +127,6 @@ func NewOIDCTrustService(repo trustRepo, sa saRepo, auth *Service, audit AuditEm
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-	}
-	return &OIDCTrustService{
-		repo:            repo,
-		serviceAccounts: sa,
-		jwks:            newJWKSCache(jwksClient),
-		allowedIssuers:  allowedIssuers,
-		auth:            auth,
-		audit:           audit,
 	}
 }
 

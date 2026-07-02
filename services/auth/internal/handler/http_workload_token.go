@@ -222,12 +222,13 @@ func (h *HTTPHandler) checkWorkloadRateLimit(ctx context.Context, iss, sub strin
 
 // workloadRateLimitKey derives the Redis bucket key from the UNVERIFIED
 // (issuer, subject) claims of the inbound JWT (SEC-061). The claims are
-// attacker-controlled and uncapped at this point — a hostile caller could
-// submit a multi-megabyte `sub` and, with a raw `key := iss + ":" + sub`,
-// force Redis to store a megabyte-sized key per bucket. We hash the tuple
-// to a fixed 64-hex-char digest so the key size is constant regardless of
-// claim length. A NUL separator keeps ("a", "b:c") and ("a:b", "c")
-// distinct — a domain that "\x00" cannot appear in for a legitimate JWT
+// attacker-controlled at this point — bounded only by the 8 KiB body cap
+// (workloadRequestBodyLimit) or, on the header path, Go's ~1 MB default
+// MaxHeaderBytes. With a raw `key := iss + ":" + sub` a hostile caller
+// could still push a near-MB `sub` into a Redis key per bucket. We hash
+// the tuple to a fixed 64-hex-char digest so the key size is constant
+// regardless of claim length. A NUL separator keeps ("a", "b:c") and
+// ("a:b", "c") distinct — a byte that cannot appear in a legitimate JWT
 // claim, unlike the ambiguous ":" the previous form used.
 func workloadRateLimitKey(iss, sub string) string {
 	sum := sha256.Sum256([]byte(iss + "\x00" + sub))
