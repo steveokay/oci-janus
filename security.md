@@ -59,7 +59,7 @@
 
 ## Open Issues
 
-> 9 OPEN SEC findings as of 2026-07-01 — SEC-055 + SEC-056 (LOW, FUT-002 credential-helpers) + SEC-057 (HIGH BLOCKER, FUT-001 issuer allowlist prefix bug) + SEC-058/059/060 (MEDIUM, FUT-001 JWKS SSRF + OOM + TTL bounds) + SEC-061/062 (LOW, FUT-001 rate-limit key + hardening) + SEC-063 (INFO, FUT-001 HTTPS scheme not enforced BE-side). SEC-040, SEC-041, SEC-042, SEC-043 RESOLVED in `fix/sec-040-041-042-sso-followups`; SEC-053 + SEC-054 OPEN follow-ups from spec-lint. See SEC-NNN entries below for full triage notes.
+> 15 OPEN SEC findings as of 2026-07-02 — SEC-057 (HIGH, FUT-001 issuer allowlist prefix bug) + SEC-058/059/060 (MEDIUM, FUT-001 JWKS SSRF + OOM + TTL bounds) + SEC-061/062 (LOW, FUT-001 rate-limit key + client timeouts) + SEC-063 (INFO, FUT-001 HTTPS scheme not enforced BE-side) + SEC-066 (MEDIUM, PutTokenPolicy trusts caller tenant_id — PeerTenantCheck interceptor is the durable fix) + SEC-053/054 (LOW, spec-lint hardening) + SEC-055/056 (LOW, FUT-002 follow-ups) + SEC-037 (LOW, migration backfill lock) + SEC-048 (LOW, JWT fallback unmetered) + SEC-049 (INFO, keyring kid provenance). Plus PENTEST-030 (OPEN) + PENTEST-033 (PARTIAL). RESOLVED 2026-07-01/02: SEC-064/067 (PR #226), SEC-065/068 (PR #228), SEC-069/070 (`fix/sec-068-access-review-tenant-scoping`). See SEC-NNN entries below for full triage notes.
 >
 > Backend feature gaps (KMS signing backends, Notary v2, etc.) are tracked in
 > `status.md` Sprint 6 — those are unimplemented features rather than
@@ -226,9 +226,10 @@
 
 ### SEC-064 — `CreateAPIKey` skips workspace `max_ttl_days` cap when caller omits `expires_at`
 - **Severity:** HIGH
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `services/auth`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-003-token-policies`)
+- **Resolved:** 2026-07-01 — PR #226 (`fix(fut-003): SEC-064 HIGH + CR routing bug + SEC-067 no-op audit`). Remediation option A: nil `expiresAt` is clamped to `now + max_ttl_days` when a policy cap is set (the cap becomes the default). Regression test `TestCreateAPIKey_NilExpiryClampedToPolicyCap` verified failing on pre-fix code. **Residual:** the SA branch (`service_account.go` `IssueKey`, remediation #3) was NOT included — SA keys remain perpetual per the documented v1 spec limitation; revisit if the SA-key FE flow gains an expiry input.
 - **Description:** `services/auth/internal/service/auth.go:657` guards the max-TTL check with `if policy.MaxTTLDays != nil && expiresAt != nil`. When the HTTP request body omits `expires_at` (`services/auth/internal/handler/http.go:588` `ExpiresAt *time.Time`), the pointer is nil and the entire enforcement clause is skipped. The resulting `api_keys` row has `expires_at IS NULL`, which downstream `ValidateAPIKey` at `auth.go:802` treats as "no expiry — key valid forever". Net effect: an operator who sets a strict `max_ttl_days=30` workspace cap is trivially bypassed by any caller (human user, curl script, or the FE happy path if the user leaves the "expiry" input blank) simply by omitting the field. The load-bearing FUT-003 promise — "no API key may have a lifetime longer than this value" — is broken. Grandfathering tests (`token_policy_test.go:363`) do not catch this because they always pass an explicit `expiresAt`. The idle-revoke worker partially mitigates by revoking never-used keys after `idle_revoke_days` — but that is a separate policy dimension and can be independently disabled. Also affects FUT-003 rotation: when `expires_at` is nil and `rotation_interval_days` is set, `rotationDueAt` is still stamped (correctly), so rotation lapse is enforced — but the underlying TTL bypass remains.
 - **Remediation:**
   1. In `CreateAPIKey`, when `policy.MaxTTLDays != nil` treat a nil `expiresAt` as "clamp to the cap": stamp `expiresAt = time.Now().Add(time.Duration(*policy.MaxTTLDays) * 24 * time.Hour)` (preferred — the cap becomes the default). Alternative: reject with `InvalidArgument` if `expiresAt == nil` under a configured cap ("expiry required by workspace policy"), pushing the choice back to the caller.
@@ -238,9 +239,10 @@
 
 ### SEC-065 — Client-side `idle_revoke_days` floor (7 days) not enforced by FE `PoliciesPanel`
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `frontend/`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-003-token-policies`)
+- **Resolved:** 2026-07-01 — PR #228. New `PER_FIELD_MIN` table maps `idle_revoke_days` → 7; `validateSection` resolves the per-dimension floor; numeric input `min=` mirrors it; regression test pins "type 3 → save → inline banner + mutation NOT called".
 - **Description:** `services/auth/internal/service/token_policy.go:45` enforces `tokenPolicyMinIdleRevokeDays = 7` — the backend rejects any `idle_revoke_days` < 7 with `codes.InvalidArgument` (surfaced as 400 via `mapTokenPolicyGRPCError`). `frontend/src/components/access/PoliciesPanel.tsx:114 validateSection` only enforces the outer `MIN_DAYS = 1` / `MAX_DAYS = 3650` bounds, applied uniformly to all three dimensions. Consequence: a workspace admin who sets `idle_revoke_days = 3` clicks Save, hits a raw BE error banner, and has to guess-and-retry. The PR message correctly says "Client-side validation rejects <=0 or non-integer values BEFORE calling the mutation" — but the tighter per-field floor (7 days for idle-revoke) is not surfaced. No security exposure — the BE catches this — but the plan explicitly promised BE + FE bounds parity ("Bounds validation — 0 or negative days rejected at both BE service layer AND FE client layer") and this dimension's floor is missing.
 - **Remediation:**
   1. In `PoliciesPanel.tsx`, thread a per-dimension `minDays` prop into `PolicySection` + `validateSection`. Set to `7` for `idle_revoke_days`, `1` for the other two.
@@ -261,7 +263,8 @@
 
 ### SEC-067 — `Upsert(all-nil)` rewrites `updated_by_user_id` on a no-op call, muddling audit trail
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED
+- **Resolved:** 2026-07-01 — PR #226. Remediation option 2: the audit emit is skipped when the before + after policy snapshots are byte-identical, so a no-op `{}` PUT no longer fires an `auth.token_policy.changed` event. (The DB `updated_by_user_id` stamp on a no-op remains — accepted, the audit trail is the tamper-evident record.)
 - **Service:** `services/auth`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-003-token-policies`)
 - **Description:** `services/auth/internal/repository/token_policy.go:83 Upsert` documents "A caller that Puts an all-nil policy is semantically saying 'no change, but stamp me as the last toucher'." The COALESCE-based update preserves the three limit fields but always writes `updated_by_user_id = EXCLUDED.updated_by_user_id`. Combined with `TokenPolicyService.Put` at `token_policy.go:105` which does NOT reject an all-nil request (only `TenantID` and `ActorID` are required), any workspace admin can call `PUT /api/v1/access/token-policy` with an empty JSON `{}` body and (a) trigger an `auth.token_policy.changed` audit event with an empty before/after diff and (b) rewrite `updated_by_user_id` to their own id — silently taking credit for the previous admin's configuration. An attacker who has compromised one admin account can use this to launder their identity into the audit trail as the "last admin who touched the policy." Not exploitable to gain new privilege but pollutes the audit trail with noise + credit-laundering.
@@ -272,9 +275,10 @@
 
 ### SEC-068 — `SnoozeAPIKeyReview` BFF admin path skips tenant scoping — cross-tenant snooze + audit-trail forgery (multi-mode)
 - **Severity:** HIGH (multi mode) / N/A (single mode — no second tenant exists)
-- **Status:** OPEN
+- **Status:** RESOLVED
 - **Service:** `services/management`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-004-access-review`, code already merged as PR #227)
+- **Resolved:** 2026-07-01 — PR #228 shipped remediation #1: the tenant-scoped `ListStaleKeys` pre-flight now runs for EVERY caller (admin included), so an unknown/foreign key id returns 404 regardless of role; regression test `TestSnoozeAPIKeyReview_admin_unknownKey_returns404`. 2026-07-02 — `fix/sec-068-access-review-tenant-scoping` shipped remediation #2 (defence-in-depth): `tenant_id` added to the proto (SEC-069) and cross-checked in `AccessReviewService.SnoozeAPIKeyReview`, so a future BFF regression can no longer reach the DB write cross-tenant.
 - **Description:** `services/management/internal/handler/access_review.go:141 handleSnoozeAPIKeyReview` gates ownership resolution behind `if !isAdmin`. When `isTenantAdminOrPlatformAdmin(r) == true` the handler passes `body.KeyID` straight through to `authv1.SnoozeAPIKeyReviewRequest.KeyId` without any check that the key belongs to the caller's tenant. **Single-mode note:** in `DEPLOYMENT_MODE=single` there is by construction no second tenant to attack — this finding is only exploitable in `DEPLOYMENT_MODE=multi`. Since the default posture (CLAUDE.md §1) is `single`, real-world exposure across OSS deployments is expected to be near-zero; the finding still stands because (a) multi-mode operators exist and are the more likely target of tenant-admin abuse, and (b) the fix is small enough to land in the same follow-up as SEC-069. Downstream, `services/auth/internal/service/access_review.go:265 SnoozeAPIKeyReview` calls `repo.GetTenantIDForKey(ctx, in.KeyID)` which returns the key's own `tenant_id` without filtering. Result: a workspace admin of tenant A supplies a UUID that belongs to tenant B (guessed / phished / obtained from a shared audit log / a compromised-CI test artefact) and the auth service snoozes tenant B's key, emits `RoutingAccessReviewSnoozed` with `TenantID = <tenant B>` and `ActorID = <caller from tenant A>`. Two concrete impacts: (a) tenant B's operator loses their weekly nudge on that key without any indication, defeating the entire purpose of FUT-004's nudge-only surface; (b) tenant B's audit trail records an actor id from tenant A, which their FE will render as a raw UUID and their /activity view will not be able to attribute — breaking the audit invariant that every event has an in-tenant principal. Compounded by SEC-069 (gRPC surface has no `tenant_id` field, so tenant scoping is not even possible without a code change). Note: `isTenantAdminOrPlatformAdmin` returns true for any tenant admin scoped to the current JWT tenant — this is NOT a platform-admin-only bug, every workspace admin in the system can attack every other workspace.
 - **Remediation:**
   1. In the admin branch of `handleSnoozeAPIKeyReview` (before line 196), call `h.auth.ListStaleKeys(r.Context(), &authv1.ListStaleKeysRequest{TenantId: tenantID})` and require `ownerOfKey(listResp.GetKeys(), body.KeyID)` to return `found == true` — same pre-flight the non-admin path already runs. Cost: one extra gRPC on the admin path (already paid on the non-admin path).
@@ -284,9 +288,10 @@
 
 ### SEC-069 — `SnoozeAPIKeyReviewRequest` gRPC surface has no `tenant_id` + trusts caller-supplied `actor_id`
 - **Severity:** MEDIUM
-- **Status:** OPEN
+- **Status:** RESOLVED (tenant scoping) / residual `actor_id` concern folded into SEC-066 remediation #2
 - **Service:** `services/auth`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-004-access-review`, code already merged as PR #227)
+- **Resolved:** 2026-07-02 — `fix/sec-068-access-review-tenant-scoping`. Remediations #1 + #2 shipped: `string tenant_id = 4` added to `SnoozeAPIKeyReviewRequest`; the BFF populates it from `middleware.TenantIDFromContext` (JWT claims); `AccessReviewService.SnoozeAPIKeyReview` cross-checks it against the key's own tenant and returns opaque `codes.NotFound` on mismatch. Empty `tenant_id` skips the check (rolling-deploy tolerance) — the BFF test fake rejects an empty value so the plumbing can't silently regress. Regression tests: `TestAccessReviewService_SnoozeAPIKeyReview_TenantMismatchReturnsNotFound` (+ matching-tenant happy path). **Residual:** the `actor_id` spoof-by-direct-gRPC-caller concern (remediation #4) is the same class as SEC-066 and is tracked there — the shared `PeerActorCheck`/`PeerTenantCheck` interceptor is the durable fix; until then remediation #3 stands (operators MUST set `MTLS_PEER_CN_ALLOWLIST=registry-management` on `services/auth` in production).
 - **Description:** `proto/auth/v1/auth.proto:528 SnoozeAPIKeyReviewRequest` declares only `key_id`, `days`, `actor_id`. No `tenant_id`. The gRPC handler at `services/auth/internal/handler/grpc_access_review.go:65 SnoozeAPIKeyReview` never checks tenant provenance — the docstring at :11 says "the gRPC layer trusts its caller — RBAC / owner-vs-admin gates land in services/management's BFF." Two related risks: (a) tenant scoping is IMPOSSIBLE at the gRPC layer without a proto change, so the BFF must carry 100% of the tenant-check burden and any BFF regression (see SEC-068) becomes a full cross-tenant bypass; (b) `actor_id` is a raw string on the wire — a direct-gRPC caller with a valid mTLS cert can pass `actor_id = "<any-uuid>"` and stamp the audit event with a forged actor. Same class as SEC-066 (`PutTokenPolicy` trusts caller-supplied `tenant_id`) but a step worse because there is no field to cross-check against at all. In single mode the `SingleTenantInjector` clamps every incoming request to `bootstrap_tenant_id` and rejects mismatches — SO **single mode is safe from tenant-cross** but NOT from actor-id spoof. In multi mode with a permissive `MTLS_PEER_CN_ALLOWLIST` (or none), both paths are open. Same shape also applies to `ListStaleKeysRequest`: it does take `tenant_id`, but there's no cross-check that the gRPC peer's identity matches.
 - **Remediation:**
   1. Add `string tenant_id = 4;` to `SnoozeAPIKeyReviewRequest` in the proto. Populate from `middleware.TenantIDFromContext(r.Context())` in the BFF.
@@ -297,9 +302,10 @@
 
 ### SEC-070 — Audit consumer swallows `json.Unmarshal` errors for FUT-004 payloads
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED (FUT-004 cases) / consumer-wide sweep tracked as follow-up
 - **Service:** `services/audit`
 - **Raised:** 2026-07-01 (pre-PR review of `feat/fut-004-access-review`, code already merged as PR #227)
+- **Resolved:** 2026-07-02 — `fix/sec-068-access-review-tenant-scoping`. Both FUT-004 `mapEvent` cases (`access_review.due`, `access_review.snoozed`) now log + drop malformed payloads (nil → ACK, no blank-Resource insert). Test `TestMapEvent_accessReview_malformedPayloadDropped` covers both routing keys + the well-formed happy path. **Residual:** the same `_ = json.Unmarshal` pattern remains in the ~25 pre-existing `mapEvent` cases — roll the fix consumer-wide alongside the FUT-048 consumer-hardening batch (futures.md), plus the optional `event.Version` gate (remediation #3).
 - **Description:** `services/audit/internal/eventconsumer/consumer.go:986` and `:1004` both use `_ = json.Unmarshal(event.Payload, &p)` for `AccessReviewDuePayload` and `AccessReviewSnoozedPayload`. A malformed payload (e.g. a broker replay of an older/newer event shape, or a hostile publisher on the same exchange) silently produces a zero-value `p` — the audit row is still inserted with `Resource = ""` (empty KeyID), `ActorID = "system"` fallback for the snoozed case. This is consistent with the pre-existing pattern used by every prior payload in `mapEvent` (RoutingPushImage, RoutingScanCompleted, etc.), so it's NOT a regression introduced by FUT-004. But it means audit rows can be silently corrupted by a malformed payload rather than being NACK+DLQ'd or logged as a parse error. Because `services/auth` is the sole publisher of both routing keys and both are typed structs on the producer side, real-world exposure is near-zero unless: (a) the exchange is ever exposed to a hostile publisher, or (b) a future producer-side refactor changes the payload shape without a version bump.
 - **Remediation:**
   1. Handle the unmarshal error: on failure, log via `slog.WarnContext(ctx, "audit: malformed FUT-004 payload", "action", event.Type, "err", err)` and return `nil` (skip the audit insert entirely, so we don't stamp a blank-Resource row into the table).
@@ -829,6 +835,7 @@ under CLAUDE.md §7 "JWT Validation."
   1. For deployments with > ~100k humans, batch the backfill into chunks (e.g. `UPDATE users SET onboarding_complete = true WHERE id IN (SELECT id FROM users WHERE NOT onboarding_complete LIMIT 10000)` looped) and commit between batches via an out-of-band runbook, leaving the migration to only run the `ALTER TABLE … ADD COLUMN NOT NULL DEFAULT false` (which is metadata-only on PG ≥ 11).
   2. Alternatively, drop the `WHERE created_at < NOW()` backfill entirely and rely on `NOT NULL DEFAULT false` for existing rows (this would re-show the wizard to pre-existing humans — a product choice, not a security one).
   3. Document the deployment-window cost in `infra/runbooks/` so operators of large installs know to run the backfill out-of-band before the schema migration.
+- **References:** CLAUDE.md §11 (migration rules — "run migrations at startup in a separate step before serving traffic"); PENTEST-028 manifest-backfill precedent (split bulk UPDATE out of migration into idempotent runbook).
 
 ### SEC-038 — `services/gc` mTLS dials lacked serverName pin and silently downgraded to plaintext on cert load error
 - **Severity:** MEDIUM
@@ -841,37 +848,6 @@ under CLAUDE.md §7 "JWT Validation."
   2. Propagate the error from `ClientCreds` on TLS load failure so startup aborts rather than silently downgrading.
 - **References:** CLAUDE.md §7 (mTLS Between Services — "Client cert CN must match expected service name"), §13 (HTTP/Go hardening — fail-closed posture), CWE-295 (Improper Certificate Validation), CWE-636 (Not Failing Securely).
 - **Resolved:** 2026-06-29 — commit `329c63b` on branch `fix/sec-038-gc-clientcreds` inlines `mtls.ClientCreds` per-target with non-empty `serverName` and returns the wrapped error on TLS-load failure. No insecure fallback remains on the client path; the server-side `buildGRPCOptions` plaintext-on-empty-paths branch is the documented dev fallback and remains intentionally untouched.
-
-### SEC-039 — Same shape as SEC-038 still present in `services/core`, `services/scanner`, `services/proxy`, `services/management`
-- **Severity:** MEDIUM
-- **Status:** OPEN
-- **Service:** `services/core`, `services/scanner`, `services/proxy`, `services/management`
-- **Raised:** 2026-06-29
-- **Description:** Sweep performed alongside the SEC-038 fix confirmed the same vulnerable shape — local `clientCreds(cfg)` (or `buildGRPCCreds(cfg)`) helper that calls `mtls.ClientTLSConfig(..., "")` with an empty serverName AND silently returns `insecure.NewCredentials()` on TLS load failure — survives in:
-  - `services/core/internal/server/server.go:254-264`
-  - `services/scanner/internal/server/server.go:442-452`
-  - `services/proxy/internal/server/server.go:296-306`
-  - `services/management/internal/server/server.go:214-231` (`buildGRPCCreds` — empty serverName comment explicitly punts to "follow-up")
-  Same impact class as SEC-038: no per-target CN/SAN binding on outbound dials (impersonation by any CA-signed cert), and corrupted cert silently downgrades the dial channel to plaintext for the process lifetime instead of refusing to start.
-- **Remediation:**
-  1. Mirror the SEC-038 fix in each service: drop the helper; call `libs/auth/mtls.ClientCreds(ca, cert, key, "<remote-service-name>")` inline at each dial site (metadata, storage, auth, scanner, signer, gc, tenant — whichever the service dials).
-  2. Where the same caller dials multiple remotes, build creds per-target — do not share one creds object across different remote services.
-  3. Propagate the error on TLS load failure rather than falling back to insecure.
-  4. For `services/management`, replace the "follow-up" comment in `buildGRPCCreds` with a per-target env var (or hardcoded constant matching the cert convention used by services/auth/metadata in their own helpers).
-- **References:** CLAUDE.md §7 (mTLS Between Services), §13 (fail-closed posture), CWE-295, CWE-636. Tracking parent: SEC-038.
-- **References:** CLAUDE.md §11 (migration rules — "run migrations at startup in a separate step before serving traffic"); PENTEST-028 manifest-backfill precedent (split bulk UPDATE out of migration into idempotent runbook).
-
-### SEC-038 — services/gc client mTLS misses server-name pin and fails open on TLS load error
-- **Severity:** MEDIUM
-- **Status:** OPEN
-- **Service:** `services/gc`
-- **Raised:** 2026-06-29
-- **Description:** During the REDESIGN-001 Phase 3.4 rollout (PR #177) `services/gc` reused its existing `tenantConn` for the bootstrap-tenant-id fetch (the variant called out in the PR description) instead of opening a second connection. The shared dial helper at `services/gc/internal/server/server.go:315-326` (`clientCreds`) builds its `tls.Config` via `mtls.ClientTLSConfig(..., "")` — an EMPTY `serverName`, so the TLS handshake against `registry-tenant` does NOT verify the server's SAN/CN matches `registry-tenant`. The other ten services in this rollout (auth/metadata/core/storage/signer/webhook/scanner/audit/proxy/tenant) all pass the literal `"registry-tenant"` to `mtls.ClientCreds` (e.g. `services/core/internal/server/server.go:240`), so gc is the only one missing the SNI/CN pin. Additionally, lines 318-321 catch a `mtls.ClientTLSConfig` error and fall back to `insecure.NewCredentials()` with a warning — i.e. a corrupted/unreadable cert silently downgrades every gc → tenant/metadata/storage dial to plaintext at startup, which directly violates CLAUDE.md §7 ("fail closed (deny all)"). Net impact: an attacker who can interpose on the `registry-tenant` gRPC port (or impersonate it with a CA-signed cert for a *different* internal service) can serve a bogus `bootstrap_tenant_id` to gc, and gc will then pin every inbound RPC to the attacker-chosen tenant for the rest of the process lifetime — pointing GC sweeps at the wrong tenant's blob/manifest set. The downgrade path additionally turns a cert-load misconfiguration into plaintext mTLS for the entire service.
-- **Remediation:**
-  1. Replace `services/gc/internal/server/server.go:315-326`'s body with `mtls.ClientCreds(cfg.MTLSCACertPath, cfg.MTLSCertPath, cfg.MTLSKeyPath, "registry-tenant")` so server-name verification matches the other ten services. Note: `tenantConn` is dialled with the same shared `creds` as `metaConn` / `storageConn`; either parameterise the helper per-target (preferred) or split the tenant dial out so it can pass `"registry-tenant"` while the others stay on `""`.
-  2. Remove the `slog.Warn ... falling back to insecure` branch — propagate the error so the service fails to start. This matches every other service's pattern (cert-load error returns from `Run()`).
-  3. Add a regression test in `services/gc/internal/server/server_test.go` that asserts `clientCreds` returns an error (not insecure creds) when only some cert paths are set.
-- **References:** CLAUDE.md §7 ("Client cert CN must match expected service name (enforce in server-side interceptor)" + "fail closed (deny all)"); CLAUDE.md §13 ("No secrets in URL parameters" / fail-loud secrets posture); CWE-295 (Improper Certificate Validation); CWE-757 (Selection of Less-Secure Algorithm).
 
 ### SEC-039 — services/core, scanner, proxy, management client mTLS misses server-name pin and fails open on TLS load error
 - **Severity:** HIGH

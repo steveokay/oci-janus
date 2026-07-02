@@ -179,3 +179,56 @@ func TestMapEvent_pullImage_anonymous(t *testing.T) {
 		t.Errorf("resource: got %q, want public/library@sha256:def", ae.Resource)
 	}
 }
+
+// TestMapEvent_accessReview_malformedPayloadDropped (SEC-070) asserts the
+// two FUT-004 cases drop a malformed payload (nil → ACK, no insert)
+// instead of persisting a blank-Resource audit row. Well-formed payloads
+// still map so the drop path can't mask an over-eager rejection.
+func TestMapEvent_accessReview_malformedPayloadDropped(t *testing.T) {
+	tenantID := uuid.New()
+	garbage := json.RawMessage(`{"key_id": 42,`) // truncated + wrong type
+
+	for _, eventType := range []string{
+		events.RoutingAccessReviewDue,
+		events.RoutingAccessReviewSnoozed,
+	} {
+		t.Run(eventType+"/malformed", func(t *testing.T) {
+			ev := events.Event{
+				ID:         uuid.NewString(),
+				Type:       eventType,
+				TenantID:   tenantID.String(),
+				OccurredAt: time.Now().UTC(),
+				Version:    "1.0",
+				Payload:    garbage,
+			}
+			if ae := mapEvent(tenantID, ev); ae != nil {
+				t.Errorf("mapEvent(%q) with malformed payload: got row (resource=%q), want nil drop",
+					eventType, ae.Resource)
+			}
+		})
+	}
+
+	// Happy-path guard: a well-formed snoozed payload must still map.
+	payload, _ := json.Marshal(events.AccessReviewSnoozedPayload{
+		TenantID:     tenantID.String(),
+		KeyID:        uuid.NewString(),
+		ActorID:      uuid.NewString(),
+		SnoozedUntil: time.Now().UTC().Format(time.RFC3339),
+		DaysSnoozed:  30,
+	})
+	ev := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingAccessReviewSnoozed,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+	ae := mapEvent(tenantID, ev)
+	if ae == nil {
+		t.Fatalf("well-formed access_review.snoozed payload must still map")
+	}
+	if ae.Action != "auth.access_review.snoozed" {
+		t.Errorf("action: got %q, want auth.access_review.snoozed", ae.Action)
+	}
+}

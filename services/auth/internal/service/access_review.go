@@ -230,10 +230,16 @@ func suggestedActionFor(k repository.StaleKey, staleCutoff, now time.Time) (Sugg
 }
 
 // SnoozeAPIKeyReviewInput is the validated request payload for Snooze.
+//
+// TenantID (SEC-069) is the caller's tenant as asserted by the BFF from
+// the JWT claims. uuid.Nil skips the cross-check (rolling-deploy
+// tolerance for callers built before the field existed); when set, it
+// must match the key's own tenant or the call fails with NotFound.
 type SnoozeAPIKeyReviewInput struct {
-	KeyID   uuid.UUID
-	Days    int32
-	ActorID uuid.UUID
+	KeyID    uuid.UUID
+	Days     int32
+	ActorID  uuid.UUID
+	TenantID uuid.UUID
 }
 
 // SnoozeAPIKeyReview defers the next access-review nudge for the given
@@ -268,6 +274,20 @@ func (s *AccessReviewService) SnoozeAPIKeyReview(ctx context.Context, in SnoozeA
 			return nil, status.Error(codes.NotFound, "api key not found")
 		}
 		return nil, fmt.Errorf("lookup key tenant: %w", err)
+	}
+
+	// SEC-069: when the caller asserted a tenant, the key must belong to
+	// it. NotFound (not PermissionDenied) on mismatch — an opaque failure
+	// that doesn't leak whether the key id exists in another tenant.
+	// This is the service-layer backstop behind the BFF's tenant-scoped
+	// pre-flight scan (SEC-068): even if a future BFF regression drops
+	// that scan, a cross-tenant snooze can no longer reach the DB write.
+	if in.TenantID != uuid.Nil && in.TenantID != tenantID {
+		slog.WarnContext(ctx, "access review: snooze tenant mismatch rejected",
+			"asserted_tenant_id", in.TenantID,
+			"key_id", in.KeyID,
+		)
+		return nil, status.Error(codes.NotFound, "api key not found")
 	}
 
 	now := s.now().UTC()

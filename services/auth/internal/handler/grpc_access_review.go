@@ -2,9 +2,9 @@
 // FUT-004 access-review feature. Two RPCs map to AccessReviewService:
 //
 //   - ListStaleKeys       — return the tenant's stale keys with the
-//                            suggested-action heuristic pre-applied.
+//     suggested-action heuristic pre-applied.
 //   - SnoozeAPIKeyReview  — validate + persist a per-key snooze; emits
-//                            auth.access_review.snoozed on success.
+//     auth.access_review.snoozed on success.
 //
 // Per the pattern established by grpc_token_policy.go, the gRPC layer
 // trusts its caller — RBAC / owner-vs-admin gates land in
@@ -62,6 +62,10 @@ func (h *GRPCHandler) ListStaleKeys(ctx context.Context, req *authv1.ListStaleKe
 // SnoozeAPIKeyReview defers the next weekly nudge for one key. Days is
 // validated at both bounds by the service layer ([1, 90]) so an
 // out-of-range value returns codes.InvalidArgument regardless of caller.
+//
+// tenant_id (SEC-069) is optional on the wire for rolling-deploy
+// compatibility, but when present it must be a valid UUID and must match
+// the key's own tenant (the service layer returns NotFound on mismatch).
 func (h *GRPCHandler) SnoozeAPIKeyReview(ctx context.Context, req *authv1.SnoozeAPIKeyReviewRequest) (*authv1.StaleKey, error) {
 	if h.accessReview == nil {
 		return nil, errAccessReviewNotConfigured
@@ -74,10 +78,21 @@ func (h *GRPCHandler) SnoozeAPIKeyReview(ctx context.Context, req *authv1.Snooze
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid actor_id")
 	}
+	// Empty → uuid.Nil → the service skips the cross-check. A present-
+	// but-garbled value is a caller bug and gets InvalidArgument rather
+	// than being silently treated as "no tenant asserted".
+	tenantID := uuid.Nil
+	if raw := req.GetTenantId(); raw != "" {
+		tenantID, err = uuid.Parse(raw)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+		}
+	}
 	got, err := h.accessReview.SnoozeAPIKeyReview(ctx, service.SnoozeAPIKeyReviewInput{
-		KeyID:   keyID,
-		Days:    req.GetDays(),
-		ActorID: actorID,
+		KeyID:    keyID,
+		Days:     req.GetDays(),
+		ActorID:  actorID,
+		TenantID: tenantID,
 	})
 	if err != nil {
 		if s, ok := status.FromError(err); ok {
