@@ -236,6 +236,6 @@ message TenantRetentionSavings {
   string                    tenant_id         = 1;
   int64                     reclaimed_bytes   = 2; // SUM(bytes_freed) over succeeded retention runs
   int64                     manifests_deleted = 3; // SUM(manifests_deleted)
-  int64                     run_count         = 4; // number of succeeded retention runs counted
+  int64                     run_count         = 4; // succeeded retention runs counted — includes both 'retention' (mark-only, 0-byte) and 'retention_grace' (hard-delete) passes
   google.protobuf.Timestamp last_run_at       = 5; // completed_at of the most recent counted run (nil if none)
 }

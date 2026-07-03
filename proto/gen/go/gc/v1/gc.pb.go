@@ -1043,7 +1043,7 @@ type TenantRetentionSavings struct {
 	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	ReclaimedBytes   int64                  `protobuf:"varint,2,opt,name=reclaimed_bytes,json=reclaimedBytes,proto3" json:"reclaimed_bytes,omitempty"`       // SUM(bytes_freed) over succeeded retention runs
 	ManifestsDeleted int64                  `protobuf:"varint,3,opt,name=manifests_deleted,json=manifestsDeleted,proto3" json:"manifests_deleted,omitempty"` // SUM(manifests_deleted)
-	RunCount         int64                  `protobuf:"varint,4,opt,name=run_count,json=runCount,proto3" json:"run_count,omitempty"`                         // number of succeeded retention runs counted
+	RunCount         int64                  `protobuf:"varint,4,opt,name=run_count,json=runCount,proto3" json:"run_count,omitempty"`                         // succeeded retention runs counted — includes both 'retention' (mark-only, 0-byte) and 'retention_grace' (hard-delete) passes
 	LastRunAt        *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_run_at,json=lastRunAt,proto3" json:"last_run_at,omitempty"`                     // completed_at of the most recent counted run (nil if none)
 }
 
