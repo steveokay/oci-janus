@@ -56,6 +56,11 @@ type fakeRepo struct {
 	getRunByIDErr    error
 	lastGetRunID     uuid.UUID
 	lastGetTenantID  uuid.UUID
+
+	// REM-013 gap 3 — retention savings aggregate fake.
+	savings           repository.RetentionSavings
+	savingsErr        error
+	lastSavingsTenant uuid.UUID
 }
 
 func (f *fakeRepo) CreateRun(_ context.Context, mode string, tenantID uuid.UUID, triggeredBy string) (*repository.GCRun, error) {
@@ -137,6 +142,15 @@ func (f *fakeRepo) GetRunByID(_ context.Context, runID, tenantID uuid.UUID) (*re
 		return nil, repository.ErrNotFound
 	}
 	return f.getRunByIDResult, nil
+}
+
+// REM-013 gap 3 — retention savings aggregate fake.
+func (f *fakeRepo) GetTenantRetentionSavings(_ context.Context, tenantID uuid.UUID) (repository.RetentionSavings, error) {
+	f.lastSavingsTenant = tenantID
+	if f.savingsErr != nil {
+		return repository.RetentionSavings{}, f.savingsErr
+	}
+	return f.savings, nil
 }
 
 // ─── GetStatus ──────────────────────────────────────────────────────────────
@@ -442,4 +456,86 @@ func TestNoRepository_AllRPCsReturnFailedPrecondition(t *testing.T) {
 func statusCode(err error) codes.Code {
 	st, _ := status.FromError(err)
 	return st.Code()
+}
+
+// ─── GetTenantRetentionSavings (REM-013 gap 3) ────────────────────────────────
+
+// TestGetTenantRetentionSavings_mapsAggregate verifies the handler forwards the
+// tenant id to the repo and maps every aggregate field (including a non-nil
+// last_run_at) onto the wire message.
+func TestGetTenantRetentionSavings_mapsAggregate(t *testing.T) {
+	tenant := uuid.New()
+	last := time.Date(2026, 7, 2, 9, 0, 0, 0, time.UTC)
+	repo := &fakeRepo{savings: repository.RetentionSavings{
+		ReclaimedBytes:   4096,
+		ManifestsDeleted: 8,
+		RunCount:         2,
+		LastRunAt:        &last,
+	}}
+	h := New(repo, nil, 0)
+
+	resp, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
+		TenantId: tenant.String(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.lastSavingsTenant != tenant {
+		t.Errorf("tenant not forwarded: got %v, want %v", repo.lastSavingsTenant, tenant)
+	}
+	if resp.GetReclaimedBytes() != 4096 {
+		t.Errorf("reclaimed_bytes: got %d, want 4096", resp.GetReclaimedBytes())
+	}
+	if resp.GetManifestsDeleted() != 8 {
+		t.Errorf("manifests_deleted: got %d, want 8", resp.GetManifestsDeleted())
+	}
+	if resp.GetRunCount() != 2 {
+		t.Errorf("run_count: got %d, want 2", resp.GetRunCount())
+	}
+	if resp.GetTenantId() != tenant.String() {
+		t.Errorf("tenant_id echo: got %q, want %q", resp.GetTenantId(), tenant.String())
+	}
+	if resp.GetLastRunAt() == nil || !resp.GetLastRunAt().AsTime().Equal(last) {
+		t.Errorf("last_run_at: got %v, want %v", resp.GetLastRunAt(), last)
+	}
+}
+
+// TestGetTenantRetentionSavings_noRuns_returnsZero verifies the empty-state:
+// a tenant with no completed retention runs yields all-zero counters and a nil
+// last_run_at, with no error.
+func TestGetTenantRetentionSavings_noRuns_returnsZero(t *testing.T) {
+	h := New(&fakeRepo{}, nil, 0)
+	resp, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
+		TenantId: uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetReclaimedBytes() != 0 || resp.GetRunCount() != 0 || resp.GetLastRunAt() != nil {
+		t.Errorf("expected zero savings, got %+v", resp)
+	}
+}
+
+// TestGetTenantRetentionSavings_badTenant_returnsInvalidArgument verifies the
+// tenant-id validation path (empty + non-UUID).
+func TestGetTenantRetentionSavings_badTenant_returnsInvalidArgument(t *testing.T) {
+	h := New(&fakeRepo{}, nil, 0)
+	for _, tid := range []string{"", "not-a-uuid"} {
+		_, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{TenantId: tid})
+		if statusCode(err) != codes.InvalidArgument {
+			t.Errorf("tenant_id %q: got %v, want InvalidArgument", tid, statusCode(err))
+		}
+	}
+}
+
+// TestGetTenantRetentionSavings_repoErr_returnsInternal verifies a repository
+// failure surfaces as codes.Internal, not a panic.
+func TestGetTenantRetentionSavings_repoErr_returnsInternal(t *testing.T) {
+	h := New(&fakeRepo{savingsErr: errors.New("boom")}, nil, 0)
+	_, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
+		TenantId: uuid.New().String(),
+	})
+	if statusCode(err) != codes.Internal {
+		t.Errorf("got %v, want Internal", statusCode(err))
+	}
 }
