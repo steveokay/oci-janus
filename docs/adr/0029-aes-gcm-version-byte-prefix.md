@@ -14,7 +14,18 @@ Encrypted secrets at rest (OAuth client secrets, SAML SP private keys, upstream 
 
 ## Consequences
 
-Future KEK rotation can flip the version byte and migrate gradually. The actual rotation tool ships separately.
+The rotation tool ships separately and **has now shipped** as RED-FU-015 (PR
+#249; operator runbook [`infra/runbooks/kek-rotation.md`](../../infra/runbooks/kek-rotation.md)).
+
+**Correction (RED-FU-015 scoping).** The original assumption that a rotation
+would "flip the version byte" to distinguish old-vs-new-key ciphertexts proved
+wrong: the version byte encodes the *layout* (`v1 = version‖nonce‖ct‖tag`), not
+*which key* produced the ciphertext — a re-encrypted row stays `0x01`. So you
+cannot tell a row's KEK generation from its bytes. The shipped tool instead
+detects completion by **trial-decryption** (authoritative) plus a nullable
+`kek_version SMALLINT` audit column, and re-encrypts in place. The version byte
+remains valuable for the *legacy-vs-v1 layout* fallback it was built for; it is
+just not the rotation key-discriminator this ADR first envisioned.
 
 ## Verified by
 

@@ -28,7 +28,7 @@
 
 **Remaining:** calendar-only — soak `v2.0.0-rc1` until **≥ 2026-07-07**, then tag `v2.0.0` + cut the GitHub release. Once `v2.0.0` is tagged, delete this entry.
 
-**Tail SEC follow-ups (non-blocking, can be picked up alongside other work):** SEC-051 (LOW, pre-migration audit rows silently unverifiable), SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases), SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex), 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch.
+**Tail SEC follow-ups (non-blocking, can be picked up alongside other work):** SEC-051 (LOW, pre-migration audit rows silently unverifiable), SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases), SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex), 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch, **SEC-075 (INFO, pre-existing — surfaced during PR #250 review)** — username/password login (`AuthenticateUser`) uses kind-agnostic `GetByUsername`; the `GetHumanByUsername` helper its docstring names doesn't exist, so the sole barrier on the password path is the empty SA `password_hash` (not exploitable today). Fix: add a `kind='human'`-guarded `GetHumanByUsername` (or an explicit post-lookup kind check) + correct the docstring. See [`security.md`](security.md).
 
 **Deferred to `futures.md`:** RED-FU-016 (SAML v0.5.x bump, LOW), RED-FU-017 (audit checkpoint signing, LOW), RED-FU-018 (scanner in-process sandbox, PARKED). *(RED-FU-015 KEK rotation tool **SHIPPED 2026-07-03**, PR #249 — resolution row in [`status.md`](status.md); review follow-ups tracked below.)*
 

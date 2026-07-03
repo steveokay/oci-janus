@@ -1220,8 +1220,8 @@ Specific events to add (from review):
 
 - [x] Ciphertext format: `[1-byte version][nonce][ciphertext + tag]`.
 - [x] Versioned decrypt picks the right key by reading the first byte. (Phase 6.4 shipped "try v1, fall back to legacy" instead of strict-on-version because ~1/256 legacy ciphertexts have random nonces starting with `0x01`; tamper safety preserved by GCM auth tag.)
-- [ ] Migration: re-encrypt existing rows with version=1 (a single pass at deploy time). DEFERRED — Phase 6.4 shipped version byte only; active KEK rotation tool is a follow-up.
-- [ ] Document rotation: deploy v2 key alongside v1, rotate writers to v2, run re-encryption job, drop v1. DEFERRED — depends on rotation tool above.
+- [x] Migration: re-encrypt existing rows. SHIPPED as RED-FU-015 (PR #249) — the `rotate-kek` per-service sweep re-encrypts in place; completion detected by trial-decryption + a `kek_version` column (NOT the version byte, which is a layout marker — see ADR-0029 correction).
+- [x] Document rotation. SHIPPED — operator runbook `infra/runbooks/kek-rotation.md`. (Approach A brief-maintenance-window; zero-downtime dual-key path documented as the future upgrade.)
 - [x] PR. (#203)
 
 ### Task 6.5: JWKS rotation prep [Review §B]
