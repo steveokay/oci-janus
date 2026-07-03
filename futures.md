@@ -36,8 +36,6 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 - **REDESIGN-001 note (2026-06-28):** `auth_login_sessions.tenant_id` was
   dropped per RM-004; sessions are deployment-wide. MFA design still works
   but the "Workspace policy" toggle becomes deployment-wide in single mode.
-  In multi mode the policy needs a separate `tenant_security_policy` table
-  since `auth_providers` is gone.
 
 ### 2. Tag immutability + image promotion workflow
 - **Why:** Without an immutability flag, an attacker (or a sleepy
@@ -186,9 +184,7 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   invite / disable / list machinery. Build the manual surface first.
 - **REDESIGN-001 note (2026-06-28):** per-tenant SSO was collapsed to a
   global `global_sso_config` table per RM-003. SCIM mapping now hangs off
-  the global IdP. Single mode = natural shape. Multi mode needs the SCIM
-  mapping to gain a tenant-resolution step (IdP group → tenant + role) —
-  document the multi-mode story explicitly before pickup.
+  the global IdP. Single mode = natural shape.
 
 ---
 
@@ -522,13 +518,6 @@ agent-style.
   emits both `.updated` and `.disabled` on a `{disabled:true}` body —
   cosmetic over-emission, can be deduped in a small future PR.
 
-### FUT-007-FE: Domain re-poll reset action — ~1h
-
-> **OBSOLETE 2026-06-27** — REDESIGN-001 Phase 2.1 (PR #132 / RM-001) removed
-> the entire custom-domain feature. `tenant_domains` table dropped; the
-> domain worker + DNS-TXT verification flow no longer exist. Nothing to
-> re-poll. Item closed without work.
-
 ### FUT-008: Sign dialog "Recent signer_ids" dropdown — ~1h
 - **Why:** Today the Sign dialog asks for `signer_id` as a free-form
   string — operators type the label from memory. Mirror PR #36's
@@ -562,39 +551,6 @@ agent-style.
   ~30min docs, ~30min smoke.
 - **Affects:** `services/management`, `frontend`, `docs/SIGNING.md`.
 
-### DEPLOY-001: Self-hosted vs SaaS deployment-model docs — discussion + ~1 day
-
-> **SUBSUMED 2026-06-26** by REDESIGN-001 (`.claude/plans/2026-06-26-single-tenant-redesign.md`). The redesign's Phase 1.4 (`/api/v1/deployment-info` endpoint), Phase 4.1 (`useDeploymentInfo()` hook), and Phase 8.2 (README + landing-page rewrite) deliver the same outcome with code, not just docs. Do not pick up DEPLOY-001 independently; pick up the redesign instead.
-- **Why:** The platform is multi-tenant by design (every row has
-  `tenant_id`; custom domains let a tenant white-label;
-  platform-admin marker `(admin, org, *)` separates super-admin
-  surfaces). But the operator-facing story isn't explicit. Same
-  binary serves both:
-  - **SaaS mode:** one provider runs the stack, many tenants
-    subscribe. Provider holds platform-admin marker;
-    `/admin/tenants` is an active surface.
-  - **Self-hosted mode:** one company runs the stack for
-    themselves. They're both platform admin AND the only tenant.
-    Same code, degenerate multi-tenant case.
-- **Surfaced gaps to address:**
-  - The dev `admin` user holds BOTH tenant-admin role AND the
-    platform-admin marker — testing UI conflates the two views.
-  - No documented "tenant persona" testing path (create a
-    non-admin user, log in, confirm `/admin/*` routes are 404).
-  - No `docs/DEPLOYMENT-MODELS.md` covering the SaaS-vs-self-hosted
-    distinction + which knobs differ + how to onboard a fresh
-    tenant.
-  - Likely follow-ups once tested: tenant self-signup flow (Tier 3
-    already lists this), team-invite flow, per-tenant theming,
-    plan-tier feature gating (`tenants.plan` column exists but
-    nothing reads it).
-- **Scope:** ~30min to seed a tenant-only user (no platform-admin
-  marker) for testing. ~half-day to write `docs/DEPLOYMENT-MODELS.md`
-  covering both modes + persona mapping + onboarding paths.
-  Recommended before any external user trial.
-- **Affects:** `services/auth` (seed migration for tenant-only user),
-  new `docs/DEPLOYMENT-MODELS.md`, possibly small README updates.
-
 ### FUT-010: RBAC + FE-RBAC polish pass — ~1 sprint
 
 > **PARTIALLY SUBSUMED 2026-06-28** by REDESIGN-001. The BFF half has shipped:
@@ -618,7 +574,7 @@ agent-style.
 > Once Phase 4.4 ships, close this item. Don't pick up FUT-010 standalone —
 > it'll collide with Phase 4.
 
-- **Why:** DEPLOY-001's tenant-persona testing will surface a class of
+- **Why:** Role-based UI testing will surface a class of
   gaps where the FE renders affordances that the BFF will then reject
   with 403, or where the sidebar leaks admin-only groups to roles that
   can't use them. Today the testing user (`admin@dev.local`) holds
@@ -635,8 +591,8 @@ agent-style.
     field that would 403 on save should be disabled (or hidden) for
     the calling role. Tooltip explains: "Role required: admin".
     Specifically:
-    - `/workspace/domains` + `/workspace/audit-export` settings
-      groups hidden from sidebar for non-workspace-admin
+    - `/workspace/audit-export` settings group hidden from sidebar
+      for non-workspace-admin
     - `/admin/*` groups hidden from sidebar for non-platform-admin
     - Settings tab toggles (immutability, signed-image, trusted keys,
       scan policy, retention) read-only for writer/reader
@@ -646,7 +602,7 @@ agent-style.
       writer/admin/owner
     - Webhook create/edit/delete/rotate gated on admin+
     - Member invite + role-grant gated on admin+
-  - **Direct URL access** — when a non-admin types `/admin/tenants`
+  - **Direct URL access** — when a non-admin types an `/admin/*` route
     in the URL bar, the route should redirect to a "not authorised"
     page rather than briefly rendering the admin shell before the
     BFF 404s come back. Today the route loader probably just renders
@@ -663,8 +619,8 @@ agent-style.
 - **Estimated:** ~1 sprint. Sized larger than it sounds because the
   FE has ~30-40 distinct admin-gated affordances and each needs a
   permission check + disabled state + tooltip.
-- **Surfaced:** 2026-06-23 tenant-persona testing (DEPLOY-001 setup +
-  `tenant_only` writer-role test).
+- **Surfaced:** 2026-06-23 role-persona testing (`tenant_only`
+  writer-role test).
 
 ---
 
@@ -727,10 +683,6 @@ prioritised for backlog uptake.
   Phase-1 fallback warning folded in.
 - ~~**DSGN-004**~~ — DONE 2026-06-24 (PR #52). `ErrorState` w/ HTTP code +
   detail + request-id expander. New `lib/api/error.ts` helper.
-- **DSGN-021** — Custom-domain row-expand revealing TXT name + value + copy +
-  "Check DNS now" + `next_poll_after` countdown. Today TXT challenge is only
-  shown at registration; you can't re-display it for verification debugging.
-  **Effort:** M.
 - **DSGN-023** — Mobile / narrow-viewport sidebar fallback. Below 1024px the
   sidebar vanishes and Topbar has no nav control. **Effort:** M.
 - ~~**QA-004**~~ — DONE 2026-06-24 (PR #59). JWT cache key in
@@ -765,9 +717,11 @@ prioritised for backlog uptake.
 - **ARCH-009** — Circuit breaker + singleflight on `auth.ValidateToken` client.
   Today the documented 3× retry amplifies the thundering herd on JWT key
   rotation / cache flush. **Effort:** S.
-- **ARCH-010** — Wire `tenant.deleted` cascade across every service that holds
-  `tenant_id` columns (auth/webhook/audit/proxy/scanner). Nightly orphan-row
-  reconciliation. **Effort:** M.
+- **ARCH-010** — Nightly orphan-row reconciliation across services that hold
+  `tenant_id` columns (auth/webhook/audit/proxy/scanner): sweep rows whose
+  owning entity no longer exists. (Dropped the multi-mode `tenant.deleted`
+  cascade framing — single mode never deletes the bootstrap tenant.)
+  **Effort:** M.
 - **ARCH-012** — Helm `ServiceMonitor` + starter `PrometheusRule` + Grafana
   dashboard JSON. Self-hosters install the chart and see nothing in Grafana
   today. Biggest "self-hoster smiles" lever. **Effort:** M.
@@ -834,8 +788,7 @@ following SELF-HOSTING.md.
   original create-repo. Non-platform-admin sees the existing
   "insufficient permissions" message.
 - Optional: dedicated `/admin/orgs` page listing all orgs with member
-  counts + a "Create org" CTA. Pairs naturally with DEPLOY-001 tenant-
-  persona docs.
+  counts + a "Create org" CTA.
 
 **Effort:** half-day backend + half-day FE. ~1 day total.
 
@@ -892,8 +845,7 @@ deferred ("we need to test this later").
    newcomer in the audit log + on the repo activity tab.
 6. Document the flow in `docs/SELF-HOSTING.md` or a new `docs/ONBOARDING.md`.
 
-Pairs with **DEPLOY-001** tenant-persona doc work. Once both are
-done, self-hosters following the docs should be able to bootstrap a
+Self-hosters following the docs should be able to bootstrap a
 real multi-user setup without SQL.
 
 ### FUT-015 — Pull-command + tag/digest row expander on `/workspace/proxy-cache`
@@ -903,8 +855,8 @@ Each table row shows the cached image but doesn't tell the
 operator HOW to pull it. They have to construct the
 `localhost:8084/cache/<upstream>/<image>:<tag>` URI by hand.
 
-**Scope:** add a chevron-expand to each row (same pattern
-DSGN-021 used for custom-domain TXT records). When expanded:
+**Scope:** add a chevron-expand to each row (row-expander pattern).
+When expanded:
 
 - Copy-button on the full `docker pull` command, using the
   workspace's actual host (from `useWorkspace()` if a custom
@@ -1835,8 +1787,6 @@ Real value, but easy to defer.
   promotions, backup, repo lifecycle). Docker CLI only goes so far.
 - **Onboarding wizard** — first-push tutorial, first-scan walkthrough
   on a freshly-provisioned tenant.
-- **Tenant self-signup flow** — public registration with email verify,
-  trial plan limits, auto-expiry.
 - **Slack / Teams native connectors** — first-class beyond webhooks,
   so an admin can install with one click and pick channels.
 - **GitOps integrations** — Argo CD / Flux image-update polling
@@ -1853,7 +1803,6 @@ Real value, but easy to defer.
   don't require a screenshot.
 - **Mobile-responsive QA pass** — the dashboard is desktop-first.
 - **a11y audit** — `S8` polish covers this; carve out time.
-- **Trial / sandbox tenants** — auto-expiry, sandbox limits.
 
 ---
 
