@@ -33,6 +33,9 @@ export function StorageBreakdownCard({
   // see capacity headroom at a glance. Falls back to just-usage when the
   // quota field is missing or zero (lazily-created tenants).
   const tenantQuota = data?.tenant_storage_quota_bytes ?? 0;
+  // REM-013 gap 3: lifetime bytes reclaimed via retention across the tenant.
+  // 0 (or missing, when GC isn't wired) renders as "—".
+  const tenantReclaimed = data?.retention_reclaimed_bytes ?? 0;
   const extraCount = Math.max(0, (data?.repositories.length ?? 0) - repos.length);
 
   return (
@@ -57,6 +60,18 @@ export function StorageBreakdownCard({
             </span>
           ) : null}
         </div>
+        {/* REM-013 gap 3 — tenant-wide "reclaimed via retention" stat. Sits */}
+        {/* under the used/total line so an operator can see, at the card    */}
+        {/* level, how much storage retention has actually saved. Renders    */}
+        {/* "—" when 0 (no retention run yet, or GC service not wired).      */}
+        {!isLoading && data ? (
+          <div className="mt-1 flex items-center justify-between text-[11px] text-[var(--color-fg-subtle)]">
+            <span>Reclaimed via retention</span>
+            <span className="tabular-nums text-[var(--color-fg-muted)]">
+              {tenantReclaimed > 0 ? formatBytes(tenantReclaimed) : "—"}
+            </span>
+          </div>
+        ) : null}
       </CardHeader>
       <CardContent className="pt-0">
         {isError ? (
