@@ -63,15 +63,15 @@
 ### REM-013 — Retention surface backend gaps
 
 **Affects:** `services/metadata` (proto + repo + handler), `services/management` (BFF).
-**Status:** OPEN — frontend (S11 slices 3 + 4) is partially shipped. Three FE surfaces are blocked by missing backend.
+**Status:** OPEN — Gap 1 shipped; Gaps 2 + 3 remain.
 
 | Gap | What's missing | Blocks FE |
 |---|---|---|
-| 1 | `manifests.retention_pending_delete_at` is exposed via `GetManifest` but not via the `ListTags` projection, so the Tags tab can't render pending-delete pills without a per-row GET fan-out. Needs a column added to the Tag proto (or a parallel `list_tags_with_retention` RPC). | "Pending delete in 24h" pills on the Tags tab |
-| 2 | No `retention_runs` table — every retention evaluation is fire-and-forget today. A run-history table would let the dashboard show "we considered X tags, kept Y, graced Z, hard-deleted W per rule". | Per-repo Retention "Run history" panel |
+| 1 | ✅ **DONE (already shipped on main).** `Tag.retention_pending_delete_at = 9` is projected by `ListTags` (repo `tagSelectCols` LEFT JOINs `manifests`), streamed through the handler, mapped by the BFF `TagResponse`, and rendered by `PendingDeletePill` in `frontend/.../tags-panel.tsx`. _(Original ticket premise was inverted: the field is surfaced via `ListTags`, NOT `GetManifest` — `GetManifest`/`Manifest` does not carry it, by design.)_ | ✅ "Pending delete in 24h" pills — live |
+| 2 | ✅ **Headline DONE (already shipped).** Retention runs are NOT fire-and-forget — each sweep is recorded as a `gc_runs` row (`mode IN ('retention','retention_grace')`, migration `20260622000001_retention_mode.sql`), listed via `GCService.ListRuns` (repo_id+modes filters), exposed by BFF `repo_retention_run.go` (`GET .../policies/retention/runs`), and rendered by the live `RetentionRunHistoryPanel` (`frontend/.../retention-run-history.tsx`, Mode/Status/When/Manifests/Bytes/Triggered-by). _Remaining (optional polish, NOT FE-blocking):_ the panel shows Manifests+Bytes per run, not the **per-rule** "considered X / kept Y / graced Z / hard-deleted W" breakdown — `EvaluateRetention` computes `total_count` (considered) + marked (graced) but not `kept` (total-scanned, discarded at `retention_eval.go`) nor a per-`kind` aggregation of `reasons[]`. Enrichment would add a `total_scanned`/per-rule field to `EvaluateRetentionResponse` (next free field 7) + `gc_runs` columns + panel columns. | Per-repo Retention "Run history" panel — **live** (per-rule detail is polish) |
 | 3 | Dashboard storage breakdown doesn't expose the bytes-reclaimed-via-retention column. Needs a `GetTenantRetentionSavings(tenant_id)` aggregation RPC + UI plumbing. | Dashboard storage-breakdown "Retention" column |
 
-**Recommended order:** Gap 1 (smallest) → Gap 2 → Gap 3. Each unblocks one FE surface independently.
+**Recommended order:** ~~Gap 1~~ (done) → **Gap 2** → Gap 3. Each unblocks one FE surface independently.
 
 ---
 
