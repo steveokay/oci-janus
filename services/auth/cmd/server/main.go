@@ -12,9 +12,11 @@ import (
 	"syscall"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
+	"github.com/steveokay/oci-janus/libs/crypto/rekey"
 	"github.com/steveokay/oci-janus/libs/observability/otel"
 	"github.com/steveokay/oci-janus/services/auth/internal/bootstrap"
 	"github.com/steveokay/oci-janus/services/auth/internal/config"
+	"github.com/steveokay/oci-janus/services/auth/internal/rotatekek"
 	"github.com/steveokay/oci-janus/services/auth/internal/server"
 )
 
@@ -34,6 +36,29 @@ func main() {
 				os.Exit(2)
 			}
 			slog.Error("bootstrap failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// ── rotate-kek subcommand dispatch ────────────────────────────────────────
+	// RED-FU-015: re-encrypts oauth_client_secret_enc on global_sso_config (and
+	// the legacy auth_providers table when present) under a new KEK. Runs before
+	// config.Load — the sweep only needs AUTH_DB_DSN + KEK_OLD_HEX/KEK_NEW_HEX,
+	// not the full server config. Exit codes: 2 = validation error (bad input),
+	// 3 = verify found rows still on the old key, 1 = infrastructure failure.
+	if len(os.Args) > 1 && os.Args[1] == "rotate-kek" {
+		if err := rotatekek.Run(context.Background(), os.Args[2:], os.Stdout); err != nil {
+			var verr *rekey.ValidationError
+			if errors.As(err, &verr) {
+				slog.Error("rotate-kek validation error", "err", err)
+				os.Exit(2)
+			}
+			if errors.Is(err, rekey.ErrRowsRemain) {
+				slog.Error("rotate-kek verify: rows remain on the old key", "err", err)
+				os.Exit(3)
+			}
+			slog.Error("rotate-kek failed", "err", err)
 			os.Exit(1)
 		}
 		return
