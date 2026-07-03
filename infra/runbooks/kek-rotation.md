@@ -49,6 +49,13 @@ Rotation is **per-table all-or-nothing**: if any cell fails to decrypt under the
 OLD key, the transaction rolls back and the tool exits non-zero with the
 offending primary key. Nothing is left half-rotated.
 
+**Re-running is safe.** Rotation is idempotent: rows that already decrypt under
+the NEW key (from a previous run) are skipped, not re-encrypted. So if a
+multi-table service (e.g. auth) commits one table and then hits a transient
+failure on the next, just re-run the same command — it resumes, rotating only
+the tables still on the OLD key and reporting `rotated 0 rows` once everything
+is done.
+
 ## 5. Verify
 
 ```bash

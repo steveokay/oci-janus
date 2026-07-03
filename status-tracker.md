@@ -40,8 +40,7 @@
 
 **Status:** OPEN (non-blocking). RED-FU-015 shipped in PR #249 (`feat/red-fu-015-kek-rotation`); resolution row in [`status.md`](status.md). The pre-PR review batch (security + code-review + qa) returned **PASS / APPROVE with no blockers**. The items below are the accepted should-fix follow-ups — none block merge.
 
-**Highest value:**
-- **Idempotency / resumability** (code-review #1): `kek_version` is stamped but never used to *select* candidates — `selectSQL` picks every non-null row and `Rekey` decrypts under OLD, so re-running `rotate` after a successful run fails (rotated rows no longer decrypt under OLD → whole-table rollback). Bites the only multi-table service, **auth**: if `global_sso_config` commits and `auth_providers` then fails transiently, the command can't be re-run to completion. Per-table atomicity means no data corruption — operational sharp edge only. Fix: skip cells already decrypting under NEW (`rekey.OnNewKey`), or filter `AND (kek_version IS NULL OR kek_version < $target)`. Add a re-run idempotency test.
+**✅ RESOLVED in PR #249 (code-review #1 — idempotency / resumability):** the sweep now skips cells that already decrypt under the NEW key (`rekey.OnNewKey`) before attempting re-encryption, so re-running `rotate` is a safe no-op and a partially-completed multi-table rotation (e.g. auth's `global_sso_config` committed, `auth_providers` transiently failed) resumes cleanly instead of stranding. Covered by `TestSweep_RotateIdempotent`; runbook step 4 documents the re-run guarantee.
 
 **Security (logged in [`security.md`](security.md), all LOW/INFO):**
 - SEC-071 (LOW): `--verify` reuses the `FOR UPDATE` select → needless row locks on a read-only check (`libs/crypto/rekey/sweep.go`). Give verify a lock-free select.

@@ -231,3 +231,70 @@ func TestNextVersion(t *testing.T) {
 		t.Fatalf("want next version 5, got %d", v)
 	}
 }
+
+// TestSweep_RotateIdempotent verifies that re-running rotate with the same keys
+// is a safe no-op rather than an error. A previous run left every row on the
+// new key; the second run must recognise that (via trial-decryption), skip
+// those rows, rotate nothing, and not fail — the property that makes rotation
+// re-runnable and a partially-completed multi-table rotation resumable.
+func TestSweep_RotateIdempotent(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, containers.Postgres(t))
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	oldKey, newKey := key32(0x11), key32(0x22)
+	setupTable(t, ctx, pool, oldKey)
+
+	// First rotation: the one seeded row moves to the new key.
+	rep, err := rekey.Sweep(ctx, pool, fixtureSpecs(), rekey.SweepOpts{
+		Mode: rekey.ModeRotate, OldKey: oldKey, NewKey: newKey, ToVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("first rotate: %v", err)
+	}
+	if rep.RowsRotated != 1 {
+		t.Fatalf("first rotate: want 1 row, got %d", rep.RowsRotated)
+	}
+
+	// Second rotation with the SAME keys must be a clean no-op — the rows now
+	// decrypt under NEW and no longer decrypt under OLD, so a naive re-encrypt
+	// would fail. The engine must skip already-rotated cells instead.
+	rep, err = rekey.Sweep(ctx, pool, fixtureSpecs(), rekey.SweepOpts{
+		Mode: rekey.ModeRotate, OldKey: oldKey, NewKey: newKey, ToVersion: 2,
+	})
+	if err != nil {
+		t.Fatalf("re-run rotate must not error, got: %v", err)
+	}
+	if rep.RowsRotated != 0 {
+		t.Fatalf("re-run should rotate 0 rows, got %d", rep.RowsRotated)
+	}
+
+	// Dry-run over an already-rotated table also reports 0 candidates.
+	rep, err = rekey.Sweep(ctx, pool, fixtureSpecs(), rekey.SweepOpts{
+		Mode: rekey.ModeDryRun, OldKey: oldKey, NewKey: newKey, ToVersion: 2,
+	})
+	if err != nil {
+		t.Fatalf("re-run dry-run must not error, got: %v", err)
+	}
+	if rep.RowsRotated != 0 {
+		t.Fatalf("re-run dry-run should report 0 candidates, got %d", rep.RowsRotated)
+	}
+
+	// Data is still valid under NEW after the no-op re-runs.
+	var blob []byte
+	var hexStr string
+	if err := pool.QueryRow(ctx,
+		`SELECT blob_enc, hex_enc FROM sweep_fixture WHERE pk='row-1'`).Scan(&blob, &hexStr); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if _, err := aes.Decrypt(blob, newKey); err != nil {
+		t.Fatalf("blob must still decrypt under new key after re-runs: %v", err)
+	}
+	hb, _ := hex.DecodeString(hexStr)
+	if _, err := aes.Decrypt(hb, newKey); err != nil {
+		t.Fatalf("hex must still decrypt under new key after re-runs: %v", err)
+	}
+}

@@ -174,6 +174,7 @@ func rotateTable(ctx context.Context, pool *pgxpool.Pool, spec TableSpec, opts S
 		}
 
 		u := update{pk: pk, newVals: make([][]byte, len(spec.Columns))}
+		changed := false // did any cell in this row actually need re-encryption?
 		for i, c := range spec.Columns {
 			cell := rawByte[i]
 			if c.Encoding == EncodingHexText {
@@ -190,14 +191,31 @@ func rotateTable(ctx context.Context, pool *pgxpool.Pool, spec TableSpec, opts S
 			if len(cell) == 0 {
 				continue // NULL cell
 			}
+			// Idempotency / resumability: a cell that already decrypts under the
+			// new key was rotated by a previous run — skip it rather than
+			// re-encrypt (which would fail, since it no longer decrypts under
+			// OLD). This makes `rotate` safe to re-run and lets a
+			// partially-completed multi-table rotation resume without stranding
+			// the tables that already committed. Trial-decryption is
+			// authoritative here; the kek_version stamp is only a cheap audit
+			// marker, not the completion signal.
+			if OnNewKey(opts.NewKey, cell) {
+				continue
+			}
 			newCT, rerr := Rekey(opts.OldKey, opts.NewKey, cell)
 			if rerr != nil {
 				rows.Close()
 				return 0, fmt.Errorf("%s.%s pk=%s: %w", spec.Table, c.Name, pk, rerr)
 			}
 			u.newVals[i] = newCT
+			changed = true
 		}
-		updates = append(updates, u)
+		// Rows whose cells are all already on the new key (or all NULL) need no
+		// UPDATE and are not counted as rotated — that is what makes a re-run
+		// report zero.
+		if changed {
+			updates = append(updates, u)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate %s: %w", spec.Table, err)
