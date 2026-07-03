@@ -205,7 +205,7 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 ### S11 Retention slices 3 + 4 (✅ DONE — REM-013 closed 2026-07-03)
 
 - **Slice 3** (FE-API-040): "Run now" trigger + 5s status polling on the Retention tab, pending-delete pills on Tags tab, and the per-repo Run history panel — all **live** (REM-013 gaps 1 + 2 shipped).
-- **Slice 4** (FE-API-039): org-default Retention surface + cross-link from inherited per-repo policies **live**; the dashboard storage-breakdown "Reclaimed via retention" savings stat shipped as REM-013 gap 3 (PR #251).
+- **Slice 4** (FE-API-039): org-default Retention surface + cross-link from inherited per-repo policies **live**; the dashboard storage-breakdown "Reclaimed via retention" savings stat shipped as REM-013 gap 3 (PR #253).
 
 All retention FE surfaces now render real data end-to-end. The only outstanding retention item is the optional, non-FE-blocking per-rule "considered/kept/graced/hard-deleted" run breakdown (parked — see the REM-013 close-out row in `status.md`).
 
