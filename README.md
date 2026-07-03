@@ -100,6 +100,12 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - Service accounts as shadow users — scoped per-key, polymorphic owner lookup
 - RBAC at org / repo level (owner / admin / writer / reader) + typed `users.is_global_admin`
 
+**Machine identity & CI**
+- Federated workload identity — CI runners (GitHub Actions / GitLab / Buildkite) exchange their OIDC token for a short-lived registry JWT, no stored secret ([`docs/WORKLOAD-IDENTITY.md`](docs/WORKLOAD-IDENTITY.md))
+- Credential helpers — copy-paste `docker login` / Kubernetes imagePullSecret / Terraform / GitHub Actions snippets for a service-account key ([`docs/CREDENTIAL-HELPERS.md`](docs/CREDENTIAL-HELPERS.md))
+- Token policies — cap API-key TTL, force rotation, auto-revoke idle keys ([`docs/TOKEN-POLICIES.md`](docs/TOKEN-POLICIES.md))
+- Access review — weekly stale-key nudge with snooze; nudge-only, never auto-revokes ([`docs/ACCESS-REVIEW.md`](docs/ACCESS-REVIEW.md))
+
 **Storage**
 - Pluggable drivers: MinIO, AWS S3, GCP Cloud Storage, Azure Blob, local filesystem
 - Per-tenant key prefixing; no presigned URLs leak to clients
@@ -110,6 +116,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - Per-server peer-CN allowlist (`MTLS_PEER_CN_ALLOWLIST`) for defence-in-depth
 - Cosign (Sigstore) + Notary v2 image signing against Vault-backed keys
 - Signed-image admission: repo-wide `require_signature` + per-repo trusted-key allowlist
+- CVSS-gated admission: block push/pull of images whose scan exceeds a configured severity threshold ([`docs/ADMISSION.md`](docs/ADMISSION.md))
 - Two-layer tag immutability: `repositories.immutable_tags` + per-tag `tags.immutable`
 - Tamper-evident audit log: FORCE RLS + per-tenant SHA-256 hash chain, INSERT-only role
 - AES-256-GCM secret encryption with versioned ciphertext prefix for future KEK rotation
@@ -123,10 +130,14 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 **Operations**
 - Pluggable vulnerability scanner plugins (Trivy default; Grype / Clair adapters) via external-process JSON-RPC
 - Per-tenant scan policies + SPDX 2.3 SBOMs + hand-crafted PDF compliance reports
+- Image promotion: atomic dev → staging → prod tag copy without re-pushing blobs ([`docs/IMAGE-PROMOTION.md`](docs/IMAGE-PROMOTION.md))
 - Mark-sweep garbage collection with `pg_try_advisory_lock` per tenant
 - Retention policies (age / version-count / max-idle-days) with dry-run preview
 - Webhook delivery with retries, HMAC signing, SSRF block-list, and delivery log
 - Pull / push analytics via PG14 `date_bin` time-series
+
+**Integrations**
+- MCP server — read-only Model Context Protocol tools for Claude Desktop / Cursor / continue.dev ([`docs/MCP.md`](docs/MCP.md))
 
 ---
 
@@ -150,6 +161,13 @@ OCI-Janus is configured entirely through environment variables; no YAML config f
 | [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) | Fork → configure → deploy in your own infrastructure |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Docker Compose + Helm chart layout |
 | [`docs/SAML.md`](docs/SAML.md), [`docs/SIGNING.md`](docs/SIGNING.md), [`docs/SCANNER.md`](docs/SCANNER.md) | Feature deep dives (SSO, signing, scanner plugins) |
+| [`docs/WORKLOAD-IDENTITY.md`](docs/WORKLOAD-IDENTITY.md) | Federated workload identity — OIDC trust + token exchange for CI |
+| [`docs/CREDENTIAL-HELPERS.md`](docs/CREDENTIAL-HELPERS.md) | `docker` / k8s / Terraform / GitHub Actions credential snippets |
+| [`docs/TOKEN-POLICIES.md`](docs/TOKEN-POLICIES.md) | API-key max-TTL, force-rotation, idle-revoke |
+| [`docs/ACCESS-REVIEW.md`](docs/ACCESS-REVIEW.md) | Weekly stale-key nudge + snooze |
+| [`docs/IMAGE-PROMOTION.md`](docs/IMAGE-PROMOTION.md) | Atomic dev → staging → prod tag promotion |
+| [`docs/ADMISSION.md`](docs/ADMISSION.md) | Admission gates — signature, CVSS threshold, tag immutability |
+| [`docs/MCP.md`](docs/MCP.md) | MCP server tools for AI assistants (Claude Desktop / Cursor) |
 | [`docs/SIEM-EXPORT.md`](docs/SIEM-EXPORT.md) | Audit-log streaming to syslog / CEF / HTTPS webhook |
 | [`docs/EVENTS.md`](docs/EVENTS.md) | RabbitMQ routing keys + payload shapes |
 | [`docs/TESTING.md`](docs/TESTING.md), [`docs/CI-CD.md`](docs/CI-CD.md) | Coverage targets, OCI conformance, pipeline stages |
