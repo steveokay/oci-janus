@@ -1,0 +1,86 @@
+# CI — security (govulncheck sweep)
+#
+# Consolidated vulnerability scan across every Go module in the monorepo.
+# This single scheduled workflow REPLACES the 13 per-service `security:`
+# jobs that used to live inside ci-libs.yml + each ci-<svc>.yml. Those
+# jobs were doubly non-blocking (`continue-on-error: true` AND a trailing
+# `|| true`), so they could never fail — they produced ~26 permanently
+# green "security" checks on every PR (pure noise + wasted runner minutes)
+# while delivering zero merge signal. Folding them into one scheduled run
+# removes the per-PR noise but keeps the vuln-scanning intent alive.
+#
+# Why scheduled, not per-PR: the findings are currently deferred under
+# REM-016 (stdlib CVEs in net/http + crypto/x509 that need a Go runtime
+# bump before they can be actioned). Running govulncheck on every PR just
+# reproduces the same known-deferred findings 26× per push. A nightly
+# sweep is the right cadence for a check whose output nobody can act on
+# until the runtime bump lands.
+#
+# REM-016 flip-to-blocking plan: when the Go runtime bump lands and the
+# stdlib CVEs clear, making this gate blocking is a ONE-LINE change —
+# delete the `continue-on-error: true` line below. The govulncheck step
+# deliberately does NOT end in `|| true`, so the job's pass/fail already
+# tracks govulncheck's real exit code; only `continue-on-error` is
+# currently swallowing it.
+#
+# Module list mirrors ci-tidy-check.yml (libs + all 13 services) so the
+# two repo-wide matrix gates stay in lock-step — one place to add a
+# module when a 14th service is created.
+
+name: CI — security (govulncheck)
+
+on:
+  # Nightly sweep — 07:00 UTC. Deliberately NOT `pull_request` / `push`:
+  # consolidating the per-service jobs into a schedule is the whole point
+  # (kills the per-PR noise). Use workflow_dispatch to run it on demand.
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    # Non-blocking until REM-016 (Go runtime bump) clears the stdlib CVEs
+    # in net/http + crypto/x509. Delete THIS LINE to make the sweep a
+    # blocking gate once the bump lands — no other change required.
+    continue-on-error: true
+    strategy:
+      # Surface findings for every module in one run rather than aborting
+      # on the first module that trips — mirrors ci-tidy-check.yml's stance.
+      fail-fast: false
+      matrix:
+        # Mirror of ci-tidy-check.yml's module list (libs + 13 services),
+        # alphabetical for log-readability. Keep the two lists in sync.
+        module:
+          - libs
+          - services/audit
+          - services/auth
+          - services/core
+          - services/gateway
+          - services/gc
+          - services/management
+          - services/metadata
+          - services/proxy
+          - services/scanner
+          - services/signer
+          - services/storage
+          - services/tenant
+          - services/webhook
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.7"
+          # Cache module downloads per module, matching ci-tidy-check.yml.
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        # No trailing `|| true`: the step must reflect govulncheck's real
+        # exit code so that removing the job-level `continue-on-error`
+        # above (REM-016 flip) is sufficient to make failures block.
+        working-directory: ${{ matrix.module }}
+        run: govulncheck ./...
