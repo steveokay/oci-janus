@@ -22,14 +22,9 @@ One workflow file per service (`ci-<name>.yml`) plus shared jobs:
 Per service (triggered by path filter):
 
 1. lint           → golangci-lint (config in .golangci.yml at repo root)
-                  → (services/auth only) scripts/lint-user-queries.sh
-                    enforces the FE-API-048 kind-guard rule: any new
-                    `FROM users WHERE` query in
-                    services/auth/internal/repository/ must use a
-                    `…Human…` helper or carry an `-- allow-any-kind`
-                    annotation. Wired in .github/workflows/ci-auth.yml.
 2. test           → go test -race ./...
-3. security       → govulncheck, gosec, gitleaks
+3. security       → govulncheck (nightly sweep in ci-security.yml, not
+                    per-PR — see REM-016), gosec, gitleaks
 4. build          → docker build (multi-stage, distroless base)
 5. conformance    → (services/core only) OCI conformance suite
 6. integration    → make test-integration

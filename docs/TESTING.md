@@ -34,10 +34,10 @@
 ## Security Tests
 
 - SAST: `gosec` run in CI on every PR.
-- Dependency audit: `govulncheck` in CI for every service workflow.
+- Dependency audit: `govulncheck` runs as a nightly consolidated sweep across all Go modules (`.github/workflows/ci-security.yml`), not per-service-per-PR — the per-service jobs were retired under REM-016 (findings deferred pending a Go runtime bump).
 - Secret scanning: `gitleaks` workflow on every push and PR.
 - Integration: OWASP ZAP baseline scan against staging environment (weekly).
-- Repo-layer lints: `scripts/lint-user-queries.sh` (FE-API-048 T20, wired into `.github/workflows/ci-auth.yml`) fails the build if a new `FROM users WHERE` query in `services/auth/internal/repository/` doesn't go through a kind-guarded `…Human…` helper or carry an `-- allow-any-kind` annotation. Enforces the spec §4.1 kind guard at the repository layer rather than relying on every caller to remember.
+- Repo-layer kind guard (FE-API-048 §4.1): every `FROM users` read in `services/auth/internal/repository/` goes through a kind-guarded `…Human…` helper (`GetHumanByEmail`, `GetHumanByID`, …) or carries an `-- allow-any-kind` annotation, so shadow service-account rows can't leak onto the human-auth path. The former `scripts/lint-user-queries.sh` CI enforcement was removed under REM-015 (it exited non-zero with no diagnostic signal); the guard now lives in the repository-helper contract itself.
 
 ## Per-service test coverage (as of 2026-06-21)
 

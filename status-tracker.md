@@ -101,25 +101,15 @@
 
 ---
 
-### REM-015 — `services/management` test stage "Lint user queries" fails
-
-**Surfaced:** 2026-06-28. CI's `test` job on PR #155 had a sub-step `Lint user queries` that exited 1 with no diagnostic context surfaced in this session.
-
-**Status:** OPEN. Likely a SQL-lint / query-template check, but the failure log doesn't include the failing query. Needs a 30-min triage to find the script + add useful error output.
-
-**Owner:** TBD.
-
----
-
 ### REM-016 — Go runtime stdlib CVEs flagged by govulncheck
 
 **Surfaced:** 2026-06-28. After PR #156 made the lint stage reachable, the `security: govulncheck` stage flagged 5+ stdlib vulnerabilities (GO-2026-5039, GO-2026-5037, GO-2026-4982, GO-2026-4980, GO-2026-4971, ...) in `net/http.Server.ListenAndServe` and `crypto/x509.Certificate.Verify`/`VerifyHostname` call paths.
 
-**Status:** OPEN. CI's `security` stage temporarily set to `continue-on-error: true` (across all 13 backend workflows) so the findings are still visible but don't block merges.
+**Status:** OPEN — findings still deferred pending the Go runtime bump. **2026-07-03 (CI cleanup):** the 13 per-service `security:` govulncheck jobs (`ci-libs.yml` + each `ci-<svc>.yml`) — every one doubly non-blocking (`continue-on-error: true` **and** a trailing `|| true`, so they could never fail; ~26 permanently-green "security" checks per PR of pure noise + wasted runner minutes) — were **deleted and consolidated** (PR #250) into one scheduled workflow `.github/workflows/ci-security.yml` (nightly `cron` + `workflow_dispatch`, matrix over all 14 Go modules mirroring `ci-tidy-check.yml`). The per-PR noise is gone; the vuln scan stays alive at a cadence appropriate for a known-deferred check.
 
-**Fix shape:** bump `go 1.25.7` → latest 1.25.x patch in every `go.mod` (12 services + libs). Each module is independent so the bump is per-go.mod (not toolchain-wide). After bumping, remove `continue-on-error: true` from the `security:` jobs.
+**Fix shape:** bump `go 1.25.7` → latest 1.25.x patch in every `go.mod` (12 services + libs). Each module is independent so the bump is per-go.mod (not toolchain-wide). Once the CVEs clear, making the sweep a blocking gate is now a **one-line change** — delete the single `continue-on-error: true` in `ci-security.yml`. The govulncheck step deliberately no longer carries `|| true`, so its real exit code already drives job pass/fail; only `continue-on-error` is swallowing it.
 
-**Owner:** TBD. Recommend a single-PR sweep that bumps every go.mod + the workflow `setup-go` `go-version` field, then drops the `continue-on-error` flag.
+**Owner:** TBD. Recommend a single-PR sweep that bumps every go.mod + the `setup-go` `go-version` fields, then flips `ci-security.yml` to blocking.
 
 ---
 
