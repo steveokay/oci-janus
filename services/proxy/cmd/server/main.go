@@ -3,18 +3,40 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
+	"github.com/steveokay/oci-janus/libs/crypto/rekey"
 	"github.com/steveokay/oci-janus/libs/observability/otel"
 	"github.com/steveokay/oci-janus/services/proxy/internal/config"
+	"github.com/steveokay/oci-janus/services/proxy/internal/rotatekek"
 	"github.com/steveokay/oci-janus/services/proxy/internal/server"
 )
 
 func main() {
+	// rotate-kek subcommand (RED-FU-015). Dispatched before config load so the
+	// KEK rotation CLI does not require the full server environment.
+	if len(os.Args) > 1 && os.Args[1] == "rotate-kek" {
+		if err := rotatekek.Run(context.Background(), os.Args[2:], os.Stdout); err != nil {
+			var verr *rekey.ValidationError
+			if errors.As(err, &verr) {
+				slog.Error("rotate-kek validation error", "err", err)
+				os.Exit(2)
+			}
+			if errors.Is(err, rekey.ErrRowsRemain) {
+				slog.Error("rotate-kek verify: rows remain on the old key", "err", err)
+				os.Exit(3)
+			}
+			slog.Error("rotate-kek failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

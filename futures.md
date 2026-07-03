@@ -1171,7 +1171,21 @@ Docker v2 manifest list shapes are well-defined.
   (auth) + §12 (tenant), `docs/SAML.md`, `docs/EVENTS.md`. ~half-day.
 - **Affects:** docs only. **✅ DONE** — PR #210 + #211 (ADRs) + #212 (spec-lint) + #213 (tracker trim).
 
-### RED-FU-015 — KEK rotation tool (REDESIGN-001 Phase 6.4 follow-up) — **HIGH PRIORITY**
+### RED-FU-015 — KEK rotation tool (REDESIGN-001 Phase 6.4 follow-up) — ✅ SHIPPED 2026-07-03
+- **Shipped:** per-service `rotate-kek` subcommand across `auth`/`proxy`/`webhook`/`audit`
+  (mirrors `bootstrap`), backed by the shared `libs/crypto/rekey` package (crypto core +
+  declarative sweep engine + CLI runner) and a nullable `kek_version SMALLINT` tracking
+  column per affected table. Modes: `--dry-run`, `--verify` (exit 3 if rows remain),
+  `--generate`, `--to-version`. Operator runbook: `infra/runbooks/kek-rotation.md`.
+  Design: `docs/superpowers/specs/2026-07-03-kek-rotation-design.md`;
+  plan: `docs/superpowers/plans/2026-07-03-kek-rotation.md`. See `status.md` for the row.
+- **Corrected scope (three backlog errors caught during scoping — the bullets below are wrong,
+  kept for history):** (1) the ciphertext `0x01` byte is a *layout* marker, not a KEK id, so
+  completion detection uses the `kek_version` column + trial-decryption, not the version byte;
+  (2) there is **no single master KEK** — four independent KEKs across four services/databases,
+  so rotation is per-service (four invocations), not one CLI with `--from-key/--to-key`;
+  (3) `signatures.private_key_enc` **does not exist** — signer key material lives in Vault
+  Transit / cloud KMS and is out of scope.
 - **Why:** Phase 6.4 (PR #203) shipped the AES `Version = 0x01` byte
   prefix on every ciphertext. The version byte is the prerequisite; the
   rotation tool is the deliverable that makes the prerequisite useful.
