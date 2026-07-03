@@ -15,7 +15,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **KEK rotation tool (RED-FU-015)** — per-service `rotate-kek` subcommand
+  (`registry-auth` / `registry-proxy` / `registry-webhook` / `registry-audit`,
+  dispatched before config load like `bootstrap`), backed by the shared
+  `libs/crypto/rekey` package (re-encryption core + declarative table-agnostic
+  sweep engine + CLI runner). Re-encrypts every KEK-encrypted column from an old
+  key to a new one, per-table all-or-nothing, idempotent/resumable via
+  trial-decryption. Modes: `--dry-run`, `--verify` (exit 3 if rows remain),
+  `--generate`, `--to-version`. Adds a nullable `kek_version SMALLINT` tracking
+  column per affected table. Keys are read from `KEK_OLD_HEX` / `KEK_NEW_HEX`
+  (never flags). Operator runbook: [`infra/runbooks/kek-rotation.md`](infra/runbooks/kek-rotation.md).
+  Note: there is **no single master KEK** — four independent per-service KEKs;
+  signer keys stay in Vault/KMS (out of scope). (PR #249.)
+
+### Changed
+
+- **CI: govulncheck consolidated** — the 13 per-service non-blocking `security:`
+  jobs were replaced by one scheduled `.github/workflows/ci-security.yml`
+  (nightly + `workflow_dispatch`, matrix over all 14 Go modules). Removed the
+  muted `scripts/lint-user-queries.sh` step (REM-015). (PR #250.)
 
 ---
 
@@ -81,8 +101,8 @@ upgrade steps in [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).
 - **AES-256-GCM ciphertext version prefix** — `libs/crypto/aes` writes a
   `0x01` version byte ahead of nonce + ciphertext + tag. Decrypt is "try
   v1, fall back to legacy"; tamper safety preserved by GCM auth tag.
-  Prerequisite for the planned KEK-rotation tool (futures.md
-  RED-FU-015). (Decision #29, Phase 6.4.)
+  Prerequisite for the KEK-rotation tool (RED-FU-015; shipped
+  post-rc1 — see Unreleased). (Decision #29, Phase 6.4.)
 - **Tamper-evident audit hash-chain** — `audit_events` carries
   `chain_seq BIGINT GENERATED ALWAYS AS IDENTITY` + `prev_hash` +
   `row_hash`. Per-tenant chain serialised by `pg_advisory_xact_lock`. Tip
@@ -182,9 +202,6 @@ These were in scope for REDESIGN-001 but explicitly descoped or anchored
 in [`futures.md`](futures.md) at close-out — they will land in a later
 2.x release.
 
-- **RED-FU-015 (HIGH)** — KEK rotation tool. Phase 6.4 shipped the
-  version byte; the rotation CLI itself is the planned next pickup
-  after v2.0.0 ships.
 - **RED-FU-016 (LOW)** — SAML library upgrade `crewjam/saml` v0.4 →
   v0.5.x. No forcing function on the v0.4 line; revisit on advisory.
 - **RED-FU-017 (LOW)** — Audit checkpoint signing. Adds a third

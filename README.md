@@ -119,7 +119,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - CVSS-gated admission: block push/pull of images whose scan exceeds a configured severity threshold ([`docs/ADMISSION.md`](docs/ADMISSION.md))
 - Two-layer tag immutability: `repositories.immutable_tags` + per-tag `tags.immutable`
 - Tamper-evident audit log: FORCE RLS + per-tenant SHA-256 hash chain, INSERT-only role
-- AES-256-GCM secret encryption with versioned ciphertext prefix for future KEK rotation
+- AES-256-GCM secret encryption with a per-service `rotate-kek` tool for key rotation (see [`infra/runbooks/kek-rotation.md`](infra/runbooks/kek-rotation.md))
 
 **Observability**
 - OpenTelemetry traces to Jaeger / Grafana Tempo / Datadog (pluggable exporter)

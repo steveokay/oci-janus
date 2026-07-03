@@ -153,12 +153,15 @@ ciphertexts written before the upgrade continue to decrypt cleanly; the next
 time the row is written it goes out as v1. So existing `auth_login_sessions`,
 upstream proxy creds, OAuth `client_secret`, and SAML SP private key rows
 keep decrypting with no operator intervention; new writes are tagged v1
-automatically; a future KEK rotation can flip the version byte and migrate
-gradually without coordinated downtime.
+automatically.
 
-The dedicated "rotate the KEK and re-encrypt every row" tool is out of scope
-for v2 itself — document it as a future operator workflow when KEK rotation
-lands. Background: [`infra/runbooks/secret-rotation.md`](../infra/runbooks/secret-rotation.md).
+The dedicated "rotate the KEK and re-encrypt every row" tool has since shipped
+as **RED-FU-015**: a per-service `rotate-kek` subcommand (auth / proxy / webhook
+/ audit) that re-encrypts every KEK-encrypted column from an old key to a new
+one, all-or-nothing per table, idempotent/resumable. It is not required for the
+v1→v2 upgrade itself — run it only when you actually need to rotate a KEK
+(suspected compromise, scheduled rotation). Full procedure:
+[`infra/runbooks/kek-rotation.md`](../infra/runbooks/kek-rotation.md).
 
 ---
 
