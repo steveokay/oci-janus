@@ -65,6 +65,11 @@ type fakeGCServer struct {
 	getRetentionStatusErr     error
 	getRetentionStatusReturn  *gcv1.RetentionRunSummary
 	lastGetRetentionStatusReq *gcv1.GetRetentionRunStatusRequest
+
+	// REM-013 gap 3 — retention savings aggregate.
+	getSavingsErr    error
+	getSavingsReturn *gcv1.TenantRetentionSavings
+	lastGetSavingsReq *gcv1.GetTenantRetentionSavingsRequest
 }
 
 func (s *fakeGCServer) GetStatus(_ context.Context, _ *gcv1.GetStatusRequest) (*gcv1.GCStatus, error) {
@@ -127,6 +132,20 @@ func (s *fakeGCServer) GetRetentionRunStatus(_ context.Context, req *gcv1.GetRet
 		return s.getRetentionStatusReturn, nil
 	}
 	return &gcv1.RetentionRunSummary{RunId: req.GetRunId(), Mode: "retention", Status: "succeeded"}, nil
+}
+
+// REM-013 gap 3 — retention savings aggregate stub.
+func (s *fakeGCServer) GetTenantRetentionSavings(_ context.Context, req *gcv1.GetTenantRetentionSavingsRequest) (*gcv1.TenantRetentionSavings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastGetSavingsReq = req
+	if s.getSavingsErr != nil {
+		return nil, s.getSavingsErr
+	}
+	if s.getSavingsReturn != nil {
+		return s.getSavingsReturn, nil
+	}
+	return &gcv1.TenantRetentionSavings{TenantId: req.GetTenantId()}, nil
 }
 
 // newGCEnv stands up a bufconn stack with a wired-in GCService client
