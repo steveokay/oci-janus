@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ExpiryBadge } from "@/components/ui/expiry-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -804,18 +805,10 @@ function ApiKeysSection({
                     </div>
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
-                    {key.expires_at ? (
-                      <span
-                        className="text-xs text-[var(--color-fg-muted)]"
-                        title={formatAbsoluteDate(key.expires_at)}
-                      >
-                        {formatRelativeDate(key.expires_at)}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-[var(--color-fg-subtle)]">
-                        Never
-                      </span>
-                    )}
+                    {/* Urgency-aware expiry (shared ExpiryBadge): danger */}
+                    {/* "Expired", warning countdown within 14 days, else */}
+                    {/* plain relative time; muted "Never" when unset. */}
+                    <ExpiryBadge expiresAt={key.expires_at} />
                   </TableCell>
                   <TableCell className="text-right">
                     <Button
