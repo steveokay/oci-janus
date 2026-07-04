@@ -27,7 +27,22 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+// safeInternalPath — only honor a post-login redirect target when it is an
+// internal absolute path: must start with "/" and must NOT start with "//"
+// (protocol-relative URLs like //evil.com would make ?from= an open-redirect
+// vector). Anything else falls back to home.
+function safeInternalPath(from: string | undefined): string {
+  if (from && from.startsWith("/") && !from.startsWith("//")) return from;
+  return "/";
+}
+
 export const Route = createFileRoute("/login")({
+  // Validate the ?from= search param the _authenticated guard sets when it
+  // bounces an unauthenticated visitor here. Only a string survives; the
+  // open-redirect gate (safeInternalPath) is applied at navigate time.
+  validateSearch: (search: Record<string, unknown>): { from?: string } => {
+    return typeof search.from === "string" ? { from: search.from } : {};
+  },
   // If you're already signed in and hit /login, bounce home — saves a click
   // on browser back/forward.
   beforeLoad: () => {
@@ -40,6 +55,9 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage(): React.ReactElement {
   const navigate = useNavigate();
+  // ?from= — where the _authenticated guard bounced the user from. Validated
+  // shape by the route's validateSearch; safety-gated at navigate time below.
+  const { from } = Route.useSearch();
   const [submitting, setSubmitting] = React.useState(false);
   const [rootError, setRootError] = React.useState<string | null>(null);
   // REDESIGN-001 Phase 2.5 (RM-007) — gate hostile "ask your platform
@@ -80,7 +98,11 @@ function LoginPage(): React.ReactElement {
         return;
       }
       await login(values.username, values.password, tenantId);
-      void navigate({ to: "/", replace: true });
+      // Bounce back to where the auth guard interrupted the user, but only
+      // to an internal absolute path (see safeInternalPath) — a raw ?from=
+      // would otherwise be an open redirect. `to` accepts the runtime
+      // string; the guard guarantees it's one of our own paths or "/".
+      void navigate({ to: safeInternalPath(from), replace: true });
     } catch {
       // Single error path for every failure mode — see FE-SEC-005.
       setRootError(LOGIN_ERROR);
