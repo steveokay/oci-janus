@@ -304,7 +304,12 @@ func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrEmailNotVerified):
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "email is not verified at the identity provider")
+			// Align with the SAML branch (saml.go): an unverified IdP email is
+			// not a credential failure, so return 403 EMAILNOTVERIFIED with
+			// actionable copy rather than a 401. The user authenticated fine at
+			// the provider; the block is that the provider has not verified the
+			// email we would provision/match against.
+			writeError(w, http.StatusForbidden, "EMAILNOTVERIFIED", "your email is not verified at the identity provider; verify it at the provider and sign in again")
 			return
 		case errors.Is(err, service.ErrAutoProvisionDisabled):
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "user does not exist and auto-provision is disabled")

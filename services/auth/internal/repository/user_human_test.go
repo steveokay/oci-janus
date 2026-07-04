@@ -29,9 +29,15 @@ func newUserRepoWithMigrations(t *testing.T, ctx context.Context) *UserRepositor
 	// Spin up a fresh PostgreSQL 16 container.
 	dsn := containers.Postgres(t)
 
-	// Apply all migrations for the FE-API-048 sprint (Tasks 1–3).
+	// Apply migrations through the latest — UserRepository.Create/scanOne read
+	// the full current users column set (is_global_admin @ 20260629000001,
+	// onboarding_complete @ 20260629000002, sso_subject @ 20260629222534/
+	// 20260630120000). The old 20260622000003 target predated all of them, so
+	// Create failed with "column ... does not exist" — a latent break in this
+	// integration-tagged test that the standard `go test ./...` CI job skips.
+	// Targeting the latest keeps the fixture aligned with the live schema.
 	// gooseUpTo is defined in migrations_test.go (same package, same build tag).
-	gooseUpTo(t, dsn, "20260622000003")
+	gooseUpTo(t, dsn, "20260703120300")
 
 	// Build the pgxpool that the repository will use for queries.
 	pool, err := pgxpool.New(ctx, dsn)
@@ -79,11 +85,14 @@ func TestUserRepo_HumanGuards(t *testing.T) {
 	require.NoError(t, err)
 
 	// Seed a service-account shadow user — must be invisible to all Human* methods.
+	// A non-empty password_hash is set deliberately so the GetHumanByUsername
+	// case below proves the kind='human' SQL guard (SEC-075) is the control, not
+	// the empty-hash argon2 barrier.
 	sa, err := repo.Create(ctx, CreateUserRequest{
 		TenantID:     tenant,
 		Username:     "sa-guard",
 		Email:        "sa+1@internal.invalid",
-		PasswordHash: "",
+		PasswordHash: "argon2-shadow-hash-nonempty",
 		Kind:         "service_account",
 	})
 	require.NoError(t, err)
@@ -117,6 +126,21 @@ func TestUserRepo_HumanGuards(t *testing.T) {
 			_, err := repo.GetHumanByID(ctx, sa.ID)
 			require.ErrorIs(t, err, ErrNotFound,
 				"GetHumanByID must return ErrNotFound for SA shadow-user ID")
+		}},
+
+		// GetHumanByUsername must return the human row but reject the SA shadow
+		// row's synthetic username (SEC-075) so a service-account cannot
+		// authenticate on the username/password login path — even though the SA
+		// row above carries a non-empty password_hash.
+		{"GetHumanByUsername matches human, rejects SA username", func(t *testing.T) {
+			got, err := repo.GetHumanByUsername(ctx, tenant, "human-guard")
+			require.NoError(t, err)
+			require.Equal(t, human.ID, got.ID,
+				"GetHumanByUsername must return the human user")
+
+			_, err = repo.GetHumanByUsername(ctx, tenant, "sa-guard")
+			require.ErrorIs(t, err, ErrNotFound,
+				"GetHumanByUsername must return ErrNotFound for an SA shadow username")
 		}},
 
 		// CountHumans must only count human rows; adding an SA must not affect

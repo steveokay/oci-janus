@@ -416,9 +416,12 @@ func TestSSOCallback_RejectsUnverifiedEmail(t *testing.T) {
 		t.Fatalf("callback GET: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
+	// SEC-075 alignment: the OAuth callback now returns 403 EMAILNOTVERIFIED
+	// for an unverified IdP email (matching the SAML branch) rather than a
+	// 401 — an unverified email is a policy block, not a credential failure.
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("want 401 for unverified email, got %d; body=%s", resp.StatusCode, string(body))
+		t.Errorf("want 403 for unverified email, got %d; body=%s", resp.StatusCode, string(body))
 	}
 }
 

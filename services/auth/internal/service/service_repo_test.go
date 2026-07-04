@@ -124,6 +124,21 @@ func (f *fakeUserRepo) GetByUsername(_ context.Context, tenantID uuid.UUID, user
 	return u, nil
 }
 
+// GetHumanByUsername mirrors the real repository's kind='human' guard (SEC-075):
+// a service-account shadow row is invisible on the username/password login path
+// even if it carries a non-empty password_hash. Returns ErrNotFound for such
+// rows so AuthenticateUser collapses the result to invalid-credentials.
+func (f *fakeUserRepo) GetHumanByUsername(_ context.Context, tenantID uuid.UUID, username string) (*repository.User, error) {
+	u, ok := f.users[username]
+	if !ok || u.TenantID != tenantID {
+		return nil, repository.ErrNotFound
+	}
+	if u.Kind == "service_account" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
 func (f *fakeUserRepo) GetByID(_ context.Context, id uuid.UUID) (*repository.User, error) {
 	for _, u := range f.users {
 		if u.ID == id {
@@ -800,6 +815,47 @@ func TestAuthenticateUser_lockoutAfterFiveFailures_setsLockedUntil(t *testing.T)
 	_, err := svc.AuthenticateUser(ctx, tenantID, username, "WrongPassword!999")
 	if !errors.Is(err, ErrAccountLocked) {
 		t.Errorf("after lockout: expected ErrAccountLocked, got %v", err)
+	}
+}
+
+// TestAuthenticateUser_serviceAccountShadow_cannotAuthenticate is the SEC-075
+// regression: a service-account shadow row (kind='service_account', synthetic
+// sa-<hex> username) must NOT be able to authenticate via the password login
+// path, even when it carries a real, non-empty password_hash. The kind='human'
+// guard in GetHumanByUsername is the control being verified — the empty-hash
+// barrier that argon2.Verify enforces is deliberately bypassed here (we set a
+// valid hash for the same password we then present) so a regression that drops
+// the guard would light this test up rather than passing by accident.
+func TestAuthenticateUser_serviceAccountShadow_cannotAuthenticate(t *testing.T) {
+	svc, ur, _, cleanup := setupServiceWithRepos(t)
+	defer cleanup()
+
+	tenantID := uuid.New()
+	const password = "SA-Sh4dow!Password123"
+
+	// Hash the password the way the real signup path would, then attach it to a
+	// service-account shadow row. If the kind guard were absent, this hash would
+	// let the shadow row log in.
+	hash, err := argon2pkg.Hash(password)
+	require.NoError(t, err)
+
+	saShadow := &repository.User{
+		ID:           uuid.New(),
+		TenantID:     tenantID,
+		Username:     "sa-deadbeef",
+		Email:        "sa+1@internal.invalid",
+		PasswordHash: hash,
+		IsActive:     true,
+		Kind:         "service_account",
+	}
+	ur.addUser(saShadow)
+
+	// Even with a matching password, the shadow row must be rejected — and with
+	// the same invalid-credentials shape as a non-existent user so we do not leak
+	// that a shadow row exists.
+	_, err = svc.AuthenticateUser(context.Background(), tenantID, "sa-deadbeef", password)
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("expected ErrInvalidCredentials for SA shadow login, got %v", err)
 	}
 }
 

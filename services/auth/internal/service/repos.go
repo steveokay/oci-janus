@@ -18,6 +18,12 @@ import (
 type userRepo interface {
 	Create(ctx context.Context, req repository.CreateUserRequest) (*repository.User, error)
 	GetByUsername(ctx context.Context, tenantID uuid.UUID, username string) (*repository.User, error)
+	// GetHumanByUsername is the kind-guarded variant of GetByUsername (SEC-075).
+	// It returns ErrNotFound for service-account shadow rows so they cannot
+	// authenticate on the username/password login path. Use this method on the
+	// human-authentication path; GetByUsername is kind-agnostic and must not be
+	// used to gate a password login.
+	GetHumanByUsername(ctx context.Context, tenantID uuid.UUID, username string) (*repository.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*repository.User, error)
 	RecordFailedLogin(ctx context.Context, id uuid.UUID) (int, error)
 	LockUntil(ctx context.Context, id uuid.UUID, until time.Time) error

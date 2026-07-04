@@ -141,8 +141,11 @@ func (r *UserRepository) Create(ctx context.Context, req CreateUserRequest) (*Us
 }
 
 // GetByUsername returns the user with the given username in the given tenant,
-// regardless of kind. Prefer GetHumanByUsername on the login path so that a
-// service-account shadow user cannot authenticate as a human.
+// regardless of kind. This resolves both human accounts and service-account
+// shadow rows (kind='service_account', synthetic sa-<hex> usernames), so it
+// must NOT be used on the password-login path — use GetHumanByUsername there
+// so a service-account shadow row can never authenticate as a human. Retained
+// for kind-agnostic lookups (e.g. fixture seeding, uniqueness probes).
 // Returns ErrNotFound if no such user exists.
 func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, username string) (*User, error) {
 	const q = `
@@ -153,6 +156,27 @@ func (r *UserRepository) GetByUsername(ctx context.Context, tenantID uuid.UUID, 
 		FROM   users -- allow-any-kind: username lookup is kind-agnostic; callers on the
 		             -- human login path must use GetHumanByUsername instead (FE-API-048 §4.1)
 		WHERE  tenant_id = $1 AND username = $2`
+
+	return r.scanOne(ctx, q, tenantID, username)
+}
+
+// GetHumanByUsername returns the human user with the given username in the
+// given tenant. The kind='human' guard is applied at the SQL layer so a
+// service-account shadow row (kind='service_account', synthetic sa-<hex>
+// username) can never match — even if it carries a non-empty password_hash.
+// This is the primary control on the username/password login path (SEC-075):
+// it does not rely on argon2.Verify rejecting an empty hash as the only
+// barrier. Returns ErrNotFound if no human row matches; callers on the login
+// path collapse that to invalid-credentials so the response does not leak
+// that a service-account shadow row exists.
+func (r *UserRepository) GetHumanByUsername(ctx context.Context, tenantID uuid.UUID, username string) (*User, error) {
+	const q = `
+		SELECT id, tenant_id, username, COALESCE(email, ''), display_name,
+		       password_hash, is_active, failed_logins, locked_until,
+		       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
+		       COALESCE(sso_subject, '')
+		FROM   users -- kind = 'human' enforced in WHERE below (FE-API-048 §4.1, SEC-075)
+		WHERE  tenant_id = $1 AND username = $2 AND kind = 'human'`
 
 	return r.scanOne(ctx, q, tenantID, username)
 }
