@@ -168,6 +168,20 @@ export function useGCRuns({
     getNextPageParam: (last) =>
       last.next_page_token ? last.next_page_token : undefined,
     staleTime: 15_000,
+    // Poll every 10s ONLY while a run is still in a non-terminal state
+    // (queued/running) — without this, a "Run now" row froze on its
+    // enqueue-time snapshot until the operator manually refreshed. Once
+    // every visible run is terminal we stop polling (false) so an idle
+    // history table costs nothing. Mirrors useGCStatus's poll, but
+    // conditional because the runs list is a heavier query.
+    refetchInterval: (query) => {
+      const hasActiveRun = query.state.data?.pages.some((page) =>
+        page.runs.some(
+          (r) => r.status === "queued" || r.status === "running",
+        ),
+      );
+      return hasActiveRun ? 10_000 : false;
+    },
   });
 }
 
