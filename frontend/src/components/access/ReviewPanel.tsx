@@ -176,12 +176,14 @@ export function ReviewPanel(): React.ReactElement {
           {/* Amber alert banner — surfaced only when there are stale
               keys to review. Copy mirrors the preview's for continuity
               with the operator's mental model. */}
+          {/* Warning-toned banner using the app's semantic --color-warning
+              token (auto-adapts to dark mode) instead of raw amber-* classes. */}
           <div
             role="alert"
-            className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-950/40"
+            className="flex items-start gap-3 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 px-4 py-3 text-sm"
           >
             <AlertTriangle
-              className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400"
+              className="mt-0.5 size-4 shrink-0 text-[var(--color-warning)]"
               aria-hidden
             />
             <span>
@@ -330,7 +332,7 @@ function ReviewRow({
             label="Revoke"
             onClick={onRevoke}
             emphasised={row.suggested_action === "REVOKE"}
-            emphasisClass="bg-red-50 text-red-700 ring-1 ring-red-200 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400 dark:ring-red-800 dark:hover:bg-red-950/50"
+            emphasisClass="bg-[var(--color-danger)]/5 text-[var(--color-danger)] ring-1 ring-[var(--color-danger)]/30 hover:bg-[var(--color-danger)]/10"
             disabled={pending}
             testAttr="revoke"
           />
@@ -338,7 +340,7 @@ function ReviewRow({
             label="Keep"
             onClick={onKeep}
             emphasised={row.suggested_action === "KEEP"}
-            emphasisClass="bg-green-50 text-green-700 ring-1 ring-green-200 hover:bg-green-100 dark:bg-green-950/30 dark:text-green-400 dark:ring-green-800 dark:hover:bg-green-950/50"
+            emphasisClass="bg-[var(--color-success)]/5 text-[var(--color-success)] ring-1 ring-[var(--color-success)]/30 hover:bg-[var(--color-success)]/10"
             disabled={pending}
             testAttr="keep"
           />
@@ -346,7 +348,7 @@ function ReviewRow({
             label="Snooze 30d"
             onClick={onSnooze}
             emphasised={row.suggested_action === "SNOOZE"}
-            emphasisClass="bg-blue-50 text-blue-700 ring-1 ring-blue-200 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-400 dark:ring-blue-800 dark:hover:bg-blue-950/50"
+            emphasisClass="bg-[var(--color-accent)]/5 text-[var(--color-accent)] ring-1 ring-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10"
             disabled={pending}
             testAttr="snooze"
           />
