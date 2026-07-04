@@ -5,6 +5,7 @@
 //   - key absent      → don't touch (MaxCVSSScoreSet=false)
 //   - key present nil → clear the gate (SQL NULL)
 //   - key present int → set the threshold
+//
 // encoding/json alone can't distinguish (a) from (b) for a nullable pointer,
 // so updateRepositoryBody has a custom UnmarshalJSON that pairs the pointer
 // with a Set flag. Regressions here would silently break operators trying to

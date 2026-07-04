@@ -67,8 +67,8 @@ type fakeGCServer struct {
 	lastGetRetentionStatusReq *gcv1.GetRetentionRunStatusRequest
 
 	// REM-013 gap 3 — retention savings aggregate.
-	getSavingsErr    error
-	getSavingsReturn *gcv1.TenantRetentionSavings
+	getSavingsErr     error
+	getSavingsReturn  *gcv1.TenantRetentionSavings
 	lastGetSavingsReq *gcv1.GetTenantRetentionSavingsRequest
 }
 
