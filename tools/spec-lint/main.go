@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -344,9 +345,24 @@ func ruleEventCatalogueCovered(root string) error {
 	if len(matches) == 0 {
 		return fmt.Errorf("no Routing* constants discovered under %s — rule needs an update for the new layout", eventsPath)
 	}
-	skipRE := regexp.MustCompile(`//\s*audit:\s*skip`)
+	// SEC-053: the skip annotation MUST cite a reason after an em-dash or
+	// ASCII hyphen (`// audit: skip — <reason>`), mirroring the mtls-validate
+	// skip precedent in ruleEveryServiceValidatesMTLS. A bare `// audit: skip`
+	// is rejected so a bad-faith PR cannot silently exempt a sensitive event by
+	// dropping the annotation in the same diff that adds the constant — the
+	// reason clause forces the author to state (and a reviewer to see) WHY the
+	// event produces no audit row. The reason text is also surfaced in the
+	// skip-count log below so the exemption list is visible in CI output.
+	skipRE := regexp.MustCompile(`//\s*audit:\s*skip\s*[—-]\s*\S`)
+	// A bare skip with no reason clause — matched separately so we can emit a
+	// precise "cite a reason" error rather than the generic "not covered" one.
+	bareSkipRE := regexp.MustCompile(`//\s*audit:\s*skip(\s*$|\s*[^—\-\s])`)
 	type entry struct{ name, val string }
 	var declared []entry
+	// skipped collects the routing keys that carry a valid reason-bearing skip
+	// annotation, so the count (and the constant names) land in the CI log —
+	// reviewers see the exemption list drift over time (SEC-053 remediation #3).
+	var skipped []string
 	for _, m := range matches {
 		// m[0]..m[1] = full match; m[2]..m[3] = name; m[4]..m[5] = value.
 		name := body[m[2]:m[3]]
@@ -371,11 +387,24 @@ func ruleEventCatalogueCovered(root string) error {
 			precStart := strings.LastIndex(body[:lineStart-1], "\n") + 1
 			preceding = body[precStart : lineStart-1]
 		}
-		skipped := skipRE.MatchString(line) || skipRE.MatchString(preceding)
-		if skipped {
+		if skipRE.MatchString(line) || skipRE.MatchString(preceding) {
+			// Valid skip: reason clause present. Record it for the count log
+			// and do NOT require a consumer case.
+			skipped = append(skipped, name)
 			continue
 		}
+		if bareSkipRE.MatchString(line) || bareSkipRE.MatchString(preceding) {
+			// A skip annotation is present but lacks the mandatory reason
+			// clause — reject with a targeted message (SEC-053).
+			return fmt.Errorf("%s: `// audit: skip` on %s lacks a reason clause — write `// audit: skip — <why this event produces no audit row>` (SEC-053)", eventsPath, name)
+		}
 		declared = append(declared, entry{name: name, val: val})
+	}
+	// Surface the exemption list in CI output so reviewers can watch it drift
+	// (SEC-053 remediation #3). Sorted for a stable, diff-friendly line.
+	if len(skipped) > 0 {
+		sort.Strings(skipped)
+		fmt.Printf("spec-lint: %d event(s) annotated `// audit: skip`: %v\n", len(skipped), skipped)
 	}
 	consumerPath := filepath.Join(root, "services", "audit", "internal", "eventconsumer", "consumer.go")
 	consumer, err := readFile(consumerPath)
@@ -418,7 +447,15 @@ func ruleEveryServiceValidatesMTLS(root string) error {
 	if err != nil {
 		return fmt.Errorf("read services dir: %w", err)
 	}
-	gateRE := regexp.MustCompile(`ValidateMTLSConfig|cfg\.Validate\(\)|loader\.Validate`)
+	// SEC-054: match ONLY an explicit reference to the mTLS validator, not a
+	// generic `cfg.Validate()` / `loader.Validate` that could check unrelated
+	// fields. A service shipping its own `cfg.Validate()` (e.g. asserting
+	// DB_DSN != "") would otherwise satisfy this rule without ever running the
+	// mTLS path-validation gate CLAUDE.md §7 requires — letting a production
+	// service silently fall back to insecure.NewCredentials(). Every current
+	// gRPC service calls loader.ValidateMTLSConfig directly, so the tightened
+	// regex is a no-op for today's tree and a real gate for future services.
+	gateRE := regexp.MustCompile(`\bValidateMTLSConfig\b|\bmtls\.Validate\b`)
 	// Skip annotation. em-dash (—) OR ASCII hyphen accepted so the rule
 	// is friendly to environments where operators can't easily type U+2014.
 	skipRE := regexp.MustCompile(`//\s*spec-lint:\s*skip\s+mtls-validate\s*[—-]\s*\S`)
