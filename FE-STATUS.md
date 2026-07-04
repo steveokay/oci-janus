@@ -114,9 +114,9 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | `/orgs/:org/members` | `GET/POST/DELETE /api/v1/orgs/{org}/members` | Add member dialog (UUID input, radio-card role picker), revoke confirmation |
 | `/webhooks` | `GET /api/v1/webhooks` | Table with URL + events chips + Active/Paused pill + relative date |
 | `/webhooks/:id` | full webhook surface | Test dispatch, deliveries timeline, rotate-secret, edit, delete |
-| `/admin/tenants` | `GET/POST/DELETE /api/v1/admin/tenants` + quota + `/admin/gc/*` + retention runs filter (client-side) | `beforeLoad` gate redirects non-admins; platform-admin banner; plan breakdown tiles; quota in GB/TB; `GCCard` + `RetentionCard` (S11.5) |
+| `/admin/tenants` | (redirect only since REDESIGN-001 Phase 4.2.d) | Legacy bookmark shim: multi mode → `/settings/platform#tenants`, single mode → `/settings/workspace`. The `GCCard` + `RetentionCard` (S11.5) now live at `/settings/workspace#gc`/`#retention` in single mode and `/settings/platform#gc`/`#retention` in multi mode |
 | `/profile` | `GET/PATCH /api/v1/users/me` + apikeys CRUD + password | Inline-edit identity, live policy checklist, API keys with show-once secret |
-| `/repositories/:org/:repo` (Retention tab) | `GET/PUT/DELETE .../policies/retention` + `/dry-run` + `/preview` + `/run` + `/runs/{id}` | S11.1+S11.2+S11.3 — read summary + editor + dry-run dialog + executor "Run now" button; pending-delete pills on Tags tab and per-repo run history deferred (REM-013) |
+| `/repositories/:org/:repo` (Retention tab) | `GET/PUT/DELETE .../policies/retention` + `/dry-run` + `/preview` + `/run` + `/runs/{id}` + `/runs` list | S11.1+S11.2+S11.3 — read summary + editor + dry-run dialog + executor "Run now" button; pending-delete pills on Tags tab + per-repo `RetentionRunHistoryPanel` live (REM-013 gaps 1+2 closed 2026-07-03) |
 | `/orgs/:org/settings` | `GET/PUT/DELETE /api/v1/orgs/{org}/policies/retention` | S11.4 — org default editor; cross-linked from inherited per-repo policies |
 
 **Cross-cutting primitives** delivered across the sprints:
@@ -149,7 +149,7 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 | 037 | Per-repo retention CRUD | DONE — Retention tab summary + editor (S11.1+S11.2) |
 | 038 | Retention dry-run + preview | DONE — mandatory pre-save dialog + 24h preview banner (S11.1+S11.2) |
 | 039 | Per-org default retention | DONE — `/orgs/$org/settings` editor (S11.4) |
-| 040 | Retention executor (gc modes) | PARTIAL — "Run now" + admin tile shipped (S11.3+S11.5); per-tag pending-delete pills + per-repo run history blocked by REM-013 gaps 1+2 |
+| 040 | Retention executor (gc modes) | DONE — "Run now" + admin tile (S11.3+S11.5); per-tag pending-delete pills + per-repo run history + dashboard savings stat all live (REM-013 closed 2026-07-03, PR #253) |
 | 041 | Retention events (audit + webhook) | DONE — notifications bell + activity chips + webhook routing-key chips (S11.5) |
 | 042 | Pull-activity tracking | DONE — closes FE-API-030 caveat (pulls analytics now live) |
 | 043 | `max_idle_days` retention rule | DONE — rule kind present in both editors (S11.2+S11.4) |
@@ -160,11 +160,11 @@ Vite dev proxy: `/api/v1/*` → `:8091`, `/auth/*` → `:8080`.
 - **FE-API-004** — per-repo activity tab on `/repositories/$org/$repo`. Backend handler `repo_activity.go` exists; FE never wired (workspace-wide `/activity` covers the bigger surface).
 - **FE-API-034** — per-tenant SSO admin UI (`/workspace/sso`). Backend wraps OAuth PKCE + SAML SP; FE deferred to a focused sprint.
 
-**Blocked on REM-013 backend gaps** (status.md tracks the three gaps with fix sketches):
+**~~Blocked on REM-013 backend gaps~~ — CLOSED 2026-07-03** (resolution row in `status.md`; PR #253):
 
-- Pending-delete pills on Tags tab — needs `retention_pending_delete_at` on `Tag` proto + metadata SQL JOIN + management `TagResponse` surface.
-- Per-repo Run history panel on Retention tab — needs `repo_id` + `mode` filters on `gcv1.ListRunsRequest` + new BFF list route.
-- Dashboard storage-breakdown "Retention" column — needs `retention_summary` + `retention_source` on `RepositoryStorageEntry` + per-row effective-policy fan-out.
+- ✅ Pending-delete pills on Tags tab — `retention_pending_delete_at` projected via `ListTags`, rendered by `PendingDeletePill`.
+- ✅ Per-repo Run history panel on Retention tab — `repo_id` + `mode` filters on `gcv1.ListRunsRequest` + BFF `repo_retention_run.go` + `RetentionRunHistoryPanel`.
+- ✅ Dashboard storage-breakdown retention surface — per-row policy column (`retention_summary`/`retention_source`) plus the tenant-wide "Reclaimed via retention" savings stat (`GCService.GetTenantRetentionSavings` → `retention_reclaimed_bytes`).
 
 ## Review batch — 2026-06-23 (FE-facing items)
 
