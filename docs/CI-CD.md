@@ -23,8 +23,8 @@ Per service (triggered by path filter):
 
 1. lint           → golangci-lint (config in .golangci.yml at repo root)
 2. test           → go test -race ./...
-3. security       → govulncheck (nightly sweep in ci-security.yml, not
-                    per-PR — see REM-016), gosec, gitleaks
+3. security       → govulncheck (nightly BLOCKING sweep in ci-security.yml,
+                    not per-PR — REM-016 closed 2026-07-04), gosec, gitleaks
 4. build          → docker build (multi-stage, distroless base)
 5. conformance    → (services/core only) OCI conformance suite
 6. integration    → make test-integration

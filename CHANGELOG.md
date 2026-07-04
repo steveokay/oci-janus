@@ -43,8 +43,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CVEs (GO-2026-5039/5037 in `net/textproto`+`crypto/x509`, GO-2026-4982/4980/4971)
   across every Go module. `services/auth`'s `russellhaering/goxmldsig` bumped
   v1.3.0 → v1.6.0 fixing **GO-2026-4753** (XML-dsig signature bypass under the
-  SAML SP path). The nightly govulncheck sweep (`ci-security.yml`) is now a
-  **blocking** gate — 0 affected vulnerabilities across all 15 modules. (PR #256.)
+  SAML SP path; logged as SEC-076, resolved same-day). The nightly govulncheck
+  sweep (`ci-security.yml`) is now a **blocking** gate — 0 affected
+  vulnerabilities across all 15 modules. (PR #256.)
+
+### Fixed
+
+- **Dashboard UI — 30 fixes from the 2026-07-04 four-agent UX review**
+  (PRs #257/#258/#259; full inventory in `FE-STATUS.md` → "UI polish review").
+  Highlights: access-review key revocation now requires confirmation; the SA
+  keys table's expiry column was mislabelled "Last used"; repository search no
+  longer reports false "no matches" over unfetched pages; login honors the
+  captured `?from=` deep-link; GC run history live-updates after "Run now";
+  sidebar gains keyboard focus rings, `aria-current`, and a Dashboard entry;
+  repo/tag detail tabs are URL-driven (`?tab=`); destructive dialogs unified
+  on `ConfirmDestructiveDialog`; API-key tables show expiry-urgency badges;
+  activity feed gains cursor pagination + URL-persisted filters;
+  platform-admin actions are disabled (with a hint) for callers without the
+  grant instead of failing post-confirmation with a 403.
 
 ---
 
