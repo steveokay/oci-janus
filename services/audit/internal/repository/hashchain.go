@@ -227,16 +227,61 @@ func tenantAdvisoryLockKey(tenantID uuid.UUID) int64 {
 	return int64(h.Sum64()) //nolint:gosec // intentional reinterpret
 }
 
+// preChainSentinel is the row_hash carried by rows that predate the Phase
+// 6.12 hash-chain migration. The migration adds row_hash with a transient
+// `DEFAULT 0x00` (dropped immediately after) so every row that already
+// existed is backfilled with this single 0x00 byte. A genuine row_hash is
+// always the 32-byte SHA-256 output of computeRowHash, so a 1-byte 0x00
+// value unambiguously marks a row that was never part of any hash linkage.
+// (Same byte value as genesisPrevHash but a distinct meaning — a pre-chain
+// row's row_hash, not a genesis row's prev_hash — so it gets its own name.)
+var preChainSentinel = []byte{0x00}
+
+// ChainVerification is the result of VerifyChain. A chain can be intact
+// (FirstBadID == uuid.Nil) while still carrying Unverifiable > 0 pre-chain
+// rows — the two conditions are independent.
+type ChainVerification struct {
+	// FirstBadID is the id of the first row that fails verification —
+	// tampered (stored hash ≠ recomputed), forked (two rows share a
+	// prev_hash), or orphaned (unreachable from genesis) — or uuid.Nil
+	// when every chained row verifies.
+	FirstBadID uuid.UUID
+	// FirstBadAt is that row's occurred_at, zero when FirstBadID is Nil.
+	FirstBadAt time.Time
+	// Unverifiable counts rows that predate the hash chain (backfilled
+	// with preChainSentinel). They can be neither confirmed intact nor
+	// confirmed tampered because they never had a row_hash computed, so
+	// they are reported explicitly here rather than silently skipped
+	// (SEC-051). An operator investigating chain integrity must treat a
+	// non-zero count as "these rows are outside the tamper-evidence
+	// guarantee" — they should be exported/checkpointed by other means.
+	Unverifiable int
+}
+
+// Intact reports whether every chained row verified. It does NOT consider
+// Unverifiable rows — callers that require full coverage must also assert
+// Unverifiable == 0.
+func (v ChainVerification) Intact() bool { return v.FirstBadID == uuid.Nil }
+
 // VerifyChain walks every audit_events row for tenantID by following the
 // linked-list structure of the chain (start at the genesis row whose
 // prev_hash is the sentinel 0x00 byte, then jump to whichever row has
 // prev_hash = current.row_hash, etc.) and recomputes each row_hash from
-// (prev_hash, canonical bytes). Returns the (id, occurredAt) of the
-// first row whose stored hash does not match the recomputation, or a
-// row that should have a successor but doesn't (broken chain).
+// (prev_hash, canonical bytes). The returned ChainVerification names the
+// first row whose stored hash does not match the recomputation, or a row
+// that should have a successor but doesn't (broken chain), plus a count of
+// pre-chain rows that lie outside the tamper-evidence guarantee.
 //
-// Returns (uuid.Nil, time.Time{}, nil) when the chain is intact and
-// every row in the table is accounted for.
+// Returns an Intact() result with Unverifiable == 0 when the chain is whole
+// and every row in the table participates in it.
+//
+// PRE-CHAIN ROWS (SEC-051): rows inserted before the Phase 6.12 migration
+// were backfilled with preChainSentinel as their row_hash. They also carry
+// prev_hash = 0x00, so if they were bucketed like normal rows they would
+// collide with the genuine genesis row and be misreported as a fork/tamper.
+// We instead count them into Unverifiable and exclude them from the walk —
+// the count makes them visible to the operator instead of the verifier
+// silently passing over (or falsely flagging) them.
 //
 // LINKED-LIST WALK vs. SORT-BY-OCCURRED_AT: we deliberately do NOT walk
 // rows in occurred_at order because the chain order is the order of
@@ -255,7 +300,7 @@ func tenantAdvisoryLockKey(tenantID uuid.UUID) int64 {
 // "in-flight" rows whose prev_hash refers to an as-yet-uncommitted
 // row — in practice operators run VerifyChain offline against a
 // snapshot, so we accept the race.
-func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, time.Time, error) {
+func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (ChainVerification, error) {
 	// Load every row for the tenant into memory keyed by hex(prev_hash).
 	// Audit chains are bounded by retention (default 30 days) so an
 	// in-memory walk is acceptable; for very large tenants a future
@@ -268,7 +313,7 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		tenantID,
 	)
 	if err != nil {
-		return uuid.Nil, time.Time{}, fmt.Errorf("VerifyChain query: %w", err)
+		return ChainVerification{}, fmt.Errorf("VerifyChain query: %w", err)
 	}
 	defer rows.Close()
 
@@ -283,7 +328,7 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		rowHash  []byte
 	}
 	bucket := make(map[string]*rowRec)
-	var total int
+	var total, unverifiable int
 	for rows.Next() {
 		var rec rowRec
 		if err := rows.Scan(
@@ -291,14 +336,21 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 			&rec.ev.Action, &rec.ev.Resource, &rec.ev.Outcome, &rec.ev.Metadata, &rec.ev.OccurredAt,
 			&rec.prevHash, &rec.rowHash,
 		); err != nil {
-			return uuid.Nil, time.Time{}, fmt.Errorf("VerifyChain scan: %w", err)
+			return ChainVerification{}, fmt.Errorf("VerifyChain scan: %w", err)
+		}
+		// Pre-chain rows (SEC-051): backfilled with preChainSentinel and
+		// never linked. Count them and exclude from the walk so their
+		// prev_hash = 0x00 does not collide with the genuine genesis row.
+		if bytesEqual(rec.rowHash, preChainSentinel) {
+			unverifiable++
+			continue
 		}
 		key := string(rec.prevHash)
 		if _, dup := bucket[key]; dup {
 			// Two rows with the same prev_hash means the chain forked
 			// — the advisory lock was bypassed or a tamperer cloned a
 			// row. Flag the second row.
-			return rec.ev.ID, rec.ev.OccurredAt, nil
+			return ChainVerification{FirstBadID: rec.ev.ID, FirstBadAt: rec.ev.OccurredAt, Unverifiable: unverifiable}, nil
 		}
 		// Copy so the loop variable's storage is not reused across
 		// iterations (rec is reassigned each loop and we keep a
@@ -308,21 +360,24 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		total++
 	}
 	if err := rows.Err(); err != nil {
-		return uuid.Nil, time.Time{}, fmt.Errorf("VerifyChain iterate: %w", err)
+		return ChainVerification{}, fmt.Errorf("VerifyChain iterate: %w", err)
 	}
 
 	// Walk from the genesis row forward. Empty chain → trivially intact.
 	current, ok := bucket[string(genesisPrevHash)]
 	if !ok {
 		if total == 0 {
-			return uuid.Nil, time.Time{}, nil
+			// No chained rows. Still surface any pre-chain rows so a
+			// table that holds ONLY pre-migration rows is not reported
+			// as a clean, fully-verified chain.
+			return ChainVerification{Unverifiable: unverifiable}, nil
 		}
 		// Rows exist but none claim to be the genesis row — the
 		// genesis row was deleted (or never had prev_hash = 0x00).
 		// Surface the first row we still hold so the operator has a
 		// concrete id to investigate.
 		for _, r := range bucket {
-			return r.ev.ID, r.ev.OccurredAt, nil
+			return ChainVerification{FirstBadID: r.ev.ID, FirstBadAt: r.ev.OccurredAt, Unverifiable: unverifiable}, nil
 		}
 	}
 	seen := 0
@@ -331,18 +386,18 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		// value from (prev_hash, canonical bytes).
 		want, err := computeRowHash(current.prevHash, &current.ev)
 		if err != nil {
-			return uuid.Nil, time.Time{}, fmt.Errorf("VerifyChain recompute: %w", err)
+			return ChainVerification{}, fmt.Errorf("VerifyChain recompute: %w", err)
 		}
 		if !bytesEqual(want, current.rowHash) {
-			return current.ev.ID, current.ev.OccurredAt, nil
+			return ChainVerification{FirstBadID: current.ev.ID, FirstBadAt: current.ev.OccurredAt, Unverifiable: unverifiable}, nil
 		}
 		seen++
 		// Hop to the row whose prev_hash equals THIS row's row_hash.
 		// If none, we've reached the tip — exit the loop.
 		current = bucket[string(current.rowHash)]
 	}
-	// All rows traversed → chain is intact. If `seen` is less than the
-	// total we loaded, some rows are orphans (not reachable from the
+	// All chained rows traversed → chain is intact. If `seen` is less than
+	// the total we bucketed, some rows are orphans (not reachable from the
 	// genesis row). Surface the first orphan id so the operator can
 	// investigate. This catches the case where a tamperer inserted a
 	// row in the middle of the chain by hand.
@@ -357,11 +412,11 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		}
 		for _, r := range bucket {
 			if !reachable[string(r.rowHash)] {
-				return r.ev.ID, r.ev.OccurredAt, nil
+				return ChainVerification{FirstBadID: r.ev.ID, FirstBadAt: r.ev.OccurredAt, Unverifiable: unverifiable}, nil
 			}
 		}
 	}
-	return uuid.Nil, time.Time{}, nil
+	return ChainVerification{Unverifiable: unverifiable}, nil
 }
 
 // bytesEqual is a fixed-length, constant-time-ish equality check used in
