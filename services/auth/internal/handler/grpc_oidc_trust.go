@@ -1,11 +1,11 @@
 // Package handler — grpc_oidc_trust.go is the gRPC layer for the FUT-001
 // federated workload identity feature. Five RPCs map to OIDCTrustService:
 //
-//   ListOIDCTrusts          — admin list
-//   CreateOIDCTrust         — admin create
-//   UpdateOIDCTrust         — admin mutate display_name / pattern / TTL
-//   DeleteOIDCTrust         — admin remove
-//   ExchangeWorkloadToken   — public exchange (CI runner → registry JWT)
+//	ListOIDCTrusts          — admin list
+//	CreateOIDCTrust         — admin create
+//	UpdateOIDCTrust         — admin mutate display_name / pattern / TTL
+//	DeleteOIDCTrust         — admin remove
+//	ExchangeWorkloadToken   — public exchange (CI runner → registry JWT)
 //
 // Per the pattern established by grpc_tenant_users.go, the gRPC layer
 // trusts its caller — RBAC gates land in services/management's BFF.
@@ -190,4 +190,3 @@ func oidcTrustToProto(t *repository.OIDCTrust) *authv1.OIDCTrust {
 		LastUsedAt:          lastUsed,
 	}
 }
-

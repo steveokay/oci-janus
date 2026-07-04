@@ -128,26 +128,13 @@ jobs:
           docker compose -f infra/docker-compose/docker-compose.yml logs registry-core >&2
           exit 1
 
-      # Create a dedicated user for the conformance suite.
-      # 201 = created, 409 = already exists (idempotent on reruns) — both are fine.
-      - name: Create conformance test user
-        run: |
-          HTTP_STATUS=$(curl -s -o /tmp/create_user_resp.json -w '%{http_code}' \
-            -X POST http://localhost:8080/api/v1/users \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "username": "conformance",
-              "password": "Conform1234!dev",
-              "email": "conformance@test.local",
-              "tenant_id": "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
-            }')
-          echo "Create user response: HTTP $HTTP_STATUS"
-          cat /tmp/create_user_resp.json || true
-          if [ "$HTTP_STATUS" != "201" ] && [ "$HTTP_STATUS" != "409" ]; then
-            echo "ERROR: unexpected status $HTTP_STATUS when creating conformance user" >&2
-            exit 1
-          fi
-
+      # NOTE (2026-07-04, REM-020): the old "Create conformance test user"
+      # step (unauthenticated POST /api/v1/users) was removed here. It has
+      # 401'd since REDESIGN-001 locked user creation behind admin auth —
+      # unnoticed because the lint gate kept this job skipped until the
+      # REM-014 sweep. It was also redundant: `make test-conformance`
+      # step [2/5] seeds the conformance user + wildcard role grant
+      # directly in the auth DB (idempotent psql INSERT ... ON CONFLICT).
       - name: Run OCI conformance suite
         run: cd services/core && make test-conformance
 

@@ -103,7 +103,7 @@ const (
 	// Reason distinguishes "manual" from "idle_revoked" from the FUT-004-
 	// reserved "rotation_lapsed" — the audit consumer surfaces it as
 	// metadata.reason so the activity feed can filter.
-	RoutingTokenPolicyChanged = "auth.token_policy.changed"
+	RoutingTokenPolicyChanged = "auth.token_policy.changed" //nolint:gosec // G101 false positive: RabbitMQ routing key, not a credential (REM-014)
 	RoutingKeyRevoked         = "auth.key_revoked"
 
 	// FUT-004 — access review.

@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     # REM-014 closed for tenant: gofmt/goimports drift in
     # services/tenant/internal/handler/{grpc,grpc_test}.go was the only
-    # finding. Lint is now blocking for tenant — the other 12 services
-    # keep continue-on-error: true until their own per-service cleanup
-    # PRs ship (per memory/feedback_review_pace.md: small focused PRs,
-    # one service at a time).
+    # finding. Lint is blocking here — and (2026-07-04) blocking on every
+    # other service too: no per-service lint job carries
+    # continue-on-error anymore, and the accumulated rot was cleared by
+    # the REM-014 gofmt+lint sweep (libs/auth/audit/core/mcp/metadata).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

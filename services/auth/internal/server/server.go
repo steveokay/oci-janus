@@ -648,7 +648,6 @@ func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) e
 	}
 }
 
-
 // publishSALifecycle is the original (pre-FUT-001) lifecycle path —
 // marshals the AuditEvent into ServiceAccountLifecyclePayload and
 // publishes to RoutingServiceAccountLifecycle. registry-audit's

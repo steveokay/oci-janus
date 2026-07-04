@@ -14,22 +14,22 @@
 // order (writes via writeField below for length-prefix framing so two
 // adjacent strings like "" and "x" cannot collide with one "" + "x"):
 //
-//   1.  id           (UUID, 16 raw bytes — Marshal() output)
-//   2.  tenant_id    (UUID, 16 raw bytes)
-//   3.  actor_id     (string, length-prefixed UTF-8)
-//   4.  actor_type   (string, length-prefixed UTF-8)
-//   5.  actor_ip     (string, length-prefixed UTF-8)
-//   6.  action       (string, length-prefixed UTF-8)
-//   7.  resource     (string, length-prefixed UTF-8)
-//   8.  outcome      (string, length-prefixed UTF-8)
-//   9.  metadata     (raw JSON bytes, length-prefixed; we DO NOT
-//                    re-canonicalise the JSON because the inserter and
-//                    verifier both see the same byte sequence produced
-//                    by the consumer's json.Marshal. If a future change
-//                    starts re-marshalling JSON in the read path it MUST
-//                    do the same here to stay deterministic.)
-//   10. occurred_at  (UTC time formatted as RFC3339Nano — fixed
-//                    timezone, fixed precision, length-prefixed.)
+//  1. id           (UUID, 16 raw bytes — Marshal() output)
+//  2. tenant_id    (UUID, 16 raw bytes)
+//  3. actor_id     (string, length-prefixed UTF-8)
+//  4. actor_type   (string, length-prefixed UTF-8)
+//  5. actor_ip     (string, length-prefixed UTF-8)
+//  6. action       (string, length-prefixed UTF-8)
+//  7. resource     (string, length-prefixed UTF-8)
+//  8. outcome      (string, length-prefixed UTF-8)
+//  9. metadata     (raw JSON bytes, length-prefixed; we DO NOT
+//     re-canonicalise the JSON because the inserter and
+//     verifier both see the same byte sequence produced
+//     by the consumer's json.Marshal. If a future change
+//     starts re-marshalling JSON in the read path it MUST
+//     do the same here to stay deterministic.)
+//  10. occurred_at  (UTC time formatted as RFC3339Nano — fixed
+//     timezone, fixed precision, length-prefixed.)
 //
 // Length prefix: 4-byte big-endian uint32 of the field byte length.
 // We use a fixed-width framing (rather than newline / NUL terminators)
@@ -350,7 +350,7 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (uuid.
 		// Build the reachable set by walking the chain again. An
 		// orphan is any bucket entry not in the reachable set.
 		reachable := map[string]bool{}
-		walk, _ := bucket[string(genesisPrevHash)]
+		walk := bucket[string(genesisPrevHash)]
 		for walk != nil {
 			reachable[string(walk.rowHash)] = true
 			walk = bucket[string(walk.rowHash)]

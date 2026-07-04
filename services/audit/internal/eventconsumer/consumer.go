@@ -1012,15 +1012,14 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 	case events.RoutingKeyRevoked:
 		var p events.KeyRevokedPayload
 		_ = json.Unmarshal(event.Payload, &p)
+		// Actor is always "system": manual revokes carry the OWNER id (not
+		// the acting operator) and the idle-revoke worker has no operator
+		// identity at all, so there is no trustworthy actor to stamp. The
+		// key id lands in Resource; downstream can join to the users table
+		// if it needs the owner. (A future auth change that adds ActorID to
+		// the payload can branch on p.Reason == "manual" here.)
 		actor := "system"
 		actorType := "system"
-		// Recognise operator-initiated manual revocations if a future
-		// caller sets ActorID on the payload; the worker leaves it empty.
-		if p.Reason == "manual" && p.OwnerUserID != "" {
-			// Manual revokes carry the owner id — not the actor — so we
-			// stamp "system" for actor and put the owner in resource.
-			// Downstream can join to the users table if needed.
-		}
 		return &repository.AuditEvent{
 			TenantID:   tenantID,
 			ActorID:    actor,

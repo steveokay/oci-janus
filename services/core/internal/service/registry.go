@@ -701,23 +701,25 @@ func (r *Registry) GetManifest(ctx context.Context, tenantID, repoID, reference 
 //
 // Load-bearing invariants (see TestCheckCVSSAdmission_* in
 // registry_test.go):
-//   1. Repo fetch fails (metadata blip)     → warn + allow (fail-OPEN).
-//   2. max_cvss_score is null (default)     → allow (no gate).
-//   3. Scan result missing (NotFound)       → info + allow (fail-OPEN,
-//      first pull of a manifest before the scanner catches up).
-//   4. Scan RPC unreachable                 → warn + allow (fail-OPEN;
-//      operators can flip to fail-CLOSED via env in a follow-up).
-//   5. top_cvss > threshold                 → deny (fail-CLOSED).
-//   6. top_cvss == threshold                → allow (`>` not `>=`).
+//  1. Repo fetch fails (metadata blip)     → warn + allow (fail-OPEN).
+//  2. max_cvss_score is null (default)     → allow (no gate).
+//  3. Scan result missing (NotFound)       → info + allow (fail-OPEN,
+//     first pull of a manifest before the scanner catches up).
+//  4. Scan RPC unreachable                 → warn + allow (fail-OPEN;
+//     operators can flip to fail-CLOSED via env in a follow-up).
+//  5. top_cvss > threshold                 → deny (fail-CLOSED).
+//  6. top_cvss == threshold                → allow (`>` not `>=`).
 //
 // CVSS derivation for v1: the scanner's plugin.Finding shape does not
 // yet carry a numeric CVSS score, so we derive top CVSS from the
 // SeverityCounts map using standard v3.1 band midpoints (LOW=39,
 // MEDIUM=69, HIGH=89, CRITICAL=100). This means:
-//   threshold 100 → blocks nothing (opt-in default)
-//   threshold  89 → blocks CRITICAL only
-//   threshold  69 → blocks HIGH + CRITICAL
-//   threshold  39 → blocks MEDIUM + HIGH + CRITICAL
+//
+//	threshold 100 → blocks nothing (opt-in default)
+//	threshold  89 → blocks CRITICAL only
+//	threshold  69 → blocks HIGH + CRITICAL
+//	threshold  39 → blocks MEDIUM + HIGH + CRITICAL
+//
 // The plugin.Finding.CVSS numeric field is a Phase 2 follow-up; once
 // findings carry the raw score, this function switches to reading the
 // JSON directly.

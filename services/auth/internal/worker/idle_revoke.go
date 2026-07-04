@@ -7,12 +7,12 @@
 //     tenants with no policy do zero work here).
 //  2. For each tenant:
 //     a. Acquire pg_try_advisory_lock keyed on the tenant id (FNV-64a hash).
-//        Skip if another auth replica already holds it — the lock is the
-//        multi-replica safety guard.
+//     Skip if another auth replica already holds it — the lock is the
+//     multi-replica safety guard.
 //     b. Load the tenant's policy (idle_revoke_days).
 //     c. ListIdleKeys with cutoff = now - idle_revoke_days.
 //     d. For each returned key: RevokeWithReason(id, "idle_revoked") +
-//        publish auth.key_revoked with reason="idle_revoked".
+//     publish auth.key_revoked with reason="idle_revoked".
 //
 // Failure semantics:
 //   - Any error on tenant N never blocks tenants N+1..M. The loop logs

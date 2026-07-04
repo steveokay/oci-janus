@@ -110,26 +110,25 @@ Docker Desktop must trust `localhost:8081` before any push/pull. Do this **once*
 
 Without this, Docker attempts TLS and the push fails before it even reaches the auth step.
 
-### 5b — Create a user and log in
+### 5b — Bootstrap the admin user and log in
 
-There is no pre-seeded user. Create one via the auth API first:
+There is no pre-seeded user, and since REDESIGN-001 user creation requires
+an authenticated admin — the old unauthenticated `POST /api/v1/users` now
+returns 401. Instead, run the bootstrap CLI once against the running stack
+(idempotent; safe to re-run):
 
 ```bash
-# Create a test user (password must be ≥ 12 chars with upper, lower, digit, symbol)
-curl -s -X POST http://localhost:8080/api/v1/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "Admin1234!dev",
-    "email": "admin@local.dev",
-    "tenant_id": "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
-  }' | jq .
+make dev-bootstrap
+# Creates admin / Admin1234! on the Development tenant
+# (98dbe36b-ef28-4903-b25c-bff1b2921c9e) via the registry-auth
+# `bootstrap` subcommand. Further users can then be created through
+# the dashboard or the admin-authenticated /api/v1/users route.
 ```
 
 Then log in with Docker:
 
 ```bash
-docker login localhost:8081 -u admin -p Admin1234!dev
+docker login localhost:8081 -u admin -p Admin1234!
 ```
 
 This stores a credential so Docker can exchange it for a bearer token via
@@ -148,7 +147,7 @@ curl -sf http://localhost:8081/v2/
 # → 401 Unauthorized (expected — confirms auth challenge is working)
 
 TOKEN=$(curl -sf "http://localhost:8080/auth/token?service=registry-core&scope=repository:myorg/myimage:push,pull" \
-  -u admin:Admin1234\!dev | jq -r .token)
+  -u admin:Admin1234\! | jq -r .token)
 curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8081/v2/
 # → {}  (HTTP 200)
 
@@ -200,7 +199,7 @@ Docker handles the full auth flow automatically — no manual token retrieval ne
 
 ```bash
 # Log in to the proxy registry (same credentials as the main registry)
-docker login localhost:8084 -u admin -p Admin1234!dev
+docker login localhost:8084 -u admin -p Admin1234!
 
 # Pull through the cache — path: localhost:8084/cache/<upstream>/<image>:<tag>
 docker pull localhost:8084/cache/dockerhub/library/alpine:3.20
