@@ -3,17 +3,18 @@
 // FUT-020 — image promotion (atomic tag copy).
 //
 // Two routes:
-//   POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote
-//       Copies the current manifest of the source tag onto a destination
-//       {org}/{repo}:{tag}. Auth: repo `writer` on BOTH source AND
-//       destination — the load-bearing security invariant is that someone
-//       with pull-only access on `prod/*` cannot promote INTO it. Success
-//       returns 201 + the persisted Promotion JSON and fires an
-//       image.promoted event on RabbitMQ for the audit consumer.
 //
-//   GET /api/v1/repositories/{org}/{repo}/promotions
-//       Returns recent promotions that touch this repo (src OR dst side).
-//       Auth: repo `reader` — the history is not a secret.
+//	POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote
+//	    Copies the current manifest of the source tag onto a destination
+//	    {org}/{repo}:{tag}. Auth: repo `writer` on BOTH source AND
+//	    destination — the load-bearing security invariant is that someone
+//	    with pull-only access on `prod/*` cannot promote INTO it. Success
+//	    returns 201 + the persisted Promotion JSON and fires an
+//	    image.promoted event on RabbitMQ for the audit consumer.
+//
+//	GET /api/v1/repositories/{org}/{repo}/promotions
+//	    Returns recent promotions that touch this repo (src OR dst side).
+//	    Auth: repo `reader` — the history is not a secret.
 //
 // A promotion is a metadata-level primitive. No blobs are copied; both
 // tags reference the same manifest digest so storage stays deduplicated.

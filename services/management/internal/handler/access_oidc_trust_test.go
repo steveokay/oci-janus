@@ -3,8 +3,8 @@
 // FUT-001 Task 13 — BFF tests for the 4 OIDC-trust admin routes.
 //
 // Each RPC is exercised with two cases:
-//   1. Happy path with a tenant-admin caller (200 / 201 / 204).
-//   2. Non-admin caller (writerToken) — expects 403 before any gRPC call.
+//  1. Happy path with a tenant-admin caller (200 / 201 / 204).
+//  2. Non-admin caller (writerToken) — expects 403 before any gRPC call.
 //
 // The tests share the same fakeAuthServer used across the handler package
 // (defined in handler_test.go). We add stub methods for the 4 new OIDC-trust

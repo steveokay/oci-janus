@@ -62,8 +62,8 @@ type RepositoryStorageEntry struct {
 // "used / total" rather than just usage. Zero when the tenant has no
 // quota row yet (lazy-created on first push).
 type StorageBreakdownResponse struct {
-	TenantStorageUsedBytes  int64                    `json:"tenant_storage_used_bytes"`
-	TenantStorageQuotaBytes int64                    `json:"tenant_storage_quota_bytes"`
+	TenantStorageUsedBytes  int64 `json:"tenant_storage_used_bytes"`
+	TenantStorageQuotaBytes int64 `json:"tenant_storage_quota_bytes"`
 	// RetentionReclaimedBytes (REM-013 gap 3) is the lifetime bytes reclaimed
 	// by retention for this tenant — SUM(bytes_freed) over succeeded retention
 	// gc_runs. It lets the dashboard card show how much retention has actually
