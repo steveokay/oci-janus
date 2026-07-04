@@ -61,6 +61,20 @@ function RepositoriesPage(): React.ReactElement {
     );
   }, [flat, query]);
 
+  // The name/org search only sees pages the infinite query has already
+  // loaded, so a match sitting on an unfetched page would previously
+  // produce a false "No repositories match" while hasNextPage was still
+  // true. Short-term fix (server-side search is FE-API-future): while a
+  // search is active, keep draining the remaining pages so the client-side
+  // filter eventually sees the full catalog. The effect re-fires as each
+  // page lands (isFetchingNextPage flips back to false) until exhausted.
+  const searchActive = query.trim() !== "";
+  React.useEffect(() => {
+    if (searchActive && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [searchActive, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   const total = data?.pages[0]?.total ?? flat.length;
 
   return (
@@ -103,6 +117,17 @@ function RepositoriesPage(): React.ReactElement {
           error={error}
           onRetry={() => void refetch()}
         />
+      ) : !isLoading && filtered.length === 0 && searchActive && hasNextPage ? (
+        // Zero matches so far but more pages are still coming (the drain
+        // effect above is fetching them) — a hard "no matches" here would
+        // be a lie until the catalog is fully loaded, so show a transient
+        // searching state instead.
+        <div
+          role="status"
+          className="flex items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] py-10 text-sm text-[var(--color-fg-muted)]"
+        >
+          Searching more repositories…
+        </div>
       ) : !isLoading && filtered.length === 0 ? (
         <EmptyState
           icon={<Boxes className="size-5" />}

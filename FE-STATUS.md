@@ -211,6 +211,24 @@ remaining S8 sub-items are bundled here so nothing slips:
 - [ ] Empty-state copy review — every empty pane should name a concrete next action (`DSGN-007` EmptyState gains `secondaryAction` for docs link)
 - [ ] Network-error UX — verify retry recoveries across every query (`DSGN-004` ErrorState surfaces HTTP code + detail)
 
+## UI polish review — 2026-07-04 (4-agent sweep)
+
+A four-agent read-only UX review swept the whole frontend (shell/nav,
+dashboard+repositories, settings/admin, access/activity) and produced 47
+findings. Execution is planned as three batches; this section tracks them.
+Full finding detail lives in the review transcripts + PR descriptions.
+
+| Batch | Scope | Status |
+|---|---|---|
+| **1 — Bug batch** | 12 actively-wrong/misleading items: SA-keys expiry column mislabeled "Last used"; access-review Revoke had no confirmation; repo search false "no matches" over unfetched infinite-query pages; tags filter zero-match rendered a blank table; notifications panel hung on "Loading…" on error; StatCard infinite skeleton on absent values; login discarded the `?from` deep-link; DeploymentInfoCard hardcoded "HTTPS termination" badge; GC runs table froze after Run-now (no poll); Settings eyebrow hardcoded "Account"; dead `docs.example.com` footer link; theme "System" matchMedia listener desync | 🔄 IN FLIGHT — `fix/ui-bug-batch-1` |
+| **2 — A11y + consistency** | Sidebar focus rings + `aria-current` + labeled `<nav>` landmarks; tag-row nested-link semantics (mirror repositories-table); notifications bell menu→popover semantics; migrate 4 hand-rolled destructive dialogs to `ConfirmDestructiveDialog`; timestamp unification (raw `toLocaleString` in audit-export/TrustPanel, missing absolute-time `title` tooltips); ReviewPanel raw Tailwind palette → `--color-*` tokens; webhook `failed` tone split from `pending`; used/quota string + H1-scale unification; extract shared `SSOReadOnlyCard` | ⬜ PLANNED |
+| **3 — Capability** | Sidebar Dashboard item (icon already imported); URL-driven `?tab=` on repo/tag detail; in-page section nav for long settings tabs (anchors exist, unexposed); permission-aware disabling of platform-admin CTAs (no more type-to-confirm→403); API-key expiry-urgency badges; activity feed pagination + type-filter URL persistence; dashboard manual-refresh affordance; repo-table sorting | ⬜ PLANNED |
+| Deferred / smaller | GC "Unknown"+disclaimer caption; HealthCard pulse on healthy; retention-card 100-row-slice footnote; notification-toggle optimistic updates; SSO stub buttons visibly disabled; ReviewPanel owner UUID → `UserCell`; sidebar `startsWith` path-boundary match; topbar sticky/blur no-op; hardcoded `text-white` badge; PoliciesPanel inline banners → toasts | ⬜ file into `futures.md` when batches land |
+
+Verified stale during the sweep: **DSGN-023** (mobile sidebar fallback —
+`shell/mobile-nav.tsx` shipped with Phase 4.5) and **DSGN-002** (sidebar IA —
+absorbed by the Phase 4.2 rework); both should be pruned from `futures.md`.
+
 ## Known UI bugs fixed in flight (this branch)
 
 - **Tag row click did nothing** (this turn) — the `<Link>` + `stopPropagation()` pattern was eating clicks in some browsers. Replaced with whole-row `onClick` + `tabIndex=0` + Enter/Space keyboard handler; copy button stops propagation locally.

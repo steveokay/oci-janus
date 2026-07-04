@@ -10,6 +10,7 @@ import {
 } from "@/lib/api/access-review";
 import { useDeleteApiKey } from "@/lib/api/api-keys";
 import { formatRelativeDate } from "@/lib/format";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 
 // ReviewPanel — live FUT-004 access-review surface. Replaces
 // ReviewPreview. Mirrors the shape of PoliciesPanel / TrustPanel
@@ -54,14 +55,27 @@ export function ReviewPanel(): React.ReactElement {
     () => new Set(),
   );
 
+  // revokeTarget — the key the operator clicked Revoke on. Non-null opens
+  // the ConfirmDestructiveDialog; revocation is permanent (the key secret
+  // cannot be recovered) so it must never fire off a bare button click.
+  const [revokeTarget, setRevokeTarget] = React.useState<StaleKey | null>(
+    null,
+  );
+
   // handleRevoke — soft-delete a key via the existing personal-key
   // primitive. Toasts + relies on invalidation to drop the row from
   // the list on refresh; also nudges it into keptIds so the row
   // disappears optimistically without waiting on the next fetch.
+  // Only ever called from the confirm dialog's onConfirm — the row
+  // button just arms `revokeTarget`.
   function handleRevoke(key: StaleKey): void {
     revoke.mutate(key.id, {
       onSuccess: () => {
         toast.success(`Revoked ${key.name}.`);
+        // Close the confirm dialog only on success — on error it stays
+        // open (loading=false re-enables the buttons) so the operator
+        // can retry or cancel with the context still on screen.
+        setRevokeTarget(null);
         setKeptIds((prev) => {
           const next = new Set(prev);
           next.add(key.id);
@@ -224,7 +238,9 @@ export function ReviewPanel(): React.ReactElement {
                   <ReviewRow
                     key={key.id}
                     row={key}
-                    onRevoke={() => handleRevoke(key)}
+                    // Revoke is permanent — arm the confirm dialog instead
+                    // of mutating straight from the row button.
+                    onRevoke={() => setRevokeTarget(key)}
                     onKeep={() => handleKeep(key)}
                     onSnooze={() => handleSnooze(key)}
                     pending={
@@ -237,6 +253,36 @@ export function ReviewPanel(): React.ReactElement {
           </div>
         </>
       )}
+
+      {/* Revoke confirmation — DSGN-003 ConfirmDestructiveDialog. Severity
+          "medium" (type the key name) because revocation permanently kills
+          the credential; matches the primitive's own severity gradient
+          ("remove a trusted key"). `loading` keeps the dialog open (and
+          blocks Escape/outside-click) while the mutation is in flight. */}
+      <ConfirmDestructiveDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevokeTarget(null);
+        }}
+        title="Revoke API key"
+        description={
+          <>
+            Permanently revoke{" "}
+            <code className="font-mono text-xs text-[var(--color-fg)]">
+              {revokeTarget?.name}
+            </code>
+            . Clients authenticating with this key will start failing
+            immediately. This cannot be undone.
+          </>
+        }
+        severity="medium"
+        resourceName={revokeTarget?.name}
+        confirmLabel="Revoke key"
+        loading={revoke.isPending}
+        onConfirm={() => {
+          if (revokeTarget) handleRevoke(revokeTarget);
+        }}
+      />
     </div>
   );
 }

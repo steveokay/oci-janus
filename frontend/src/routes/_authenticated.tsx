@@ -13,8 +13,9 @@ export const Route = createFileRoute("/_authenticated")({
     if (!authStore.getToken()) {
       throw redirect({
         to: "/login",
-        // Preserve where the user was headed so we can bounce back after login
-        // (handled by login.tsx when we wire the redirect step in S0 polish).
+        // Preserve where the user was headed so login.tsx can bounce back
+        // after a successful sign-in (login validates ?from= and only
+        // honors internal absolute paths — see safeInternalPath there).
         search: { from: location.pathname },
       });
     }

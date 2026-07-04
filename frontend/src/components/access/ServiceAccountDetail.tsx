@@ -769,7 +769,11 @@ function ApiKeysSection({
                 <TableHead>Name</TableHead>
                 <TableHead>Prefix</TableHead>
                 <TableHead className="hidden sm:table-cell">Scopes</TableHead>
-                <TableHead className="hidden md:table-cell">Last used</TableHead>
+                {/* The cell below renders `expires_at`; the header used to say
+                    "Last used" which mislabelled the column. SAApiKey carries
+                    no last_used_at field (T14 enrichment doesn't include it),
+                    so there is no real "Last used" column to add yet. */}
+                <TableHead className="hidden md:table-cell">Expires</TableHead>
                 <TableHead className="text-right">
                   <span className="sr-only">Actions</span>
                 </TableHead>

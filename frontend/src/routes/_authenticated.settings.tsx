@@ -88,11 +88,21 @@ function SettingsLayout(): React.ReactElement {
     return out;
   }, [hasAnyAdminScope, showPlatformTab]);
 
+  // Eyebrow above the H1 tracks the active tab — it was hardcoded "Account",
+  // which read wrong on /settings/workspace and /settings/platform. Derived
+  // from the pathname (same source of truth the tab rail uses for its
+  // active state) rather than tab state so deep links land correct.
+  const eyebrow = location.pathname.startsWith("/settings/workspace")
+    ? "Workspace"
+    : location.pathname.startsWith("/settings/platform")
+      ? "Platform"
+      : "Account";
+
   return (
     <div className="space-y-6 p-6">
       <header className="flex flex-col gap-1">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-          Account
+          {eyebrow}
         </p>
         <h1 className="flex items-center gap-2 font-display text-3xl font-medium tracking-tight">
           <SettingsIcon className="size-6" /> Settings

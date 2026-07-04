@@ -32,7 +32,9 @@ import { cn } from "@/lib/utils";
 // for the full filterable feed.
 export function NotificationsBell(): React.ReactElement {
   const tenantID = useAuthStore((s) => s.claims?.tenant_id);
-  const { data } = useNotifications({ limit: 10 });
+  // isError + refetch drive the panel's error branch — the old `!data`-only
+  // check left a failed fetch stuck on "Loading…" forever.
+  const { data, isError, refetch } = useNotifications({ limit: 10 });
   // The "last seen" cursor is a free localStorage read. We intentionally
   // re-read whenever the notifications page updates so a "Mark all seen"
   // anywhere in the app refreshes the badge here. `data` looks "unused"
@@ -105,7 +107,24 @@ export function NotificationsBell(): React.ReactElement {
 
           {/* List */}
           <div className="max-h-[400px] overflow-y-auto">
-            {!data ? (
+            {isError && !data ? (
+              // Fetch failed with nothing cached — surface it instead of an
+              // eternal "Loading…". If stale data exists we keep showing it
+              // (the 60s poll will self-heal), so this branch only fires on
+              // a cold-cache failure.
+              <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
+                <div className="text-xs text-[var(--color-fg-muted)]">
+                  Couldn&apos;t load notifications
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refetch()}
+                  className="rounded-sm px-1.5 py-0.5 text-[11px] text-[var(--color-fg-muted)] underline hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)]"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : !data ? (
               <div className="grid place-items-center px-3 py-8 text-xs text-[var(--color-fg-muted)]">
                 Loading…
               </div>
