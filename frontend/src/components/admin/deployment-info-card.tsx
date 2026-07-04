@@ -114,9 +114,15 @@ export function DeploymentInfoCard(): React.ReactElement {
               icon={<ShieldCheck className="size-4" />}
               label="TLS"
               value={
-                <Badge tone="success" className="text-[10px]">
-                  HTTPS termination
-                </Badge>
+                // Neutral informational text, NOT a success badge:
+                // /api/v1/deployment-info reports no TLS field, so the FE
+                // must not assert a posture ("HTTPS termination" in green)
+                // the API doesn't actually report — a misconfigured plain-
+                // HTTP deployment would have shown the same green badge.
+                <span className="text-sm text-[var(--color-fg-muted)]">
+                  TLS is terminated at the gateway — see infra/docker-compose
+                  or your ingress config.
+                </span>
               }
               hint="Internal mTLS posture is set per service via MTLS_REQUIRED; not exposed here."
             />
