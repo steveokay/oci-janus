@@ -279,3 +279,48 @@ func TestHashChain_preChainRowsReportedUnverifiable(t *testing.T) {
 		t.Fatalf("expected the 2 pre-chain rows reported as unverifiable, got %d", res.Unverifiable)
 	}
 }
+
+// TestHashChain_zeroedRowHashNotLaunderedAsUnverifiable pins SEC-NEW-1: a
+// DB-level actor with out-of-band UPDATE (outside the INSERT-only role model
+// the chain is written against) must not be able to zero a *chained* row's
+// row_hash to disguise a tamper as a mere Unverifiable bump. A genuine
+// pre-chain row carries the 0x00 sentinel in BOTH prev_hash and row_hash; a
+// chained row keeps its real 32-byte prev_hash, so zeroing only its row_hash
+// leaves it in the walk where the recompute mismatch flags it as tampered.
+func TestHashChain_zeroedRowHashNotLaunderedAsUnverifiable(t *testing.T) {
+	repo, pool := newRepoWithPool(t)
+	tenant := uuid.New()
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	ids := make([]uuid.UUID, 3)
+	for i := 0; i < 3; i++ {
+		ev := makeEvent(tenant, "push.image", base.Add(time.Duration(i)*time.Second))
+		if err := repo.Insert(ctx, ev); err != nil {
+			t.Fatalf("Insert #%d: %v", i, err)
+		}
+		ids[i] = ev.ID
+	}
+
+	// Zero the tip row's row_hash directly on the default partition (bypassing
+	// the no_update_audit parent rule), simulating a DB-level tamper that tries
+	// to masquerade as a pre-chain row. Its prev_hash stays the real 32-byte
+	// link, so the tightened guard must NOT count it as unverifiable.
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_events_default SET row_hash = decode('00','hex') WHERE id = $1`,
+		ids[2],
+	); err != nil {
+		t.Fatalf("zero row_hash: %v", err)
+	}
+
+	res, err := repo.VerifyChain(ctx, tenant)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if res.FirstBadID != ids[2] {
+		t.Fatalf("zeroed tip row must be flagged as tampered id=%s, got id=%s", ids[2], res.FirstBadID)
+	}
+	if res.Unverifiable != 0 {
+		t.Fatalf("a zeroed chained row must NOT be counted unverifiable, got %d", res.Unverifiable)
+	}
+}

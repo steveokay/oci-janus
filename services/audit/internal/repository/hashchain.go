@@ -338,10 +338,19 @@ func (r *Repository) VerifyChain(ctx context.Context, tenantID uuid.UUID) (Chain
 		); err != nil {
 			return ChainVerification{}, fmt.Errorf("VerifyChain scan: %w", err)
 		}
-		// Pre-chain rows (SEC-051): backfilled with preChainSentinel and
-		// never linked. Count them and exclude from the walk so their
-		// prev_hash = 0x00 does not collide with the genuine genesis row.
-		if bytesEqual(rec.rowHash, preChainSentinel) {
+		// Pre-chain rows (SEC-051): the Phase 6.12 migration backfills BOTH
+		// prev_hash and row_hash with the 1-byte 0x00 sentinel, so a genuine
+		// pre-migration row carries the sentinel in both columns. We require
+		// both here — not row_hash alone — which also closes SEC-NEW-1: a
+		// DB-level actor holding out-of-band UPDATE (beyond the INSERT-only
+		// registry_audit_app threat model) could otherwise zero a *chained*
+		// row's row_hash to launder a tamper into a mere "unverifiable" bump.
+		// Such a row keeps its real 32-byte prev_hash, so it fails this guard,
+		// stays in the walk, and is flagged as tampered when its recomputed
+		// hash does not match the stored 0x00. Count + exclude only true
+		// pre-chain rows so their prev_hash = 0x00 cannot collide with the
+		// genuine genesis row.
+		if bytesEqual(rec.prevHash, preChainSentinel) && bytesEqual(rec.rowHash, preChainSentinel) {
 			unverifiable++
 			continue
 		}
