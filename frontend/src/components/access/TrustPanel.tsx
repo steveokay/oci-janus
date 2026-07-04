@@ -8,6 +8,7 @@ import {
   type OIDCTrust,
 } from "@/lib/api/oidc-trust";
 import { CreateOIDCTrustDialog } from "./CreateOIDCTrustDialog";
+import { formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 
 // TrustPanel — live FUT-001 federated-trust surface. Replaces
 // TrustPreview. Mirrors the shape of HelpersPanel (unconditional header,
@@ -27,18 +28,12 @@ import { CreateOIDCTrustDialog } from "./CreateOIDCTrustDialog";
 
 // formatLastVerified returns a human-readable "last verified" string.
 // null / undefined maps to a sentinel — copy matches the preview so
-// existing docs still make sense.
+// existing docs still make sense. Now uses the shared formatRelativeDate
+// ("3 days ago") for app-wide timestamp consistency; the absolute form is
+// surfaced via a title tooltip at the call site.
 function formatLastVerified(iso: string | null | undefined): string {
   if (!iso) return "never";
-  try {
-    const d = new Date(iso);
-    // Fall back to the raw ISO if Date parsing fails (Intl.DateTimeFormat
-    // throws on Invalid Date in some engines).
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
-  } catch {
-    return iso;
-  }
+  return formatRelativeDate(iso);
 }
 
 export function TrustPanel(): React.ReactElement {
@@ -282,7 +277,16 @@ function TrustCard({
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="shrink-0 text-xs text-[var(--color-fg-subtle)]">
+          <span
+            className="shrink-0 text-xs text-[var(--color-fg-subtle)]"
+            // Absolute timestamp on hover; only meaningful when there IS a
+            // last-used timestamp (otherwise the relative form is "never").
+            title={
+              trust.last_used_at
+                ? formatAbsoluteDate(trust.last_used_at)
+                : undefined
+            }
+          >
             Last verified: {formatLastVerified(trust.last_used_at)}
           </span>
           <DropdownMenu.Root>

@@ -11,7 +11,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
-import { formatRelativeDate } from "@/lib/format";
+import { formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 import { usePromotionHistory, type Promotion } from "@/lib/api/promotions";
 
 interface PromotionsTabProps {
@@ -83,7 +83,12 @@ export function PromotionsTab({
 function PromotionRow({ p }: { p: Promotion }): React.ReactElement {
   return (
     <TableRow>
-      <TableCell className="whitespace-nowrap text-xs text-[var(--color-fg-muted)]">
+      {/* Absolute timestamp on hover — matches the app-wide relative-date +
+          title-tooltip convention. */}
+      <TableCell
+        className="whitespace-nowrap text-xs text-[var(--color-fg-muted)]"
+        title={formatAbsoluteDate(p.promoted_at)}
+      >
         {formatRelativeDate(p.promoted_at)}
       </TableCell>
       <TableCell className="font-mono text-xs">

@@ -35,6 +35,7 @@ import {
   useDrainAuditExportDLX,
 } from "@/lib/api/audit-export";
 import type { AuditExportFormat, AuditExportTestResponse } from "@/lib/api/types";
+import { formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 
 // /workspace/audit-export — futures.md Tier 1 #4.
 //
@@ -545,8 +546,18 @@ function ObservabilityCard({ cfg, onDrain, draining }: ObservabilityCardProps): 
         )}
         <span className="text-xs text-[var(--color-fg-muted)]">
           Last success:{" "}
-          <span className="text-[var(--color-fg)]">
-            {cfg.last_success_at ? new Date(cfg.last_success_at).toLocaleString() : "never"}
+          {/* Relative form for scannability; absolute timestamp on hover.
+              Matches the app-wide formatRelativeDate/formatAbsoluteDate
+              timestamp convention. */}
+          <span
+            className="text-[var(--color-fg)]"
+            title={
+              cfg.last_success_at
+                ? formatAbsoluteDate(cfg.last_success_at)
+                : undefined
+            }
+          >
+            {cfg.last_success_at ? formatRelativeDate(cfg.last_success_at) : "never"}
           </span>
         </span>
         {stuckInQueue ? (
