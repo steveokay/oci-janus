@@ -38,6 +38,7 @@ import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapt
 import { GCCard } from "@/components/admin/gc-card";
 import { RetentionCard } from "@/components/admin/retention-card";
 import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
+import { SectionAnchorNav } from "@/components/ui/section-anchor-nav";
 import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import { cn } from "@/lib/utils";
 
@@ -126,6 +127,19 @@ function WorkspaceTab(): React.ReactElement {
           concerns. */}
       {isSingleMode ? (
         <>
+          {/* Anchor chips for the single-mode-only section stack. Only these
+              four blocks carry #id anchors on this tab, and they only exist
+              in single mode — so the chip row is rendered inside the same
+              conditional and lists exactly the sections below it. */}
+          <SectionAnchorNav
+            ariaLabel="Workspace platform sections"
+            items={[
+              { id: "scanner", label: "Scanner" },
+              { id: "gc", label: "Garbage collection" },
+              { id: "retention", label: "Retention" },
+              { id: "deployment", label: "Deployment" },
+            ]}
+          />
           <ScannerAdaptersSection />
           <section id="gc" className="space-y-4 scroll-mt-24">
             <GCCard />

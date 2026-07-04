@@ -26,6 +26,7 @@ import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapt
 import { GCCard } from "@/components/admin/gc-card";
 import { RetentionCard } from "@/components/admin/retention-card";
 import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
+import { SectionAnchorNav } from "@/components/ui/section-anchor-nav";
 import { queryClient } from "@/lib/query";
 import {
   abilitiesKeys,
@@ -68,6 +69,23 @@ function PlatformTab(): React.ReactElement {
           control plane.
         </p>
       </div>
+
+      {/* Compact anchor chips under the header expose the (otherwise
+          undiscoverable) in-page sections — the Platform tab is a long
+          scroll and the #ids already exist on each section wrapper. All six
+          sections are unconditionally rendered here, so the chip list is
+          static. */}
+      <SectionAnchorNav
+        ariaLabel="Platform settings sections"
+        items={[
+          { id: "tenants", label: "Tenants" },
+          { id: "scanner", label: "Scanner" },
+          { id: "gc", label: "Garbage collection" },
+          { id: "retention", label: "Retention" },
+          { id: "deployment", label: "Deployment" },
+          { id: "sso", label: "SSO" },
+        ]}
+      />
 
       <TenantsSection />
       <ScannerAdaptersSection />
