@@ -94,12 +94,15 @@ func TestHashChain_intactAfterSerialInserts(t *testing.T) {
 		}
 	}
 
-	badID, badTime, err := repo.VerifyChain(ctx, tenant)
+	res, err := repo.VerifyChain(ctx, tenant)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
-	if badID != uuid.Nil {
-		t.Fatalf("expected intact chain, got tampered row id=%s at=%s", badID, badTime)
+	if !res.Intact() {
+		t.Fatalf("expected intact chain, got tampered row id=%s at=%s", res.FirstBadID, res.FirstBadAt)
+	}
+	if res.Unverifiable != 0 {
+		t.Fatalf("expected 0 unverifiable rows in a fresh chain, got %d", res.Unverifiable)
 	}
 }
 
@@ -125,8 +128,8 @@ func TestHashChain_detectsTamperedRow(t *testing.T) {
 	}
 
 	// Sanity: chain starts intact.
-	if badID, _, err := repo.VerifyChain(ctx, tenant); err != nil || badID != uuid.Nil {
-		t.Fatalf("expected intact pre-tamper, got id=%s err=%v", badID, err)
+	if res, err := repo.VerifyChain(ctx, tenant); err != nil || !res.Intact() {
+		t.Fatalf("expected intact pre-tamper, got id=%s err=%v", res.FirstBadID, err)
 	}
 
 	// Tamper: rewrite the middle row's actor_id via the default
@@ -141,12 +144,12 @@ func TestHashChain_detectsTamperedRow(t *testing.T) {
 		t.Fatalf("tamper UPDATE: %v", err)
 	}
 
-	badID, _, err := repo.VerifyChain(ctx, tenant)
+	res, err := repo.VerifyChain(ctx, tenant)
 	if err != nil {
 		t.Fatalf("VerifyChain post-tamper: %v", err)
 	}
-	if badID != ids[1] {
-		t.Fatalf("expected verifier to flag middle row id=%s, got %s", ids[1], badID)
+	if res.FirstBadID != ids[1] {
+		t.Fatalf("expected verifier to flag middle row id=%s, got %s", ids[1], res.FirstBadID)
 	}
 }
 
@@ -188,12 +191,12 @@ func TestHashChain_concurrentInsertsRemainIntact(t *testing.T) {
 	// goroutines both reading the same tip and producing rows with
 	// the same prev_hash) would surface as a verifier mismatch on
 	// whichever row was overwritten by the duplicate prev_hash.
-	badID, _, err := repo.VerifyChain(ctx, tenant)
+	res, err := repo.VerifyChain(ctx, tenant)
 	if err != nil {
 		t.Fatalf("VerifyChain: %v", err)
 	}
-	if badID != uuid.Nil {
-		t.Fatalf("concurrent inserts produced a broken chain, first bad id=%s", badID)
+	if !res.Intact() {
+		t.Fatalf("concurrent inserts produced a broken chain, first bad id=%s", res.FirstBadID)
 	}
 
 	// And confirm we actually wrote N rows for the tenant — a silent
@@ -218,11 +221,106 @@ func TestHashChain_emptyTenantVerifies(t *testing.T) {
 	repo, _ := newRepoWithPool(t)
 	ctx := context.Background()
 
-	badID, _, err := repo.VerifyChain(ctx, uuid.New())
+	res, err := repo.VerifyChain(ctx, uuid.New())
 	if err != nil {
 		t.Fatalf("VerifyChain empty: %v", err)
 	}
-	if badID != uuid.Nil {
-		t.Fatalf("expected intact empty chain, got id=%s", badID)
+	if !res.Intact() {
+		t.Fatalf("expected intact empty chain, got id=%s", res.FirstBadID)
+	}
+}
+
+// TestHashChain_preChainRowsReportedUnverifiable simulates a deployment that
+// already held audit rows BEFORE the Phase 6.12 hash-chain migration. That
+// migration backfills every pre-existing row with the transient row_hash
+// DEFAULT — a single 0x00 byte — which also matches the genesis prev_hash
+// sentinel. A naive verifier would bucket those rows against the genuine
+// genesis row and misreport a fork. VerifyChain must instead count them into
+// Unverifiable and still verify the real chain layered on top (SEC-051).
+func TestHashChain_preChainRowsReportedUnverifiable(t *testing.T) {
+	repo, pool := newRepoWithPool(t)
+	tenant := uuid.New()
+	ctx := context.Background()
+
+	// Seed two raw "pre-migration" rows directly into the default partition,
+	// bypassing the app inserter, each carrying the pre-chain sentinel
+	// (prev_hash = row_hash = 0x00). Inserted first, they take the lowest
+	// chain_seq values — exactly the ordering a real backfill produces.
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	for i := 0; i < 2; i++ {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO audit_events_default
+			   (tenant_id, actor_id, actor_type, action, outcome, occurred_at, prev_hash, row_hash)
+			 VALUES ($1, 'legacy', 'system', 'legacy.event', 'success', $2, decode('00','hex'), decode('00','hex'))`,
+			tenant, base.Add(time.Duration(i)*time.Second),
+		); err != nil {
+			t.Fatalf("seed pre-chain row #%d: %v", i, err)
+		}
+	}
+
+	// Now insert three real rows via the app inserter. The first insert's tip
+	// query returns a pre-chain row's row_hash (0x00), so it chains off the
+	// genesis sentinel just as a fresh deployment's first row would.
+	for i := 0; i < 3; i++ {
+		ev := makeEvent(tenant, "push.image", base.Add(time.Duration(10+i)*time.Second))
+		if err := repo.Insert(ctx, ev); err != nil {
+			t.Fatalf("Insert #%d: %v", i, err)
+		}
+	}
+
+	res, err := repo.VerifyChain(ctx, tenant)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if !res.Intact() {
+		t.Fatalf("real chain built atop pre-chain rows must verify, got bad id=%s at=%s", res.FirstBadID, res.FirstBadAt)
+	}
+	if res.Unverifiable != 2 {
+		t.Fatalf("expected the 2 pre-chain rows reported as unverifiable, got %d", res.Unverifiable)
+	}
+}
+
+// TestHashChain_zeroedRowHashNotLaunderedAsUnverifiable pins SEC-NEW-1: a
+// DB-level actor with out-of-band UPDATE (outside the INSERT-only role model
+// the chain is written against) must not be able to zero a *chained* row's
+// row_hash to disguise a tamper as a mere Unverifiable bump. A genuine
+// pre-chain row carries the 0x00 sentinel in BOTH prev_hash and row_hash; a
+// chained row keeps its real 32-byte prev_hash, so zeroing only its row_hash
+// leaves it in the walk where the recompute mismatch flags it as tampered.
+func TestHashChain_zeroedRowHashNotLaunderedAsUnverifiable(t *testing.T) {
+	repo, pool := newRepoWithPool(t)
+	tenant := uuid.New()
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	ids := make([]uuid.UUID, 3)
+	for i := 0; i < 3; i++ {
+		ev := makeEvent(tenant, "push.image", base.Add(time.Duration(i)*time.Second))
+		if err := repo.Insert(ctx, ev); err != nil {
+			t.Fatalf("Insert #%d: %v", i, err)
+		}
+		ids[i] = ev.ID
+	}
+
+	// Zero the tip row's row_hash directly on the default partition (bypassing
+	// the no_update_audit parent rule), simulating a DB-level tamper that tries
+	// to masquerade as a pre-chain row. Its prev_hash stays the real 32-byte
+	// link, so the tightened guard must NOT count it as unverifiable.
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_events_default SET row_hash = decode('00','hex') WHERE id = $1`,
+		ids[2],
+	); err != nil {
+		t.Fatalf("zero row_hash: %v", err)
+	}
+
+	res, err := repo.VerifyChain(ctx, tenant)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if res.FirstBadID != ids[2] {
+		t.Fatalf("zeroed tip row must be flagged as tampered id=%s, got id=%s", ids[2], res.FirstBadID)
+	}
+	if res.Unverifiable != 0 {
+		t.Fatalf("a zeroed chained row must NOT be counted unverifiable, got %d", res.Unverifiable)
 	}
 }
