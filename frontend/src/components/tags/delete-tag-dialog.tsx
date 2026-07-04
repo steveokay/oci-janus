@@ -1,18 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { AlertTriangle } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useDeleteTag } from "@/lib/api/tags";
 
 interface DeleteTagDialogProps {
@@ -23,10 +12,12 @@ interface DeleteTagDialogProps {
   tag: string;
 }
 
-// Beacon — DeleteTagDialog. Same shape as DeleteRepositoryDialog: the user
-// must type the exact tag name to enable the destructive button. We compare
-// to just the tag name (not org/repo/tag) since the breadcrumb already
-// gives the operator the context they need to know what they're deleting.
+// Beacon — DeleteTagDialog. Migrated onto the shared
+// ConfirmDestructiveDialog primitive (DSGN-003) so the type-to-confirm
+// UX, styling, and in-flight escape-lock are consistent with every other
+// destructive flow. Confirmation strength is unchanged: the operator must
+// type the exact tag name (severity="medium", resourceName={tag}) since
+// the breadcrumb already supplies the org/repo context.
 export function DeleteTagDialog({
   open,
   onOpenChange,
@@ -34,16 +25,8 @@ export function DeleteTagDialog({
   repo,
   tag,
 }: DeleteTagDialogProps): React.ReactElement {
-  const [confirmText, setConfirmText] = React.useState("");
   const navigate = useNavigate();
   const del = useDeleteTag();
-
-  const matches = confirmText.trim() === tag;
-  const submitting = del.isPending;
-
-  React.useEffect(() => {
-    if (!open) setConfirmText("");
-  }, [open]);
 
   async function onConfirm(): Promise<void> {
     try {
@@ -65,61 +48,27 @@ export function DeleteTagDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <div className="mb-2 flex items-center gap-2 text-[var(--color-danger)]">
-            <AlertTriangle className="size-4" />
-            <span className="text-xs font-medium uppercase tracking-[0.16em]">
-              Destructive action
-            </span>
-          </div>
-          <DialogTitle>Delete tag</DialogTitle>
-          <DialogDescription>
-            This removes <code className="font-mono">{tag}</code> from{" "}
-            <code className="font-mono">{org}/{repo}</code>. The underlying
-            manifest stays available by digest until garbage collection.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-2">
-          <Label htmlFor="confirm-tag">
-            Type{" "}
-            <span className="font-mono normal-case text-[var(--color-fg)]">
-              {tag}
-            </span>{" "}
-            to confirm
-          </Label>
-          <Input
-            id="confirm-tag"
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={tag}
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={submitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="danger"
-            onClick={() => void onConfirm()}
-            disabled={!matches || submitting}
-            loading={submitting}
-          >
-            {submitting ? "Deleting" : "Delete tag"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDestructiveDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      severity="medium"
+      resourceName={tag}
+      title="Delete tag"
+      confirmLabel="Delete tag"
+      // Pass the mutation's in-flight state so the primitive locks Escape /
+      // outside-click and shows the spinner until the delete resolves.
+      loading={del.isPending}
+      onConfirm={onConfirm}
+      description={
+        <>
+          This removes <code className="font-mono">{tag}</code> from{" "}
+          <code className="font-mono">
+            {org}/{repo}
+          </code>
+          . The underlying manifest stays available by digest until garbage
+          collection.
+        </>
+      }
+    />
   );
 }

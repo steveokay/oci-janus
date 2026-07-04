@@ -6,7 +6,11 @@ import {
   Inbox,
   ArrowRight,
 } from "lucide-react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -28,10 +32,18 @@ import { cn } from "@/lib/utils";
 // as read" without a server write. "Mark all seen" bumps the cursor + fires
 // a cache invalidation so the badge resets.
 //
-// Dropdown lists the most recent 10 events; "View all" links to /activity
+// Panel lists the most recent 10 events; "View all" links to /activity
 // for the full filterable feed.
+//
+// The floating panel is a Radix Popover, NOT a DropdownMenu: the panel is a
+// scrollable feed of links + buttons, not a list of single-action menu
+// items. Menu semantics (role="menu", roving tabindex, typeahead) fight the
+// rich content and break normal Tab navigation, so Popover is the correct
+// primitive. Outside-click + ESC dismissal come from Radix; we control
+// `open` so notification / footer links can close the panel on navigation.
 export function NotificationsBell(): React.ReactElement {
   const tenantID = useAuthStore((s) => s.claims?.tenant_id);
+  const [open, setOpen] = React.useState(false);
   // isError + refetch drive the panel's error branch — the old `!data`-only
   // check left a failed fetch stuck on "Loading…" forever.
   const { data, isError, refetch } = useNotifications({ limit: 10 });
@@ -43,10 +55,13 @@ export function NotificationsBell(): React.ReactElement {
   const lastSeenAt = React.useMemo(() => loadLastSeen(tenantID), [tenantID, data]);
   const markAllSeen = useMarkAllSeen(tenantID);
   const unread = countUnread(data, lastSeenAt);
+  // Close the panel — passed to every navigation link so a click dismisses
+  // the popover the same way selecting a DropdownMenu.Item used to.
+  const close = React.useCallback(() => setOpen(false), []);
 
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <Button
           variant="ghost"
           size="icon"
@@ -70,13 +85,13 @@ export function NotificationsBell(): React.ReactElement {
             </span>
           ) : null}
         </Button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          sideOffset={6}
-          className="z-50 w-[360px] overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[var(--shadow-floating)]"
-        >
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        sideOffset={6}
+        aria-label="Notifications"
+        className="w-[360px] overflow-hidden"
+      >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
             <div className="flex items-center gap-2">
@@ -147,6 +162,7 @@ export function NotificationsBell(): React.ReactElement {
                     isUnread={
                       !lastSeenAt || Date.parse(n.occurred_at) > Date.parse(lastSeenAt)
                     }
+                    onNavigate={close}
                   />
                 ))}
               </ul>
@@ -158,47 +174,47 @@ export function NotificationsBell(): React.ReactElement {
               the three failure-class event types. The /activity route
               hydrates its chip state from the `event_types` search param
               (comma-separated routing keys) so the page lands with those
-              chips pressed. Both items close the dropdown on click — the
-              wrapping DropdownMenu.Item is the close trigger; we leave
-              dismiss to Radix. */}
+              chips pressed. Both links close the popover on click via the
+              `close` callback (Popover has no menu-item auto-dismiss). */}
           <div className="grid grid-cols-2 border-t border-[var(--color-border)]">
-            <DropdownMenu.Item asChild>
-              <Link
-                to="/activity"
-                className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
-              >
-                See all activity
-                <ArrowRight className="size-3" />
-              </Link>
-            </DropdownMenu.Item>
-            <DropdownMenu.Item asChild>
-              <Link
-                to="/activity"
-                search={
-                  {
-                    event_types:
-                      "push.failed,scan.policy_blocked,webhook.delivery_failed",
-                  } as Record<string, string>
-                }
-                className="flex items-center justify-center gap-1.5 border-l border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
-              >
-                Failures only
-                <ArrowRight className="size-3" />
-              </Link>
-            </DropdownMenu.Item>
+            <Link
+              to="/activity"
+              onClick={close}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
+            >
+              See all activity
+              <ArrowRight className="size-3" />
+            </Link>
+            <Link
+              to="/activity"
+              onClick={close}
+              search={
+                {
+                  event_types:
+                    "push.failed,scan.policy_blocked,webhook.delivery_failed",
+                } as Record<string, string>
+              }
+              className="flex items-center justify-center gap-1.5 border-l border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-fg-muted)] outline-none hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-fg)] focus-visible:bg-[var(--color-surface-sunken)] focus-visible:text-[var(--color-fg)]"
+            >
+              Failures only
+              <ArrowRight className="size-3" />
+            </Link>
           </div>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+        </PopoverContent>
+    </Popover>
   );
 }
 
 function NotificationRow({
   n,
   isUnread,
+  onNavigate,
 }: {
   n: Notification;
   isUnread: boolean;
+  // Closes the popover when a linked row is clicked — parity with the old
+  // DropdownMenu.Item auto-dismiss.
+  onNavigate: () => void;
 }): React.ReactElement {
   // Row renders as an anchor when there's a link, plain div when not.
   // Each click navigates to the synthesized deep-link from the backend
@@ -240,6 +256,7 @@ function NotificationRow({
       <li>
         <Link
           to={n.link}
+          onClick={onNavigate}
           className="block hover:bg-[var(--color-surface-sunken)]"
         >
           {inner}

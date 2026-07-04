@@ -357,7 +357,9 @@ function PageHeader(): React.ReactElement {
   return (
     <div className="flex items-start justify-between gap-3">
       <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">
+        {/* Aligned to the dominant page-title treatment used across routes
+            (font-display text-3xl font-medium tracking-tight). */}
+        <h1 className="font-display text-3xl font-medium tracking-tight">
           Pull-through cache
         </h1>
         <p className="mt-1 max-w-prose text-sm text-[var(--color-fg-muted)]">

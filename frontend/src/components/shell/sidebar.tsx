@@ -177,7 +177,9 @@ export function SidebarBody({
       <Link
         to="/"
         onClick={onNavigate}
-        className="flex items-center gap-2.5 px-5 py-5"
+        // a11y — brand link is a keyboard focus stop; mirror the topbar
+        // hamburger's visible focus ring so keyboard users can see it.
+        className="flex items-center gap-2.5 px-5 py-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
       >
         <span
           className="grid size-8 place-items-center rounded-md bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
@@ -205,7 +207,7 @@ export function SidebarBody({
         </div>
       </Link>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-4">
+      <nav aria-label="Primary" className="flex-1 overflow-y-auto px-3 pb-4">
         {GROUPS.map((group) => {
           // Filter items by probe key. No adminOnly flag exists in the new IA —
           // the Platform group (which used adminOnly) was removed entirely.
@@ -224,16 +226,25 @@ export function SidebarBody({
               <ul className="space-y-0.5">
                 {visibleItems.map((item) => {
                   const Icon = item.icon;
-                  // Mark exact-match for the root path; everything else is prefix.
-                  const active = location.pathname.startsWith(item.to);
+                  // Active when the pathname is the item's route or a child of
+                  // it — a path-boundary match (`to` OR `to/…`) so `/repo` does
+                  // not falsely match `/repository`. A bare startsWith would.
+                  const active =
+                    location.pathname === item.to ||
+                    location.pathname.startsWith(item.to + "/");
                   return (
                     <li key={item.to}>
                       <Link
                         to={item.to}
                         onClick={onNavigate}
+                        // aria-current="page" exposes the active route to AT,
+                        // matching the app's sub-nav convention.
+                        aria-current={active ? "page" : undefined}
                         className={cn(
                           "group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm",
                           "transition-colors",
+                          // a11y — visible keyboard focus ring on every nav link.
+                          "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
                           active
                             ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
                             : "text-[var(--color-fg)] hover:bg-[var(--color-surface-sunken)]",
@@ -268,9 +279,19 @@ export function SidebarBody({
         <Link
           to="/settings"
           onClick={onNavigate}
+          // aria-current="page" when on any /settings route, matching the
+          // nav-link convention above.
+          aria-current={
+            location.pathname === "/settings" ||
+            location.pathname.startsWith("/settings/")
+              ? "page"
+              : undefined
+          }
           className={cn(
             "group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm",
             "transition-colors",
+            // a11y — visible keyboard focus ring, matching the primary nav.
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
             location.pathname.startsWith("/settings")
               ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
               : "text-[var(--color-fg)] hover:bg-[var(--color-surface-sunken)]",
@@ -303,6 +324,10 @@ export function SidebarBody({
 export function Sidebar(): React.ReactElement {
   return (
     <aside
+      // a11y — label the desktop nav landmark so AT can distinguish it from
+      // the footer nav. The inner <nav aria-label="Primary"> carries the
+      // matching list semantics.
+      aria-label="Primary"
       className={cn(
         "hidden h-full w-[248px] shrink-0 flex-col border-r border-[var(--color-border)]",
         "bg-[var(--color-surface-2)] lg:flex",

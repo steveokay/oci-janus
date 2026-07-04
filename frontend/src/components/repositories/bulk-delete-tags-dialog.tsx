@@ -1,17 +1,6 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Trash2 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   useBulkDeleteTags,
   type BulkDeleteResult,
@@ -26,16 +15,20 @@ interface BulkDeleteTagsDialogProps {
   onCompleted: () => void;
 }
 
-// FE-API-036 — confirm + run a bulk tag delete.
+// FE-API-036 — confirm + run a bulk tag delete. Migrated onto the shared
+// ConfirmDestructiveDialog primitive (DSGN-003) for consistent styling +
+// the in-flight escape-lock.
 //
-// Type-to-confirm gate:
+// Type-to-confirm gate (strength preserved from the hand-rolled version):
 //   - Multi-tag (N > 1): type the COUNT ("47"). Typing 47 names would be
 //     useless friction on a swipe-select, and the visible list above the
-//     input already lets the operator audit the set before they confirm.
+//     input (passed as the primitive's children) lets the operator audit
+//     the set before they confirm.
 //   - Single-tag (N == 1): type the TAG NAME. "Type 1 to confirm" was a
-//     bad UX hand-off — the operator could blindly type "1" without
-//     reading what they're about to delete. Typing the tag name forces
-//     the eyes onto the actual identifier.
+//     bad hand-off — the operator could blindly type "1" without reading
+//     what they're about to delete. Typing the tag name forces attention.
+// Both map to severity="medium" with resourceName set to the expected
+// string, so the primitive gates the confirm button on exact equality.
 // Once the mutation runs, the per-tag result list is surfaced in a toast
 // so the operator sees which tags failed (e.g. concurrent delete).
 export function BulkDeleteTagsDialog({
@@ -51,14 +44,6 @@ export function BulkDeleteTagsDialog({
   // — typing "1" to drop a single tag was friction without protection.
   const isSingle = tagNames.length === 1;
   const expected = isSingle ? (tagNames[0] ?? "") : String(tagNames.length);
-  const [typed, setTyped] = React.useState("");
-
-  // Reset the input when the dialog closes so a re-open starts clean.
-  React.useEffect(() => {
-    if (!open) setTyped("");
-  }, [open]);
-
-  const canConfirm = typed === expected && tagNames.length > 0;
 
   async function handleConfirm(): Promise<void> {
     try {
@@ -80,81 +65,43 @@ export function BulkDeleteTagsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="size-4 text-[var(--color-danger)]" />
-            Delete {tagNames.length}{" "}
-            {tagNames.length === 1 ? "tag" : "tags"}?
-          </DialogTitle>
-          <DialogDescription>
-            This removes the selected tags from{" "}
-            <code className="font-mono">
-              {org}/{repo}
-            </code>
-            . The underlying manifests stay reachable by digest until the
-            next GC sweep, but pulls by tag will fail immediately.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="max-h-40 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2">
-          <ul className="space-y-0.5">
-            {tagNames.map((t) => (
-              <li
-                key={t}
-                className="truncate font-mono text-xs text-[var(--color-fg)]"
-              >
-                {t}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div>
-          <Label htmlFor="bulk-confirm" className="mb-2 inline-block">
-            {isSingle ? "Type the tag name" : "Type"}{" "}
-            <code className="font-mono text-[var(--color-danger)]">
-              {expected}
-            </code>{" "}
-            to confirm
-          </Label>
-          <Input
-            id="bulk-confirm"
-            autoFocus
-            autoComplete="off"
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            className="font-mono"
-            // Single-tag delete needs alphanumeric tag-name input; the
-            // bulk path stays numeric so the keypad on mobile pops
-            // straight to digits.
-            inputMode={isSingle ? "text" : "numeric"}
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={del.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="danger"
-            onClick={() => void handleConfirm()}
-            loading={del.isPending}
-            disabled={!canConfirm || del.isPending}
-          >
-            <Trash2 className="size-4" />
-            Delete {tagNames.length}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDestructiveDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      severity="medium"
+      // expected is the COUNT (multi) or the TAG NAME (single) — the gate
+      // strength is identical to the previous bespoke implementation.
+      resourceName={expected}
+      title={`Delete ${tagNames.length} ${tagNames.length === 1 ? "tag" : "tags"}?`}
+      confirmLabel={`Delete ${tagNames.length}`}
+      loading={del.isPending}
+      onConfirm={handleConfirm}
+      description={
+        <>
+          This removes the selected tags from{" "}
+          <code className="font-mono">
+            {org}/{repo}
+          </code>
+          . The underlying manifests stay reachable by digest until the next GC
+          sweep, but pulls by tag will fail immediately.
+        </>
+      }
+    >
+      {/* Audit list — the full set the operator is about to delete, rendered
+          between the description and the type-to-confirm input. */}
+      <div className="max-h-40 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] px-3 py-2">
+        <ul className="space-y-0.5">
+          {tagNames.map((t) => (
+            <li
+              key={t}
+              className="truncate font-mono text-xs text-[var(--color-fg)]"
+            >
+              {t}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </ConfirmDestructiveDialog>
   );
 }
 

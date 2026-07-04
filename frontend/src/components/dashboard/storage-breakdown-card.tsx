@@ -48,13 +48,17 @@ export function StorageBreakdownCard({
           {!isLoading && data ? (
             <span className="text-xs text-[var(--color-fg-muted)]">
               {tenantQuota > 0 ? (
+                // Unified "used / total" form (matches repositories-table +
+                // repository-header); dropped the trailing "total" word.
                 <>
                   {formatBytes(tenantUsed)}{" "}
                   <span className="text-[var(--color-fg-subtle)]">
-                    / {formatBytes(tenantQuota)} total
+                    / {formatBytes(tenantQuota)}
                   </span>
                 </>
               ) : (
+                // No quota set — no total to divide against, so show the
+                // absolute used figure with a "total" qualifier.
                 <>{formatBytes(tenantUsed)} total</>
               )}
             </span>

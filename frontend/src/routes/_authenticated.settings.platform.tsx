@@ -19,14 +19,8 @@
 // matching hash so bookmarks keep working.
 import * as React from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { ShieldAlert, KeyRound } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@/components/ui/card";
+import { ShieldAlert } from "lucide-react";
+import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
 import { TenantsSection } from "@/components/admin/tenants-section";
 import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapters-section";
 import { GCCard } from "@/components/admin/gc-card";
@@ -87,43 +81,21 @@ function PlatformTab(): React.ReactElement {
         <RetentionCard />
       </section>
       <DeploymentInfoCard />
-      <SSOReadOnlySection />
+      {/* SSO read-only note (shared SSOReadOnlyCard). Sits at the bottom of
+          the Platform tab (anchored #sso) so its presence telegraphs "this
+          is where an editable multi-tenant SSO surface will live" without
+          overpromising. Per RM-003/004 SSO is configured in deployment files
+          in both modes today; the editor lands in a future phase. */}
+      <SSOReadOnlyCard
+        sectionId="sso"
+        note={
+          <>
+            An editable multi-tenant SSO surface for global admins lands in a
+            follow-up phase. Until then, rotate secrets or add providers by
+            updating the deployment config and redeploying.
+          </>
+        }
+      />
     </div>
-  );
-}
-
-// SSO is read-only in single mode (Workspace tab) and would be the
-// editable surface here in multi mode — but the editor doesn't exist yet.
-// Per RM-003/004 SSO is configured in deployment files in both modes
-// today; the multi-mode editor lands in a future phase. Card lives at the
-// bottom of the Platform tab so its presence telegraphs "this is where
-// it'll live" without overpromising.
-function SSOReadOnlySection(): React.ReactElement {
-  return (
-    <section id="sso" className="scroll-mt-24">
-      <Card>
-        <CardHeader>
-          <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-            Sign-in
-          </CardDescription>
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 font-display text-xl font-medium">
-              <KeyRound className="size-4 text-[var(--color-fg-muted)]" />
-              Single sign-on
-            </h2>
-            <Badge tone="neutral" className="text-[10px]">Read-only</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-[var(--color-fg-muted)]">
-            SSO providers (Google, GitHub, Microsoft, generic OIDC, SAML 2.0)
-            are currently configured in the deployment's environment / Helm
-            values. An editable multi-tenant SSO surface for global admins
-            lands in a follow-up phase. Until then, rotate secrets or add
-            providers by updating the deployment config and redeploying.
-          </p>
-        </CardContent>
-      </Card>
-    </section>
   );
 }

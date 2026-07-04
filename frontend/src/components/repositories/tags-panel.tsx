@@ -29,6 +29,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
 import { BulkDeleteTagsDialog } from "@/components/repositories/bulk-delete-tags-dialog";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
 import { BULK_DELETE_MAX } from "@/lib/api/tags";
@@ -36,14 +37,6 @@ import { useBulkScanRepo } from "@/lib/api/scan";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import type { ArtifactType } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
@@ -317,25 +310,20 @@ export function TagsPanel({
                 const hrefTo = `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(t.name)}`;
                 const isSelected = selected.has(t.name);
                 return (
+                  // Mirror repositories-table's row pattern: the whole-row
+                  // onClick is a convenience only — the single focusable
+                  // navigation target is the tag-name anchor in the first
+                  // cell below. Dropping role="link"/tabIndex/onKeyDown here
+                  // removes the nested-link + duplicate-focus-stop a11y bug
+                  // (the row and its inner <a> both claimed link semantics).
                   <TableRow
                     key={`${t.name}-${t.manifest_digest}`}
                     interactive
-                    role="link"
-                    tabIndex={0}
                     data-state={isSelected ? "selected" : undefined}
                     className={
                       isSelected ? "bg-[var(--color-accent-subtle)]/40" : ""
                     }
                     onClick={open}
-                    onMouseDown={(e) => {
-                      if (e.button === 0) open();
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        open();
-                      }
-                    }}
                   >
                     <TableCell className="w-[40px] !pr-0">
                       {/* stopPropagation on both click + mousedown so the
@@ -352,13 +340,17 @@ export function TagsPanel({
                       </span>
                     </TableCell>
                     <TableCell className="p-0">
+                      {/* The sole keyboard focus target for row navigation.
+                          stopPropagation prevents a double-navigate with the
+                          row-level onClick when the anchor itself is clicked. */}
                       <a
                         href={hrefTo}
                         onClick={(e) => {
                           e.preventDefault();
+                          e.stopPropagation();
                           open();
                         }}
-                        className="block px-4 py-3 text-inherit no-underline"
+                        className="block rounded px-4 py-3 text-inherit no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
                       >
                         <div className="inline-flex items-center gap-1.5">
                           <Badge tone="accent">
@@ -843,6 +835,11 @@ function BulkScanAllButton({
 // /repositories/{org}/{repo}/scan. Toast shows the returned counters
 // so the operator sees exactly what got queued (and whether they
 // need to click again because of the per-request cap).
+//
+// Migrated onto the shared ConfirmDestructiveDialog primitive (DSGN-003):
+// this is a high-fan-out mass action (potentially hundreds of scans), so
+// it reuses the "type a fixed phrase" (severity="high") gate + the
+// in-flight escape-lock rather than re-implementing a bespoke dialog.
 function BulkScanConfirmDialog({
   open,
   onOpenChange,
@@ -857,11 +854,6 @@ function BulkScanConfirmDialog({
   tagCount: number;
 }): React.ReactElement {
   const mutation = useBulkScanRepo();
-  const [typed, setTyped] = React.useState("");
-  const EXPECTED = "SCAN";
-  React.useEffect(() => {
-    if (!open) setTyped("");
-  }, [open]);
 
   async function handleSubmit(): Promise<void> {
     try {
@@ -886,60 +878,24 @@ function BulkScanConfirmDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Play className="size-4 text-[var(--color-accent)]" />
-            Scan all tags in {org}/{repo}
-          </DialogTitle>
-          <DialogDescription>
-            Queues a vulnerability scan for every image tag in this
-            repository — {tagCount.toLocaleString()} {tagCount === 1 ? "tag" : "tags"} total.
-            Non-image artifacts (Helm charts, signatures, SBOMs) are
-            skipped automatically. Server caps each request at 500;
-            click again if the toast says we hit it.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div>
-          <Label htmlFor="bulk-scan-confirm" className="mb-2 inline-block">
-            Type{" "}
-            <code className="font-mono text-[var(--color-accent)]">
-              {EXPECTED}
-            </code>{" "}
-            to confirm
-          </Label>
-          <Input
-            id="bulk-scan-confirm"
-            autoComplete="off"
-            autoFocus
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            className="font-mono"
-          />
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={() => void handleSubmit()}
-            loading={mutation.isPending}
-            disabled={mutation.isPending || typed !== EXPECTED}
-          >
-            <Play className="size-4" />
-            Queue scans
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDestructiveDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      severity="high"
+      confirmPhrase="SCAN"
+      title={`Scan all tags in ${org}/${repo}`}
+      confirmLabel="Queue scans"
+      loading={mutation.isPending}
+      onConfirm={handleSubmit}
+      description={
+        <>
+          Queues a vulnerability scan for every image tag in this repository —{" "}
+          {tagCount.toLocaleString()} {tagCount === 1 ? "tag" : "tags"} total.
+          Non-image artifacts (Helm charts, signatures, SBOMs) are skipped
+          automatically. Server caps each request at 500; click again if the
+          toast says we hit it.
+        </>
+      }
+    />
   );
 }

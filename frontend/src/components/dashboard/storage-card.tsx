@@ -50,9 +50,11 @@ export function StorageCard({
           <Skeleton className="mt-1 h-7 w-48" />
         ) : (
           <CardTitle className="!text-xl font-display !font-medium">
+            {/* Unified "used / total" form (matches repositories-table +
+                repository-header); dropped the "of" wording. */}
             {formatBytes(used ?? 0)}{" "}
             <span className="text-base font-normal text-[var(--color-fg-muted)]">
-              of {formatBytes(quota ?? 0)}
+              / {formatBytes(quota ?? 0)}
             </span>
           </CardTitle>
         )}

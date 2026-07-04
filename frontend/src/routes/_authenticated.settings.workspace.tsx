@@ -30,16 +30,9 @@ import {
   Building2,
   Webhook as WebhookIcon,
   ArrowRight,
-  KeyRound,
   Archive,
 } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
 import { ScanPolicyEditor } from "@/components/security/scan-policy-editor";
 import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapters-section";
 import { GCCard } from "@/components/admin/gc-card";
@@ -88,36 +81,22 @@ function WorkspaceTab(): React.ReactElement {
         />
       </div>
 
-      {/* SSO read-only info card. Per RM-003/004 (Phase 2.2), SSO is now a
-          global deployment-config concern — there is no FE editor in single
-          mode. Multi-mode operators get the editable surface inside the
-          Platform tab (4.2.d). For everyone else this card explains the
-          posture without misleading them into thinking there's a toggle. */}
-      <Card>
-        <CardHeader>
-          <CardDescription className="!text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
-            Sign-in
-          </CardDescription>
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 font-display text-lg font-medium">
-              <KeyRound className="size-4 text-[var(--color-fg-muted)]" />
-              Single sign-on
-            </h2>
-            <Badge tone="neutral" className="text-[10px]">Read-only</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-[var(--color-fg-muted)]">
-            SSO providers (Google, GitHub, Microsoft, generic OIDC, SAML 2.0)
-            are configured in the deployment's environment / Helm values, not
-            from the dashboard. Edits require a deployment restart. To rotate
-            a client secret or add a provider, update the deployment config and
-            redeploy — the login screen picks up the change on the next page
-            load. Multi-tenant deployments expose an editable surface under
-            Settings › Platform.
-          </p>
-        </CardContent>
-      </Card>
+      {/* SSO read-only info card (shared SSOReadOnlyCard primitive). Per
+          RM-003/004 (Phase 2.2), SSO is now a global deployment-config
+          concern — there is no FE editor in single mode. Multi-mode operators
+          get the editable surface inside the Platform tab (4.2.d). For
+          everyone else this card explains the posture without misleading them
+          into thinking there's a toggle. */}
+      <SSOReadOnlyCard
+        note={
+          <>
+            Edits require a deployment restart. To rotate a client secret or add
+            a provider, update the deployment config and redeploy — the login
+            screen picks up the change on the next page load. Multi-tenant
+            deployments expose an editable surface under Settings › Platform.
+          </>
+        }
+      />
 
       {/* Retention defaults. Per-org / per-repo today (no tenant-wide row),
           so this card routes operators to /members where each org has its

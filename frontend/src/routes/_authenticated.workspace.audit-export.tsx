@@ -35,6 +35,7 @@ import {
   useDrainAuditExportDLX,
 } from "@/lib/api/audit-export";
 import type { AuditExportFormat, AuditExportTestResponse } from "@/lib/api/types";
+import { formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 
 // /workspace/audit-export — futures.md Tier 1 #4.
 //
@@ -247,7 +248,9 @@ function AuditExportPage(): React.ReactElement {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-xl font-semibold text-[var(--color-fg)]">
+        {/* Aligned to the dominant page-title treatment used across routes
+            (font-display text-3xl font-medium tracking-tight). */}
+        <h1 className="font-display text-3xl font-medium tracking-tight">
           Audit log streaming
         </h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
@@ -545,8 +548,18 @@ function ObservabilityCard({ cfg, onDrain, draining }: ObservabilityCardProps): 
         )}
         <span className="text-xs text-[var(--color-fg-muted)]">
           Last success:{" "}
-          <span className="text-[var(--color-fg)]">
-            {cfg.last_success_at ? new Date(cfg.last_success_at).toLocaleString() : "never"}
+          {/* Relative form for scannability; absolute timestamp on hover.
+              Matches the app-wide formatRelativeDate/formatAbsoluteDate
+              timestamp convention. */}
+          <span
+            className="text-[var(--color-fg)]"
+            title={
+              cfg.last_success_at
+                ? formatAbsoluteDate(cfg.last_success_at)
+                : undefined
+            }
+          >
+            {cfg.last_success_at ? formatRelativeDate(cfg.last_success_at) : "never"}
           </span>
         </span>
         {stuckInQueue ? (

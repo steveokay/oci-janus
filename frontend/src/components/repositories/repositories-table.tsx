@@ -12,7 +12,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { formatBytes, formatRelativeDate } from "@/lib/format";
+import { formatBytes, formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 import type { Repository } from "@/lib/api/types";
 
 // F4 follow-up — when the table is rendered on /helm or /repositories
@@ -149,7 +149,12 @@ function Row({
           <Progress value={pct} className="h-1" />
         </div>
       </TableCell>
-      <TableCell className="hidden text-[var(--color-fg-muted)] md:table-cell">
+      {/* Absolute timestamp on hover — matches the app-wide relative-date +
+          title-tooltip convention. */}
+      <TableCell
+        className="hidden text-[var(--color-fg-muted)] md:table-cell"
+        title={formatAbsoluteDate(repo.created_at)}
+      >
         {formatRelativeDate(repo.created_at)}
       </TableCell>
     </TableRow>

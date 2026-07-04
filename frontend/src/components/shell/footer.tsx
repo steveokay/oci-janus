@@ -83,14 +83,17 @@ export function Footer(): React.ReactElement {
         </span>
       </div>
 
-      <nav className="flex items-center gap-4">
+      {/* a11y — label distinguishes this footer nav landmark from the
+          primary sidebar nav for assistive tech. */}
+      <nav aria-label="Footer" className="flex items-center gap-4">
         {FOOTER_LINKS.map((l) => (
           <a
             key={l.label}
             href={l.href}
             target={l.external ? "_blank" : undefined}
             rel={l.external ? "noreferrer noopener" : undefined}
-            className="inline-flex items-center gap-1 text-[var(--color-fg-muted)] transition-colors hover:text-[var(--color-fg)]"
+            // a11y — visible keyboard focus ring, matching the sidebar links.
+            className="inline-flex items-center gap-1 rounded-sm text-[var(--color-fg-muted)] transition-colors hover:text-[var(--color-fg)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           >
             {l.label}
             {l.external ? (

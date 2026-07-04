@@ -8,6 +8,13 @@ import { BulkDeleteTagsDialog } from "../bulk-delete-tags-dialog";
 // Asking the operator to type "1" to confirm a one-tag delete was a bad
 // hand-off: the eye never lands on what's about to disappear. Typing the
 // tag name forces a moment of attention. Multi-tag stays as count typing.
+//
+// The dialog now delegates to the shared ConfirmDestructiveDialog primitive,
+// whose confirm label reads "Type <expected> to confirm" (the primitive
+// doesn't render the old "the tag name" phrasing). The gate STRENGTH is what
+// matters and is unchanged: single ⇒ type the tag name, multi ⇒ type the
+// count. We assert on the label→input association (getByLabelText) so the
+// exact wording of the primitive isn't load-bearing.
 
 function renderWithClient(children: React.ReactNode): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -28,15 +35,14 @@ describe("BulkDeleteTagsDialog confirm gate", () => {
       />,
     );
 
-    // Label copy must include the tag-name verbatim — this is the
-    // observable surface the operator's eye lands on before typing.
-    const label = screen.getByText(/type the tag name/i);
-    expect(label).toBeInTheDocument();
-    expect(label.textContent).toContain("v1.2.3");
+    // The confirm input's accessible name (its label) must include the
+    // tag-name verbatim — this is the observable surface the operator's
+    // eye lands on before typing.
+    const input = screen.getByLabelText(/v1\.2\.3/i);
+    expect(input).toBeInTheDocument();
 
     // Wrong input ("1") must NOT enable the confirm button — that was
     // the old behaviour and is exactly what this fix prevents.
-    const input = screen.getByLabelText(/type the tag name/i);
     const confirmBtn = screen.getByRole("button", { name: /^Delete 1/i });
     await user.type(input, "1");
     expect(confirmBtn).toBeDisabled();
