@@ -43,8 +43,16 @@ export function StatCard({
         </div>
       </CardHeader>
       <CardContent className="pt-0 pb-5">
-        {loading || value === undefined ? (
+        {/* Skeleton keys on `loading` only — the old `|| value === undefined`
+            arm rendered a permanent skeleton when the API legitimately omits
+            a stat. A settled-but-absent value renders an em dash instead so
+            the card reads "no data", not "still loading". */}
+        {loading ? (
           <Skeleton className="h-10 w-32" />
+        ) : value === undefined ? (
+          <div className="font-display text-4xl font-medium leading-none tracking-tight text-[var(--color-fg)]">
+            —
+          </div>
         ) : (
           <div className="font-display text-4xl font-medium leading-none tracking-tight text-[var(--color-fg)]">
             <AnimatedNumber value={value} format={format} />
