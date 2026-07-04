@@ -71,7 +71,7 @@ If you're not sure whether something is in scope, ask first. We'd rather spend 5
 
 ### Backend (Go)
 
-- **Go 1.23+** (toolchain pinned at `go 1.25.7` in `go.work`).
+- **Go 1.23+** (toolchain pinned at `go 1.25.11` in `go.work`).
 - **No ORM.** All SQL via `pgx/v5` directly. Parameterised queries only.
 - **One service per `services/<name>/`** with the standard layout (`cmd/server`, `internal/{config,server,handler,service,repository,middleware}`, `migrations`, `Dockerfile`).
 - **No business logic in `libs/`.** Shared utilities only.

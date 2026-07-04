@@ -1,6 +1,6 @@
 module github.com/steveokay/oci-janus/services/storage
 
-go 1.25.7
+go 1.25.11
 
 require (
 	github.com/minio/minio-go/v7 v7.0.94

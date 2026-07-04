@@ -1,6 +1,6 @@
 module github.com/steveokay/oci-janus/services/mcp
 
-go 1.25.7
+go 1.25.11
 
 replace (
 	github.com/steveokay/oci-janus/libs => ../../libs

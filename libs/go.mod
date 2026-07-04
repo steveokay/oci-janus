@@ -1,6 +1,6 @@
 module github.com/steveokay/oci-janus/libs
 
-go 1.25.7
+go 1.25.11
 
 require (
 	github.com/google/uuid v1.6.0

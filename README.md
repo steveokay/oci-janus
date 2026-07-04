@@ -3,7 +3,7 @@
 Self-hosted OCI registry with mTLS between every service, multi-key JWT signing, tamper-evident audit, and optional multi-tenant mode for SaaS operators.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.25.7-00ADD8?logo=go)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.25.11-00ADD8?logo=go)](https://go.dev)
 [![OCI Distribution Spec](https://img.shields.io/badge/OCI_Spec-v1.1-262261)](https://github.com/opencontainers/distribution-spec)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/steveokay)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)

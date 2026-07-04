@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: "1.25.7" }
+        with: { go-version: "1.25.11" }
       - name: Vet spec-lint
         # Cheap regression guard so the tool itself doesn't rot. Catches
         # obvious mistakes (unused vars, format-string typos, etc) before
