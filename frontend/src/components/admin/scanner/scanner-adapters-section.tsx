@@ -24,9 +24,14 @@ import {
   useTestScan,
   type AdminAdapter,
 } from "@/lib/api/admin-scanners";
+import { useIsGlobalAdmin } from "@/lib/api/abilities";
 
 export function ScannerAdaptersSection(): React.ReactElement {
   const adaptersQ = useAdapters();
+  // Promoting an adapter is a platform-wide change gated on the same
+  // platform-admin marker the BFF enforces. false while abilities load, so
+  // the promote CTA stays disabled until the grant resolves (no flicker).
+  const canManage = useIsGlobalAdmin();
   const testScan = useTestScan();
   const [pendingActive, setPendingActive] = React.useState<AdminAdapter | null>(
     null,
@@ -112,6 +117,7 @@ export function ScannerAdaptersSection(): React.ReactElement {
               busy={false}
               testing={a.active && testScan.isPending}
               currentActiveName={active?.name}
+              canMakeActive={canManage}
               onMakeActive={() => setPendingActive(a)}
               onRunTestScan={handleRunTestScan}
             />
@@ -142,6 +148,7 @@ export function ScannerAdaptersSection(): React.ReactElement {
           }}
           adapter={pendingActive}
           currentActive={active}
+          canConfirm={canManage}
         />
       ) : null}
     </section>
