@@ -21,25 +21,53 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 
-export const Route = createFileRoute(
-  "/_authenticated/repositories/$org/$repo_/tags/$tag",
-)({
-  component: TagDetail,
-});
-
 // Tab values for the tag-detail page. The default landing tab is "security"
 // — it's the most informative surface when a scan exists, and the empty
 // state for an unscanned tag offers an inline "Other views" affordance
 // (DSGN-019) so the operator can hop to a sibling tab without bouncing.
-type TagDetailTab = "security" | "history" | "layers" | "signing";
+const TAG_TAB_VALUES = ["security", "history", "layers", "signing"] as const;
+type TagDetailTab = (typeof TAG_TAB_VALUES)[number];
+const DEFAULT_TAG_TAB: TagDetailTab = "security";
+
+interface TagDetailSearch {
+  tab?: TagDetailTab;
+}
+
+export const Route = createFileRoute(
+  "/_authenticated/repositories/$org/$repo_/tags/$tag",
+)({
+  component: TagDetail,
+  // Persist the selected tab in the URL so it survives refresh/back and is
+  // deep-linkable. Invalid/absent → default tab. Whitelist mirrors the
+  // <TabsTrigger value=…> set so an unknown tab can't reach the controlled Tabs.
+  validateSearch: (raw: Record<string, unknown>): TagDetailSearch => {
+    const tab = raw.tab;
+    if (typeof tab === "string" && (TAG_TAB_VALUES as readonly string[]).includes(tab)) {
+      return { tab: tab as TagDetailTab };
+    }
+    return {};
+  },
+});
 
 function TagDetail(): React.ReactElement {
   const { org, repo, tag } = Route.useParams();
+  const { tab } = Route.useSearch();
+  const navigate = Route.useNavigate();
   const [deleteOpen, setDeleteOpen] = React.useState(false);
-  // Controlled Tabs value so the empty-state sibling-tab links (DSGN-019)
-  // can switch tabs without route navigation.
-  const [activeTab, setActiveTab] =
-    React.useState<TagDetailTab>("security");
+  // The URL is the single source of truth for the active tab; absent/invalid
+  // resolves to the default. setActiveTab navigates (replace:true) so the
+  // empty-state sibling-tab links (DSGN-019) drive the same URL param instead
+  // of local state — keeping deep-links and the tab bar in sync.
+  const activeTab: TagDetailTab = tab ?? DEFAULT_TAG_TAB;
+  const setActiveTab = React.useCallback(
+    (value: TagDetailTab): void => {
+      void navigate({
+        search: (prev) => ({ ...prev, tab: value }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   // No per-tag GET endpoint exists yet; we read from the tag list and pick
   // the row by name. This is fine for the page sizes we expect and the list

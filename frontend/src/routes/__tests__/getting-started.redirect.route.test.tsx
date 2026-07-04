@@ -6,6 +6,7 @@ import {
   createMemoryHistory,
   RouterProvider,
 } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { routeTree } from "@/routeTree.gen";
 import type { MeResponse } from "@/lib/api/me";
 
@@ -210,6 +211,20 @@ async function buildRouter(initialPath: string) {
   return router;
 }
 
+// renderWithClient wraps RouterProvider in a QueryClientProvider. The dashboard
+// index now calls useQueryClient() (for the manual-refresh control), so the
+// real hook needs a provider even though the data hooks themselves are mocked.
+function renderWithClient(router: Awaited<ReturnType<typeof buildRouter>>) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("/ dashboard onboarding redirect (Phase 4.3 §3)", () => {
@@ -232,7 +247,7 @@ describe("/ dashboard onboarding redirect (Phase 4.3 §3)", () => {
     } as MeResponse;
 
     const router = await buildRouter("/");
-    render(<RouterProvider router={router} />);
+    renderWithClient(router);
 
     // The useEffect fires after mount and navigates to /getting-started
     // with replace:true. waitFor handles the async commit + nav.
@@ -254,7 +269,7 @@ describe("/ dashboard onboarding redirect (Phase 4.3 §3)", () => {
     } as MeResponse;
 
     const router = await buildRouter("/");
-    render(<RouterProvider router={router} />);
+    renderWithClient(router);
 
     // Give the redirect effect time to NOT fire. waitFor with a short
     // poll window asserts the negative case: if the redirect were going
@@ -277,7 +292,7 @@ describe("/ dashboard onboarding redirect (Phase 4.3 §3)", () => {
     } as MeResponse;
 
     const router = await buildRouter("/");
-    render(<RouterProvider router={router} />);
+    renderWithClient(router);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(router.state.location.pathname).toBe("/");
@@ -304,7 +319,7 @@ describe("/ dashboard onboarding redirect (Phase 4.3 §3)", () => {
     } as MeResponse;
 
     const router = await buildRouter("/");
-    render(<RouterProvider router={router} />);
+    renderWithClient(router);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(router.state.location.pathname).toBe("/");

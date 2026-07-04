@@ -65,6 +65,10 @@ const GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "Registry",
     items: [
+      // Dashboard is the index route ("/") — the operator's landing
+      // overview. Kept first so the top-most nav entry maps to the app
+      // home, matching the brand link's `to="/"` target.
+      { to: "/", label: "Dashboard", icon: LayoutDashboard },
       // Repositories is the primary landing for operators — everything
       // they push/pull lives here.
       { to: "/repositories", label: "Repositories", icon: Boxes },
@@ -229,9 +233,17 @@ export function SidebarBody({
                   // Active when the pathname is the item's route or a child of
                   // it — a path-boundary match (`to` OR `to/…`) so `/repo` does
                   // not falsely match `/repository`. A bare startsWith would.
+                  //
+                  // The Dashboard root ("/") is special-cased to an EXACT match:
+                  // every route starts with "/", so the child-boundary branch
+                  // ("//") would never fire but a naive startsWith("/") would
+                  // light up Dashboard on every page. Exact-only keeps it lit
+                  // solely on the index route.
                   const active =
-                    location.pathname === item.to ||
-                    location.pathname.startsWith(item.to + "/");
+                    item.to === "/"
+                      ? location.pathname === "/"
+                      : location.pathname === item.to ||
+                        location.pathname.startsWith(item.to + "/");
                   return (
                     <li key={item.to}>
                       <Link

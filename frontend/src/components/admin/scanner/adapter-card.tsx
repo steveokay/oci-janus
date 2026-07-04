@@ -18,9 +18,18 @@ interface AdapterCardProps {
   // no adapter is currently active — then the button falls back to
   // "Make active".
   currentActiveName?: string;
+  // Whether the caller holds the platform-admin grant required to promote an
+  // adapter. When false the promote button renders disabled with a hint —
+  // the server enforces the grant too, this just avoids a dead-end click.
+  // The section passes useIsGlobalAdmin(), which is false while abilities
+  // load, so the button stays disabled until the grant is confirmed.
+  canMakeActive?: boolean;
   onMakeActive: () => void;
   onRunTestScan: () => void;
 }
+
+// Hint copy for the disabled promote CTA — mirrors gc-card's wording.
+const PLATFORM_ADMIN_HINT = "Requires a platform-admin grant";
 
 // Beacon — AdapterCard.
 //
@@ -38,6 +47,7 @@ export function AdapterCard({
   busy,
   testing,
   currentActiveName,
+  canMakeActive = false,
   onMakeActive,
   onRunTestScan,
 }: AdapterCardProps): React.ReactElement {
@@ -139,7 +149,10 @@ export function AdapterCard({
             size="sm"
             className="w-full"
             onClick={onMakeActive}
-            disabled={busy}
+            // Disabled while a swap is in-flight OR the caller lacks the
+            // platform-admin grant — title explains the latter.
+            disabled={busy || !canMakeActive}
+            title={!canMakeActive ? PLATFORM_ADMIN_HINT : undefined}
           >
             {currentActiveName ? (
               <>

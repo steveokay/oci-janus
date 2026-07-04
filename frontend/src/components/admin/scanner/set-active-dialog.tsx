@@ -24,6 +24,11 @@ interface SetActiveDialogProps {
   // The currently-active adapter, shown for context. Optional because the
   // page may not have resolved it yet (we still allow promotion).
   currentActive?: AdminAdapter | null;
+  // Whether the caller holds the platform-admin grant. The card that opens
+  // this dialog is already grant-gated, but we also gate the confirm button
+  // here so the swap can't fire if the dialog is reached another way
+  // (defence in depth alongside the server-side 403).
+  canConfirm?: boolean;
 }
 
 // Beacon — SetActiveDialog.
@@ -38,6 +43,7 @@ export function SetActiveDialog({
   onOpenChange,
   adapter,
   currentActive,
+  canConfirm = false,
 }: SetActiveDialogProps): React.ReactElement {
   const [confirmText, setConfirmText] = React.useState("");
   const setActive = useSetActiveAdapter();
@@ -134,7 +140,9 @@ export function SetActiveDialog({
             type="button"
             variant="highlight"
             onClick={() => void onConfirm()}
-            disabled={!matches || submitting}
+            // Requires the typed-name match AND the platform-admin grant.
+            disabled={!matches || submitting || !canConfirm}
+            title={!canConfirm ? "Requires a platform-admin grant" : undefined}
             loading={submitting}
           >
             {submitting ? "Switching" : "Make active"}

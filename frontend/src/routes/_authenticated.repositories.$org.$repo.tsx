@@ -49,26 +49,65 @@ const ARTIFACT_FILTER_VALUES = [
 ] as const;
 type ArtifactFilterParam = (typeof ARTIFACT_FILTER_VALUES)[number];
 
+// Tab values for the repo-detail page — kept in the URL so a selected tab
+// survives refresh/back and is deep-linkable (e.g. …/org/repo?tab=settings).
+// The list must mirror the <TabsTrigger value=…> set below; validateSearch
+// rejects anything else so the URL can't smuggle an unknown tab into the
+// controlled <Tabs>.
+const REPO_TAB_VALUES = [
+  "tags",
+  "members",
+  "retention",
+  "promotions",
+  "settings",
+] as const;
+type RepoTabParam = (typeof REPO_TAB_VALUES)[number];
+const DEFAULT_REPO_TAB: RepoTabParam = "tags";
+
 interface RepoDetailSearch {
   type?: ArtifactFilterParam;
+  tab?: RepoTabParam;
 }
 
 export const Route = createFileRoute("/_authenticated/repositories/$org/$repo")({
   component: RepositoryDetail,
   validateSearch: (raw: Record<string, unknown>): RepoDetailSearch => {
+    const out: RepoDetailSearch = {};
     const t = raw.type;
     if (typeof t === "string" && (ARTIFACT_FILTER_VALUES as readonly string[]).includes(t)) {
-      return { type: t as ArtifactFilterParam };
+      out.type = t as ArtifactFilterParam;
     }
-    return {};
+    // Only persist a valid, non-default tab — absent/invalid falls through to
+    // the default so we don't clutter the URL for the common "tags" case.
+    const tab = raw.tab;
+    if (typeof tab === "string" && (REPO_TAB_VALUES as readonly string[]).includes(tab)) {
+      out.tab = tab as RepoTabParam;
+    }
+    return out;
   },
 });
 
 function RepositoryDetail(): React.ReactElement {
   const { org, repo } = Route.useParams();
-  const { type: initialTypeFilter } = Route.useSearch();
+  const { type: initialTypeFilter, tab } = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { data, isLoading, isError, refetch } = useRepository(org, repo);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+
+  // Absent/invalid ?tab= resolves to the default tab. The <Tabs> is driven
+  // as controlled so the URL is the single source of truth.
+  const activeTab: RepoTabParam = tab ?? DEFAULT_REPO_TAB;
+  const handleTabChange = React.useCallback(
+    (value: string): void => {
+      // replace:true so tab switches don't stack history entries. Spread the
+      // previous search so sibling params (e.g. ?type=) survive the change.
+      void navigate({
+        search: (prev) => ({ ...prev, tab: value as RepoTabParam }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   if (isError) {
     return (
@@ -105,7 +144,7 @@ function RepositoryDetail(): React.ReactElement {
 
       <DescriptionCard description={data?.description} />
 
-      <Tabs defaultValue="tags">
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="tags">Tags</TabsTrigger>
           <TabsTrigger value="members">Members</TabsTrigger>

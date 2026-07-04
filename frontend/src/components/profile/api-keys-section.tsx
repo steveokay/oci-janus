@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
+import { ExpiryBadge } from "@/components/ui/expiry-badge";
 import { CreateApiKeyDialog } from "./create-api-key-dialog";
 import { DeleteApiKeyDialog } from "./delete-api-key-dialog";
 import { useApiKeys, type ApiKey } from "@/lib/api/api-keys";
@@ -112,6 +113,9 @@ function KeysTable({
             <TableHead className="w-[35%]">Name</TableHead>
             <TableHead>Key ID</TableHead>
             <TableHead>Last used</TableHead>
+            {/* ApiKey carries expires_at (services/auth apiKeyResponse), so we */}
+            {/* surface it with an urgency treatment (expired/soon/ok). */}
+            <TableHead className="hidden md:table-cell">Expires</TableHead>
             <TableHead className="hidden lg:table-cell">Issued</TableHead>
             <TableHead className="w-[100px] text-right">
               <span className="sr-only">Actions</span>
@@ -167,6 +171,11 @@ function KeysTable({
                     </span>
                   )}
                 </TableCell>
+                <TableCell className="hidden md:table-cell">
+                  {/* Urgency-aware expiry: danger "Expired", warning countdown */}
+                  {/* within 14 days, else plain muted relative time. */}
+                  <ExpiryBadge expiresAt={k.expires_at} />
+                </TableCell>
                 <TableCell className="hidden lg:table-cell">
                   <span
                     className="text-xs text-[var(--color-fg-muted)]"
@@ -208,6 +217,10 @@ function SkeletonRows(): React.ReactElement {
           </TableCell>
           <TableCell>
             <Skeleton className="h-3 w-20" />
+          </TableCell>
+          {/* Expires column skeleton (md+). */}
+          <TableCell className="hidden md:table-cell">
+            <Skeleton className="h-3 w-16" />
           </TableCell>
           <TableCell className="hidden lg:table-cell">
             <Skeleton className="h-3 w-20" />

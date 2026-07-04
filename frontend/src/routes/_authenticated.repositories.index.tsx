@@ -159,6 +159,9 @@ function RepositoriesPage(): React.ReactElement {
             repositories={filtered}
             loading={isLoading}
             linkArtifactType="image"
+            // Lets the table warn that a client-side sort only covers loaded
+            // pages while more remain (server-side sort is FE-API-future).
+            hasNextPage={hasNextPage}
           />
           {hasNextPage ? (
             <div className="flex justify-center pt-2">

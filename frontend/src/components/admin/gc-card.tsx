@@ -39,8 +39,14 @@ import {
   type GCMode,
   type GCRun,
 } from "@/lib/api/admin-gc";
+import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import { formatAbsoluteDate, formatBytes, formatRelativeDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+// Copy shown on disabled platform-admin CTAs. The server enforces the grant
+// too (defence in depth) — this just stops a non-admin from completing the
+// type-to-confirm ritual only to eat a 403 toast at the end.
+const PLATFORM_ADMIN_HINT = "Requires a platform-admin grant";
 
 // Beacon — Housekeeping / Garbage collection card (FE-API-032).
 //
@@ -69,6 +75,12 @@ function statusTone(s: string): React.ComponentProps<typeof Badge>["tone"] {
 
 export function GCCard(): React.ReactElement {
   const status = useGCStatus();
+  // Gate the destructive "Run now" CTA on the same platform-admin marker the
+  // BFF enforces. useIsGlobalAdmin returns false while the abilities query is
+  // still loading, so the button renders disabled until abilities resolve —
+  // "unknown" is treated as not-granted, and there's no enabled→disabled
+  // flicker (only disabled→enabled once the grant is confirmed).
+  const canRunGC = useIsGlobalAdmin();
   // S-MAINT-1 F2: search filters drive useGCRuns directly so a fresh
   // typed search triggers a re-fetch via the queryKey. Debounce the
   // text input so each keystroke doesn't fire a request.
@@ -133,6 +145,10 @@ export function GCCard(): React.ReactElement {
               size="sm"
               variant="outline"
               onClick={() => setOpen(true)}
+              // Disabled for non-platform-admins so the type-to-confirm dialog
+              // can't even be opened without the grant. title surfaces the why.
+              disabled={!canRunGC}
+              title={!canRunGC ? PLATFORM_ADMIN_HINT : undefined}
             >
               <Play className="size-3.5" />
               Run now
