@@ -1,6 +1,6 @@
 # Security Issues
 
-> **Open as of 2026-07-04: 13 SEC findings — all LOW/INFO, no open HIGH or MEDIUM — plus PENTEST-030 (OPEN) and PENTEST-033 (PARTIAL).** LOW: SEC-037, SEC-048, SEC-053, SEC-054, SEC-055, SEC-056, SEC-071. INFO: SEC-049, SEC-063, SEC-072, SEC-073, SEC-074, SEC-075. _Supersedes the "15 OPEN as of 2026-07-02" snapshot lower down:_ SEC-057..062 resolved (#244), SEC-064/065/067/068/069/070 resolved (#226/#228/#243), SEC-066 closed WON'T FIX (#246); SEC-071..075 logged since (RED-FU-015 / PR #250 reviews). SEC-076 (goxmldsig GO-2026-4753 signature bypass, MEDIUM) was raised AND RESOLVED same-day 2026-07-04 via PR #256 — not in the open count. See each entry below for triage.
+> **Open as of 2026-07-04 (after the security-tail close-out): 7 SEC findings — all LOW/INFO, no open HIGH or MEDIUM — plus PENTEST-030 (OPEN) and PENTEST-033 (PARTIAL).** LOW: SEC-037, SEC-048, SEC-055, SEC-056. INFO: SEC-049, SEC-063, SEC-074. _Security-tail close-out (2026-07-04):_ SEC-071/072/073 resolved (#262), SEC-075 resolved (#263), SEC-053/054 resolved (#264), SEC-051/052 resolved + SEC-077 raised-and-resolved (#265). SEC-074 (plaintext buffer zeroing, INFO) intentionally stays OPEN — accepted as best-effort defense-in-depth consistent with the existing `libs/crypto/aes` posture, not a regression. _Earlier supersessions:_ SEC-057..062 resolved (#244), SEC-064/065/067/068/069/070 resolved (#226/#228/#243), SEC-066 closed WON'T FIX (#246); SEC-076 (goxmldsig GO-2026-4753 signature bypass, MEDIUM) raised AND RESOLVED same-day 2026-07-04 via PR #256 — not in the open count. See each entry below for triage.
 >
 > Last updated: 2026-07-03 — Reviewed PR #250 (`chore/ci-consolidate-govulncheck`) — infra-only (CI workflows + docs + trackers; no service/lib/proto code). **PR PASSES — NO SECURITY REGRESSION, no blockers.** **Change B (removal of `scripts/lint-user-queries.sh` + its `ci-auth.yml` step, REM-015):** VERIFIED SAFE. The script was a repository-layer SQL-annotation lint (every `FROM users` SELECT in `services/auth/internal/repository/` must filter by `kind` or carry an `-- allow-any-kind`/`// allow-any-kind` annotation) and was already `continue-on-error: true` — it NEVER gated merges. Crucially it never enforced *caller-side* routing, only annotation presence. The real runtime kind-guard is the repository `…Human…` helper contract + the empty `password_hash` on SA shadow rows, none of which this PR touches: SSO email match routes through `GetHumanByEmail` (kind='human' guard) at `services/auth/internal/service/sso.go:412,498`; `GetHumanByEmail`/`GetHumanByID` reject SA rows, pinned by integration tests in `services/auth/internal/repository/user_human_test.go`; SA shadow rows are created with `password_hash=''` (`services/auth/internal/repository/service_account.go:144`) so `argon2.Verify` rejects every password. One genuine (pre-existing, non-exploitable) defense-in-depth gap surfaced and logged as **SEC-075 (INFO)** — the username/password login path (`AuthenticateUser`, `service/auth.go:1080`) uses the kind-agnostic `GetByUsername`, and the `GetHumanByUsername` helper referenced in docstrings + the deleted lint's guidance does not exist; the sole barrier there is the empty password_hash, not the kind guard. **Change A (govulncheck consolidation to nightly `ci-security.yml`):** VERIFIED — removes NO blocking gate. The 13 per-service `security:` jobs were doubly non-blocking (`continue-on-error: true` AND a trailing `|| true`), so they produced ~26 permanently-green checks with zero merge signal; the new scheduled matrix job drops the `|| true` so its exit code now tracks govulncheck for real (REM-016 flip-to-blocking is a one-line `continue-on-error` deletion). No merge-time signal is lost because the pre-state provided none. No CRITICAL/HIGH.
 >
@@ -904,11 +904,30 @@ under CLAUDE.md §7 "JWT Validation."
   3. Consider switching the default signer from "lex-greatest" to "most-recently-modified" mtime (already captured in `loaded.modTime` at keyring.go:244 but currently only used as a tie-break that never fires). Matches operator intuition ("the key I just added") regardless of naming convention.
 - **References:** CLAUDE.md §7 (JWT validation, kid-targeted lookup); CWE-1188 (Insecure Default Initialization); CWE-345 (Insufficient Verification of Data Authenticity).
 
+### SEC-051 — Pre-migration audit rows are silently unverifiable / misreported by `VerifyChain`
+- **Severity:** LOW
+- **Status:** RESOLVED (2026-07-04, PR #265)
+- **Service:** `services/audit`
+- **Raised:** 2026-06-30 (Phase 6.12 hash-chain review; tracked inline until formalised here)
+- **Description:** The Phase 6.12 migration (`20260630120000_audit_hash_chain.sql`) adds `row_hash NOT NULL DEFAULT decode('00','hex')` (default dropped immediately after) and `prev_hash NOT NULL DEFAULT decode('00','hex')`, so every row that existed **before** the migration is backfilled with a 1-byte `0x00` in both columns — the same value as the genesis `prev_hash` sentinel. `VerifyChain` bucketed those rows against the genuine genesis row and reported them as a fork/tamper, training operators to ignore a real signal (or, in mixed histories, masking a genuine break).
+- **Resolved:** `VerifyChain` now returns `ChainVerification{FirstBadID, FirstBadAt, Unverifiable}` (was a bare `(uuid, time, error)` — only test callers existed). Pre-chain rows are recognised by the sentinel, **excluded from the walk**, and **counted into `Unverifiable`** so they are visible rather than mis-flagged; a chain can be `Intact()` with `Unverifiable > 0`. Integration test `TestHashChain_preChainRowsReportedUnverifiable` seeds raw pre-migration rows and asserts the real chain verifies while the legacy rows are counted. See also SEC-077 (the sentinel-detection hardening).
+- **References:** CLAUDE.md §10 (audit hash chain); CWE-778 (Insufficient Logging).
+
+### SEC-052 — `canonicaliseJSON` number-precision / determinism edge cases untested
+- **Severity:** INFO
+- **Status:** RESOLVED (2026-07-04, PR #265)
+- **Service:** `services/audit`
+- **Raised:** 2026-06-30 (Phase 6.12 hash-chain review; tracked inline until formalised here)
+- **Description:** The hash chain's tamper-evidence depends on `canonicaliseJSON` producing byte-identical output for the inserter and the verifier. It already uses `json.Decoder.UseNumber()` (so integers survive past the float64 `2^53` boundary), but nothing pinned that behaviour, leaving the NaN/Inf/`>2^53` edge cases the reviewer named unguarded against regression.
+- **Resolved:** Added pure unit tests (`hashchain_canonical_test.go`, standard `go test ./...` lane): recursive key sort at every depth, `2^53+1` must not collapse to `2^53`, whitespace/key-order invariance + idempotence, and rejection of invalid JSON (NaN / Infinity / truncated / empty). No production-code change was required — the tests confirm the `UseNumber` path is correct and lock it in.
+- **References:** CLAUDE.md §10 (canonicalisation contract); CWE-697 (Incorrect Comparison).
+
 ### SEC-053 — spec-lint rule #11 (`// audit: skip` annotation) has no allowlist; bad-faith PR can silently exempt a sensitive event
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #264)
 - **Service:** `tools/spec-lint`
 - **Raised:** 2026-06-30
+- **Resolved:** Adopted remediation #2 + #3. `// audit: skip` now MUST cite a reason after an em-dash or ASCII hyphen (`// audit: skip — <why this event produces no audit row>`); a bare skip is rejected with a targeted "reason clause" error (`bareSkipRE`), and the reason-bearing exemption list (count + sorted constant names) is printed to CI output so reviewers see it drift. Fixture-based `tools/spec-lint/main_test.go` pins reason-bearing vs bare skip (em-dash + ASCII-hyphen) and covered vs uncovered constants. All 13 rules still PASS against the live tree.
 - **Description:** `ruleEventCatalogueCovered` (tools/spec-lint/main.go:323) treats `// audit: skip` as a self-applied opt-out: any `Routing*` constant in `libs/rabbitmq/events/events.go` either has a `case` in `services/audit/internal/eventconsumer/consumer.go`'s `mapEvent` switch, OR carries an inline / preceding-line `// audit: skip` comment. The annotation is unrestricted — a PR can add `RoutingRBACRoleGranted = "rbac.role_granted" // audit: skip` in the same diff that defines the constant, and spec-lint will PASS even though the event is meant to be audited per CLAUDE.md §10. The check enforces "every constant is decided about" but not "the decision matches the security policy."
 - **Remediation:**
   1. Maintain an in-tree allowlist (e.g. `tools/spec-lint/skip_allowlist.txt`) of routing keys explicitly approved for skip; reject `// audit: skip` annotations on any constant not in the file.
@@ -918,9 +937,10 @@ under CLAUDE.md §7 "JWT Validation."
 
 ### SEC-054 — spec-lint rule #12 (mTLS validate gate) matches generic `cfg.Validate()` regex; any local Validate satisfies the rule regardless of behaviour
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #264)
 - **Service:** `tools/spec-lint`
 - **Raised:** 2026-06-30
+- **Resolved:** Adopted remediation #1. The gate regex is tightened to `\bValidateMTLSConfig\b|\bmtls\.Validate\b`, dropping the over-broad `cfg.Validate()` / `loader.Validate` decoy branch. Empirically verified a no-op for today's tree — every gRPC service `main.go` already calls `loader.ValidateMTLSConfig` (mcp carries the `// spec-lint: skip mtls-validate — <reason>` exemption), so all 13 rules still PASS; a future service shipping only a generic `cfg.Validate()` now fails the rule. Negative/positive fixtures in `main_test.go`.
 - **Description:** `ruleEveryServiceValidatesMTLS` (tools/spec-lint/main.go:392) walks every `services/<name>/cmd/server/main.go` and passes if any of `ValidateMTLSConfig`, `cfg.Validate()`, or `loader.Validate` appears in the file. The first form is precise; the latter two are not. A new service that ships its own `cfg.Validate()` checking unrelated fields (e.g. `DB_DSN != ""`) will pass the rule without ever exercising the mTLS path-validation gate that CLAUDE.md §7 requires (mTLS cert paths must be set when `OTEL_ENVIRONMENT=production`). Combined with the dev fallback in `libs/auth/mtls` that downgrades to `insecure.NewCredentials()` when paths are unset, this lets a regression ship where a production service silently runs plaintext gRPC because nothing forced the mTLS validator to run.
 - **Remediation:**
   1. Tighten the gate regex to require an actual reference to the mTLS validator: `ValidateMTLSConfig|loader\.ValidateMTLSConfig|mtls\.Validate`.
@@ -953,9 +973,10 @@ under CLAUDE.md §7 "JWT Validation."
 
 ### SEC-071 — `rotate-kek --verify` takes unnecessary `FOR UPDATE` row locks
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #262)
 - **Service:** `libs/crypto/rekey`
 - **Raised:** 2026-07-03
+- **Resolved:** Adopted remediation #1 + #2. `selectSQL` gained a `lock bool` param — rotate/dry-run pass `true` (append `FOR UPDATE`), `verifyTable` passes `false` (lock-free read), so the inspection-only pass no longer write-locks rows it will not mutate. Regression pinned by an in-package `TestSelectSQL_LockClause` unit assertion (fast CI lane, no Docker) asserting `FOR UPDATE` presence per mode.
 - **Description:** `verifyTable` (`libs/crypto/rekey/sweep.go:256`) reuses `selectSQL(spec)`, whose SQL ends in `... FOR UPDATE` (`sweep.go:132`). Verify mode is documented as "never mutates" (`sweep.go:55-57`) and runs the query on the pool (`pool.Query`) in an implicit transaction, but `FOR UPDATE` still acquires row-level write locks on every candidate row for the duration of the scan. If an operator runs `--verify` against a live database (the runbook stops the service for `--rotate`, but `--verify` is the natural pre/post-flight check an operator would run while the service is up), the verify scan can briefly block concurrent writers to the credential tables (e.g. an SSO-config update, an upstream-registry credential rotation). No data-integrity or confidentiality impact — purely an availability/lock-contention nit. `--rotate`/`--dry-run` correctly need `FOR UPDATE` (they select-then-update in one tx); verify does not.
 - **Remediation:**
   1. Give verify its own lock-free select — e.g. add a `forUpdate bool` param to `selectSQL` (or a sibling `selectReadSQL`) that omits the `FOR UPDATE` suffix, and call it from `verifyTable`.
@@ -964,9 +985,10 @@ under CLAUDE.md §7 "JWT Validation."
 
 ### SEC-072 — `rotate-kek --generate` prints the fresh KEK to stdout (scrollback / CI-log capture)
 - **Severity:** INFO
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #262)
 - **Service:** `libs/crypto/rekey`
 - **Raised:** 2026-07-03
+- **Resolved:** Adopted remediation #1 + #2. The key stays the sole line on **stdout** (pipeline-friendly) and a WARNING caveat is written to **os.Stderr** so it cannot corrupt a downstream pipe while still alerting an interactive operator. `infra/runbooks/kek-rotation.md` §1 documents safe handling (avoid CI-log capture; redirect to a restricted file). Covered by `TestRunCLI_GenerateWritesKeyToStdoutCaveatToStderr` (asserts 64-hex on stdout, WARNING on captured stderr).
 - **Description:** `RunCLI` (`libs/crypto/rekey/cli.go:58-65`) mints a fresh 32-byte KEK with `GenerateKeyHex` and writes it in cleartext to stdout via `fmt.Fprintln(stdout, h)`. This is the intended UX (the operator must capture the new key to paste into the secrets manager), and the key never touches slog/error paths — but a hex KEK on stdout lands in terminal scrollback, shell session recordings, and, critically, CI/job logs if `--generate` is ever wired into an automation step. There is no accompanying "do not run this in CI / clear your scrollback" caveat at the call site. Not a code defect; a handling-guidance gap for the highest-value secret in the platform.
 - **Remediation:**
   1. Add a stderr warning line alongside the printed key (e.g. "WARNING: this is the new KEK in cleartext — capture it into your secrets manager and clear your scrollback; never run --generate in CI logs").
@@ -975,9 +997,10 @@ under CLAUDE.md §7 "JWT Validation."
 
 ### SEC-073 — No guard against `KEK_OLD_HEX == KEK_NEW_HEX` (silent no-op rotation → false confidence)
 - **Severity:** INFO
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #262)
 - **Service:** `libs/crypto/rekey`
 - **Raised:** 2026-07-03
+- **Resolved:** Adopted remediation #1 + #2. `RunCLI` rejects the rotate/dry-run path with a `ValidationError` when `subtle.ConstantTimeCompare(oldKey, newKey) == 1` (constant-time, executed before any DB dial); `--verify`/`--generate` return earlier so both keys are guaranteed present on the guarded path. Runbook pre-flight notes the check. Covered by `TestRunCLI_EqualKeysRejected`. (Also in the same PR: `--to-version` is now bounds-checked to [1, 32767] before DB work — code-review #3 — so an int flag cannot wrap the int16 `kek_version` column; and the four service `rotate-kek` dispatches wrap the run in `signal.NotifyContext(SIGINT,SIGTERM)` — code-review #5.)
 - **Description:** `RunCLI` parses both keys (`cli.go:70-80`) but never checks that they differ. If an operator misconfigures the environment so `KEK_OLD_HEX == KEK_NEW_HEX` (e.g. a copy-paste error, or both point at the same secrets-manager entry), the rotate sweep succeeds — every row decrypts and re-encrypts under the same key (with a fresh nonce), rows get stamped with the next `kek_version`, and `--verify` reports zero rows remaining. The operator receives a clean success and a bumped version generation while the compromised/retired key is still the live key. This defeats the security objective of the rotation (moving off a key believed exposed) with no signal. Length+hex validation catches malformed keys but not this equality case.
 - **Remediation:**
   1. In `RunCLI`, after parsing both keys for rotate/dry-run, reject with a `ValidationError` when `subtle.ConstantTimeCompare(oldKey, newKey) == 1` (constant-time to avoid a timing oracle on the byte comparison).
@@ -997,9 +1020,10 @@ under CLAUDE.md §7 "JWT Validation."
 
 ### SEC-075 — Username/password login path uses kind-agnostic `GetByUsername`; guard relies solely on empty SA password_hash
 - **Severity:** INFO
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-07-04, PR #263)
 - **Service:** `services/auth`
 - **Raised:** 2026-07-03
+- **Resolved:** Adopted remediation #1 + #3. Added `UserRepository.GetHumanByUsername(ctx, tenantID, username)` with `WHERE tenant_id=$1 AND username=$2 AND kind='human'` (parameterised); `AuthenticateUser` now calls it so the kind guard is the primary control on the password path, and the misleading `GetByUsername` docstring is corrected. The argon2 timing-equalisation work is preserved so SA-shadow vs no-user responses stay indistinguishable. Service-layer regression test seeds an SA shadow row with a **non-empty** argon2 hash and asserts `ErrInvalidCredentials` — proving the kind guard (not the empty-hash barrier) is the control; integration `TestUserRepo_HumanGuards` adds the `GetHumanByUsername` case. (Same PR aligned the OAuth `ErrEmailNotVerified` branch to `403 EMAILNOTVERIFIED`, matching the SAML branch — the 5.6 alignment follow-up.)
 - **Description:** Surfaced while reviewing PR #250's removal of the `lint-user-queries.sh` kind-guard CI check. The human password-login path `AuthenticateUser` (`services/auth/internal/service/auth.go:1080`) resolves the account via the kind-agnostic `UserRepository.GetByUsername` (`services/auth/internal/repository/user.go:147`, whose SQL carries an `-- allow-any-kind` annotation), NOT through a kind='human' guarded helper. The `GetHumanByUsername` helper that the `GetByUsername` docstring (`user.go:144,154`) and the now-deleted lint script both name as the required login-path variant **does not actually exist** in the repository. As a result the FE-API-048 §4.1 kind guard is not applied on the username/password path — a service-account shadow row (`kind='service_account'`, synthetic username `sa-<8hex>`) can be returned by the lookup. This is NOT exploitable today: SA shadow rows are inserted with `password_hash=''` (`services/auth/internal/repository/service_account.go:144`) and `argon2.Verify` rejects an empty hash, so no password can authenticate an SA row (confirmed by the fixture note at `services/auth/internal/testutil/sa_fixtures.go:145`). The exposure is therefore defense-in-depth only: the single barrier is the empty-hash invariant rather than the kind guard the contract advertises. Pre-existing on `main`; not introduced by PR #250. Removing the CI lint does not change this (the lint passed `GetByUsername` via its `-- allow-any-kind` annotation and never checked caller routing), which is why PR #250 is assessed as no-regression.
 - **Remediation:**
   1. Add a `GetHumanByID`-style `GetHumanByUsername(ctx, tenantID, username)` helper enforcing `AND kind = 'human'` at the SQL layer, and switch `AuthenticateUser` to call it so the kind guard becomes the primary control on the password path (matching the docstring/contract).
@@ -1015,3 +1039,12 @@ under CLAUDE.md §7 "JWT Validation."
 - **Description:** While verifying the REM-016 Go 1.25.11 toolchain bump, `govulncheck` flagged **GO-2026-4753** — a loop-variable-capture signature-verification bypass in `github.com/russellhaering/goxmldsig` v1.3.0, the XML digital-signature library `crewjam/saml` uses to validate IdP assertions. govulncheck classed it as a *called* vulnerability for `services/auth` (reachable via the SAML SP path). A signature-verification bypass in the SAML chain is the worst-case class for an SSO trust boundary, so although no exploit against this deployment was demonstrated, it was fixed immediately rather than deferred.
 - **Remediation (shipped in PR #256):** bumped `goxmldsig` v1.3.0 → v1.6.0 (with `beevik/etree` v1.1.0 → v1.6.0); `crewjam/saml` stays at v0.4.14. Full auth test suite green; `govulncheck` reports 0 affected vulnerabilities across all 15 modules, and the nightly `ci-security.yml` sweep is now a **blocking** gate so a recurrence of this class cannot sit silently. The deferred `crewjam/saml` v0.5.x API upgrade remains tracked as RED-FU-016 (ergonomics only — no longer security-motivated).
 - **References:** GO-2026-4753 (vuln.go.dev); REM-016 close-out row in `status.md`; RED-FU-016 in `futures.md`; CWE-347 (Improper Verification of Cryptographic Signature).
+
+### SEC-077 — Audit `VerifyChain` sentinel-detection could launder a tip-row tamper into an `Unverifiable` bump (residual of SEC-051 fix)
+- **Severity:** INFO (defense-in-depth; outside the stated threat model)
+- **Status:** RESOLVED (2026-07-04, PR #265 — raised + resolved same PR via the pre-merge security-agent review)
+- **Service:** `services/audit`
+- **Raised:** 2026-07-04
+- **Description:** The initial SEC-051 fix identified pre-chain rows by `row_hash == 0x00` alone. A stronger attacker holding **out-of-band UPDATE** on `audit_events` (table owner / direct DB compromise — beyond the INSERT-only `registry_audit_app` role the chain is written against) could zero a genuinely-chained row's `row_hash` so it was counted as `Unverifiable` (`Intact() == true`) rather than flagged as tampered. Detection was not eliminated (the `Unverifiable` counter still moved), but the verdict softened for a DB-level actor.
+- **Resolved:** The pre-chain detector now requires the `0x00` sentinel in **BOTH** `prev_hash` and `row_hash` (a genuine pre-migration row carries it in both; the migration backfills both columns). A chained row keeps its real 32-byte `prev_hash`, so zeroing only its `row_hash` fails the guard — it stays in the walk and the recompute mismatch flags it as tampered. Integration test `TestHashChain_zeroedRowHashNotLaunderedAsUnverifiable` zeroes a tip row's `row_hash` and asserts it is reported tampered (`FirstBadID`) with `Unverifiable == 0`. **Operator guidance:** alert on any *increase* in the `Unverifiable` count (not just a nonzero value) so a DB-level actor cannot hide behind pre-existing legacy rows.
+- **References:** SEC-051; CLAUDE.md §10 (audit hash chain, INSERT-only role model); CWE-347 (Improper Verification of Cryptographic Signature); CWE-778 (Insufficient Logging).
