@@ -39,8 +39,14 @@ const STATUS_META: Record<
   }
 > = {
   delivered: { icon: CircleCheck, tone: "success", badge: "success" },
+  // Semantic split of the two non-terminal-success states:
+  //   pending — still retrying, no failure yet → warning (amber).
+  //   failed  — a delivery attempt failed (retries exhausted for this
+  //             attempt) → danger (red), so it's visually distinct from a
+  //             merely-pending row.
+  //   dead    — permanently undeliverable after all retries → danger.
   pending: { icon: Clock, tone: "warning", badge: "warning" },
-  failed: { icon: CircleAlert, tone: "warning", badge: "warning" },
+  failed: { icon: CircleAlert, tone: "danger", badge: "danger" },
   dead: { icon: CircleX, tone: "danger", badge: "danger" },
 };
 
