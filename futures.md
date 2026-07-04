@@ -683,8 +683,9 @@ prioritised for backlog uptake.
   Phase-1 fallback warning folded in.
 - ~~**DSGN-004**~~ — DONE 2026-06-24 (PR #52). `ErrorState` w/ HTTP code +
   detail + request-id expander. New `lib/api/error.ts` helper.
-- **DSGN-023** — Mobile / narrow-viewport sidebar fallback. Below 1024px the
-  sidebar vanishes and Topbar has no nav control. **Effort:** M.
+- ~~**DSGN-023**~~ — STALE (verified 2026-07-04): the mobile shell shipped with
+  REDESIGN-001 Phase 4.5 (`frontend/src/components/shell/mobile-nav.tsx` +
+  tests); below-1024px nav is a drawer with full route parity.
 - ~~**QA-004**~~ — DONE 2026-06-24 (PR #59). JWT cache key in
   `services/core` + `services/proxy` now uses `jti` (extracted via a
   small inline `parseJTI` helper) instead of the raw token. Malformed
@@ -736,8 +737,9 @@ Lower priority — pick when picking up neighbouring work in the same file:
 - ~~DSGN-006~~ DONE PR #55 (repo Settings sub-sections + sticky ToC).
   ~~DSGN-010~~ DONE PR #57 (scanner adapter sort + active-name button).
   ~~DSGN-017~~ DONE PR #50 (focus rings on Button/Dialog/Switch/Tabs).
-  **Still open:** **DSGN-002** (sidebar IA — Workspace cluster split from Access),
-  **DSGN-008** (topbar `<Breadcrumbs/>` from `useMatches`),
+  ~~DSGN-002~~ STALE (verified 2026-07-04 — absorbed by the REDESIGN-001
+  Phase 4.2 sidebar IA rework).
+  **Still open:** **DSGN-008** (topbar `<Breadcrumbs/>` from `useMatches`),
   **DSGN-009** (audit-export observability tiles redesign),
   **DSGN-018** (extract `<SecretInput>` primitive from audit-export pattern),
   **DSGN-024** (extract `<PageHeader>` primitive — 8+ header shapes today).
@@ -762,6 +764,48 @@ Lower priority — pick when picking up neighbouring work in the same file:
   per-service-db profile, storage backend smoke profiles, GC CronJob + Deployment
   split, schema-evolution docs, `libs/delivery` reuse, in-process Cosign
   verification, multipart storage driver interface.
+
+### UI-REVIEW-2026-07 — deferred nits from the 2026-07-04 four-agent UI sweep
+
+The 2026-07-04 UI review produced 47 findings; batches 1–3 shipped 30 of them
+(PRs #257/#258/#259 — see `FE-STATUS.md` → "UI polish review"). These are the
+deliberately-deferred remainder. All small; pick up when touching the
+neighbouring file:
+
+- **UIR-1** — GC card renders its "best-effort" disclaimer caption even when
+  `next_scheduled_at` is null ("Unknown" + an explanation of a value that
+  isn't there). Render the caption only when a timestamp exists.
+  (`gc-card.tsx`) **Effort:** S.
+- **UIR-2** — `HealthCard` pulse animation fires on the healthy/success state
+  too, diluting the "needs attention" cue. Restrict pulse to non-success
+  tones. (`dashboard/health-card.tsx`) **Effort:** S.
+- **UIR-3** — Retention admin tile computes 24h/7d counts + the runs table
+  from a client-side filter over one 100-row GC page — counts can silently
+  under-report on busy deployments. Add a "based on the latest 100 runs"
+  footnote or a mode-scoped count endpoint. (`retention-card.tsx`)
+  **Effort:** M.
+- **UIR-4** — Notification channel toggles disable the whole 12-checkbox
+  matrix during any single update and give no optimistic feedback. Optimistic
+  update or per-cell pending state. (`settings.account.tsx`) **Effort:** M.
+- **UIR-5** — Login SSO provider buttons render fully active but only toast
+  "launches with the next release" — render visibly disabled/"coming soon"
+  until wired. (`auth/sso-buttons.tsx`) **Effort:** S.
+- **UIR-6** — Access-review Owner column prints a raw user UUID; resolve via
+  `UserCell` (or BFF join). (`access/ReviewPanel.tsx`) **Effort:** M.
+- **UIR-7** — Topbar `sticky top-0` + `backdrop-blur` is a no-op (the scroll
+  container is `<main>`, the topbar never scrolls) — drop the dead styles or
+  move the bar inside the scroll container. (`shell/topbar.tsx`,
+  `app-shell.tsx`) **Effort:** S.
+- **UIR-8** — Notifications unread badge hardcodes `text-white` over
+  `--color-highlight`; pair it with a fg token. (`notifications-bell.tsx`)
+  **Effort:** S.
+- **UIR-9** — PoliciesPanel renders save success/error as muted inline text
+  ("no toast infra yet" comment predates sonner adoption); switch to
+  `toast.success/error`, keep inline for field validation.
+  (`access/PoliciesPanel.tsx`) **Effort:** M.
+- **UIR-10** — SecretRevealDialog's copy control is icon-only; a labelled
+  "Copy secret" button would de-risk dismiss-without-copy.
+  (`webhooks/secret-reveal-dialog.tsx`) **Effort:** S.
 
 ### REM-017 — Platform-admin "claim a new org" route (chicken-egg)
 
