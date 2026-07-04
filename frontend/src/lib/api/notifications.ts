@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 
 // FE-API-008 — tenant-wide notifications feed.
@@ -101,6 +106,45 @@ export function useNotifications(params: ListParams = {}) {
       );
       return data;
     },
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+}
+
+// useInfiniteNotifications — paginated variant of useNotifications for the
+// /activity feed. The BFF returns a `next_page_token` cursor; this hook walks
+// it via useInfiniteQuery so a "Load older" button can append pages instead of
+// the feed being stuck at a single page. The topbar bell keeps using the
+// single-page useNotifications (it only ever wants the freshest 10).
+//
+// `since` / `event_types` are part of the query key, so changing a filter
+// starts a fresh paginated query (page cursor resets) rather than mixing
+// filtered + unfiltered pages.
+export function useInfiniteNotifications(
+  params: Omit<ListParams, "page_token"> = {},
+) {
+  return useInfiniteQuery({
+    // Reuse the list key shape (minus page_token, which the cursor owns) so
+    // invalidation via notificationKeys.all still reaches this query.
+    queryKey: notificationKeys.list(params),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const q: Record<string, string> = {};
+      if (params.since) q.since = params.since;
+      if (params.limit) q.limit = String(params.limit);
+      if (pageParam) q.page_token = pageParam;
+      if (params.event_types && params.event_types.length > 0) {
+        q.event_types = params.event_types.join(",");
+      }
+      if (params.unread_only) q.unread_only = "true";
+      const { data } = await apiClient.get<NotificationsPage>(
+        "/notifications",
+        { params: q },
+      );
+      return data;
+    },
+    // Empty / absent token means the server has no more pages.
+    getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
     staleTime: 15_000,
     refetchInterval: 60_000,
   });

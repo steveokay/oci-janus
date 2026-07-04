@@ -32,7 +32,7 @@ import {
   NOTIFICATION_EVENT_TYPES,
   loadLastSeen,
   useMarkAllSeen,
-  useNotifications,
+  useInfiniteNotifications,
   type Notification,
   type NotificationEventType,
 } from "@/lib/api/notifications";
@@ -153,45 +153,68 @@ function ActivityPage(): React.ReactElement {
   // memo landed.
   const since = React.useMemo(() => rangeToSince(range), [range]);
 
-  // DSGN-016 — chip selection hydrates from the URL `event_types` search
-  // param so deep-links from the notifications-bell footer ("Failures
-  // only") land with the right chips already pressed. We only consume
-  // the param at mount time; subsequent chip toggles drive local state
-  // only (we keep the URL clean to match the existing range-chip pattern
-  // which similarly omits the default state from the URL).
-  const initialEventTypes = React.useMemo(
+  // DSGN-016 — chip selection is now URL-driven (the `event_types` search
+  // param is the single source of truth), mirroring the range chip above.
+  // Reading from the URL means a refresh / share / bell deep-link ("Failures
+  // only") reproduces the operator's exact filter set, and every toggle
+  // writes back to the URL so it survives navigation. Derived (not local
+  // state) so the two never drift.
+  const selected = React.useMemo(
     () => parseEventTypesParam(search.event_types),
-    // Hydrate once on first render; later URL changes from the bell
-    // shouldn't clobber an in-progress filter edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-  const [selected, setSelected] = React.useState<Set<NotificationEventType>>(
-    initialEventTypes,
+    [search.event_types],
   );
   const eventTypes = selected.size > 0 ? Array.from(selected) : undefined;
   // S-MAINT-1 P5: persisted page size, "notifications" key.
   const [pageSize, setPageSize] = usePageSize("notifications");
-  const { data, isLoading, isError, error, refetch, isFetching } = useNotifications({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isFetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteNotifications({
     limit: pageSize,
     event_types: eventTypes,
     since,
   });
+  // Flatten the paginated response into a single list for rendering; the
+  // "Load older" button appends pages via the BFF's next_page_token cursor.
+  const notifications = React.useMemo(
+    () => data?.pages.flatMap((p) => p.notifications) ?? [],
+    [data],
+  );
   const lastSeenAt = React.useMemo(
     () => loadLastSeen(tenantID),
-    // re-read when data refreshes so a new "Mark all seen" registers
+    // re-read when the data refreshes so a new "Mark all seen" registers
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tenantID, data],
   );
   const markAllSeen = useMarkAllSeen(tenantID);
 
-  function toggleType(t: NotificationEventType): void {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
-      return next;
+  // writeEventTypes persists the chip selection to the URL (comma-joined),
+  // clearing the param when the set is empty so the URL stays tidy for the
+  // implicit "all types" default — same replace:true pattern setRange uses.
+  function writeEventTypes(next: Set<NotificationEventType>): void {
+    const joined = Array.from(next).join(",");
+    void navigate({
+      to: "/activity",
+      search: (prev) => ({
+        ...prev,
+        event_types: joined.length > 0 ? joined : undefined,
+      }),
+      replace: true,
     });
+  }
+
+  function toggleType(t: NotificationEventType): void {
+    const next = new Set(selected);
+    if (next.has(t)) next.delete(t);
+    else next.add(t);
+    writeEventTypes(next);
   }
 
   // setRange updates the URL search param so a refresh / share preserves
@@ -295,7 +318,7 @@ function ActivityPage(): React.ReactElement {
           {selected.size > 0 ? (
             <button
               type="button"
-              onClick={() => setSelected(new Set())}
+              onClick={() => writeEventTypes(new Set())}
               className="rounded-full border border-transparent px-2 py-1 text-xs text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)]"
             >
               Clear
@@ -332,8 +355,10 @@ function ActivityPage(): React.ReactElement {
               </CardDescription>
               {data ? (
                 <span className="text-xs text-[var(--color-fg-muted)]">
-                  {data.notifications.length}{" "}
-                  {data.notifications.length === 1 ? "event" : "events"}
+                  {notifications.length}{" "}
+                  {notifications.length === 1 ? "event" : "events"}
+                  {/* Trailing "+" hints there are older pages to load. */}
+                  {hasNextPage ? "+" : ""}
                 </span>
               ) : null}
             </div>
@@ -341,7 +366,7 @@ function ActivityPage(): React.ReactElement {
           <CardContent>
             {isLoading || (isFetching && !data) ? (
               <SkeletonRows />
-            ) : !data || data.notifications.length === 0 ? (
+            ) : notifications.length === 0 ? (
               <EmptyState
                 icon={<Inbox className="size-5" />}
                 title={
@@ -362,18 +387,36 @@ function ActivityPage(): React.ReactElement {
                 }
               />
             ) : (
-              <ol className="space-y-3">
-                {data.notifications.map((n) => (
-                  <ActivityRow
-                    key={n.event_id}
-                    n={n}
-                    isUnread={
-                      !lastSeenAt ||
-                      Date.parse(n.occurred_at) > Date.parse(lastSeenAt)
-                    }
-                  />
-                ))}
-              </ol>
+              <>
+                <ol className="space-y-3">
+                  {notifications.map((n) => (
+                    <ActivityRow
+                      key={n.event_id}
+                      n={n}
+                      isUnread={
+                        !lastSeenAt ||
+                        Date.parse(n.occurred_at) > Date.parse(lastSeenAt)
+                      }
+                    />
+                  ))}
+                </ol>
+                {/* Cursor-driven pagination — the feed used to be stuck at a
+                    single page. "Load older" appends the next page via the
+                    BFF's next_page_token until the cursor runs out. */}
+                {hasNextPage ? (
+                  <div className="mt-4 flex justify-center">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void fetchNextPage()}
+                      loading={isFetchingNextPage}
+                      disabled={isFetchingNextPage}
+                    >
+                      Load older events
+                    </Button>
+                  </div>
+                ) : null}
+              </>
             )}
           </CardContent>
         </Card>
