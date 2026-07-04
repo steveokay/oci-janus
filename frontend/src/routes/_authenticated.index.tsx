@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Boxes, ArrowDownToLine, ShieldAlert } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Boxes, ArrowDownToLine, ShieldAlert, RefreshCw } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { StorageCard } from "@/components/dashboard/storage-card";
 import { HealthCard } from "@/components/dashboard/health-card";
@@ -10,11 +11,13 @@ import { StorageBreakdownCard } from "@/components/dashboard/storage-breakdown-c
 import { FirstStepsStrip } from "@/components/dashboard/first-steps-strip";
 import { ErrorState } from "@/components/ui/error-state";
 import { SeverityBar } from "@/components/security/severity-bar";
+import { Button } from "@/components/ui/button";
 import { useStats } from "@/lib/api/stats";
 import { useMe } from "@/lib/api/me";
 import { useWorkspace } from "@/lib/api/workspace";
-import { formatCompactNumber } from "@/lib/format";
+import { formatCompactNumber, formatRelativeDate } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth/store";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/")({
   component: DashboardHome,
@@ -23,9 +26,22 @@ export const Route = createFileRoute("/_authenticated/")({
 function DashboardHome(): React.ReactElement {
   const claims = useAuthStore((s) => s.claims);
   const { data: me, isLoading: meLoading } = useMe();
-  const { data, isLoading, isError, error, refetch } = useStats();
+  const { data, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } =
+    useStats();
   const { data: workspace } = useWorkspace();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // Manual refresh — the dashboard auto-polls every 30s, but operators often
+  // want an immediate re-pull after an action (push, scan, GC). Invalidate the
+  // dashboard query-key prefixes so every panel refetches together, not just
+  // the stats tiles. The `["stats"]` prefix also covers the storage-breakdown
+  // query (keyed `["stats","storage"]`); `["analytics"]` covers the two
+  // analytics charts.
+  const handleRefresh = React.useCallback((): void => {
+    void queryClient.invalidateQueries({ queryKey: ["stats"] });
+    void queryClient.invalidateQueries({ queryKey: ["analytics"] });
+  }, [queryClient]);
 
   // REDESIGN-001 Phase 4.3 — first-run onboarding auto-redirect.
   //
@@ -125,9 +141,33 @@ function DashboardHome(): React.ReactElement {
   return (
     <div className="space-y-8">
       <header className="flex flex-col gap-1">
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-          Overview
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+            Overview
+          </p>
+          {/* Manual refresh control — spins while any dashboard query is in
+              flight and surfaces when the data was last pulled. */}
+          <div className="flex items-center gap-2">
+            {dataUpdatedAt > 0 ? (
+              <span className="hidden text-xs text-[var(--color-fg-subtle)] sm:inline">
+                Updated{" "}
+                {formatRelativeDate(new Date(dataUpdatedAt).toISOString())}
+              </span>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleRefresh}
+              disabled={isFetching}
+              aria-label="Refresh dashboard"
+              title="Refresh dashboard"
+            >
+              <RefreshCw
+                className={cn("size-4", isFetching && "animate-spin")}
+              />
+            </Button>
+          </div>
+        </div>
         <h1 className="font-display text-3xl font-medium tracking-tight">
           {isServiceAccount ? (
             <>Authenticated as {saName}.</>
