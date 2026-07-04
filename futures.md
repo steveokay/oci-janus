@@ -1247,6 +1247,14 @@ Docker v2 manifest list shapes are well-defined.
 - **Recommendation:** next pickup after REDESIGN-001 v2.0.0 ships.
 
 ### RED-FU-016 — SAML library upgrade to v0.5.x (REDESIGN-001 Phase 6.8 descoped) — **LOW PRIORITY**
+
+> **2026-07-04 update:** the *security* half of this item is retired — the
+> REM-016 sweep (PR #256) bumped `russellhaering/goxmldsig` v1.3.0 → v1.6.0,
+> fixing **GO-2026-4753** (XML-dsig signature bypass; logged as SEC-076,
+> RESOLVED) while staying on `crewjam/saml` v0.4.14. Trigger (a) below has
+> therefore already fired and been handled at the dependency layer; what
+> remains is purely the v0.5.x API-ergonomics upgrade.
+
 - **Why:** Originally scoped as REDESIGN-001 Phase 6.8 (semver-breaking
   upgrade from `crewjam/saml` v0.4 → v0.5). Descoped 2026-06-30 — no
   forcing function on v0.4. Enterprise SAML self-hosters are a thin
