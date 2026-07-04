@@ -28,7 +28,7 @@
 
 **Remaining:** calendar-only — soak `v2.0.0-rc1` until **≥ 2026-07-07**, then tag `v2.0.0` + cut the GitHub release. Once `v2.0.0` is tagged, delete this entry.
 
-**Tail SEC follow-ups (non-blocking, can be picked up alongside other work):** SEC-051 (LOW, pre-migration audit rows silently unverifiable), SEC-052 (INFO, `canonicaliseJSON` NaN/Inf/>2^53 edge cases), SEC-053/054 (spec-lint hardening — annotation allowlist + tighter mTLS-validate regex), 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment with SAML branch, **SEC-075 (INFO, pre-existing — surfaced during PR #250 review)** — username/password login (`AuthenticateUser`) uses kind-agnostic `GetByUsername`; the `GetHumanByUsername` helper its docstring names doesn't exist, so the sole barrier on the password path is the empty SA `password_hash` (not exploitable today). Fix: add a `kind='human'`-guarded `GetHumanByUsername` (or an explicit post-lookup kind check) + correct the docstring. See [`security.md`](security.md).
+**Tail SEC follow-ups — SHIPPED 2026-07-04:** SEC-051/052 (#265), SEC-053/054 (#264), SEC-075 + the 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment (#263), SEC-071/072/073 + `--to-version` bounds + signal-aware cancel (#262). Resolution rows in [`status.md`](status.md); full triage in [`security.md`](security.md). **Residual OPEN:** SEC-074 (INFO, plaintext buffer zeroing — accepted as best-effort defense-in-depth, consistent with the `libs/crypto/aes` posture, not a regression).
 
 **Deferred to `futures.md`:** RED-FU-016 (SAML v0.5.x bump, LOW), RED-FU-017 (audit checkpoint signing, LOW), RED-FU-018 (scanner in-process sandbox, PARKED). *(RED-FU-015 KEK rotation tool **SHIPPED 2026-07-03**, PR #249 — resolution row in [`status.md`](status.md); review follow-ups tracked below.)*
 
@@ -38,25 +38,13 @@
 
 ### RED-FU-015 follow-ups — KEK rotation tool post-merge hardening
 
-**Status:** OPEN (non-blocking). RED-FU-015 shipped in PR #249 (`feat/red-fu-015-kek-rotation`); resolution row in [`status.md`](status.md). The pre-PR review batch (security + code-review + qa) returned **PASS / APPROVE with no blockers**. The items below are the accepted should-fix follow-ups — none block merge.
+**Status:** OPEN (non-blocking; mostly cleared). RED-FU-015 shipped in PR #249; the bulk of the should-fix follow-ups shipped in **PR #262 (2026-07-04)**: SEC-071/072/073 (lock-free verify, stdout/stderr split, equal-key guard), code-review #3 (`--to-version` bounds), code-review #5 (`signal.NotifyContext(SIGINT,SIGTERM)`), and the QA flag-plumbing test gaps (`cli_test.go` covering mutual-exclusion / bounds / bad-missing-equal keys / missing DSN / `--generate`, plus `Rekey`/`OnNewKey` empty+nil ciphertext and a `selectSQL` FOR-UPDATE lock-clause assertion). Resolution rows in [`status.md`](status.md).
 
-**✅ RESOLVED in PR #249 (code-review #1 — idempotency / resumability):** the sweep now skips cells that already decrypt under the NEW key (`rekey.OnNewKey`) before attempting re-encryption, so re-running `rotate` is a safe no-op and a partially-completed multi-table rotation (e.g. auth's `global_sso_config` committed, `auth_providers` transiently failed) resumes cleanly instead of stranding. Covered by `TestSweep_RotateIdempotent`; runbook step 4 documents the re-run guarantee.
-
-**Security (logged in [`security.md`](security.md), all LOW/INFO):**
-- SEC-071 (LOW): `--verify` reuses the `FOR UPDATE` select → needless row locks on a read-only check (`libs/crypto/rekey/sweep.go`). Give verify a lock-free select.
-- SEC-072 (INFO): `--generate` prints the KEK to stdout — add a stderr caveat + runbook note against CI-log capture.
-- SEC-073 (INFO): no `KEK_OLD_HEX != KEK_NEW_HEX` guard → an equal-key misconfig reports clean success while the retired key stays live. Add a constant-time inequality check in `RunCLI`.
-- SEC-074 (INFO): plaintext buffer in `Rekey` not zeroed (consistent with existing `libs/crypto/aes` posture — not a regression).
-
-**Code-review minors:**
-- #2 (latent): `EncodingHexText` NULL cell would fail to scan in a *multi-column* table (`string` can't take SQL NULL); safe today because webhook's hex-TEXT column is the sole column in its spec. Use `*string`/`pgtype.Text` before adding a second hex-TEXT column.
-- #3: `--to-version` has no bounds check — `int16(*toVersion)` wraps/truncates >32767 and accepts negatives. Validate `>0 && <=32767` → `ValidationError`.
-- #5: CLI path uses `context.Background()` with no `signal.NotifyContext` / deadline — a long sweep isn't Ctrl-C-cancellable (blast radius one table given atomicity).
-- #6: rotate path opens the pool via `pgxpool.New(os.Getenv(dsn))` directly, bypassing `loader.DBConfig`, so the §11 / SEC-022 `sslmode=disable` rejection + pool tuning don't apply. Deliberately mirrors the `bootstrap` subcommand pattern (consistent), but the sslmode guard is silently skipped for rotations.
-
-**QA test-gap follow-ups (thin `RunCLI` flag-plumbing layer; crypto core + engine + per-service encodings are well covered):** `Rekey`/`OnNewKey` empty+nil ciphertext (spec §8); `--dry-run` CLI wiring + output; `--generate` branch; `--to-version` override branch; mutually-exclusive `--dry-run && --verify` validation; `RunCLI` key/DSN validation-error mapping; legacy-table present-but-empty.
-
-**CI note:** PR #249's `lint` jobs (metadata/core/libs/auth/audit) are red on **pre-existing main-rot (REM-020)** — every failing file is untouched by this PR; the clean modules (proxy, webhook) lint green. `test`/`build`/`spec-lint`/`security`/`tidy-check`/`gitleaks`/`GitGuardian` all pass. Clearing that rot is tracked under REM-020, not this item.
+**Still OPEN (all LOW/INFO, non-blocking):**
+- **SEC-074 (INFO):** plaintext buffer in `Rekey` not zeroed. Accepted as best-effort defense-in-depth — consistent with the existing `libs/crypto/aes` posture, not a regression. Left open deliberately (Go GC makes true wiping unreliable).
+- **Code-review #2 (latent):** `EncodingHexText` NULL cell would fail to scan in a *multi-column* table (`string` can't take SQL NULL); safe today because webhook's hex-TEXT column is the sole column in its spec. Use `*string`/`pgtype.Text` before adding a second hex-TEXT column.
+- **Code-review #6:** rotate path opens the pool via `pgxpool.New(os.Getenv(dsn))` directly, bypassing `loader.DBConfig`, so the §11 / SEC-022 `sslmode=disable` rejection + pool tuning don't apply. Deliberately mirrors the `bootstrap` subcommand pattern, but the sslmode guard is silently skipped for rotations.
+- **Audit VerifyChain unit-coverage gap (from #265 QA review):** the `VerifyChain` walk (incl. the SEC-051 pre-chain counting) is exercised only in the Docker-gated integration lane; the standard unit lane covers `canonicaliseJSON` only. A future refactor extracting the walk to accept an in-memory row slice would allow pure unit coverage.
 
 ---
 
