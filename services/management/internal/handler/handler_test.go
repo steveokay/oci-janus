@@ -23,6 +23,7 @@ import (
 
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
@@ -2126,6 +2127,34 @@ func TestStorageBreakdown_adminToken_returns200(t *testing.T) {
 	}
 	if body.Repositories[0].PercentOfTenant < 66.66 || body.Repositories[0].PercentOfTenant > 66.67 {
 		t.Errorf("percent[0]: got %v, want ~66.667", body.Repositories[0].PercentOfTenant)
+	}
+	// REM-013 gap 3: the default test env wires no GC client (h.gc == nil), so
+	// the savings read is skipped and the field falls back to 0 without panic.
+	if body.RetentionReclaimedBytes != 0 {
+		t.Errorf("retention_reclaimed_bytes with no GC client: got %d, want 0", body.RetentionReclaimedBytes)
+	}
+}
+
+// TestStorageBreakdown_withGCClient_surfacesRetentionSavings verifies that when
+// the GC client is wired (WithGCClient), the storage breakdown carries the
+// tenant's lifetime retention savings from GCService.GetTenantRetentionSavings
+// (REM-013 gap 3).
+func TestStorageBreakdown_withGCClient_surfacesRetentionSavings(t *testing.T) {
+	t.Cleanup(func() { storageBreakdownOverride = nil })
+	env, fakeGC := newGCEnv(t)
+	fakeGC.getSavingsReturn = &gcv1.TenantRetentionSavings{ReclaimedBytes: 4096, ManifestsDeleted: 8, RunCount: 2}
+
+	resp := env.get(t, "/api/v1/stats/storage", platformAdminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.StorageBreakdownResponse
+	decodeJSON(t, resp, &body)
+	if body.RetentionReclaimedBytes != 4096 {
+		t.Errorf("retention_reclaimed_bytes: got %d, want 4096", body.RetentionReclaimedBytes)
+	}
+	if fakeGC.lastGetSavingsReq == nil {
+		t.Error("expected GetTenantRetentionSavings to be called")
 	}
 }
 

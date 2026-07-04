@@ -57,6 +57,13 @@ service GCService {
   // a repo admin poll their own retention sweeps without needing the
   // platform-admin marker required by ListRuns.
   rpc GetRetentionRunStatus(GetRetentionRunStatusRequest) returns (RetentionRunSummary);
+
+  // GetTenantRetentionSavings returns lifetime bytes reclaimed by retention
+  // for a tenant — the SUM of bytes_freed over succeeded retention /
+  // retention_grace gc_runs. Read-only aggregate that feeds the dashboard
+  // storage-breakdown card so operators can see how much retention has
+  // actually saved (REM-013 gap 3).
+  rpc GetTenantRetentionSavings(GetTenantRetentionSavingsRequest) returns (TenantRetentionSavings);
 }
 
 // GCStatus describes the latest GC run summary and the next scheduled
@@ -214,4 +221,21 @@ message RetentionRunSummary {
   int64                     bytes_freed         = 11; // populated when mode = retention_grace
   string                    error_message       = 12;
   string                    triggered_by        = 13;
+}
+
+// GetTenantRetentionSavingsRequest asks for the lifetime retention savings
+// aggregate for a single tenant (REM-013 gap 3).
+message GetTenantRetentionSavingsRequest {
+  string tenant_id = 1;
+}
+
+// TenantRetentionSavings is the aggregate over a tenant's succeeded
+// retention-mode gc_runs. All counters are zero (and last_run_at nil) when the
+// tenant has never had a retention sweep complete.
+message TenantRetentionSavings {
+  string                    tenant_id         = 1;
+  int64                     reclaimed_bytes   = 2; // SUM(bytes_freed) over succeeded retention runs
+  int64                     manifests_deleted = 3; // SUM(manifests_deleted)
+  int64                     run_count         = 4; // succeeded retention runs counted — includes both 'retention' (mark-only, 0-byte) and 'retention_grace' (hard-delete) passes
+  google.protobuf.Timestamp last_run_at       = 5; // completed_at of the most recent counted run (nil if none)
 }

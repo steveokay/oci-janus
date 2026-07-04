@@ -60,21 +60,6 @@
 
 ---
 
-### REM-013 — Retention surface backend gaps
-
-**Affects:** `services/metadata` (proto + repo + handler), `services/management` (BFF).
-**Status:** OPEN — frontend (S11 slices 3 + 4) is partially shipped. Three FE surfaces are blocked by missing backend.
-
-| Gap | What's missing | Blocks FE |
-|---|---|---|
-| 1 | `manifests.retention_pending_delete_at` is exposed via `GetManifest` but not via the `ListTags` projection, so the Tags tab can't render pending-delete pills without a per-row GET fan-out. Needs a column added to the Tag proto (or a parallel `list_tags_with_retention` RPC). | "Pending delete in 24h" pills on the Tags tab |
-| 2 | No `retention_runs` table — every retention evaluation is fire-and-forget today. A run-history table would let the dashboard show "we considered X tags, kept Y, graced Z, hard-deleted W per rule". | Per-repo Retention "Run history" panel |
-| 3 | Dashboard storage breakdown doesn't expose the bytes-reclaimed-via-retention column. Needs a `GetTenantRetentionSavings(tenant_id)` aggregation RPC + UI plumbing. | Dashboard storage-breakdown "Retention" column |
-
-**Recommended order:** Gap 1 (smallest) → Gap 2 → Gap 3. Each unblocks one FE surface independently.
-
----
-
 ### REM-014 — Lint findings unmasked by Go 1.25 toolchain upgrade
 
 **Surfaced:** 2026-06-28 after PR #156 (`fix(ci): goinstall golangci-lint`) made golangci-lint reachable past its typecheck stage. Prior to #156 the action's bundled Go 1.24 binary couldn't parse Go 1.25 source, so every linter was short-circuited; PR #156 fixed that, which unmasked a real backlog.
@@ -217,12 +202,12 @@ The full audit log lives in [`security.md`](security.md). Only items that remain
 
 ## Partial / blocked surfaces
 
-### S11 Retention slices 3 + 4 (PARTIAL)
+### S11 Retention slices 3 + 4 (✅ DONE — REM-013 closed 2026-07-03)
 
-- **Slice 3** (FE-API-040): "Run now" trigger + 5s status polling on the Retention tab. **PARTIAL** — pending-delete pills on Tags tab + per-repo Run history panel deferred (blocked by REM-013 gaps 1 + 2).
-- **Slice 4** (FE-API-039): org-default Retention surface on new `/orgs/$org/settings` route + cross-link from inherited per-repo policies. **PARTIAL** — dashboard storage-breakdown "Retention" column deferred (blocked by REM-013 gap 3).
+- **Slice 3** (FE-API-040): "Run now" trigger + 5s status polling on the Retention tab, pending-delete pills on Tags tab, and the per-repo Run history panel — all **live** (REM-013 gaps 1 + 2 shipped).
+- **Slice 4** (FE-API-039): org-default Retention surface + cross-link from inherited per-repo policies **live**; the dashboard storage-breakdown "Reclaimed via retention" savings stat shipped as REM-013 gap 3 (PR #253).
 
-The FE work for both slices is wired; only the backend gaps in REM-013 prevent the surfaces from rendering useful data.
+All retention FE surfaces now render real data end-to-end. The only outstanding retention item is the optional, non-FE-blocking per-rule "considered/kept/graced/hard-deleted" run breakdown (parked — see the REM-013 close-out row in `status.md`).
 
 ---
 

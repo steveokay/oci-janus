@@ -32,6 +32,11 @@ export interface StorageBreakdownResponse {
   // (lazy-created on first push). The dashboard card renders "used / total"
   // when this is set, falling back to "used" alone when it's 0.
   tenant_storage_quota_bytes?: number;
+  // REM-013 gap 3 — lifetime bytes reclaimed via retention for this tenant
+  // (SUM of bytes_freed over succeeded retention gc_runs). 0 when the GC
+  // service is not wired or no retention has ever run; the card renders 0
+  // as "—".
+  retention_reclaimed_bytes?: number;
   repositories: RepositoryStorageEntry[];
 }
 

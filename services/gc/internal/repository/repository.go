@@ -447,6 +447,47 @@ func (r *Repository) ClaimNextQueued(ctx context.Context) (*GCRun, error) {
 	return rec, nil
 }
 
+// RetentionSavings is the lifetime aggregate returned by
+// GetTenantRetentionSavings. LastRunAt is nil when the tenant has never had a
+// retention sweep complete.
+type RetentionSavings struct {
+	ReclaimedBytes   int64
+	ManifestsDeleted int64
+	RunCount         int64
+	LastRunAt        *time.Time
+}
+
+// GetTenantRetentionSavings sums bytes_freed + manifests_deleted over the
+// tenant's *succeeded* retention-mode runs, and reports how many such runs
+// were counted plus when the most recent one finished. Failed/queued/running
+// runs and non-retention modes ('dry-run','manifests','blobs','full') are
+// excluded so the number reflects work that actually reclaimed storage.
+//
+// The real hard-delete (and thus the non-zero bytes_freed) happens in the
+// 'retention_grace' pass, but both retention modes are summed so callers see a
+// stable lifetime figure regardless of which pass a given run recorded bytes
+// in. COALESCE keeps the counters at 0 (rather than NULL) when the tenant has
+// no matching rows; MAX(completed_at) is left nullable and scanned into a
+// *time.Time. (REM-013 gap 3.)
+func (r *Repository) GetTenantRetentionSavings(ctx context.Context, tenantID uuid.UUID) (RetentionSavings, error) {
+	var s RetentionSavings
+	err := r.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(bytes_freed), 0),
+		        COALESCE(SUM(manifests_deleted), 0),
+		        COUNT(*),
+		        MAX(completed_at)
+		   FROM gc_runs
+		  WHERE tenant_id = $1
+		    AND mode IN ('retention', 'retention_grace')
+		    AND status = 'succeeded'`,
+		tenantID,
+	).Scan(&s.ReclaimedBytes, &s.ManifestsDeleted, &s.RunCount, &s.LastRunAt)
+	if err != nil {
+		return RetentionSavings{}, fmt.Errorf("GetTenantRetentionSavings: %w", err)
+	}
+	return s, nil
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

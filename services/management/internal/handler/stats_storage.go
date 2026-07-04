@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
@@ -63,6 +64,13 @@ type RepositoryStorageEntry struct {
 type StorageBreakdownResponse struct {
 	TenantStorageUsedBytes  int64                    `json:"tenant_storage_used_bytes"`
 	TenantStorageQuotaBytes int64                    `json:"tenant_storage_quota_bytes"`
+	// RetentionReclaimedBytes (REM-013 gap 3) is the lifetime bytes reclaimed
+	// by retention for this tenant — SUM(bytes_freed) over succeeded retention
+	// gc_runs. It lets the dashboard card show how much retention has actually
+	// saved, complementing the per-repo policy column. Zero when the GC client
+	// is not wired (WithGCClient omitted) or no retention has ever run; the FE
+	// renders 0 as "—".
+	RetentionReclaimedBytes int64                    `json:"retention_reclaimed_bytes"`
 	Repositories            []RepositoryStorageEntry `json:"repositories"`
 }
 
@@ -94,11 +102,29 @@ func (h *Handler) handleGetStorageBreakdown(w http.ResponseWriter, r *http.Reque
 		slog.WarnContext(r.Context(), "GetTenantQuotaUsage (storage breakdown)", "err", quotaErr, "tenant_id", tenantID)
 	}
 
+	// REM-013 gap 3: pair the breakdown with lifetime retention savings so the
+	// dashboard card can render "reclaimed via retention". The GC client is
+	// optional (WithGCClient) — the management BFF mounts gc routes only when
+	// its gRPC addr is set — so guard the nil client and, on any error, fall
+	// back to 0 (the FE renders 0 as "—"). Never fail the breakdown on this
+	// read: it's a decorative stat, not the primary payload.
+	var retentionReclaimedBytes int64
+	if h.gc != nil {
+		if sv, svErr := h.gc.GetTenantRetentionSavings(r.Context(), &gcv1.GetTenantRetentionSavingsRequest{
+			TenantId: tenantID,
+		}); svErr == nil {
+			retentionReclaimedBytes = sv.GetReclaimedBytes()
+		} else {
+			slog.WarnContext(r.Context(), "GetTenantRetentionSavings (storage breakdown)", "err", svErr, "tenant_id", tenantID)
+		}
+	}
+
 	// Always emit a non-nil slice on the wire so the dashboard's serde has
 	// a stable shape even for a zero-repo tenant.
 	out := StorageBreakdownResponse{
 		TenantStorageUsedBytes:  resp.GetTenantStorageUsedBytes(),
 		TenantStorageQuotaBytes: tenantQuotaBytes,
+		RetentionReclaimedBytes: retentionReclaimedBytes,
 		Repositories:            make([]RepositoryStorageEntry, 0, len(resp.GetRepositories())),
 	}
 	for _, e := range resp.GetRepositories() {

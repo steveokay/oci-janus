@@ -43,6 +43,8 @@ type Repository interface {
 	// FE-API-040 — retention executor surface.
 	CreateRetentionRun(ctx context.Context, mode string, tenantID, repoID uuid.UUID, triggeredBy string) (*repository.GCRun, error)
 	GetRunByID(ctx context.Context, runID, tenantID uuid.UUID) (*repository.GCRun, error)
+	// REM-013 gap 3 — lifetime retention savings aggregate for the tenant.
+	GetTenantRetentionSavings(ctx context.Context, tenantID uuid.UUID) (repository.RetentionSavings, error)
 }
 
 // validModes mirrors the allowlist from the GC_MODE config flag.
@@ -455,6 +457,43 @@ func (h *GRPCHandler) GetRetentionRunStatus(ctx context.Context, req *gcv1.GetRe
 	// rows.
 	if rec.RepoID == uuid.Nil {
 		out.RepoId = ""
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// GetTenantRetentionSavings (REM-013 gap 3)
+// ---------------------------------------------------------------------------
+
+// GetTenantRetentionSavings returns the tenant's lifetime retention savings
+// aggregate for the dashboard storage-breakdown card. Read-only; a tenant with
+// no completed retention runs simply yields all-zero counters and a nil
+// last_run_at, which the BFF/dashboard render as "no savings yet".
+func (h *GRPCHandler) GetTenantRetentionSavings(ctx context.Context, req *gcv1.GetTenantRetentionSavingsRequest) (*gcv1.TenantRetentionSavings, error) {
+	if h.repo == nil {
+		return nil, status.Error(codes.FailedPrecondition, "gc repository not configured")
+	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+
+	sv, err := h.repo.GetTenantRetentionSavings(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get retention savings: %v", err)
+	}
+
+	out := &gcv1.TenantRetentionSavings{
+		TenantId:         tenantID.String(),
+		ReclaimedBytes:   sv.ReclaimedBytes,
+		ManifestsDeleted: sv.ManifestsDeleted,
+		RunCount:         sv.RunCount,
+	}
+	if sv.LastRunAt != nil {
+		out.LastRunAt = timestamppb.New(*sv.LastRunAt)
 	}
 	return out, nil
 }

@@ -31,11 +31,12 @@ import (
 const _ = grpc.SupportPackageIsVersion8
 
 const (
-	GCService_GetStatus_FullMethodName             = "/registry.gc.v1.GCService/GetStatus"
-	GCService_RunNow_FullMethodName                = "/registry.gc.v1.GCService/RunNow"
-	GCService_ListRuns_FullMethodName              = "/registry.gc.v1.GCService/ListRuns"
-	GCService_TriggerRetentionRun_FullMethodName   = "/registry.gc.v1.GCService/TriggerRetentionRun"
-	GCService_GetRetentionRunStatus_FullMethodName = "/registry.gc.v1.GCService/GetRetentionRunStatus"
+	GCService_GetStatus_FullMethodName                 = "/registry.gc.v1.GCService/GetStatus"
+	GCService_RunNow_FullMethodName                    = "/registry.gc.v1.GCService/RunNow"
+	GCService_ListRuns_FullMethodName                  = "/registry.gc.v1.GCService/ListRuns"
+	GCService_TriggerRetentionRun_FullMethodName       = "/registry.gc.v1.GCService/TriggerRetentionRun"
+	GCService_GetRetentionRunStatus_FullMethodName     = "/registry.gc.v1.GCService/GetRetentionRunStatus"
+	GCService_GetTenantRetentionSavings_FullMethodName = "/registry.gc.v1.GCService/GetTenantRetentionSavings"
 )
 
 // GCServiceClient is the client API for GCService service.
@@ -76,6 +77,12 @@ type GCServiceClient interface {
 	// a repo admin poll their own retention sweeps without needing the
 	// platform-admin marker required by ListRuns.
 	GetRetentionRunStatus(ctx context.Context, in *GetRetentionRunStatusRequest, opts ...grpc.CallOption) (*RetentionRunSummary, error)
+	// GetTenantRetentionSavings returns lifetime bytes reclaimed by retention
+	// for a tenant — the SUM of bytes_freed over succeeded retention /
+	// retention_grace gc_runs. Read-only aggregate that feeds the dashboard
+	// storage-breakdown card so operators can see how much retention has
+	// actually saved (REM-013 gap 3).
+	GetTenantRetentionSavings(ctx context.Context, in *GetTenantRetentionSavingsRequest, opts ...grpc.CallOption) (*TenantRetentionSavings, error)
 }
 
 type gCServiceClient struct {
@@ -136,6 +143,16 @@ func (c *gCServiceClient) GetRetentionRunStatus(ctx context.Context, in *GetRete
 	return out, nil
 }
 
+func (c *gCServiceClient) GetTenantRetentionSavings(ctx context.Context, in *GetTenantRetentionSavingsRequest, opts ...grpc.CallOption) (*TenantRetentionSavings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantRetentionSavings)
+	err := c.cc.Invoke(ctx, GCService_GetTenantRetentionSavings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GCServiceServer is the server API for GCService service.
 // All implementations should embed UnimplementedGCServiceServer
 // for forward compatibility
@@ -174,6 +191,12 @@ type GCServiceServer interface {
 	// a repo admin poll their own retention sweeps without needing the
 	// platform-admin marker required by ListRuns.
 	GetRetentionRunStatus(context.Context, *GetRetentionRunStatusRequest) (*RetentionRunSummary, error)
+	// GetTenantRetentionSavings returns lifetime bytes reclaimed by retention
+	// for a tenant — the SUM of bytes_freed over succeeded retention /
+	// retention_grace gc_runs. Read-only aggregate that feeds the dashboard
+	// storage-breakdown card so operators can see how much retention has
+	// actually saved (REM-013 gap 3).
+	GetTenantRetentionSavings(context.Context, *GetTenantRetentionSavingsRequest) (*TenantRetentionSavings, error)
 }
 
 // UnimplementedGCServiceServer should be embedded to have forward compatible implementations.
@@ -194,6 +217,9 @@ func (UnimplementedGCServiceServer) TriggerRetentionRun(context.Context, *Trigge
 }
 func (UnimplementedGCServiceServer) GetRetentionRunStatus(context.Context, *GetRetentionRunStatusRequest) (*RetentionRunSummary, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRetentionRunStatus not implemented")
+}
+func (UnimplementedGCServiceServer) GetTenantRetentionSavings(context.Context, *GetTenantRetentionSavingsRequest) (*TenantRetentionSavings, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTenantRetentionSavings not implemented")
 }
 
 // UnsafeGCServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -297,6 +323,24 @@ func _GCService_GetRetentionRunStatus_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GCService_GetTenantRetentionSavings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantRetentionSavingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GCServiceServer).GetTenantRetentionSavings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GCService_GetTenantRetentionSavings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GCServiceServer).GetTenantRetentionSavings(ctx, req.(*GetTenantRetentionSavingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GCService_ServiceDesc is the grpc.ServiceDesc for GCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -323,6 +367,10 @@ var GCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRetentionRunStatus",
 			Handler:    _GCService_GetRetentionRunStatus_Handler,
+		},
+		{
+			MethodName: "GetTenantRetentionSavings",
+			Handler:    _GCService_GetTenantRetentionSavings_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
