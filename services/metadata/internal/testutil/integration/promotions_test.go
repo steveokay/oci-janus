@@ -96,9 +96,9 @@ func TestPromoteTag_HappyPath(t *testing.T) {
 	tenantUUID := uuid.MustParse(devTenantID)
 	actor := uuid.New()
 	prom, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
-		TenantID:    tenantUUID,
-		SrcOrg:      seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:      seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		TenantID: tenantUUID,
+		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
 		ActorUserID: &actor,
 		Note:        "promote v1.0.0 to prod",
 	})
@@ -147,7 +147,7 @@ func TestPromoteTag_SourceMissing(t *testing.T) {
 	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: uuid.MustParse(devTenantID),
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: "does-not-exist",
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
 	})
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
@@ -165,7 +165,7 @@ func TestPromoteTag_DestRepoMissing(t *testing.T) {
 	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: uuid.MustParse(devTenantID),
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: "no-such-repo", DstTag: seed.dstTag,
+		DstOrg: seed.dstOrg, DstRepo: "no-such-repo", DstTag: seed.dstTag,
 	})
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
@@ -184,9 +184,9 @@ func TestPromoteTag_DestRepoMissing_CreateIfMissing(t *testing.T) {
 
 	tenantUUID := uuid.MustParse(devTenantID)
 	prom, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
-		TenantID:        tenantUUID,
-		SrcOrg:          seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:          seed.dstOrg, DstRepo: "fresh-dst-repo", DstTag: "v1",
+		TenantID: tenantUUID,
+		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg: seed.dstOrg, DstRepo: "fresh-dst-repo", DstTag: "v1",
 		CreateIfMissing: true,
 	})
 	if err != nil {
@@ -225,9 +225,9 @@ func TestPromoteTag_DestOrgMissing_CreateIfMissing(t *testing.T) {
 	seed := seedPromoteFixtures(t, repo, false)
 
 	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
-		TenantID:        uuid.MustParse(devTenantID),
-		SrcOrg:          seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:          "does-not-exist-org", DstRepo: "any-repo", DstTag: "v1",
+		TenantID: uuid.MustParse(devTenantID),
+		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg: "does-not-exist-org", DstRepo: "any-repo", DstTag: "v1",
 		CreateIfMissing: true,
 	})
 	if !errors.Is(err, repository.ErrNotFound) {
@@ -251,7 +251,7 @@ func TestPromoteTag_ImmutableDestExistingSameDigest(t *testing.T) {
 	if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: tenantUUID,
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
 	}); err != nil {
 		t.Fatalf("first PromoteTag: %v", err)
 	}
@@ -264,8 +264,8 @@ func TestPromoteTag_ImmutableDestExistingSameDigest(t *testing.T) {
 	prom, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: tenantUUID,
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
-		Note:     "re-promotion for audit",
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		Note: "re-promotion for audit",
 	})
 	if err != nil {
 		t.Fatalf("re-PromoteTag: %v", err)
@@ -306,7 +306,7 @@ func TestPromoteTag_ImmutableDestExistingDifferentDigest(t *testing.T) {
 	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: tenantUUID,
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: "v1.0.0-existing",
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: "v1.0.0-existing",
 	})
 	if !errors.Is(err, repository.ErrImmutableTag) {
 		t.Fatalf("want ErrImmutableTag, got %v", err)
@@ -353,7 +353,7 @@ func TestPromoteTag_AtomicRollbackOnCancelledContext(t *testing.T) {
 	_, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: tenantUUID,
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
 	})
 	if err == nil {
 		t.Fatal("expected error on cancelled ctx, got nil")
@@ -386,7 +386,7 @@ func TestListPromotions_FilterByOrg(t *testing.T) {
 	if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 		TenantID: tenantUUID,
 		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-		DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: seed.dstTag,
 	}); err != nil {
 		t.Fatalf("PromoteTag: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestListPromotions_DefaultOrder(t *testing.T) {
 		if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
 			TenantID: tenantUUID,
 			SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
-			DstOrg:   seed.dstOrg, DstRepo: seed.dstRepo, DstTag: dstTag,
+			DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: dstTag,
 		}); err != nil {
 			t.Fatalf("PromoteTag(%q): %v", dstTag, err)
 		}

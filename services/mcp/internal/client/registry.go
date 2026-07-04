@@ -202,13 +202,13 @@ func (r *Registry) ListTags(ctx context.Context, org, repo string) ([]Tag, error
 
 // Manifest is the shape the get_manifest tool surfaces.
 type Manifest struct {
-	MediaType string          `json:"media_type"`
-	SchemaVersion int         `json:"schema_version,omitempty"`
-	Digest    string          `json:"digest"`
-	SizeBytes int64           `json:"size_bytes,omitempty"`
-	Layers    []ManifestLayer `json:"layers,omitempty"`
-	Config    *ManifestBlob   `json:"config,omitempty"`
-	Raw       json.RawMessage `json:"raw,omitempty"`
+	MediaType     string          `json:"media_type"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	Digest        string          `json:"digest"`
+	SizeBytes     int64           `json:"size_bytes,omitempty"`
+	Layers        []ManifestLayer `json:"layers,omitempty"`
+	Config        *ManifestBlob   `json:"config,omitempty"`
+	Raw           json.RawMessage `json:"raw,omitempty"`
 }
 
 // ManifestLayer is a single layer entry inside a manifest.
@@ -259,13 +259,13 @@ func (r *Registry) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, e
 
 // StaleKey is the shape the list_stale_keys tool surfaces.
 type StaleKey struct {
-	KeyID            string `json:"key_id"`
-	OwnerID          string `json:"owner_id"`
-	OwnerKind        string `json:"owner_kind"`
-	OwnerLabel       string `json:"owner_label,omitempty"`
-	LastUsedAt       string `json:"last_used_at,omitempty"`
-	AgeDays          int    `json:"age_days"`
-	SuggestedAction  string `json:"suggested_action,omitempty"`
+	KeyID           string `json:"key_id"`
+	OwnerID         string `json:"owner_id"`
+	OwnerKind       string `json:"owner_kind"`
+	OwnerLabel      string `json:"owner_label,omitempty"`
+	LastUsedAt      string `json:"last_used_at,omitempty"`
+	AgeDays         int    `json:"age_days"`
+	SuggestedAction string `json:"suggested_action,omitempty"`
 }
 
 // ListStaleKeys proxies GET /api/v1/access/review/stale.
@@ -340,13 +340,13 @@ func (r *Registry) ListAuditEvents(ctx context.Context, f AuditFilter) ([]AuditE
 // ScanReport is the shape the get_scan_report tool surfaces. Only the
 // summary fields — the LLM doesn't need every CVE row.
 type ScanReport struct {
-	Digest       string      `json:"digest"`
-	ScannedAt    string      `json:"scanned_at,omitempty"`
-	ScannerName  string      `json:"scanner_name,omitempty"`
-	Severities   SeverityMap `json:"severities"`
-	TopCVEs      []CVE       `json:"top_cves,omitempty"`
-	SBOMPresent  bool        `json:"sbom_present,omitempty"`
-	ReportURL    string      `json:"report_url,omitempty"`
+	Digest      string      `json:"digest"`
+	ScannedAt   string      `json:"scanned_at,omitempty"`
+	ScannerName string      `json:"scanner_name,omitempty"`
+	Severities  SeverityMap `json:"severities"`
+	TopCVEs     []CVE       `json:"top_cves,omitempty"`
+	SBOMPresent bool        `json:"sbom_present,omitempty"`
+	ReportURL   string      `json:"report_url,omitempty"`
 }
 
 // SeverityMap is the CVE counts by severity.
@@ -406,17 +406,17 @@ func (r *Registry) ListSignatures(ctx context.Context, org, repo, digest string)
 // FUT-020 having shipped — if the BFF returns 404, the tool falls back
 // to a human-readable "not deployed" message.
 type Promotion struct {
-	ID          string `json:"id"`
-	PromotedAt  string `json:"promoted_at"`
-	FromOrg     string `json:"from_org"`
-	FromRepo    string `json:"from_repo"`
-	FromTag     string `json:"from_tag"`
-	ToOrg       string `json:"to_org"`
-	ToRepo      string `json:"to_repo"`
-	ToTag       string `json:"to_tag"`
-	Digest      string `json:"digest"`
-	ActorID     string `json:"actor_id,omitempty"`
-	Note        string `json:"note,omitempty"`
+	ID         string `json:"id"`
+	PromotedAt string `json:"promoted_at"`
+	FromOrg    string `json:"from_org"`
+	FromRepo   string `json:"from_repo"`
+	FromTag    string `json:"from_tag"`
+	ToOrg      string `json:"to_org"`
+	ToRepo     string `json:"to_repo"`
+	ToTag      string `json:"to_tag"`
+	Digest     string `json:"digest"`
+	ActorID    string `json:"actor_id,omitempty"`
+	Note       string `json:"note,omitempty"`
 }
 
 // ListPromotions proxies GET /api/v1/repositories/{org}/{repo}/promotions.

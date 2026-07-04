@@ -81,8 +81,10 @@
 
 | Service | Status | PR | Notes |
 |---|---|---|---|
-| `services/tenant` | ✅ CLOSED | (this branch's PR) | gofmt/goimports drift in `internal/handler/{grpc,grpc_test}.go`; `continue-on-error: true` dropped on `ci-tenant.yml` `lint:` as proof. |
-| Remaining 12 services | OPEN | — | Each gets its own per-service cleanup PR + flag drop, per `feedback_review_pace.md` cadence. |
+| `services/tenant` | ✅ CLOSED | (earlier PR) | gofmt/goimports drift in `internal/handler/{grpc,grpc_test}.go`; `continue-on-error: true` dropped on `ci-tenant.yml` `lint:` as proof. |
+| `services/management` | ✅ CLOSED | PR #254 | gofmt sweep of the handler package (2 introduced by #253 + 3 pre-existing). |
+| `libs` + `auth` + `audit` + `core` + `mcp` + `metadata` | ✅ CLOSED | PR #255 (`chore/rem-014-gofmt-rot-sweep`) | 12 gofmt-drifted files + 6 real linter findings (gocritic elseif, gosimple S1005/S1009, staticcheck SA9003 empty branch, gosec G101 false-positive nolint'd, unparam nolint'd). This was the rot keeping main's `ci-core` lint red — which gated `build` → `conformance`, so OCI conformance had stopped running on main. Lint is blocking on every per-service workflow (no lint job carries `continue-on-error` anymore). |
+| Remaining (proxy, webhook, scanner, signer, storage, gateway, gc) | ✅ clean as of 2026-07-04 | — | `gofmt -l` clean repo-wide after the sweep; their CI lint was already green. Residual REM-014 surface = the `.golangci.yml` exclusions (gosec G115/G306 etc.) listed above, not per-service red. |
 
 ---
 

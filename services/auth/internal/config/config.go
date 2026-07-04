@@ -209,12 +209,10 @@ func validate(cfg *Config) error {
 		required["JWT_PRIVATE_KEY_B64"] = cfg.JWTPrivateKeyB64
 		required["JWT_PUBLIC_KEY_B64"] = cfg.JWTPublicKeyB64
 		required["JWT_KEY_ID"] = cfg.JWTKeyID
-	} else {
+	} else if cfg.JWTPrivateKeyB64 != "" || cfg.JWTPublicKeyB64 != "" || cfg.JWTKeyID != "" {
 		// Multi-key path: forbid the single-key envs so there is exactly
 		// one source of truth for the active signing material.
-		if cfg.JWTPrivateKeyB64 != "" || cfg.JWTPublicKeyB64 != "" || cfg.JWTKeyID != "" {
-			return fmt.Errorf("invalid config: JWT_KEY_RING_PATH is set; JWT_PRIVATE_KEY_B64 / JWT_PUBLIC_KEY_B64 / JWT_KEY_ID must be empty (pick exactly one path)")
-		}
+		return fmt.Errorf("invalid config: JWT_KEY_RING_PATH is set; JWT_PRIVATE_KEY_B64 / JWT_PUBLIC_KEY_B64 / JWT_KEY_ID must be empty (pick exactly one path)")
 	}
 	return loader.RequireFields(required)
 }

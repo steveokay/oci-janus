@@ -2374,9 +2374,9 @@ func TestGetTenantUsage_lazyMissingTenant_returnsZero(t *testing.T) {
 // entire struct.
 func validPromoteReq() *metadatav1.PromoteTagRequest {
 	return &metadatav1.PromoteTagRequest{
-		TenantId:    "98dbe36b-ef28-4903-b25c-bff1b2921c9e",
-		SrcOrg:      "myorg", SrcRepo: "src", SrcTag: "v1",
-		DstOrg:      "myorg", DstRepo: "dst", DstTag: "v1",
+		TenantId: "98dbe36b-ef28-4903-b25c-bff1b2921c9e",
+		SrcOrg:   "myorg", SrcRepo: "src", SrcTag: "v1",
+		DstOrg: "myorg", DstRepo: "dst", DstTag: "v1",
 		ActorUserId: "6d16d55e-4f30-4b12-9d1a-4a1c9c1c1234",
 		Note:        "promote v1 to prod",
 	}

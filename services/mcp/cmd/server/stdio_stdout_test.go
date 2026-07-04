@@ -182,7 +182,7 @@ func TestStdioStdoutIsOnlyJSONRPC(t *testing.T) {
 
 	// Sibling assertion: stderr MUST contain at least one line (the
 	// startup log). Proves that logs went to stderr, not stdout.
-	if stderrBytes == nil || len(stderrBytes) == 0 {
+	if len(stderrBytes) == 0 {
 		t.Error("stderr was empty; startup log did not route there")
 	}
 }

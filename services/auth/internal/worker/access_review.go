@@ -8,13 +8,13 @@
 //     workspace).
 //  2. For each tenant:
 //     a. Acquire pg_try_advisory_lock keyed on the tenant id (FNV-64a
-//        hash, salted with "access-review:" so this lock never collides
-//        with FUT-003's idle-revoke lock on the same tenant).
+//     hash, salted with "access-review:" so this lock never collides
+//     with FUT-003's idle-revoke lock on the same tenant).
 //     b. Load the tenant's policy → resolve the idle threshold.
 //     c. Call AccessReviewService.ListStaleKeys (which handles the
-//        default-threshold fallback + snoozed-key exclusion).
+//     default-threshold fallback + snoozed-key exclusion).
 //     d. For each stale key: emit auth.access_review_due with the
-//        reason from the suggested-action heuristic.
+//     reason from the suggested-action heuristic.
 //
 // The worker is NUDGE-ONLY — spec Decision #4. It never revokes; that
 // job belongs to FUT-003's idle_revoke worker. The audit consumer's

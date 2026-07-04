@@ -13,13 +13,13 @@
 //
 // The 7 named reject reasons (matching the spec):
 //
-//	1. issuer_not_allowed    — `iss` not in OIDC_ALLOWED_ISSUERS
-//	2. audience_mismatch     — `aud` doesn't match any trust's audience
-//	3. subject_mismatch      — `sub` doesn't match any trust's pattern
-//	4. signature_invalid     — RS256 verify failed (incl. unknown kid)
-//	5. expired               — `exp` in the past
-//	6. not_yet_valid         — `nbf` in the future
-//	7. sa_disabled           — trust's SA has been disabled
+//  1. issuer_not_allowed    — `iss` not in OIDC_ALLOWED_ISSUERS
+//  2. audience_mismatch     — `aud` doesn't match any trust's audience
+//  3. subject_mismatch      — `sub` doesn't match any trust's pattern
+//  4. signature_invalid     — RS256 verify failed (incl. unknown kid)
+//  5. expired               — `exp` in the past
+//  6. not_yet_valid         — `nbf` in the future
+//  7. sa_disabled           — trust's SA has been disabled
 //
 // Each branch emits an auth.workload_token.rejected event with the
 // reason set to the matching string.

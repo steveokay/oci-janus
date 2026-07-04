@@ -29,16 +29,16 @@ type fakeClient struct {
 	// Recorded call log — used to assert methods called + args.
 	calls []string
 
-	repos     []client.Repository
-	reposErr  error
-	tags      []client.Tag
-	tagsErr   error
-	manifest  *client.Manifest
+	repos       []client.Repository
+	reposErr    error
+	tags        []client.Tag
+	tagsErr     error
+	manifest    *client.Manifest
 	manifestErr error
-	sas       []client.ServiceAccount
-	sasErr    error
-	staleKeys []client.StaleKey
-	staleErr  error
+	sas         []client.ServiceAccount
+	sasErr      error
+	staleKeys   []client.StaleKey
+	staleErr    error
 	auditEvents []client.AuditEvent
 	auditFilter client.AuditFilter // last-seen filter for cap tests
 	auditErr    error
@@ -312,9 +312,9 @@ func (d *recordingDoer) Do(req *http.Request) (*http.Response, error) {
 
 func TestGetScanReport_Happy(t *testing.T) {
 	fc := &fakeClient{scan: &client.ScanReport{
-		Digest: "sha256:aa",
-		Severities: client.SeverityMap{Critical: 2, High: 5},
-		TopCVEs: []client.CVE{{ID: "CVE-2021-44228", Severity: "critical", Package: "log4j"}},
+		Digest:      "sha256:aa",
+		Severities:  client.SeverityMap{Critical: 2, High: 5},
+		TopCVEs:     []client.CVE{{ID: "CVE-2021-44228", Severity: "critical", Package: "log4j"}},
 		SBOMPresent: true,
 	}}
 	s := registerAll(fc, slog.Default())

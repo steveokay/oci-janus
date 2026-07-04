@@ -25,7 +25,6 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
-
 // fakeTokenPolicyRepo implements the TokenPolicyRepo interface with an
 // in-memory map keyed by tenant_id. Preserves nil-in fields (matches the
 // COALESCE semantics of the real repo).

@@ -235,6 +235,8 @@ func (p *Publisher) Close() error {
 // confirmation receiver. It exists so unit tests can inject a fake channel
 // that gives them deterministic control over publish timing. Production code
 // must use New, which owns dialling the broker and enabling confirm mode.
+//
+//nolint:unparam // exchange is always "test-exchange" today because only tests call this; keeping the param mirrors New's signature (REM-014)
 func newWithChannel(ch amqpChannel, confirms chan amqp.Confirmation, exchange string) *Publisher {
 	return &Publisher{
 		ch:             ch,
