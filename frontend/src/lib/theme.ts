@@ -23,12 +23,11 @@ function applyTheme(theme: Theme): void {
 export function initTheme(): void {
   const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "system";
   applyTheme(stored);
-  // Keep system-mode users in sync if they flip OS theme mid-session.
-  if (stored === "system") {
-    window
-      .matchMedia("(prefers-color-scheme: dark)")
-      .addEventListener("change", () => applyTheme("system"));
-  }
+  // NOTE: no matchMedia listener here. The old one-shot subscription was
+  // bound to the value stored at page load and never removed, so switching
+  // to Light/Dark mid-session still got overridden by an OS theme flip, and
+  // switching TO System mid-session didn't track until reload. The OS-pref
+  // subscription now lives in useTheme's effect, keyed to the CURRENT theme.
 }
 
 export function useTheme(): {
@@ -41,6 +40,15 @@ export function useTheme(): {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, theme);
     applyTheme(theme);
+    // Follow OS theme flips only while the CURRENT selection is "system".
+    // Subscribing inside the effect (and cleaning up on theme change /
+    // unmount) means picking Light/Dark mid-session detaches the listener,
+    // and picking System mid-session attaches it — both without a reload.
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onOSThemeChange = (): void => applyTheme("system");
+    mq.addEventListener("change", onOSThemeChange);
+    return () => mq.removeEventListener("change", onOSThemeChange);
   }, [theme]);
   return { theme, setTheme };
 }
