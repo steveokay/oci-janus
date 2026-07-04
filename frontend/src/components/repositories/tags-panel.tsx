@@ -317,25 +317,20 @@ export function TagsPanel({
                 const hrefTo = `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(t.name)}`;
                 const isSelected = selected.has(t.name);
                 return (
+                  // Mirror repositories-table's row pattern: the whole-row
+                  // onClick is a convenience only — the single focusable
+                  // navigation target is the tag-name anchor in the first
+                  // cell below. Dropping role="link"/tabIndex/onKeyDown here
+                  // removes the nested-link + duplicate-focus-stop a11y bug
+                  // (the row and its inner <a> both claimed link semantics).
                   <TableRow
                     key={`${t.name}-${t.manifest_digest}`}
                     interactive
-                    role="link"
-                    tabIndex={0}
                     data-state={isSelected ? "selected" : undefined}
                     className={
                       isSelected ? "bg-[var(--color-accent-subtle)]/40" : ""
                     }
                     onClick={open}
-                    onMouseDown={(e) => {
-                      if (e.button === 0) open();
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        open();
-                      }
-                    }}
                   >
                     <TableCell className="w-[40px] !pr-0">
                       {/* stopPropagation on both click + mousedown so the
@@ -352,13 +347,17 @@ export function TagsPanel({
                       </span>
                     </TableCell>
                     <TableCell className="p-0">
+                      {/* The sole keyboard focus target for row navigation.
+                          stopPropagation prevents a double-navigate with the
+                          row-level onClick when the anchor itself is clicked. */}
                       <a
                         href={hrefTo}
                         onClick={(e) => {
                           e.preventDefault();
+                          e.stopPropagation();
                           open();
                         }}
-                        className="block px-4 py-3 text-inherit no-underline"
+                        className="block rounded px-4 py-3 text-inherit no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
                       >
                         <div className="inline-flex items-center gap-1.5">
                           <Badge tone="accent">
