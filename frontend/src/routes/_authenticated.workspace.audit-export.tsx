@@ -248,7 +248,9 @@ function AuditExportPage(): React.ReactElement {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-xl font-semibold text-[var(--color-fg)]">
+        {/* Aligned to the dominant page-title treatment used across routes
+            (font-display text-3xl font-medium tracking-tight). */}
+        <h1 className="font-display text-3xl font-medium tracking-tight">
           Audit log streaming
         </h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
