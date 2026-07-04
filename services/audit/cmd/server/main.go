@@ -21,7 +21,12 @@ func main() {
 	// rotate-kek subcommand (RED-FU-015). Dispatched before config load so the
 	// KEK rotation CLI does not require the full server environment.
 	if len(os.Args) > 1 && os.Args[1] == "rotate-kek" {
-		if err := rotatekek.Run(context.Background(), os.Args[2:], os.Stdout); err != nil {
+		// Signal-aware context so a long sweep is Ctrl-C/SIGTERM cancellable
+		// (RED-FU-015 follow-up). Per-table transactions are atomic, so a
+		// cancel between tables leaves each processed table fully rotated.
+		rkCtx, rkStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer rkStop()
+		if err := rotatekek.Run(rkCtx, os.Args[2:], os.Stdout); err != nil {
 			var verr *rekey.ValidationError
 			if errors.As(err, &verr) {
 				slog.Error("rotate-kek validation error", "err", err)

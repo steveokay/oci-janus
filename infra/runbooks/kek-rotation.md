@@ -22,8 +22,16 @@ AES-256 keys, hex-encoded (64 hex chars).
 
 ```bash
 <service> rotate-kek --generate
-# prints one 64-char hex string — store it in your secrets manager
+# prints one 64-char hex string on STDOUT — store it in your secrets manager
 ```
+
+> **Handling the key safely (SEC-072):** the key is the only thing on
+> **stdout** so `--generate` is pipeline-friendly (e.g. pipe straight into a
+> secrets-manager CLI). A warning is printed to **stderr**, not stdout, so it
+> cannot corrupt that pipe. Do **not** run `--generate` in a job whose stdout
+> is captured to CI logs or a shared console — treat the output like any raw
+> secret. If in doubt, redirect to a file with restrictive permissions and
+> load it into your secrets manager from there.
 
 ## 2. Pre-flight (no mutation)
 

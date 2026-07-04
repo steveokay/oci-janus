@@ -118,20 +118,33 @@ func tableExists(ctx context.Context, pool *pgxpool.Pool, table string) (bool, e
 	return reg != nil, nil
 }
 
-// selectSQL builds the FOR UPDATE candidate query for a table. It selects the
-// PK as text (uniform across UUID and TEXT PKs) plus every cipher column, and
-// filters to rows where at least one cipher column is non-null.
-func selectSQL(spec TableSpec) string {
+// selectSQL builds the candidate query for a table. It selects the PK as text
+// (uniform across UUID and TEXT PKs) plus every cipher column, and filters to
+// rows where at least one cipher column is non-null.
+//
+// lock controls the concurrency posture (SEC-071):
+//   - rotate/dry-run pass lock=true → the query appends FOR UPDATE so the rows
+//     are write-locked for the duration of the table's transaction, preventing
+//     a concurrent writer from mutating a cell between our SELECT and UPDATE.
+//   - verify passes lock=false → a plain read-only SELECT. Verify never
+//     mutates, so taking write locks would needlessly block writers (and each
+//     other) for a check that only trial-decrypts. The lock-free read is the
+//     correct posture for an inspection-only pass.
+func selectSQL(spec TableSpec, lock bool) string {
 	cols := make([]string, len(spec.Columns))
 	notNull := make([]string, len(spec.Columns))
 	for i, c := range spec.Columns {
 		cols[i] = c.Name
 		notNull[i] = c.Name + " IS NOT NULL"
 	}
-	return fmt.Sprintf(
-		"SELECT %s::text, %s FROM %s WHERE %s FOR UPDATE",
+	sql := fmt.Sprintf(
+		"SELECT %s::text, %s FROM %s WHERE %s",
 		spec.PKColumn, strings.Join(cols, ", "), spec.Table, strings.Join(notNull, " OR "),
 	)
+	if lock {
+		sql += " FOR UPDATE"
+	}
+	return sql
 }
 
 // rotateTable re-encrypts every candidate row in one transaction. In ModeDryRun
@@ -144,7 +157,9 @@ func rotateTable(ctx context.Context, pool *pgxpool.Pool, spec TableSpec, opts S
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after an explicit Commit
 
-	rows, err := tx.Query(ctx, selectSQL(spec))
+	// rotate/dry-run lock the candidate rows (lock=true) so a concurrent writer
+	// cannot slip a new ciphertext in between our read and write.
+	rows, err := tx.Query(ctx, selectSQL(spec, true))
 	if err != nil {
 		return 0, fmt.Errorf("select %s: %w", spec.Table, err)
 	}
@@ -271,7 +286,9 @@ func applyUpdate(ctx context.Context, tx pgx.Tx, spec TableSpec, pk string, newV
 // verifyTable counts rows with at least one cipher cell that does not decrypt
 // under newKey (i.e. still on the old key). It never mutates.
 func verifyTable(ctx context.Context, pool *pgxpool.Pool, spec TableSpec, newKey []byte) (int, error) {
-	rows, err := pool.Query(ctx, selectSQL(spec))
+	// verify is read-only (SEC-071): a plain SELECT with no FOR UPDATE, so the
+	// inspection pass never takes write locks on rows it will not mutate.
+	rows, err := pool.Query(ctx, selectSQL(spec, false))
 	if err != nil {
 		return 0, fmt.Errorf("verify select %s: %w", spec.Table, err)
 	}

@@ -48,7 +48,12 @@ func main() {
 	// not the full server config. Exit codes: 2 = validation error (bad input),
 	// 3 = verify found rows still on the old key, 1 = infrastructure failure.
 	if len(os.Args) > 1 && os.Args[1] == "rotate-kek" {
-		if err := rotatekek.Run(context.Background(), os.Args[2:], os.Stdout); err != nil {
+		// Signal-aware context so a long sweep is Ctrl-C/SIGTERM cancellable
+		// (RED-FU-015 follow-up). Per-table transactions are atomic, so a
+		// cancel between tables leaves each processed table fully rotated.
+		rkCtx, rkStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer rkStop()
+		if err := rotatekek.Run(rkCtx, os.Args[2:], os.Stdout); err != nil {
 			var verr *rekey.ValidationError
 			if errors.As(err, &verr) {
 				slog.Error("rotate-kek validation error", "err", err)
