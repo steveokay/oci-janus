@@ -2,6 +2,7 @@ package rekey
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// maxKEKVersion is the largest value the kek_version SMALLINT column can hold.
+// --to-version is validated against this so an int flag cannot silently wrap or
+// truncate when narrowed to int16 (code-review #3).
+const maxKEKVersion = 32767
 
 // ValidationError signals operator-input problems (bad flags, missing/invalid
 // keys). The service main.go dispatch maps it to exit code 2.
@@ -55,16 +61,38 @@ func RunCLI(ctx context.Context, args []string, dsnEnv string, specs []TableSpec
 		return validationError("parse flags: %v", err)
 	}
 
+	// Detect whether --to-version was explicitly provided. The flag default is 0,
+	// which is also the "auto = max+1" sentinel; fs.Visit lets us tell an
+	// explicit --to-version 0 (a bounds error) apart from an omitted flag.
+	toVersionSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "to-version" {
+			toVersionSet = true
+		}
+	})
+
 	if *generate {
 		h, err := GenerateKeyHex()
 		if err != nil {
 			return fmt.Errorf("generate key: %w", err)
 		}
+		// The key is the sole stdout line so `rotate-kek --generate` can be piped
+		// into a secrets manager. The caveat goes to STDERR (SEC-072) so it does
+		// not corrupt that pipe, while still warning an interactive operator.
 		fmt.Fprintln(stdout, h)
+		fmt.Fprintln(os.Stderr, "WARNING: this key is printed to stdout — avoid running under CI log capture; store it in your secrets manager immediately.")
 		return nil
 	}
 	if *dryRun && *verify {
 		return validationError("--dry-run and --verify are mutually exclusive")
+	}
+
+	// Validate --to-version bounds before touching the DB so the failure is a
+	// cheap, DB-free ValidationError (code-review #3). An int flag narrowed to
+	// the int16 kek_version column would otherwise wrap (>32767) or accept a
+	// nonsensical zero/negative generation.
+	if toVersionSet && (*toVersion <= 0 || *toVersion > maxKEKVersion) {
+		return validationError("--to-version must be between 1 and %d, got %d", maxKEKVersion, *toVersion)
 	}
 
 	newKey, err := ParseKeyHex(os.Getenv("KEK_NEW_HEX"))
@@ -76,6 +104,15 @@ func RunCLI(ctx context.Context, args []string, dsnEnv string, specs []TableSpec
 		oldKey, err = ParseKeyHex(os.Getenv("KEK_OLD_HEX"))
 		if err != nil {
 			return validationError("KEK_OLD_HEX: %v", err)
+		}
+		// Reject a no-op rotation where OLD == NEW (SEC-073). Without this an
+		// operator who fat-fingers the same value into both env vars gets a clean
+		// "rotated N rows" success while nothing actually changed key. Only the
+		// rotate/dry-run paths reach here — --verify uses NewKey alone and
+		// --generate returned above — so both keys are guaranteed present.
+		// Constant-time compare avoids leaking key equality via timing.
+		if subtle.ConstantTimeCompare(oldKey, newKey) == 1 {
+			return validationError("KEK_OLD_HEX and KEK_NEW_HEX are identical — rotation would be a no-op")
 		}
 	}
 
