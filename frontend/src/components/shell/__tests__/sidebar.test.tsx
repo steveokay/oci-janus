@@ -252,6 +252,28 @@ describe("Sidebar — REDESIGN-001 Phase 4.2.a operator IA", () => {
     expect(repoLink?.className).toContain("text-[var(--color-accent)]");
   });
 
+  // ── a11y: aria-current ─────────────────────────────────────────────────────
+
+  test("sets aria-current='page' on the active nav link", async () => {
+    await renderSidebar("/repositories");
+    const repoLink = screen.getByText("Repositories").closest("a");
+    expect(repoLink?.getAttribute("aria-current")).toBe("page");
+
+    // Non-active links must NOT carry aria-current.
+    const helmLink = screen.getByText("Helm charts").closest("a");
+    expect(helmLink?.getAttribute("aria-current")).toBeNull();
+  });
+
+  // ── Active-match path boundary ─────────────────────────────────────────────
+
+  test("active match respects path boundaries (child route stays active)", async () => {
+    // A deeper child of the route is still the active section.
+    await renderSidebar("/repositories/library/nginx");
+    const repoLink = screen.getByText("Repositories").closest("a");
+    expect(repoLink?.getAttribute("aria-current")).toBe("page");
+    expect(repoLink?.className).toContain("text-[var(--color-accent)]");
+  });
+
   // ── Phase 2.4 (RM-006) — plan badge removed ───────────────────────────────
 
   test("does NOT render workspace.plan badge in the brand block", async () => {
