@@ -128,11 +128,36 @@ describe("Sidebar — REDESIGN-001 Phase 4.2.a operator IA", () => {
 
   // ── Registry group ────────────────────────────────────────────────────────
 
-  test("Registry group contains Repositories, Helm charts, Pull-through cache", async () => {
+  test("Registry group contains Dashboard, Repositories, Helm charts, Pull-through cache", async () => {
     await renderSidebar();
+    // Dashboard is the new index-route ("/") entry added at the top of the
+    // Registry group.
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText("Repositories")).toBeInTheDocument();
     expect(screen.getByText("Helm charts")).toBeInTheDocument();
     expect(screen.getByText("Pull-through cache")).toBeInTheDocument();
+  });
+
+  // ── Dashboard root-route active match ──────────────────────────────────────
+
+  test("marks Dashboard active ONLY on the exact index route", async () => {
+    // On "/", Dashboard is the active section.
+    await renderSidebar("/");
+    const dashLink = screen.getByText("Dashboard").closest("a");
+    expect(dashLink?.getAttribute("aria-current")).toBe("page");
+    expect(dashLink?.className).toContain("text-[var(--color-accent)]");
+  });
+
+  test("does NOT mark Dashboard active on non-root routes", async () => {
+    // Every path starts with "/", so a naive startsWith would light up
+    // Dashboard everywhere. The exact-match special-case must keep it dark
+    // on child routes like /repositories.
+    await renderSidebar("/repositories");
+    const dashLink = screen.getByText("Dashboard").closest("a");
+    expect(dashLink?.getAttribute("aria-current")).toBeNull();
+    expect(dashLink?.className).not.toContain(
+      "bg-[var(--color-accent-subtle)]",
+    );
   });
 
   // ── Security group ────────────────────────────────────────────────────────
