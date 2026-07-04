@@ -291,6 +291,22 @@ export function TagsPanel({
           <TableBody>
             {isLoading ? (
               <SkeletonRows />
+            ) : tags.length === 0 ? (
+              // Filtered-to-zero state — the repo HAS tags (the truly-empty
+              // case returns the EmptyState earlier), but the chip/search
+              // combination matched none. Render an in-table row instead of
+              // a bare header-over-nothing table so the operator gets told
+              // why the table is empty and how to recover. colSpan=5 spans
+              // checkbox + Tag + Digest + Size + Updated.
+              <TableRow>
+                <TableCell
+                  colSpan={5}
+                  className="py-8 text-center text-sm text-[var(--color-fg-muted)]"
+                >
+                  No tags match this filter — clear it to see all{" "}
+                  {allTags.length} tags.
+                </TableCell>
+              </TableRow>
             ) : (
               tags.map((t) => {
                 const target = {
