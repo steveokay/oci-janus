@@ -172,12 +172,37 @@ describe("ReviewPanel", () => {
     );
   });
 
-  it("revoke button calls the revoke mutation with the key id", async () => {
+  // Updated for the confirm-gated revoke flow: the row button no longer
+  // mutates directly — it opens a ConfirmDestructiveDialog (severity
+  // "medium", type-the-key-name) and only the dialog's confirm button
+  // fires the mutation. Revocation is permanent, so the old direct-click
+  // behaviour was the bug this asserts against regressing to.
+  it("revoke button opens a confirm dialog; typing the key name + confirming calls the mutation", async () => {
     const user = userEvent.setup();
     mockData = [fixtureKey({ id: "k1", name: "deploy-prod" })];
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: /revoke/i }));
+    // Row button — exact name "Revoke" (the dialog confirm is "Revoke key").
+    await user.click(screen.getByRole("button", { name: /^revoke$/i }));
+
+    // Nothing mutated yet — the dialog is the gate.
+    expect(mockRevoke).not.toHaveBeenCalled();
+
+    // Dialog surfaces the key name + irreversibility copy.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/this cannot be undone/i);
+
+    // Severity "medium" requires retyping the resource name before the
+    // confirm button enables.
+    const confirmButton = screen.getByRole("button", {
+      name: /revoke key/i,
+    });
+    expect(confirmButton).toBeDisabled();
+    await user.type(
+      screen.getByLabelText(/type\s+deploy-prod\s+to confirm/i),
+      "deploy-prod",
+    );
+    await user.click(confirmButton);
 
     await waitFor(() =>
       expect(mockRevoke).toHaveBeenCalledWith(
