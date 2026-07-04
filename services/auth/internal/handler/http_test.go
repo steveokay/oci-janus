@@ -108,6 +108,19 @@ func (f *handlerFakeUserRepo) GetByUsername(_ context.Context, tenantID uuid.UUI
 	return u, nil
 }
 
+// GetHumanByUsername mirrors the real repository's kind='human' guard (SEC-075):
+// service-account shadow rows are excluded from the username/password login path.
+func (f *handlerFakeUserRepo) GetHumanByUsername(_ context.Context, tenantID uuid.UUID, username string) (*repository.User, error) {
+	u, ok := f.users[username]
+	if !ok || u.TenantID != tenantID {
+		return nil, repository.ErrNotFound
+	}
+	if u.Kind == "service_account" {
+		return nil, repository.ErrNotFound
+	}
+	return u, nil
+}
+
 func (f *handlerFakeUserRepo) GetByID(_ context.Context, id uuid.UUID) (*repository.User, error) {
 	for _, u := range f.users {
 		if u.ID == id {

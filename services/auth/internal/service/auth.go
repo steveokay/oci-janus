@@ -1077,7 +1077,14 @@ func mapScopesToAccess(scopes []string) []RepositoryAccess {
 // enumerate valid usernames by measuring the ~100 ms gap that Argon2id verify
 // adds — known users take much longer than unknown users.
 func (s *Service) AuthenticateUser(ctx context.Context, tenantID uuid.UUID, username, password string) (*repository.User, error) {
-	user, err := s.users.GetByUsername(ctx, tenantID, username)
+	// SEC-075: resolve via the kind-guarded lookup so a service-account shadow
+	// row (kind='service_account', synthetic sa-<hex> username) can never be
+	// authenticated by password. The kind='human' guard is the primary control
+	// — we no longer rely on argon2.Verify rejecting an empty password_hash as
+	// the sole barrier. A matched-but-non-human row is indistinguishable from
+	// "no such user" here, so we return the same invalid-credentials shape and
+	// do not leak that a shadow row exists.
+	user, err := s.users.GetHumanByUsername(ctx, tenantID, username)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			// Burn the same Argon2id work the happy path would. We discard
