@@ -37,6 +37,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (nightly + `workflow_dispatch`, matrix over all 14 Go modules). Removed the
   muted `scripts/lint-user-queries.sh` step (REM-015). (PR #250.)
 
+### Security
+
+- **Go toolchain 1.25.7 → 1.25.11 (REM-016)** — clears the five deferred stdlib
+  CVEs (GO-2026-5039/5037 in `net/textproto`+`crypto/x509`, GO-2026-4982/4980/4971)
+  across every Go module. `services/auth`'s `russellhaering/goxmldsig` bumped
+  v1.3.0 → v1.6.0 fixing **GO-2026-4753** (XML-dsig signature bypass under the
+  SAML SP path). The nightly govulncheck sweep (`ci-security.yml`) is now a
+  **blocking** gate — 0 affected vulnerabilities across all 15 modules. (PR #256.)
+
 ---
 
 ## [2.0.0-rc1] — 2026-06-30

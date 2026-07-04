@@ -1,6 +1,6 @@
 module github.com/steveokay/oci-janus/services/gateway
 
-go 1.25.7
+go 1.25.11
 
 require (
 	github.com/spf13/viper v1.19.0

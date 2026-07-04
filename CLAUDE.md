@@ -73,7 +73,7 @@ Storage schemas keep `tenant_id` columns in both modes — single mode just popu
 
 | Concern | Choice |
 |---|---|
-| Backend language | Go 1.23+ (toolchain `go 1.25.7` across all modules) |
+| Backend language | Go 1.23+ (toolchain `go 1.25.11` across all modules) |
 | Protobuf/gRPC codegen | `buf` CLI v1.x |
 | Database | PostgreSQL 16 |
 | Cache / Rate limiting | Redis 7 (Valkey acceptable) |
