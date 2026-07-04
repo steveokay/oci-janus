@@ -10,12 +10,18 @@ import { cn } from "@/lib/utils";
 //   middle — live BFF health dot (polls /healthz so the operator sees red
 //            within ~30s if the management API drops). Deliberately quiet:
 //            green dot is the default, no label until something breaks.
-//   right  — links: changelog, docs, GitHub
+//   right  — links: docs, GitHub
 //
 // The footer reads as a status bar — a small piece of operational comfort.
 
 const FOOTER_LINKS: Array<{ label: string; href: string; external?: boolean }> = [
-  { label: "Docs", href: "https://docs.example.com", external: true },
+  {
+    label: "Docs",
+    // Same self-hosting guide FirstStepsStrip links to — the canonical
+    // operator entry point (the old docs.example.com was a placeholder).
+    href: "https://github.com/steveokay/oci-janus/blob/main/docs/SELF-HOSTING.md",
+    external: true,
+  },
   {
     label: "GitHub",
     href: "https://github.com/steveokay/oci-janus",
