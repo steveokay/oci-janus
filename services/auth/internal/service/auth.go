@@ -197,6 +197,11 @@ type Service struct {
 	// tokens so every login/MFA/SSO test that does not wire a session repo
 	// keeps passing.
 	sessions sessionRepo
+	// sessionActive is the Redis-debounced user_sessions.last_active_at updater
+	// fired from the ValidateToken hot path. When nil (legacy fakes / dev stacks
+	// without the wiring), ValidateToken skips the last_active bump entirely —
+	// last_active is telemetry, so its absence never blocks validation.
+	sessionActive *sessionActiveUpdater
 	// mfaIssuer is the otpauth:// issuer label embedded in enrolment URIs — the
 	// name an authenticator app shows next to the account (e.g. "oci-janus").
 	// Defaulted to "oci-janus" in every constructor.
@@ -521,6 +526,16 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		}
 		if sv != "" {
 			return nil, status.Error(codes.Unauthenticated, "session revoked")
+		}
+	}
+
+	// Debounced last_active telemetry: bump user_sessions.last_active_at at most
+	// once per session per minute. Fire-and-forget on a background context so a
+	// client disconnect doesn't cancel the write, and never on the request's
+	// critical path. A parse failure or unwired updater is a silent no-op.
+	if claims.Sid != "" && s.sessionActive != nil {
+		if sid, perr := uuid.Parse(claims.Sid); perr == nil {
+			s.sessionActive.Touch(context.Background(), sid)
 		}
 	}
 

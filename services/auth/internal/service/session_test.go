@@ -247,6 +247,20 @@ func TestValidateToken_revokedSid_denied(t *testing.T) {
 	}
 }
 
+func TestSessionActiveUpdater_debounces(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	u := newSessionActiveUpdater(rdb, sessions, nil)
+	ctx := context.Background()
+	sid := uuid.New()
+
+	u.touchNow(ctx, sid) // first: SETNX wins -> write
+	u.touchNow(ctx, sid) // second inside window: SETNX loses -> skip
+	if sessions.touchCount[sid] != 1 {
+		t.Fatalf("expected exactly 1 debounced touch, got %d", sessions.touchCount[sid])
+	}
+}
+
 func TestIssueSessionToken_createsRowAndSid(t *testing.T) {
 	rdb := newTestRedis(t)
 	sessions := newFakeSessionRepo()

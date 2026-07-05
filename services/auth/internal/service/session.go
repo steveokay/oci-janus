@@ -6,9 +6,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
@@ -88,4 +91,66 @@ func (s *Service) idleCutoff(ctx context.Context, tenantID uuid.UUID) time.Time 
 		}
 	}
 	return s.now().Add(-window)
+}
+
+// sessionActiveWindow is the debounce interval for last_active writes — one DB
+// write per session per minute at most, keeping ValidateToken hot.
+const sessionActiveWindow = 60 * time.Second
+
+// sessionActiveUpdater debounces user_sessions.last_active_at writes through
+// Redis (SETNX), fail-OPEN on Redis error. Fire-and-forget, exactly like the
+// FUT-003 lastUsedUpdater for API keys. last_active is telemetry, not a
+// security boundary, so Redis-down here degrades to an inline write, never a deny.
+type sessionActiveUpdater struct {
+	redis  lastUsedRedis
+	repo   sessionTouchRepo
+	logger *slog.Logger
+}
+
+// sessionTouchRepo is the narrow interface the debouncer needs — just the
+// last_active bump. Satisfied by the SessionRepository and by the in-memory
+// fake used in unit tests.
+type sessionTouchRepo interface {
+	TouchLastActive(ctx context.Context, sid uuid.UUID, at time.Time) error
+}
+
+// newSessionActiveUpdater constructs a sessionActiveUpdater. logger may be nil —
+// slog.Default() is substituted so warn/info paths never panic in dev-mode tests.
+func newSessionActiveUpdater(rd lastUsedRedis, repo sessionTouchRepo, logger *slog.Logger) *sessionActiveUpdater {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &sessionActiveUpdater{redis: rd, repo: repo, logger: logger}
+}
+
+// NewSessionActiveUpdater is the exported constructor used by server wiring.
+func NewSessionActiveUpdater(rd lastUsedRedis, repo sessionTouchRepo, logger *slog.Logger) *sessionActiveUpdater {
+	return newSessionActiveUpdater(rd, repo, logger)
+}
+
+// SetSessionActiveUpdater wires the debouncer onto the Service (mirrors SetMFAKEK).
+func (s *Service) SetSessionActiveUpdater(u *sessionActiveUpdater) { s.sessionActive = u }
+
+// Touch fire-and-forgets a debounced last_active bump. Callers pass
+// context.Background() (the request context would cancel on client disconnect).
+func (u *sessionActiveUpdater) Touch(ctx context.Context, sid uuid.UUID) { go u.touchNow(ctx, sid) }
+
+// touchNow is called synchronously by tests + async by Touch. It SET NX EX's a
+// per-session debounce key; on a win (or when Redis is unwired/erroring) it
+// writes the DB row, on a loss it skips. Redis errors fail-OPEN because
+// last_active is telemetry, not a security boundary.
+func (u *sessionActiveUpdater) touchNow(ctx context.Context, sid uuid.UUID) {
+	now := time.Now().UTC()
+	if u.redis != nil {
+		set, err := u.redis.SetNX(ctx, "sid_active:"+sid.String(), "1", sessionActiveWindow).Result()
+		if err == nil && !set {
+			return // another tick claimed this window
+		}
+		if err != nil && !errors.Is(err, redis.Nil) {
+			u.logger.Info("session last_active debounce redis error; falling open", "err", err)
+		}
+	}
+	if err := u.repo.TouchLastActive(ctx, sid, now); err != nil {
+		u.logger.Warn("session last_active UPDATE failed", "sid", sid, "err", err)
+	}
 }
