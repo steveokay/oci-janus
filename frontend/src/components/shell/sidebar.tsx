@@ -281,12 +281,12 @@ export function SidebarBody({
         })}
       </nav>
 
-      {/* FUT-019 Phase 1 — sticky-bottom Settings cog. Mirrors the GitHub
-          / Linear / Notion pattern where personal preferences live at the
-          bottom of the chrome and stay reachable regardless of scroll.
-          Always rendered — tab-level gates inside /settings handle
-          visibility of Notifications / Security per the per-category
-          opt-in matrix that lands in FUT-019 Phase 2+. */}
+      {/* Sticky-bottom Settings cog. Mirrors the GitHub / Linear / Notion
+          pattern where the settings hub lives at the bottom of the chrome and
+          stays reachable regardless of scroll. Profile is intentionally NOT
+          here — the personal surface is reached from the top-right user menu
+          (topbar → "Your profile"). Always rendered — per-tab gates inside
+          /settings handle role visibility. */}
       <div className="border-t border-[var(--color-border)] px-3 py-2">
         <Link
           to="/settings"

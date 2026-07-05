@@ -33,7 +33,7 @@ import {
   type AbilitiesResponse,
 } from "@/lib/api/abilities";
 
-// Route guard: direct URL hits go to /settings/account when the caller
+// Route guard: direct URL hits go to /settings/workspace when the caller
 // isn't a global admin. Parent route already hides the tab from the rail
 // for the same callers, so this fires only on bookmark/URL access.
 //
@@ -42,14 +42,14 @@ import {
 // has mounted, the abilities query is already in-flight via the parent's
 // useAbilities() call. If the cache is cold (cold tab opening
 // /settings/platform directly), we err on the side of safety and bounce
-// to /settings/account; a global admin can retry once the cache warms.
+// to /settings/workspace; a global admin can retry once the cache warms.
 export const Route = createFileRoute("/_authenticated/settings/platform")({
   beforeLoad: () => {
     const abilities = queryClient.getQueryData<AbilitiesResponse>(
       abilitiesKeys.all,
     );
     if (!abilities?.is_global_admin) {
-      throw redirect({ to: "/settings/account", replace: true });
+      throw redirect({ to: "/settings/workspace", replace: true });
     }
   },
   component: PlatformTab,
