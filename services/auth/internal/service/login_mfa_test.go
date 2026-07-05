@@ -9,6 +9,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -218,4 +219,87 @@ func TestVerifyLoginMFA_badChallengeToken_rejected(t *testing.T) {
 
 	_, err = svc.VerifyLoginMFA(ctx, access, backupCodes[0])
 	require.ErrorIs(t, err, ErrInvalidCredentials)
+}
+
+// TestVerifyLoginMFA_lockedAccount_rejected verifies SEC-079: a locked account
+// is refused at the OTP step before the code is checked, so minting fresh
+// challenge tokens cannot be used to keep probing a locked account.
+func TestVerifyLoginMFA_lockedAccount_rejected(t *testing.T) {
+	ctx := context.Background()
+	svc, users := newLoginMFATestService(t, loginMFAFixedNow)
+
+	pwHash, err := argon2pkg.Hash("pw")
+	require.NoError(t, err)
+	userID, backupCodes := enrolMFAUser(t, svc, users, loginMFAFixedNow, pwHash)
+	u, err := users.GetByID(ctx, userID)
+	require.NoError(t, err)
+
+	// Lock the account (the lock check uses real wall-clock, like AuthenticateUser).
+	require.NoError(t, users.LockUntil(ctx, userID, time.Now().Add(time.Hour)))
+
+	ct, err := svc.IssueMFAChallengeToken(ctx, userID.String(), u.TenantID.String())
+	require.NoError(t, err)
+
+	// Even a correct backup code must be refused while locked.
+	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	require.ErrorIs(t, err, ErrAccountLocked)
+}
+
+// TestVerifyLoginMFA_challengeAttemptCap verifies SEC-079's defence-in-depth:
+// a single challenge token is burned after maxMFAChallengeAttempts submissions,
+// even when the account-lockout write is unavailable — so the token cannot be
+// replayed for unbounded guessing within its 5-minute window.
+func TestVerifyLoginMFA_challengeAttemptCap(t *testing.T) {
+	ctx := context.Background()
+	svc, users := newLoginMFATestService(t, loginMFAFixedNow)
+
+	pwHash, err := argon2pkg.Hash("pw")
+	require.NoError(t, err)
+	userID, backupCodes := enrolMFAUser(t, svc, users, loginMFAFixedNow, pwHash)
+	u, err := users.GetByID(ctx, userID)
+	require.NoError(t, err)
+
+	// Simulate the lockout write being unavailable so the per-token cap is the
+	// only bound in play — proving it limits a single challenge independently.
+	users.recordFailErr = errors.New("lockout store unavailable")
+
+	ct, err := svc.IssueMFAChallengeToken(ctx, userID.String(), u.TenantID.String())
+	require.NoError(t, err)
+
+	// Exhaust the cap with wrong codes.
+	for i := 0; i < maxMFAChallengeAttempts; i++ {
+		_, verr := svc.VerifyLoginMFA(ctx, ct, "000000")
+		require.ErrorIs(t, verr, ErrInvalidCredentials)
+	}
+	// The token is now burned: even a correct backup code is refused (the cap is
+	// checked before the code is consumed).
+	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+}
+
+// TestVerifyLoginMFA_success_resetsFailedLogins verifies a successful OTP step
+// clears the failed-login counter, mirroring the password path (SEC-079).
+func TestVerifyLoginMFA_success_resetsFailedLogins(t *testing.T) {
+	ctx := context.Background()
+	svc, users := newLoginMFATestService(t, loginMFAFixedNow)
+
+	pwHash, err := argon2pkg.Hash("pw")
+	require.NoError(t, err)
+	userID, backupCodes := enrolMFAUser(t, svc, users, loginMFAFixedNow, pwHash)
+	u, err := users.GetByID(ctx, userID)
+	require.NoError(t, err)
+
+	ct, err := svc.IssueMFAChallengeToken(ctx, userID.String(), u.TenantID.String())
+	require.NoError(t, err)
+
+	// One wrong code bumps the counter...
+	_, err = svc.VerifyLoginMFA(ctx, ct, "000000")
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+	require.Equal(t, 1, users.failedLogins[userID])
+
+	// ...a correct backup code succeeds and clears it.
+	tok, err := svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	require.NoError(t, err)
+	require.NotEmpty(t, tok)
+	require.Equal(t, 0, users.failedLogins[userID], "success must reset the failed-login counter")
 }

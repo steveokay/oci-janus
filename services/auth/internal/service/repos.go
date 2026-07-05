@@ -154,6 +154,10 @@ type saRepo interface {
 type redisClient interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	// Incr backs the SEC-079 per-challenge-token OTP attempt counter
+	// (recordMFAChallengeAttempt). Real *redis.Client and the embedded test
+	// doubles pick it up transparently.
+	Incr(ctx context.Context, key string) *redis.IntCmd
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
 	Pipeline() redis.Pipeliner
 	SMembers(ctx context.Context, key string) *redis.StringSliceCmd
