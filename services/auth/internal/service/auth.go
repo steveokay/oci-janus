@@ -748,7 +748,12 @@ type LoginResult struct {
 //   - Otherwise → a full access token, with the user's RBAC role names and
 //     global-admin flag embedded so downstream services (and the frontend) can
 //     read them without an extra RPC.
-func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (LoginResult, error) {
+// meta carries the client IP + User-Agent captured at the HTTP edge; it is
+// threaded into the no-MFA branch so a successful password login creates a
+// listable/revocable session row (the active-session-list feature). The
+// MFA-required and setup-required branches create no session — they return
+// short-lived challenge/setup tokens, not access tokens.
+func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string, meta SessionMeta) (LoginResult, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
 	if err != nil {
 		return LoginResult{}, err
@@ -801,9 +806,11 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// "human", but we forward the actual column to keep the contract tight.
 	// Login is the password credential path, so the authentication method is
 	// always "pwd" (["pwd"] amr).
-	// sid is "" here: this password-login path does not yet mint a session row
-	// (a later task in the active-session-list feature replaces this).
-	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"}, "")
+	// issueSessionToken mints a sid, persists the user_sessions row stamped with
+	// the captured client meta, and embeds the sid in the JWT so the login can be
+	// listed and revoked. When no session repo is wired it degrades to a plain
+	// (no-sid) token — keeping existing login unit tests green.
+	tok, terr := s.issueSessionToken(ctx, user.ID, user.TenantID, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"}, meta)
 	if terr != nil {
 		return LoginResult{}, terr
 	}

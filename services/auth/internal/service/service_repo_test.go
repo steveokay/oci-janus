@@ -1017,7 +1017,7 @@ func TestLogin_validCredentials_returnsToken(t *testing.T) {
 	svc, tenantID, username, password, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	res, err := svc.Login(context.Background(), tenantID, username, password)
+	res, err := svc.Login(context.Background(), tenantID, username, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -1037,7 +1037,7 @@ func TestLogin_invalidCredentials_returnsError(t *testing.T) {
 	svc, tenantID, username, _, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	_, err := svc.Login(context.Background(), tenantID, username, "WrongPassword!999")
+	_, err := svc.Login(context.Background(), tenantID, username, "WrongPassword!999", SessionMeta{})
 	if err == nil {
 		t.Error("expected error for wrong password, got nil")
 	}

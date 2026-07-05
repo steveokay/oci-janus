@@ -521,7 +521,11 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
+	// Capture the client IP + User-Agent so a successful login creates a
+	// listable/revocable session row (the active-session-list feature). ip is
+	// already resolved above (remoteIP honours the trusted-proxy CIDR allowlist).
+	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password,
+		service.SessionMeta{IP: ip, UserAgent: r.UserAgent()})
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
 		// PENTEST-005: collapse all auth failure variants into one 401 response.

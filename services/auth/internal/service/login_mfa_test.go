@@ -59,7 +59,7 @@ func TestLogin_mfaEnabled_returnsChallenge(t *testing.T) {
 	u, err := users.GetByID(ctx, userID)
 	require.NoError(t, err)
 
-	res, err := svc.Login(ctx, u.TenantID, u.Username, "pw")
+	res, err := svc.Login(ctx, u.TenantID, u.Username, "pw", SessionMeta{})
 	require.NoError(t, err)
 	require.True(t, res.MFARequired, "MFA-enabled login must require the second step")
 	require.NotEmpty(t, res.ChallengeToken, "a challenge token must be returned")
@@ -91,7 +91,7 @@ func TestLogin_requireMFAPolicy_unenrolled_returnsSetup(t *testing.T) {
 		Kind:         "human",
 	})
 
-	res, err := svc.Login(ctx, tenantID, "forced", "pw")
+	res, err := svc.Login(ctx, tenantID, "forced", "pw", SessionMeta{})
 	require.NoError(t, err)
 	require.True(t, res.MFASetupRequired, "policy-forced un-enrolled human must be sent to setup")
 	require.NotEmpty(t, res.SetupToken, "a setup token must be returned")
@@ -117,7 +117,7 @@ func TestLogin_noMFA_returnsToken(t *testing.T) {
 		Kind:         "human",
 	})
 
-	res, err := svc.Login(ctx, tenantID, "plain", "pw")
+	res, err := svc.Login(ctx, tenantID, "plain", "pw", SessionMeta{})
 	require.NoError(t, err)
 	require.NotEmpty(t, res.Token, "plain login must return an access token")
 	require.False(t, res.MFARequired)
