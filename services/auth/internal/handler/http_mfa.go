@@ -45,6 +45,40 @@ func (h *HTTPHandler) mfaClaims(r *http.Request) (*service.Claims, bool, error) 
 	return c, false, err
 }
 
+// loginMFA implements POST /api/v1/login/mfa — step 2 of the two-step login.
+// It exchanges an mfa_challenge token (issued by POST /login when MFA is on)
+// plus a TOTP code or single-use backup code for a full access token
+// (amr=["pwd","otp"]). It mirrors the login handler's per-IP rate-limit and
+// auth-failure recording so the second factor is brute-force-bounded exactly
+// like the password step; the challenge token, code, and issued token are
+// secrets and are never logged (CLAUDE.md §10).
+func (h *HTTPHandler) loginMFA(w http.ResponseWriter, r *http.Request) {
+	ip := remoteIP(r)
+	if err := h.svc.CheckIPRateLimit(r.Context(), ip); err != nil {
+		writeError(w, http.StatusTooManyRequests, "TOOMANYREQUESTS", "rate limit exceeded")
+		return
+	}
+	var req struct {
+		ChallengeToken string `json:"challenge_token"`
+		Code           string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChallengeToken == "" || req.Code == "" {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "challenge_token and code are required")
+		return
+	}
+	tok, err := h.svc.VerifyLoginMFA(r.Context(), req.ChallengeToken, req.Code)
+	if err != nil {
+		// Any failure (bad challenge token, wrong/replayed code) collapses to a
+		// single 401 so an attacker cannot distinguish the cause. The service
+		// layer already fed the account-lockout counter on a wrong code; here we
+		// also bump the per-IP failure counter, matching the login handler.
+		h.svc.RecordAuthFailure(r.Context(), ip)
+		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid code")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
 // mfaStatus implements GET /api/v1/users/me/mfa — reports whether the caller has
 // TOTP MFA enabled and, if so, when they enrolled. Requires a normal access token.
 func (h *HTTPHandler) mfaStatus(w http.ResponseWriter, r *http.Request) {

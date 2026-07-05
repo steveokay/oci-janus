@@ -1012,12 +1012,17 @@ func TestLogin_validCredentials_returnsToken(t *testing.T) {
 	svc, tenantID, username, password, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	tok, err := svc.Login(context.Background(), tenantID, username, password)
+	res, err := svc.Login(context.Background(), tenantID, username, password)
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if tok == "" {
+	// This fixture has no MFA and no forced-enrolment policy, so Login returns a
+	// full access token directly.
+	if res.Token == "" {
 		t.Error("expected non-empty token")
+	}
+	if res.MFARequired || res.MFASetupRequired {
+		t.Errorf("expected a plain token result, got MFARequired=%v MFASetupRequired=%v", res.MFARequired, res.MFASetupRequired)
 	}
 }
 

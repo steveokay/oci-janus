@@ -683,15 +683,76 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	return newToken, nil
 }
 
-// Login validates credentials, enforces account lockout, and issues a token.
-// The user's RBAC role names and global-admin flag are loaded and embedded in
-// the JWT so downstream services (and the frontend) can read them without an
-// extra RPC.
-func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (string, error) {
+// LoginResult is the outcome of a password login. Exactly one of the three
+// states is set: an access Token, an MFA challenge (MFARequired +
+// ChallengeToken), or a forced-enrolment setup (MFASetupRequired + SetupToken).
+// The handler branches on these flags to shape the HTTP response.
+type LoginResult struct {
+	// Token is the full RS256 access token (amr=["pwd"]). Set only when MFA is
+	// not required for this user.
+	Token string
+	// MFARequired is true when the user has MFA enabled and must complete the
+	// second step at POST /api/v1/login/mfa. ChallengeToken carries the
+	// short-lived typ=mfa_challenge token to spend there.
+	MFARequired    bool
+	ChallengeToken string
+	// MFASetupRequired is true when the workspace policy forces MFA and this
+	// human password user is not yet enrolled. SetupToken carries the
+	// short-lived typ=mfa_setup token that authorizes enroll/verify.
+	MFASetupRequired bool
+	SetupToken       string
+}
+
+// Login validates credentials, enforces account lockout, and returns a
+// LoginResult describing the next step. The three outcomes are:
+//
+//   - MFA enabled → an mfa_challenge token (two-step login); the caller spends
+//     it at POST /login/mfa with an OTP or backup code.
+//   - MFA required by policy but the user is un-enrolled → an mfa_setup token
+//     (forced enrolment); the caller enrols before receiving an access token.
+//   - Otherwise → a full access token, with the user's RBAC role names and
+//     global-admin flag embedded so downstream services (and the frontend) can
+//     read them without an extra RPC.
+func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (LoginResult, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
 	if err != nil {
-		return "", err
+		return LoginResult{}, err
 	}
+
+	// MFA-enabled users never get an access token straight from Login: they
+	// must spend a challenge token at POST /login/mfa (amr becomes ["pwd","otp"]
+	// only after the OTP/backup code is verified there).
+	mfaState, err := s.users.GetMFAState(ctx, user.ID)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	if mfaState.Enabled {
+		ct, terr := s.IssueMFAChallengeToken(ctx, user.ID.String(), user.TenantID.String())
+		if terr != nil {
+			return LoginResult{}, terr
+		}
+		return LoginResult{MFARequired: true, ChallengeToken: ct}, nil
+	}
+
+	// Forced enrolment: the workspace token policy requires MFA and this human
+	// password user has no factor yet. Hand back an mfa_setup token so the FE
+	// can drive enrolment before the user holds an access token. The policy repo
+	// is optional (nil in some test fixtures) — when unwired we skip the gate,
+	// matching the pre-MFA behaviour. Service-account principals never reach this
+	// branch on the password path (GetHumanByUsername filters them), but we still
+	// guard on Kind=="human" so the policy can never force a non-human enrolment.
+	if s.tokenPolicy != nil {
+		policy, perr := s.tokenPolicy.GetOrDefault(ctx, user.TenantID)
+		if perr == nil && policy.RequireMFA && user.Kind == "human" {
+			stk, terr := s.IssueMFASetupToken(ctx, user.ID.String(), user.TenantID.String())
+			if terr != nil {
+				return LoginResult{}, terr
+			}
+			return LoginResult{MFASetupRequired: true, SetupToken: stk}, nil
+		}
+	}
+
+	// No MFA in play — issue the full access token.
 	// Load the user's role names from the role_assignments table; deduplicated
 	// because a user can hold the same role across multiple scopes (e.g. admin
 	// of two orgs). A failure here is non-fatal — log it and issue a token
@@ -704,9 +765,55 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// human credential path (password), so in practice this is always
 	// "human", but we forward the actual column to keep the contract tight.
 	// Login is the password credential path, so the authentication method is
-	// always "pwd" (["pwd"] amr). MFA-gated logins mint a challenge/setup token
-	// via the dedicated issuers instead of calling IssueToken here.
-	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"})
+	// always "pwd" (["pwd"] amr).
+	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"})
+	if terr != nil {
+		return LoginResult{}, terr
+	}
+	return LoginResult{Token: tok}, nil
+}
+
+// VerifyLoginMFA completes the two-step login: it validates the mfa_challenge
+// token minted by Login, verifies the submitted OTP or single-use backup code,
+// and — on success — mints the full access token with amr=["pwd","otp"]. A
+// wrong code feeds the SAME account-lockout counter that AuthenticateUser uses,
+// so brute-forcing the second factor is bounded by the existing lockout policy.
+// OTP codes and backup codes are never logged (CLAUDE.md §10).
+func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string) (string, error) {
+	// The challenge token is only spendable here: ValidateMFAToken enforces
+	// typ==mfa_challenge, so a normal access token (or a setup token) is refused.
+	claims, err := s.ValidateMFAToken(ctx, challengeToken, tokenTypeMFAChallenge)
+	if err != nil {
+		return "", ErrInvalidCredentials
+	}
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return "", ErrInvalidCredentials
+	}
+	ok, cerr := s.ConsumeMFACode(ctx, userID, code)
+	if cerr != nil {
+		return "", cerr
+	}
+	if !ok {
+		// Wrong / replayed code — feed the existing lockout counter exactly the
+		// way AuthenticateUser does (record + lock at the threshold) so the OTP
+		// step cannot be brute-forced past the account-lockout policy.
+		if count, ferr := s.users.RecordFailedLogin(ctx, userID); ferr == nil && count >= maxFailedLogins {
+			_ = s.users.LockUntil(ctx, userID, time.Now().Add(lockoutDuration))
+		}
+		return "", ErrInvalidCredentials
+	}
+	tenantID, _ := uuid.Parse(claims.TenantID)
+	roles := s.loadRoleNames(ctx, userID, tenantID)
+	// Re-load the user for the fresh is_global_admin flag — the challenge token
+	// deliberately carries no roles/access, so we resolve them from the DB here.
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	// The MFA login path is human-only (GetHumanByUsername gates AuthenticateUser),
+	// so principal_kind is always "human"; amr records both factors.
+	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"})
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in

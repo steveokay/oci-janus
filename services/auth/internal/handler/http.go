@@ -184,6 +184,11 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/token/workload", h.HandleWorkloadTokenExchange)
 	mux.HandleFunc("POST /api/v1/users", h.createUser)
 	mux.HandleFunc("POST /api/v1/login", h.login)
+	// Tier-1 #1 — step 2 of two-step login: exchange an mfa_challenge token +
+	// OTP/backup code for a full access token. Public (the challenge token is
+	// the credential); shares the login handler's per-IP rate-limit + auth-
+	// failure recording so the OTP step is brute-force-bounded like /login.
+	mux.HandleFunc("POST /api/v1/login/mfa", h.loginMFA)
 	mux.HandleFunc("POST /api/v1/logout", h.logout)
 	mux.HandleFunc("POST /api/v1/token/refresh", h.refreshToken)
 	mux.HandleFunc("POST /api/v1/apikeys", h.createAPIKey)
@@ -514,7 +519,7 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
+	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
 		// PENTEST-005: collapse all auth failure variants into one 401 response.
@@ -523,7 +528,18 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	// Two-step login: branch on the LoginResult. An MFA-enabled user gets a
+	// challenge token (spent at POST /login/mfa); a policy-forced un-enrolled
+	// user gets a setup token; otherwise the full access token is returned under
+	// the same {"token": ...} shape the single-step flow always used.
+	switch {
+	case res.MFARequired:
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "challenge_token": res.ChallengeToken})
+	case res.MFASetupRequired:
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_setup_required": true, "setup_token": res.SetupToken})
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"token": res.Token})
+	}
 }
 
 // logAuthFailure emits a structured server-side log entry classifying an

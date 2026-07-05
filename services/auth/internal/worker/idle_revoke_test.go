@@ -131,7 +131,7 @@ func TestIdleRevoke_Tick_RevokesIdleKeys(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
-	gooseUpTo(t, dsn, "20260702000001")
+	gooseUpTo(t, dsn, "20260705120000")
 
 	// Set 7-day idle threshold.
 	idle := int32(7)
@@ -185,7 +185,7 @@ func TestIdleRevoke_Tick_NoOpWhenIdleRevokeDaysIsNil(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
-	gooseUpTo(t, dsn, "20260702000001")
+	gooseUpTo(t, dsn, "20260705120000")
 
 	// Seed a tenant with idle_revoke_days = nil (only max_ttl_days set).
 	// ListTenantsWithIdleRevoke will NOT return this tenant, so the worker
@@ -226,7 +226,7 @@ func TestIdleRevoke_Tick_SkipsTenantsWithoutAdvisoryLock(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
-	gooseUpTo(t, dsn, "20260702000001")
+	gooseUpTo(t, dsn, "20260705120000")
 
 	idle := int32(7)
 	tenantID := seedTenantWithPolicy(t, pool, &idle)
