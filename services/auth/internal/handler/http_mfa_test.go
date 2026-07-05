@@ -6,6 +6,8 @@
 package handler
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -205,6 +207,148 @@ func TestMFADisable_noReauth_returns401(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		buf, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status: got %d, want 401, body=%s", resp.StatusCode, string(buf))
+	}
+}
+
+// TestMFAVerify_setupToken_completesLoginWithToken exercises the forced-enrolment
+// happy path: a user who holds only a short-lived mfa_setup token (no access
+// token yet) enrols and verifies with that token, and the verify response
+// carries BOTH the backup codes AND a full access token — so the FE can finish
+// login in one step (SEC-080 routes the token through the DB-resolving issuer).
+func TestMFAVerify_setupToken_completesLoginWithToken(t *testing.T) {
+	srv, tc := newMFATestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "mfa-setup-verify", "Str0ng!Password123")
+
+	// The require-MFA-gated user has only a setup token.
+	setupTok, err := tc.svc.IssueMFASetupToken(context.Background(), userID.String(), tenantID.String())
+	if err != nil {
+		t.Fatalf("IssueMFASetupToken: %v", err)
+	}
+
+	// 1. Enrol with the setup token → a fresh pending secret we can compute a
+	//    code against.
+	enrollReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users/me/mfa/enroll", nil)
+	enrollReq.Header.Set("Authorization", "Bearer "+setupTok)
+	enrollResp, err := http.DefaultClient.Do(enrollReq)
+	if err != nil {
+		t.Fatalf("POST enroll (setup token): %v", err)
+	}
+	if enrollResp.StatusCode != http.StatusOK {
+		buf, _ := io.ReadAll(enrollResp.Body)
+		_ = enrollResp.Body.Close()
+		t.Fatalf("enroll status: got %d, want 200, body=%s", enrollResp.StatusCode, string(buf))
+	}
+	var enrolled struct {
+		SecretBase32 string `json:"secret_base32"`
+	}
+	if err := json.NewDecoder(enrollResp.Body).Decode(&enrolled); err != nil {
+		t.Fatalf("decode enroll: %v", err)
+	}
+	_ = enrollResp.Body.Close()
+
+	// 2. Verify with the setup token + the correct current code.
+	body, _ := json.Marshal(map[string]string{"code": totpNow(t, enrolled.SecretBase32)})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/users/me/mfa/verify", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+setupTok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST verify (setup token): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf, _ := io.ReadAll(resp.Body)
+		t.Fatalf("verify status: got %d, want 200, body=%s", resp.StatusCode, string(buf))
+	}
+	var got struct {
+		BackupCodes []string `json:"backup_codes"`
+		Token       string   `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode verify: %v", err)
+	}
+	if len(got.BackupCodes) != 8 {
+		t.Errorf("backup_codes: got %d, want 8", len(got.BackupCodes))
+	}
+	if got.Token == "" {
+		t.Error("token: expected a full access token on setup-token verify (forced-enrolment completes login)")
+	}
+}
+
+// TestMFADisable_setupToken_returns401 pins the privilege boundary between the
+// two MFA credential kinds: the mfa_setup token authorizes enroll/verify ONLY.
+// It must NOT be accepted by DELETE /users/me/mfa (disable) — otherwise a token
+// minted for forced enrolment could tear the second factor back down. Even with
+// the correct account password in the body, requireAuth rejects the setup token
+// before the re-auth gate runs.
+func TestMFADisable_setupToken_returns401(t *testing.T) {
+	srv, tc := newMFATestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "mfa-disable-setup", "Str0ng!Password123")
+	tc.users.seedMFAEnabled(userID)
+
+	setupTok, err := tc.svc.IssueMFASetupToken(context.Background(), userID.String(), tenantID.String())
+	if err != nil {
+		t.Fatalf("IssueMFASetupToken: %v", err)
+	}
+
+	// Correct password supplied — the rejection must come from the token kind,
+	// not a failed re-auth.
+	body, _ := json.Marshal(map[string]string{"password": "Str0ng!Password123"})
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/users/me/mfa", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+setupTok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /users/me/mfa (setup token): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		buf, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d, want 401 (setup token must not disable MFA), body=%s", resp.StatusCode, string(buf))
+	}
+	// MFA must remain enabled — nothing was torn down.
+	if st, ok := tc.users.mfa[userID]; !ok || !st.Enabled {
+		t.Error("MFA must remain enabled after a rejected setup-token disable")
+	}
+}
+
+// TestMFARegenerate_validReauth_returnsFreshCodes covers the exported
+// regenerate handler happy path: an authenticated, MFA-enabled user who proves
+// control with their account password gets a fresh set of 8 distinct backup
+// codes (the prior set is atomically replaced).
+func TestMFARegenerate_validReauth_returnsFreshCodes(t *testing.T) {
+	srv, tc := newMFATestServer(t)
+	userID, tenantID := seedTestUser(t, tc, "mfa-regen", "Str0ng!Password123")
+	seedMFAEnabledWithSecret(t, tc, userID, loginMFATestSecret)
+
+	// Re-auth with the correct account password (a normal access token via
+	// makeMeRequest satisfies requireAuth).
+	body, _ := json.Marshal(map[string]string{"password": "Str0ng!Password123"})
+	req := makeMeRequest(t, srv, tc, http.MethodPost, "/api/v1/users/me/mfa/backup-codes/regenerate", body, userID, tenantID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST regenerate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: got %d, want 200, body=%s", resp.StatusCode, string(buf))
+	}
+	var got struct {
+		BackupCodes []string `json:"backup_codes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.BackupCodes) != 8 {
+		t.Fatalf("backup_codes: got %d, want 8", len(got.BackupCodes))
+	}
+	seen := map[string]bool{}
+	for _, c := range got.BackupCodes {
+		if c == "" || seen[c] {
+			t.Fatalf("backup codes must be non-empty and distinct, got %q", c)
+		}
+		seen[c] = true
 	}
 }
 

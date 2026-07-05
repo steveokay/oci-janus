@@ -72,7 +72,7 @@ func TestMFAEnrollment_HappyPathAndReplay(t *testing.T) {
 
 	// 1. Begin enrolment → non-empty secret + otpauth URI; pending secret stored,
 	//    not yet enabled.
-	secret, uri, err := svc.BeginMFAEnrollment(ctx, userID, "alice@example.com")
+	secret, uri, err := svc.BeginMFAEnrollment(ctx, userID)
 	if err != nil {
 		t.Fatalf("BeginMFAEnrollment: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestMFAEnrollment_HappyPathAndReplay(t *testing.T) {
 	}
 
 	// 4. Re-begin must be rejected — MFA is already on.
-	if _, _, err := svc.BeginMFAEnrollment(ctx, userID, "alice@example.com"); !errors.Is(err, ErrMFAAlreadyEnabled) {
+	if _, _, err := svc.BeginMFAEnrollment(ctx, userID); !errors.Is(err, ErrMFAAlreadyEnabled) {
 		t.Fatalf("expected ErrMFAAlreadyEnabled on re-enrol, got %v", err)
 	}
 
@@ -140,7 +140,7 @@ func enrolMFAUser(t *testing.T, svc *Service, users *fakeUserRepo, fixedNow time
 		IsActive:     true,
 		PasswordHash: pwHash,
 	})
-	secret, _, err := svc.BeginMFAEnrollment(context.Background(), userID, "user@example.com")
+	secret, _, err := svc.BeginMFAEnrollment(context.Background(), userID)
 	if err != nil {
 		t.Fatalf("BeginMFAEnrollment: %v", err)
 	}

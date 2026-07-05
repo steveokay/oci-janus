@@ -93,6 +93,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// JWT-posture constructors above stay signature-stable. The raw bytes are
 	// never logged.
 	svc.SetMFAKEK(cfg.MFASecretKey)
+	// Stamp freshly-enrolled secrets with the configured KEK generation so new
+	// enrolments track a rotated KEK (MFA_SECRET_KEK_VERSION). Unset/0 is
+	// ignored by the setter, leaving the default generation of 1.
+	svc.SetMFAKEKVersion(cfg.MFASecretKEKVersion)
 
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
 	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC

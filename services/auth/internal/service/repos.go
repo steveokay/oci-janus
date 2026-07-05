@@ -219,6 +219,7 @@ func NewWithFakes(
 		redis:           rdb,
 		keys:            ring,
 		mfaIssuer:       defaultMFAIssuer,
+		mfaKEKVersion:   defaultMFAKEKVersion,
 	}
 	// FUT-003: wire the debounced last_used_at updater so ValidateAPIKey
 	// tests exercise the same touch-path as production. rdb may be nil for
@@ -254,6 +255,7 @@ func NewWithFakesAndRing(
 		redis:           rdb,
 		keys:            ring,
 		mfaIssuer:       defaultMFAIssuer,
+		mfaKEKVersion:   defaultMFAKEKVersion,
 	}
 	if apiKeys != nil {
 		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())

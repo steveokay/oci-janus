@@ -87,10 +87,11 @@ func TestPutTokenPolicy_tenantAdmin_returns200(t *testing.T) {
 	env := newTestEnv(t)
 	maxTTL := int32(30)
 	idle := int32(14)
+	requireMFA := true
 	payload, _ := json.Marshal(handler.PutTokenPolicyRequestBody{
 		MaxTTLDays:     &maxTTL,
 		IdleRevokeDays: &idle,
-		RequireMFA:     true,
+		RequireMFA:     &requireMFA,
 		// RotationIntervalDays intentionally omitted — preserve existing.
 	})
 	req := newTenantAdminRequest(t, env.srv.URL, http.MethodPut, "/api/v1/access/token-policy", payload)
@@ -124,6 +125,33 @@ func TestPutTokenPolicy_tenantAdmin_returns200(t *testing.T) {
 	}
 }
 
+// TestPutTokenPolicy_omitRequireMFA_preservesExisting asserts the preserve-on-nil
+// fix: a partial PUT that omits require_mfa (e.g. a CLI/Terraform client updating
+// only a TTL limit) must NOT clobber an enabled MFA policy to false. The BFF reads
+// the current policy (require_mfa=true in the fake) and forwards that value.
+func TestPutTokenPolicy_omitRequireMFA_preservesExisting(t *testing.T) {
+	env := newTestEnv(t)
+	maxTTL := int32(45)
+	// Body omits require_mfa entirely.
+	payload, _ := json.Marshal(handler.PutTokenPolicyRequestBody{MaxTTLDays: &maxTTL})
+	req := newTenantAdminRequest(t, env.srv.URL, http.MethodPut, "/api/v1/access/token-policy", payload)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	var body handler.TokenPolicyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.RequireMFA {
+		t.Error("require_mfa: got false, want true preserved from the existing policy on a partial PUT")
+	}
+}
+
 // TestPutTokenPolicy_nonAdmin_returns403 asserts the RBAC gate rejects a
 // non-admin PUT before the JSON body is even parsed.
 func TestPutTokenPolicy_nonAdmin_returns403(t *testing.T) {
@@ -153,8 +181,11 @@ func (s *fakeAuthServer) GetTokenPolicy(_ context.Context, req *authv1.GetTokenP
 		MaxTtlDays:           wrapperspb.Int32(90),
 		RotationIntervalDays: wrapperspb.Int32(30),
 		IdleRevokeDays:       wrapperspb.Int32(60),
-		UpdatedAt:            timestamppb.Now(),
-		UpdatedByUserId:      "seed-admin-user",
+		// Canned require_mfa=true so the preserve-on-nil PUT test can assert the
+		// BFF read this value back rather than clobbering it to false.
+		RequireMfa:      true,
+		UpdatedAt:       timestamppb.Now(),
+		UpdatedByUserId: "seed-admin-user",
 	}, nil
 }
 

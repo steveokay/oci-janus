@@ -22,10 +22,13 @@ import (
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
-// mfaKEKVersion is the KEK generation stamped on freshly-encrypted MFA secrets.
-// A future KEK rotation increments this so re-encryption sweeps can find rows
-// still on an older key.
-const mfaKEKVersion int16 = 1
+// defaultMFAKEKVersion is the KEK generation stamped on freshly-encrypted MFA
+// secrets when no override is configured. A KEK rotation (the rekey tool's
+// --mfa sweep) bumps every row's mfa_secret_kek_version; operators set
+// MFA_SECRET_KEK_VERSION to the new generation in lock-step so subsequent
+// enrolments stamp the current version rather than a stale 1. Kept as a
+// package constant so the constructors and config default agree.
+const defaultMFAKEKVersion int16 = 1
 
 // ErrMFAAlreadyEnabled is returned when enrolment is attempted for a user who
 // already has MFA turned on.
@@ -51,6 +54,17 @@ func (s *Service) now() time.Time {
 // constructors stay signature-stable. The value is never logged.
 func (s *Service) SetMFAKEK(kek []byte) {
 	s.mfaKEK = kek
+}
+
+// SetMFAKEKVersion overrides the KEK generation stamped on freshly-encrypted
+// MFA secrets. Called at startup with MFA_SECRET_KEK_VERSION so new enrolments
+// stay in lock-step with a rotated KEK. A non-positive value is ignored so the
+// constructor default (defaultMFAKEKVersion) stands — the version column is a
+// positive SMALLINT generation counter.
+func (s *Service) SetMFAKEKVersion(v int16) {
+	if v > 0 {
+		s.mfaKEKVersion = v
+	}
 }
 
 // MFAStatus is the self-service status payload.
@@ -101,13 +115,20 @@ func (s *Service) GetMFAStatus(ctx context.Context, userID uuid.UUID) (MFAStatus
 
 // BeginMFAEnrollment mints a fresh secret, stores it encrypted (pending), and
 // returns the base32 secret + otpauth URI for the QR. Rejects if already on.
-func (s *Service) BeginMFAEnrollment(ctx context.Context, userID uuid.UUID, account string) (secretBase32, otpauthURI string, err error) {
+// The otpauth account label is resolved from the user's record (email, then
+// username) so authenticator apps show a human-readable name; it falls back to
+// the user id only when neither is set (never expected for a human account).
+func (s *Service) BeginMFAEnrollment(ctx context.Context, userID uuid.UUID) (secretBase32, otpauthURI string, err error) {
 	st, err := s.users.GetMFAState(ctx, userID)
 	if err != nil {
 		return "", "", err
 	}
 	if st.Enabled {
 		return "", "", ErrMFAAlreadyEnabled
+	}
+	account, err := s.mfaAccountLabel(ctx, userID)
+	if err != nil {
+		return "", "", err
 	}
 	secret, uri, err := mfa.GenerateSecret(s.mfaIssuer, account)
 	if err != nil {
@@ -120,10 +141,30 @@ func (s *Service) BeginMFAEnrollment(ctx context.Context, userID uuid.UUID, acco
 	if err != nil {
 		return "", "", fmt.Errorf("encrypt mfa secret: %w", err)
 	}
-	if err := s.users.SetPendingMFASecret(ctx, userID, enc, mfaKEKVersion); err != nil {
+	if err := s.users.SetPendingMFASecret(ctx, userID, enc, s.mfaKEKVersion); err != nil {
 		return "", "", err
 	}
 	return secret, uri, nil
+}
+
+// mfaAccountLabel resolves the otpauth:// account label for a user: their email
+// if set, else their username, else the bare user id as a last resort. The
+// label is non-secret (it identifies the account inside the authenticator app),
+// but it is embedded in the otpauth URI which also carries the secret, so — like
+// the URI — it is never logged.
+func (s *Service) mfaAccountLabel(ctx context.Context, userID uuid.UUID) (string, error) {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case u.Email != "":
+		return u.Email, nil
+	case u.Username != "":
+		return u.Username, nil
+	default:
+		return userID.String(), nil
+	}
 }
 
 // CompleteMFAEnrollment verifies the first code against the pending secret; on
