@@ -404,6 +404,19 @@ func (f *handlerFakeUserRepo) InsertBackupCodes(_ context.Context, _ uuid.UUID, 
 	return nil
 }
 
+// MFA disable + recovery-code stubs (Task 6). The handler package does not
+// exercise these flows, so minimal no-ops that satisfy the service.userRepo
+// interface are sufficient.
+func (f *handlerFakeUserRepo) DisableMFA(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *handlerFakeUserRepo) DeleteBackupCodes(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *handlerFakeUserRepo) ListUnusedBackupCodes(_ context.Context, _ uuid.UUID) ([]repository.BackupCode, error) {
+	return nil, nil
+}
+
+func (f *handlerFakeUserRepo) MarkBackupCodeUsed(_ context.Context, _ uuid.UUID) error { return nil }
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey

@@ -94,6 +94,16 @@ type userRepo interface {
 	EnableMFA(ctx context.Context, userID uuid.UUID) error
 	AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) error
 	InsertBackupCodes(ctx context.Context, userID uuid.UUID, hashes []string) error
+	// MFA disable + recovery-code consumption (Task 6). DisableMFA clears all
+	// TOTP state; DeleteBackupCodes removes the recovery codes (the two together
+	// fully tear down MFA). ListUnusedBackupCodes / MarkBackupCodeUsed back the
+	// single-use recovery-code path — MarkBackupCodeUsed returns
+	// repository.ErrNotFound when the code was already spent, so a concurrent
+	// double-spend loses the race cleanly.
+	DisableMFA(ctx context.Context, userID uuid.UUID) error
+	DeleteBackupCodes(ctx context.Context, userID uuid.UUID) error
+	ListUnusedBackupCodes(ctx context.Context, userID uuid.UUID) ([]repository.BackupCode, error)
+	MarkBackupCodeUsed(ctx context.Context, id uuid.UUID) error
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

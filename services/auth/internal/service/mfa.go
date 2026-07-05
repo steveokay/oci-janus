@@ -147,6 +147,104 @@ func (s *Service) verifyTOTP(ctx context.Context, userID uuid.UUID, st *reposito
 	return true, nil
 }
 
+// DisableMFA requires re-auth (a valid password, TOTP, or unused backup code),
+// then clears all MFA state + backup codes. The re-auth gate defends against a
+// hijacked session silently turning the second factor off. Backup codes live in
+// a separate table, so they are cleared alongside the user-row MFA columns to
+// leave no orphaned recovery codes behind.
+func (s *Service) DisableMFA(ctx context.Context, userID uuid.UUID, password, code string) error {
+	if err := s.reauth(ctx, userID, password, code); err != nil {
+		return err
+	}
+	if err := s.users.DisableMFA(ctx, userID); err != nil {
+		return err
+	}
+	return s.users.DeleteBackupCodes(ctx, userID)
+}
+
+// RegenerateBackupCodes requires re-auth, then replaces the whole code set with
+// 8 fresh codes and returns the new plaintext once. Re-issuing atomically
+// invalidates every previously-issued code (InsertBackupCodes is delete-then-
+// insert), so a leaked prior code cannot be redeemed after a regenerate.
+func (s *Service) RegenerateBackupCodes(ctx context.Context, userID uuid.UUID, password, code string) ([]string, error) {
+	if err := s.reauth(ctx, userID, password, code); err != nil {
+		return nil, err
+	}
+	return s.regenerateBackupCodes(ctx, userID)
+}
+
+// reauth accepts EITHER the account password OR a valid current OTP / unused
+// backup code as proof the caller controls the account. It returns
+// ErrInvalidCredentials when neither proves control, so callers surface a single
+// uniform failure regardless of which factor was attempted. The password branch
+// is skipped when password is empty (and vice-versa) so an empty submission for
+// one factor never short-circuits the other. Passwords, OTPs, and backup codes
+// are never logged (CLAUDE.md §10).
+func (s *Service) reauth(ctx context.Context, userID uuid.UUID, password, code string) error {
+	if password != "" {
+		u, err := s.users.GetByID(ctx, userID)
+		if err != nil {
+			return err
+		}
+		// argon2pkg.Verify returns (false, err) on a malformed stored hash; we
+		// treat any non-match (error or false) as "password did not prove
+		// control" and fall through to the code branch.
+		ok, _ := argon2pkg.Verify(password, u.PasswordHash)
+		if ok {
+			return nil
+		}
+	}
+	if code != "" {
+		ok, err := s.ConsumeMFACode(ctx, userID, code)
+		if err == nil && ok {
+			return nil
+		}
+	}
+	return ErrInvalidCredentials
+}
+
+// ConsumeMFACode validates a submitted code as EITHER a TOTP (with the same
+// replay-prevention as enrolment) OR an unused single-use backup code. It
+// returns true on success. A matched backup code is marked consumed before
+// success is reported; if the mark loses a race to a concurrent redemption the
+// method reports failure (false) so a code can never be spent twice. Returns
+// ErrMFANotEnrolled when the user has no enabled factor.
+func (s *Service) ConsumeMFACode(ctx context.Context, userID uuid.UUID, code string) (bool, error) {
+	st, err := s.users.GetMFAState(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if !st.Enabled || len(st.SecretEnc) == 0 {
+		return false, ErrMFANotEnrolled
+	}
+	// TOTP first — the common case and the cheapest check.
+	ok, err := s.verifyTOTP(ctx, userID, st, code)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
+	// Then backup codes: argon2-compare the submission against each unused hash.
+	codes, err := s.users.ListUnusedBackupCodes(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	for _, bc := range codes {
+		match, verr := argon2pkg.Verify(code, bc.CodeHash)
+		if verr == nil && match {
+			// Single-use: mark consumed. A concurrent double-spend loses the
+			// race — MarkBackupCodeUsed returns ErrNotFound once the row is
+			// already stamped, and we report failure rather than success.
+			if merr := s.users.MarkBackupCodeUsed(ctx, bc.ID); merr != nil {
+				return false, nil // already used by a racing request
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // regenerateBackupCodes mints, hashes, and stores 8 fresh codes, returning the
 // plaintext once. Callers must surface the plaintext to the user immediately —
 // only the argon2 hashes are persisted.

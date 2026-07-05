@@ -60,9 +60,11 @@ type fakeUserRepo struct {
 	// mfa holds per-user TOTP state (Task 5), keyed by user ID. Lazily
 	// initialised by the MFA setter methods so non-MFA tests pay nothing.
 	mfa map[uuid.UUID]*repository.MFAState
-	// backupCodes holds the argon2 hashes stored by InsertBackupCodes, keyed
-	// by user ID. Only the count/replacement is asserted by tests.
-	backupCodes map[uuid.UUID][]string
+	// backupCodes holds the recovery codes stored by InsertBackupCodes, keyed
+	// by user ID. Each entry carries a generated ID + argon2 hash + used flag so
+	// the Task 6 single-use consumption path (ListUnusedBackupCodes /
+	// MarkBackupCodeUsed) has real behaviour to exercise.
+	backupCodes map[uuid.UUID][]repository.BackupCode
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -542,16 +544,68 @@ func (f *fakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, co
 	return nil
 }
 
-// InsertBackupCodes replaces the user's stored backup-code hashes.
+// InsertBackupCodes replaces the user's stored backup-code hashes, minting a
+// fresh ID + unused flag per code (delete-then-insert, mirroring the real repo).
 func (f *fakeUserRepo) InsertBackupCodes(_ context.Context, userID uuid.UUID, hashes []string) error {
 	if f.findUserByID(userID) == nil {
 		return repository.ErrNotFound
 	}
 	if f.backupCodes == nil {
-		f.backupCodes = make(map[uuid.UUID][]string)
+		f.backupCodes = make(map[uuid.UUID][]repository.BackupCode)
 	}
-	f.backupCodes[userID] = append([]string(nil), hashes...)
+	codes := make([]repository.BackupCode, 0, len(hashes))
+	for _, h := range hashes {
+		codes = append(codes, repository.BackupCode{ID: uuid.New(), CodeHash: h, Used: false})
+	}
+	f.backupCodes[userID] = codes
 	return nil
+}
+
+// DisableMFA clears the user's in-memory MFA state (Task 6). Backup codes are
+// cleared separately via DeleteBackupCodes, matching the real repository split.
+func (f *fakeUserRepo) DisableMFA(_ context.Context, userID uuid.UUID) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	delete(f.mfa, userID)
+	return nil
+}
+
+// DeleteBackupCodes removes all of the user's stored recovery codes. Idempotent:
+// deleting when none exist is not an error (matches the real repo).
+func (f *fakeUserRepo) DeleteBackupCodes(_ context.Context, userID uuid.UUID) error {
+	delete(f.backupCodes, userID)
+	return nil
+}
+
+// ListUnusedBackupCodes returns the user's not-yet-consumed recovery codes so
+// ConsumeMFACode can argon2-compare a submission against each unused hash.
+func (f *fakeUserRepo) ListUnusedBackupCodes(_ context.Context, userID uuid.UUID) ([]repository.BackupCode, error) {
+	var out []repository.BackupCode
+	for _, c := range f.backupCodes[userID] {
+		if !c.Used {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// MarkBackupCodeUsed flips a single code's used flag, but only if it is still
+// unused — a second consume of the same code returns repository.ErrNotFound so
+// a spent code cannot be redeemed twice (mirrors the SQL "AND used_at IS NULL").
+func (f *fakeUserRepo) MarkBackupCodeUsed(_ context.Context, id uuid.UUID) error {
+	for userID, codes := range f.backupCodes {
+		for i := range codes {
+			if codes[i].ID == id {
+				if codes[i].Used {
+					return repository.ErrNotFound
+				}
+				f.backupCodes[userID][i].Used = true
+				return nil
+			}
+		}
+	}
+	return repository.ErrNotFound
 }
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
