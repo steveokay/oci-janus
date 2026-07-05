@@ -1,10 +1,14 @@
 name: CI — core
 
 on:
+  # Include this workflow file in the path filter so changes to the pipeline
+  # itself (e.g. the conformance-stack env setup) self-trigger and validate,
+  # rather than silently landing untested until the next core/libs/proto PR.
   push:
-    paths: ["services/core/**", "libs/**", "proto/**"]
+    paths: ["services/core/**", "libs/**", "proto/**", ".github/workflows/ci-core.yml"]
   pull_request:
-    paths: ["services/core/**", "libs/**", "proto/**"]
+    paths: ["services/core/**", "libs/**", "proto/**", ".github/workflows/ci-core.yml"]
+  workflow_dispatch: {}
 
 jobs:
   lint:
@@ -102,6 +106,12 @@ jobs:
           printf '\nJWT_PRIVATE_KEY_B64=%s\n' "$JWT_PRIVATE_B64" >> services/auth/.env
           printf 'JWT_PUBLIC_KEY_B64=%s\n'  "$JWT_PUBLIC_B64"  >> services/auth/.env
           printf 'JWT_KEY_ID=%s\n'          "$JWT_KID"         >> services/auth/.env
+          # MFA (TOTP) secret-at-rest AES-256 KEK. registry-auth's config
+          # validate() fails CLOSED when MFA_SECRET_KEY_HEX is empty or not
+          # exactly 32 bytes (PR #267), so .env.example's empty placeholder
+          # would leave the auth container unhealthy at startup and abort the
+          # whole conformance stack. Generate an ephemeral KEK inline.
+          printf 'MFA_SECRET_KEY_HEX=%s\n' "$(openssl rand -hex 32)" >> services/auth/.env
 
           # ── Write services/core/.env (no extra vars needed) ───────────────
           cp services/core/.env.example services/core/.env
