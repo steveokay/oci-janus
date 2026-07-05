@@ -1,5 +1,7 @@
 # REM-013 Gap 3 — Retention Savings Implementation Plan
 
+> **✅ SHIPPED — REM-013 gap 3, PR #253. Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** implement task-by-task, TDD, one commit per task.
 
 **Goal:** Surface *bytes reclaimed via retention* on the dashboard storage-breakdown card, via a new `GCService.GetTenantRetentionSavings` RPC that aggregates `gc_runs.bytes_freed` for retention modes, wired through the management BFF.

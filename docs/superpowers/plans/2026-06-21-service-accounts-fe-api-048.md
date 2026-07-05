@@ -1,5 +1,7 @@
 # Service Accounts + `/api-keys` Hub (FE-API-048) — Implementation Plan
 
+> **✅ SHIPPED — FE-API-048 service-accounts + /api-keys hub (2026-06). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add workspace-owned service-account API keys to `services/auth`, plus a `/api-keys` hub UI with live service-accounts/activity surfaces and four dummy-data preview surfaces for FUT-001..004.

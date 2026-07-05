@@ -1,5 +1,7 @@
 # KEK Rotation Tool Implementation Plan
 
+> **✅ SHIPPED — RED-FU-015, PR #249 (+#262 hardening follow-ups). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give operators a safe, per-service `rotate-kek` CLI subcommand that re-encrypts every KEK-encrypted column across the four affected databases (auth, proxy, webhook, audit) from an OLD key to a NEW key, with dry-run and verify modes.

@@ -1,5 +1,7 @@
 # FUT-003 Token Policies Implementation Plan
 
+> **✅ SHIPPED — PR #225 (+#226/#228 hardening). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Lift `/api-keys/policies` from preview to live — workspace-admin sets a single policy (`max_ttl_days`, `rotation_interval_days`, `idle_revoke_days`), the auth service enforces the cap on new keys, an hourly background worker revokes idle keys, and every API key gains a `last_used_at` timestamp that FUT-004 will consume.

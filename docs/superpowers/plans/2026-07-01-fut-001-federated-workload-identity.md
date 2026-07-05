@@ -1,5 +1,7 @@
 # FUT-001 Federated Workload Identity Implementation Plan
 
+> **✅ SHIPPED — PR #224. Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Lift `/api-keys/trust` from preview to live — CI runners (GitHub Actions / GitLab CI / Buildkite / generic OIDC) exchange a workload OIDC token for a short-lived registry JWT mapped to a workspace service account, with no static API key.

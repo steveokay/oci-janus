@@ -1,5 +1,7 @@
 # Active Session List + Per-Row Revoke — Implementation Plan
 
+> **✅ SHIPPED — PR #270 (session pagination follow-up in #277). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give a signed-in user a list of their active sessions (device, IP, last active) on `/settings/account` with per-row revoke + "sign out all other sessions", backed by a durable `user_sessions` table and a stable `sid` JWT claim.

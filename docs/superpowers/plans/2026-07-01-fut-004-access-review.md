@@ -1,5 +1,7 @@
 # FUT-004 Access Review Implementation Plan
 
+> **✅ SHIPPED — PR #227 (+#228 hardening). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Lift `/api-keys/review` from preview to live — a weekly background job flags API keys that are stale (`last_used_at < threshold`) OR have a lapsed rotation deadline (`rotation_due_at < now()`); operators see the list in `/api-keys/review` and pick per-row Revoke / Keep / Snooze 30d. Last of the FUT-001..004 batch.

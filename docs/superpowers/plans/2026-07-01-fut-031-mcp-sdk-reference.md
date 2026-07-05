@@ -1,5 +1,7 @@
 # FUT-031 SDK Reference — Official `modelcontextprotocol/go-sdk` v1.4.0
 
+> **✅ Reference doc — consumed while building the FUT-031 MCP server (PR #232). Not an execution checklist.**
+
 > Synthesised from the SDK source at `github.com\modelcontextprotocol\go-sdk@v1.4.0\mcp\`. This is the OFFICIAL Go SDK from the Model Context Protocol org — **use this, not mark3labs**. The subagent's original plan pointed at mark3labs which is not cached; the official SDK IS cached and is the better choice anyway.
 
 ## Module + import

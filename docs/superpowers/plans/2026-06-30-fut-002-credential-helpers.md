@@ -1,5 +1,7 @@
 # FUT-002 Credential Helpers Implementation Plan
 
+> **✅ SHIPPED — PR #221. Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Lift `/api-keys/helpers` from preview to live — render hostname-aware `docker login` / k8s Secret / Terraform / GHA snippets parameterised on the operator's selected service account.
