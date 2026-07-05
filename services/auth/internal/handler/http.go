@@ -210,6 +210,12 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users/me/mfa/verify", h.mfaVerify)
 	mux.HandleFunc("DELETE /api/v1/users/me/mfa", h.mfaDisable)
 	mux.HandleFunc("POST /api/v1/users/me/mfa/backup-codes/regenerate", h.mfaRegenerateBackupCodes)
+	// Tier-1 #1 — self-service active session list + revoke. Identity comes from
+	// the Bearer token; ownership is enforced in the service/repo layer so a sid
+	// belonging to another user surfaces as 404, never a cross-user revoke.
+	mux.HandleFunc("GET /api/v1/users/me/sessions", h.listSessions)
+	mux.HandleFunc("DELETE /api/v1/users/me/sessions/{sid}", h.revokeSession)
+	mux.HandleFunc("POST /api/v1/users/me/sessions/revoke-others", h.revokeOtherSessions)
 	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.
