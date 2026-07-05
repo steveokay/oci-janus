@@ -237,6 +237,7 @@ Quick pointer to the largest open backlog items (see `futures.md` for full detai
 - **DEPLOY-001** — SaaS vs self-hosted deployment docs + tenant-persona testing — ~half day
 - Smaller Tier 2 items: FUT-007-FE, FUT-008, etc.
 - Remaining DSGN: DSGN-002 / -008 / -009 / -018 / -023 / -024 (6 of 24 still open from the 2026-06-23 review batch)
+- **System review batch 2026-07-05** — FUT-071 (air-gap export/import), FUT-072 (vuln diff between tags), FUT-073 (per-token rate limit on core data plane), FUT-074 (quota fail-open observability), FUT-075 (test-debt truth-up: `libs/scanner` + TESTING.md claims) + FUT-067 amended with an on-demand hash-chain-verify UI action — see the `futures.md` section of the same name
 
 ---
 
