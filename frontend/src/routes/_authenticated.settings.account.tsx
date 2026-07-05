@@ -13,7 +13,7 @@
 import * as React from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Bell, Compass, Shield } from "lucide-react";
+import { Bell, Compass } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -27,6 +27,8 @@ import { Badge } from "@/components/ui/badge";
 import { ErrorState } from "@/components/ui/error-state";
 import { IdentityCard } from "@/components/profile/identity-card";
 import { ChangePasswordDialog } from "@/components/profile/change-password-dialog";
+import { MfaCard } from "@/components/profile/mfa-card";
+import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
 import { ApiKeysSection } from "@/components/profile/api-keys-section";
 import {
   useNotificationPreferences,
@@ -44,6 +46,10 @@ function AccountTab(): React.ReactElement {
   // component (it just emits onChangePassword). Matches the pattern used by
   // the old /profile page so the user behaviour is unchanged.
   const [passwordOpen, setPasswordOpen] = React.useState(false);
+  // MFA enrolment dialog state, owned here alongside the password dialog so
+  // MfaCard stays a dumb emitter. The disable flow's dialog is built in the
+  // next task; for now onDisable is a no-op stub (wired then).
+  const [mfaEnrollOpen, setMfaEnrollOpen] = React.useState(false);
 
   return (
     <div className="space-y-6">
@@ -62,9 +68,15 @@ function AccountTab(): React.ReactElement {
           colocated with profile. */}
       <NotificationsSection />
 
-      {/* MFA + active sessions placeholder. Belongs on Account because it's
-          personal-account hardening; was the old Security tab. */}
-      <SecuritySection />
+      {/* MFA card. Personal-account hardening; was the old Security tab
+          placeholder. onDisable is a no-op until the disable dialog lands in
+          the next task. */}
+      <MfaCard
+        onEnroll={() => setMfaEnrollOpen(true)}
+        onDisable={() => {
+          // wired in the disable task
+        }}
+      />
 
       {/* REDESIGN-001 Phase 4.3 §3 — replay onboarding link. The first-run
           wizard auto-shows on the dashboard for users with
@@ -77,6 +89,7 @@ function AccountTab(): React.ReactElement {
       <ReplayOnboardingFooter />
 
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
+      <MfaEnrollDialog open={mfaEnrollOpen} onOpenChange={setMfaEnrollOpen} />
     </div>
   );
 }
@@ -279,30 +292,5 @@ function SkeletonRows(): React.ReactElement {
         </TableRow>
       ))}
     </>
-  );
-}
-
-// ── Security / MFA placeholder (futures.md Tier 1 #1) ───────────────
-
-function SecuritySection(): React.ReactElement {
-  return (
-    <section className="rounded-lg border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] p-6 text-center">
-      <div className="mx-auto inline-flex size-10 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-fg-muted)]">
-        <Shield className="size-5" />
-      </div>
-      <h2 className="mt-3 font-display text-lg font-medium">
-        Two-factor auth + active sessions
-      </h2>
-      <p className="mx-auto mt-2 max-w-prose text-sm text-[var(--color-fg-muted)]">
-        TOTP enrolment with QR code + 8 backup codes, optional WebAuthn /
-        hardware key support, active-session list with per-row revoke, and a
-        workspace policy toggle to require MFA for every member. Lives here so
-        operators don't have to context-switch to a separate /security route
-        for personal account hardening.
-      </p>
-      <p className="mt-3 text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-        Tracked under Tier 1 #1 (MFA + session management)
-      </p>
-    </section>
   );
 }
