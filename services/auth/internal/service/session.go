@@ -78,6 +78,51 @@ func (s *Service) issueSessionToken(ctx context.Context, userID, tenantID uuid.U
 // fail-closed by ValidateToken, mirroring revoke:user.
 func sessionRevokeKey(sid string) string { return "revoke:sid:" + sid }
 
+// ListSessions returns the caller's live sessions, honouring the tenant idle
+// policy. tenantID scopes the idle-window lookup only; rows are filtered by
+// user_id in the repo.
+func (s *Service) ListSessions(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.Session, error) {
+	return s.sessions.ListLive(ctx, userID, s.idleCutoff(ctx, tenantID))
+}
+
+// RevokeSession revokes one of the caller's own sessions and sets the fail-closed
+// Redis gate with a TTL = the session's remaining lifetime (bounded by the 30d
+// max). ok=false means the sid was absent or not owned (-> handler 404).
+func (s *Service) RevokeSession(ctx context.Context, userID, sid uuid.UUID) (bool, error) {
+	expiresAt, ok, err := s.sessions.RevokeOwned(ctx, userID, sid)
+	if err != nil || !ok {
+		return false, err
+	}
+	s.setSessionRevokeGate(ctx, sid, expiresAt)
+	return true, nil
+}
+
+// RevokeOtherSessions revokes every live session for the caller except keepSID
+// (the current one) and gates each. Returns the count revoked.
+func (s *Service) RevokeOtherSessions(ctx context.Context, userID, keepSID uuid.UUID) (int, error) {
+	revoked, err := s.sessions.RevokeOthers(ctx, userID, keepSID)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range revoked {
+		s.setSessionRevokeGate(ctx, r.SID, r.ExpiresAt)
+	}
+	return len(revoked), nil
+}
+
+// setSessionRevokeGate sets revoke:sid with a TTL = remaining session lifetime,
+// so the entry self-cleans exactly when the session could no longer exist
+// (SEC-005 TTL-coupling). A non-positive TTL (already expired) is skipped.
+func (s *Service) setSessionRevokeGate(ctx context.Context, sid uuid.UUID, expiresAt time.Time) {
+	ttl := time.Until(expiresAt)
+	if ttl <= 0 {
+		return
+	}
+	if err := s.redis.Set(ctx, sessionRevokeKey(sid.String()), "1", ttl).Err(); err != nil {
+		slog.ErrorContext(ctx, "set revoke:sid gate failed", "sid", sid, "err", err)
+	}
+}
+
 // idleCutoff returns now()-idleWindow, honouring the tenant token policy's
 // idle_revoke_days when configured, else the default sessionIdleWindow.
 func (s *Service) idleCutoff(ctx context.Context, tenantID uuid.UUID) time.Time {

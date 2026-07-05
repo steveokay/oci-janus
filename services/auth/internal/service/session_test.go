@@ -247,6 +247,60 @@ func TestValidateToken_revokedSid_denied(t *testing.T) {
 	}
 }
 
+func TestRevokeSession_setsGateAndRow(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	svc := newSessionTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	userID := uuid.New()
+	sid := uuid.New()
+	sessions.bySID[sid.String()] = &repository.Session{SID: sid, UserID: userID, ExpiresAt: time.Now().Add(time.Hour)}
+
+	ok, err := svc.RevokeSession(ctx, userID, sid)
+	if err != nil || !ok {
+		t.Fatalf("RevokeSession: ok=%v err=%v", ok, err)
+	}
+	if v, _ := rdb.Get(ctx, sessionRevokeKey(sid.String())).Result(); v == "" {
+		t.Fatal("RevokeSession must set the revoke:sid gate")
+	}
+	if ok, _ := svc.RevokeSession(ctx, uuid.New(), sid); ok {
+		t.Fatal("cross-user RevokeSession must return ok=false")
+	}
+}
+
+// TestRevokeOtherSessions_keepsCurrent seeds two live sessions for one user,
+// revokes all but the kept sid, and asserts the count is 1 and the kept session's
+// gate is NOT set (it must remain valid).
+func TestRevokeOtherSessions_keepsCurrent(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	svc := newSessionTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	userID := uuid.New()
+	keepSID := uuid.New()
+	otherSID := uuid.New()
+	sessions.bySID[keepSID.String()] = &repository.Session{SID: keepSID, UserID: userID, ExpiresAt: time.Now().Add(time.Hour)}
+	sessions.bySID[otherSID.String()] = &repository.Session{SID: otherSID, UserID: userID, ExpiresAt: time.Now().Add(time.Hour)}
+
+	n, err := svc.RevokeOtherSessions(ctx, userID, keepSID)
+	if err != nil {
+		t.Fatalf("RevokeOtherSessions: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 revoked, got %d", n)
+	}
+	// The kept session's gate must NOT be set — it stays valid.
+	if v, _ := rdb.Get(ctx, sessionRevokeKey(keepSID.String())).Result(); v != "" {
+		t.Fatal("kept session must not be gated")
+	}
+	// The other session's gate must be set.
+	if v, _ := rdb.Get(ctx, sessionRevokeKey(otherSID.String())).Result(); v == "" {
+		t.Fatal("revoked session must be gated")
+	}
+}
+
 func TestSessionActiveUpdater_debounces(t *testing.T) {
 	rdb := newTestRedis(t)
 	sessions := newFakeSessionRepo()
