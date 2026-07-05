@@ -122,7 +122,7 @@ func (h *HTTPHandler) mfaEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 		return
 	}
-	secret, uri, err := h.svc.BeginMFAEnrollment(r.Context(), userID, accountLabel(claims))
+	secret, uri, err := h.svc.BeginMFAEnrollment(r.Context(), userID)
 	if err != nil {
 		if errors.Is(err, service.ErrMFAAlreadyEnabled) {
 			// Idempotency guard: a user who already has MFA on must disable it
@@ -272,14 +272,4 @@ func (h *HTTPHandler) mfaRegenerateBackupCodes(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"backup_codes": codes})
-}
-
-// accountLabel returns a stable label for the otpauth URI account name. The
-// subject (user id) is always available on the claims; there is no username or
-// email field on service.Claims, so we use the subject. The label is not a
-// secret (it identifies the account in the authenticator app), but it also must
-// never expose more than the caller already knows about themselves — the user id
-// satisfies both constraints.
-func accountLabel(c *service.Claims) string {
-	return c.Subject
 }

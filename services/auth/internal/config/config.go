@@ -85,6 +85,15 @@ type Config struct {
 	// re-decoding (and re-validating) the hex string.
 	MFASecretKey []byte `mapstructure:"-"`
 
+	// MFASecretKEKVersion is the KEK generation stamped on freshly-encrypted
+	// MFA secrets (users.mfa_secret_kek_version). Defaults to 1. When the MFA
+	// KEK is rotated via the rekey tool's --mfa sweep (which bumps every
+	// existing row to the new generation), operators set this to the same new
+	// value so subsequent enrolments stamp the current version rather than a
+	// stale 1. A non-positive value is ignored by the service (the built-in
+	// default of 1 stands).
+	MFASecretKEKVersion int16 `mapstructure:"MFA_SECRET_KEK_VERSION"`
+
 	// DefaultTenantID is the fallback tenant UUID used when auto-provisioning
 	// a new SSO user and no existing user row can be matched by email
 	// (RM-004: tenant_id is no longer stored in the SSO session). Required

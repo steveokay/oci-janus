@@ -73,10 +73,15 @@ type PutTokenPolicyRequestBody struct {
 	RotationIntervalDays *int32 `json:"rotation_interval_days,omitempty"`
 	IdleRevokeDays       *int32 `json:"idle_revoke_days,omitempty"`
 	// RequireMFA (TOTP MFA Task 14): admin toggle for enforcing MFA on all
-	// local password accounts. Plain bool — the proto field is a plain bool
-	// with no wrapper, so the FE always submits the current on/off value and
-	// there is no partial-update / preserve-existing case for this dimension.
-	RequireMFA bool `json:"require_mfa"`
+	// local password accounts. Nullable so a partial update — an omitted or
+	// explicitly-null field — preserves the existing value rather than
+	// clobbering it to false. The FE always submits the current on/off value
+	// (so it round-trips unchanged), but a CLI/Terraform client that PUTs only
+	// the TTL limits and omits require_mfa would otherwise silently disable an
+	// enabled MFA policy. The proto field is a plain (non-nullable) bool, so
+	// the preserve-on-nil resolution happens here at the BFF: a nil value is
+	// resolved to the current policy's value before the gRPC call.
+	RequireMFA *bool `json:"require_mfa,omitempty"`
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────
@@ -121,12 +126,22 @@ func (h *Handler) handlePutTokenPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// require_mfa preserve-on-nil: the proto field is a plain bool with no
+	// "unset" state, so an omitted JSON field cannot be distinguished from
+	// false on the wire. Resolve nil to the current policy's value here (a
+	// read-modify-write) so a partial PUT that omits require_mfa preserves the
+	// existing toggle instead of clobbering it to false.
+	requireMFA, ok := h.resolveRequireMFA(w, r, tenantID, body.RequireMFA)
+	if !ok {
+		return // resolveRequireMFA already wrote the error response
+	}
+
 	policy, err := h.auth.PutTokenPolicy(r.Context(), &authv1.PutTokenPolicyRequest{
 		TenantId:             tenantID,
 		MaxTtlDays:           intPtrToWrapper(body.MaxTTLDays),
 		RotationIntervalDays: intPtrToWrapper(body.RotationIntervalDays),
 		IdleRevokeDays:       intPtrToWrapper(body.IdleRevokeDays),
-		RequireMfa:           body.RequireMFA,
+		RequireMfa:           requireMFA,
 		ActorId:              actorID,
 	})
 	if err != nil {
@@ -134,6 +149,27 @@ func (h *Handler) handlePutTokenPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toTokenPolicyResponse(policy))
+}
+
+// resolveRequireMFA resolves the desired require_mfa value for a PUT. A non-nil
+// body value is used verbatim. A nil value means "preserve existing": it reads
+// the current policy row and returns its require_mfa, so a partial update that
+// omits the field does not clobber an enabled MFA policy to false. On a gRPC
+// error while reading the current policy it writes the mapped HTTP error and
+// returns ok=false so the caller aborts. (A tenant with no policy row yet reads
+// back false, which is the correct default for a first write.)
+func (h *Handler) resolveRequireMFA(w http.ResponseWriter, r *http.Request, tenantID string, v *bool) (bool, bool) {
+	if v != nil {
+		return *v, true
+	}
+	cur, err := h.auth.GetTokenPolicy(r.Context(), &authv1.GetTokenPolicyRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		mapTokenPolicyGRPCError(w, "get token policy", err)
+		return false, false
+	}
+	return cur.GetRequireMfa(), true
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

@@ -43,6 +43,34 @@ func TestValidateCode_AcceptsPrevWindow(t *testing.T) {
 	}
 }
 
+// TestValidateCode_AcceptsNextWindow allows a code from one step later
+// (+1 skew), returning that later counter — the forward half of the ±1
+// tolerance (the prev-window case covers −1).
+func TestValidateCode_AcceptsNextWindow(t *testing.T) {
+	at := time.Unix(1234567890, 0)
+	next := uint64(at.Unix())/periodSeconds + 1
+	code, _ := hotp.GenerateCode(rfc6238Secret, next)
+	ok, gotCounter := ValidateCode(rfc6238Secret, code, at)
+	if !ok || gotCounter != int64(next) {
+		t.Fatalf("next-window code should validate with its counter, got ok=%v c=%d", ok, gotCounter)
+	}
+}
+
+// TestValidateCode_RejectsOutOfWindow rejects codes exactly one step beyond the
+// ±1 tolerance on each side (−2 and +2), pinning the accepted window to three
+// counters and no wider.
+func TestValidateCode_RejectsOutOfWindow(t *testing.T) {
+	at := time.Unix(1234567890, 0)
+	base := uint64(at.Unix()) / periodSeconds
+	for _, delta := range []int{-2, +2} {
+		counter := uint64(int64(base) + int64(delta))
+		code, _ := hotp.GenerateCode(rfc6238Secret, counter)
+		if ok, _ := ValidateCode(rfc6238Secret, code, at); ok {
+			t.Fatalf("code from delta=%d must be rejected (outside ±%d skew)", delta, skewSteps)
+		}
+	}
+}
+
 // TestValidateCode_RejectsWrongCode rejects a bogus code.
 func TestValidateCode_RejectsWrongCode(t *testing.T) {
 	if ok, _ := ValidateCode(rfc6238Secret, "000000", time.Unix(59, 0)); ok {

@@ -189,6 +189,12 @@ type Service struct {
 	// name an authenticator app shows next to the account (e.g. "oci-janus").
 	// Defaulted to "oci-janus" in every constructor.
 	mfaIssuer string
+	// mfaKEKVersion is the KEK generation stamped on freshly-encrypted MFA
+	// secrets (users.mfa_secret_kek_version). Defaulted to defaultMFAKEKVersion
+	// in every constructor; server startup overrides it from
+	// MFA_SECRET_KEK_VERSION via SetMFAKEKVersion so new enrolments track a
+	// rotated KEK.
+	mfaKEKVersion int16
 	// nowFn returns the current wall clock. Overridable so enrolment/login MFA
 	// tests can pin the TOTP time step deterministically. nil ⇒ time.Now
 	// (resolved in the now() helper).
@@ -237,6 +243,7 @@ func New(
 		redis:           rdb,
 		keys:            ring,
 		mfaIssuer:       defaultMFAIssuer,
+		mfaKEKVersion:   defaultMFAKEKVersion,
 	}
 	// Auto-wire the FUT-003 debounced last_used_at updater when the caller
 	// passed a non-nil api-key repo (production path). Tests that construct
@@ -278,6 +285,7 @@ func NewWithKeyRing(
 		redis:           rdb,
 		keys:            ring,
 		mfaIssuer:       defaultMFAIssuer,
+		mfaKEKVersion:   defaultMFAKEKVersion,
 	}
 	if apiKeys != nil {
 		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
