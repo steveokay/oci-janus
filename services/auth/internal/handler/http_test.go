@@ -787,10 +787,12 @@ func TestLogin_validCredentials_returns200(t *testing.T) {
 	}
 }
 
-// TestLogin_accountLocked_returns401_noLeakage — PENTEST-005: locked accounts
-// must produce the same 401 invalid-credentials response as wrong-password
-// failures so an attacker cannot enumerate which accounts are locked.
-func TestLogin_accountLocked_returns401_noLeakage(t *testing.T) {
+// TestLogin_accountLocked_returns423WithRetry — the /login page deliberately
+// surfaces lockout (a scoped reversal of PENTEST-005; see security.md): a locked
+// account gets a 423 Locked with a distinct ACCOUNT_LOCKED code + retry hint so
+// the operator understands why login is failing. Wrong-password (unlocked)
+// failures still collapse to a generic 401 (asserted separately).
+func TestLogin_accountLocked_returns423WithRetry(t *testing.T) {
 	srv, tc := newTestServer(t)
 	tenantID := uuid.New()
 	const password = "Str0ng!Password123"
@@ -813,8 +815,50 @@ func TestLogin_accountLocked_returns401_noLeakage(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusLocked {
+		t.Fatalf("status: got %d, want 423 (locked account surfaces to the login page)", resp.StatusCode)
+	}
+	var parsed struct {
+		Errors []struct {
+			Code              string `json:"code"`
+			RetryAfterSeconds int    `json:"retry_after_seconds"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(parsed.Errors) != 1 || parsed.Errors[0].Code != "ACCOUNT_LOCKED" {
+		t.Fatalf("body: want one ACCOUNT_LOCKED error, got %+v", parsed.Errors)
+	}
+	if parsed.Errors[0].RetryAfterSeconds <= 0 {
+		t.Errorf("retry_after_seconds: got %d, want > 0", parsed.Errors[0].RetryAfterSeconds)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("expected a Retry-After header on the locked response")
+	}
+}
+
+// TestLogin_wrongPassword_returns401Generic pins that a NON-locked bad-password
+// failure still collapses to the generic 401 — the lockout reveal is scoped to
+// the locked state only, so wrong-password attempts don't leak account existence.
+func TestLogin_wrongPassword_returns401Generic(t *testing.T) {
+	srv, tc := newTestServer(t)
+	tenantID := uuid.New()
+	registerTestUser(t, tc.svc, tenantID, "someone", "Str0ng!Password123")
+
+	body, _ := json.Marshal(map[string]string{
+		"tenant_id": tenantID.String(),
+		"username":  "someone",
+		"password":  "WrongPass!1",
+	})
+	resp, err := http.Post(srv.URL+"/api/v1/login", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /login: %v", err)
+	}
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status: got %d, want 401 (locked account must not leak via 403 — PENTEST-005)", resp.StatusCode)
+		t.Errorf("status: got %d, want 401 (non-locked bad password stays generic)", resp.StatusCode)
 	}
 }
 

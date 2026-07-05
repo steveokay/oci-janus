@@ -73,11 +73,17 @@ export function CreateApiKeyDialog({
       setSecret(created.key);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response?.status;
-      toast.error(
+      // 409 = a key with this name already exists (names stay reserved even
+      // after a key is revoked, and the list only shows active keys — so a
+      // collision is otherwise invisible). Tell the user plainly instead of
+      // the generic "try again", which was indistinguishable from a real error.
+      const message =
         status === 403
           ? "You don't have permission to create API keys."
-          : "Couldn't create key. Try again.",
-      );
+          : status === 409
+            ? `A key named "${values.name.trim()}" already exists. Choose a different name.`
+            : "Couldn't create key. Try again.";
+      toast.error(message);
     }
   }
 
