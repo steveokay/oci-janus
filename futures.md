@@ -1938,6 +1938,13 @@ route + a form).**
   ticket. SIEM streaming (audit-export) already exists but assumes you
   *have* a SIEM. (FUT-057 mentions lazy-loading an "audit explorer" but
   nothing is specced/built.)
+- **Amendment (2026-07-05 system review):** include a "Verify chain
+  integrity" action surfacing `Repository.VerifyChain` — result banner
+  showing intact / `FirstBadID`+`FirstBadAt` / `Unverifiable` count.
+  The tamper-evident hash chain (Decision #30, CLAUDE.md §10) is the
+  platform's headline audit feature and currently has **no UI at all**;
+  this complements FUT-051 (scheduled backend verify + alert rules)
+  with an on-demand operator surface.
 
 #### FUT-068 — Raw manifest / config JSON inspector on tag detail — **Tier 3 (small)**
 - Show the exact manifest + config bytes for a pushed tag (media-types,
@@ -2018,6 +2025,83 @@ Real value, but easy to defer.
   patch to actually capture them at delivery time. The UI already
   renders a "Not captured · backend follow-up tracked in status.md
   FE-API-035" muted placeholder.
+---
+
+## System review batch — 2026-07-05 (full-platform sweep)
+
+Output of a 3-agent full-system review (trackers, backend gap analysis,
+frontend UI audit) run ahead of the v2.0.0 tag. Deduped against the
+whole backlog — already-tracked overlaps landed as pointers, not
+duplicates: replication → FUT-046, audit explorer → FUT-067 (amended
+above with the chain-verify action), CLI/Terraform → FUT-029/FUT-027,
+base-image staleness → FUT-041, Grafana/alert rules → ARCH-012,
+backup restore-verification → FUT-056, `libs/storage` tests → FUT-050,
+WebAuthn → Tier 1 #1 residual. Below is only what was genuinely
+untracked.
+
+#### FUT-071 — Air-gap export/import bundle — **Tier 2**
+- **Why:** Regulated / disconnected self-hosters need to move images
+  between a connected and an air-gapped registry instance. Almost no
+  OSS registry does this well — a genuine differentiator for the
+  self-hosted posture, and a natural headline feature for v2.1.
+- **What:** `registryctl export <repo[:tag|@digest]> --out bundle.tar`
+  producing a self-contained archive (blobs + manifests + referrers +
+  Cosign signatures + SBOMs + latest scan report), and
+  `registryctl import bundle.tar` on the target instance with full
+  digest verification before any write. Dashboard equivalent optional.
+- **Depends on:** FUT-029 (`registryctl` CLI) for the transport;
+  complements FUT-026 (import from public registries).
+
+#### FUT-072 — Vulnerability diff between tags — **Tier 2**
+- **Why:** "What CVEs did `:v1.2` add vs `:v1.1`?" is the
+  release-gating question every operator asks before promoting. All
+  the scan findings are already stored per digest in metadata — this
+  is mostly a query + a panel, with outsized perceived value.
+- **What:** metadata query joining scan findings for two digests →
+  added / removed / unchanged CVE sets (with severity deltas); BFF
+  endpoint + a "Compare with…" tag picker on the tag-detail Security
+  tab. Distinct from FUT-024, which diffs *files/layers* — this diffs
+  *scan findings*.
+
+#### FUT-073 — Per-token rate limiting on the core data plane — **Tier 2**
+- **Why:** the only per-principal limiter today is the in-process
+  per-user token bucket in the management BFF
+  (`services/management/internal/middleware/ratelimit.go`,
+  PENTEST-014). `services/core` — the actual OCI push/pull path — has
+  none; it relies entirely on gateway IP limits. One leaked token or a
+  runaway CI loop can hammer pulls unbounded, and IP limits don't help
+  when the abuser is behind shared NAT / in-cluster.
+- **What:** Redis-backed limiter keyed by token/user (fall back to IP
+  for anonymous pulls) on core's request path, per-tenant configurable
+  rates, returning `429` + `Retry-After` with the OCI
+  `TOOMANYREQUESTS` error code. Consider lifting into
+  `libs/middleware` so proxy gets it for free. Fail-open on Redis
+  outage (availability posture, mirrors the API-key cache).
+
+#### FUT-074 — Quota fail-open observability + optional fail-closed mode — **Tier 3 (small)**
+- **Why:** `CheckQuota` in core deliberately fails OPEN when the
+  metadata call errors (`services/core/internal/handler/http.go:808`)
+  — a reasonable availability choice, but today the bypass window is
+  completely invisible to operators.
+- **What:** (a) counter metric + WARN log whenever a push proceeds
+  with the quota check skipped, plus an alert-rule entry (ties into
+  ARCH-012); (b) a `QUOTA_FAIL_CLOSED=true` env opt-in for operators
+  who prefer a 503 over an unmetered write during a metadata outage.
+
+#### FUT-075 — Test-debt truth-up: `libs/scanner` + thin services + TESTING.md claims — **Tier 3**
+- **Why:** `docs/TESTING.md` claims 80% minimum per service and "libs
+  foundation packages all covered", but the 2026-07-05 sweep found
+  `libs/scanner` has **zero** test files and several services are thin
+  (gateway 2 test files, storage 3/7, tenant 3/6, signer 5/10). The
+  doc overstates reality — that's worse than honest gaps because it
+  suppresses the signal. (`libs/storage` zero-tests is already covered
+  by FUT-050's driver conformance suite.)
+- **What:** (a) unit tests for `libs/scanner` plugin-host types
+  (ScanRequest/ScanResult marshalling, interface contract); (b) raise
+  gateway/tenant/signer coverage toward the stated floor; (c) correct
+  TESTING.md to state *measured* per-service coverage and mark the
+  known exceptions instead of a blanket claim.
+
 ---
 
 ## How to use this file
