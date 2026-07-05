@@ -203,6 +203,32 @@ func TestVerifyLoginMFA_createsSession(t *testing.T) {
 	}
 }
 
+// TestIssueSSOToken_createsSession asserts the SSO login path mints a session
+// row + sid. It wraps the shared session harness's *Service in a minimal SSO
+// (nil provider/session repos, a throwaway 32-byte credential key) since
+// IssueSSOToken only needs the underlying auth service to issue the token.
+func TestIssueSSOToken_createsSession(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	svc, _ := newSessionLoginTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	sso, err := NewSSO(svc, nil, nil, make([]byte, 32))
+	if err != nil {
+		t.Fatalf("NewSSO: %v", err)
+	}
+	user := &repository.User{ID: uuid.New(), TenantID: uuid.New(), Kind: "human", IsActive: true}
+	tok, err := sso.IssueSSOToken(ctx, user, []string{"reader"},
+		SessionMeta{IP: "203.0.113.7", UserAgent: "Mozilla/5.0"})
+	if err != nil {
+		t.Fatalf("IssueSSOToken: %v", err)
+	}
+	claims, _ := svc.ValidateToken(ctx, tok)
+	if claims.Sid == "" || sessions.bySID[claims.Sid] == nil {
+		t.Fatal("SSO login must create a session")
+	}
+}
+
 func TestIssueSessionToken_createsRowAndSid(t *testing.T) {
 	rdb := newTestRedis(t)
 	sessions := newFakeSessionRepo()

@@ -549,18 +549,21 @@ func (s *SSO) EnsureSSOUser(ctx context.Context, p *repository.GlobalSSOProvider
 }
 
 // IssueSSOToken issues a JWT for an SSO-authenticated user. Wraps the
-// existing IssueToken path so the SSO callback does not duplicate JWT
+// existing issueSessionToken path so the SSO callback does not duplicate JWT
 // signing logic. The user's is_global_admin flag is included in the JWT
 // (REDESIGN-001 Phase 5.1).
-func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []string) (string, error) {
+//
+// meta carries the client IP + User-Agent captured at the SSO callback edge so
+// a successful federated login creates a listable/revocable session row. When
+// no session repo is wired the underlying issueSessionToken degrades to a plain
+// (no-sid) token.
+func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []string, meta SessionMeta) (string, error) {
 	// SSO callbacks always provision human users — service-account principals
 	// are minted server-side and never appear in the SSO flow. user.Kind is
 	// forwarded verbatim so the contract stays correct if that ever changes.
 	// amr is ["sso"] — the authentication method was a federated SSO/SAML
 	// assertion rather than a local password.
-	// sid is "" here: this SSO path does not yet mint a session row (a later
-	// task in the active-session-list feature will thread it through).
-	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"sso"}, "")
+	return s.auth.issueSessionToken(ctx, user.ID, user.TenantID, roles, user.IsGlobalAdmin, user.Kind, []string{"sso"}, meta)
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────
