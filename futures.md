@@ -1856,6 +1856,122 @@ None of these justify individual FUT numbers; pick with neighbouring FE work:
 
 ---
 
+## UI feature sweep — 2026-07-05
+
+Output of a 4-agent read-only sweep (UX inventory, backend-exists-no-FE,
+OCI-domain gaps, backlog dedup) requested after the active-session-list
+ship. Everything below was deduped against the existing FUT-/DSGN-/UIR-
+backlog — these are net-new or only loosely adjacent. **Group A items have
+working gRPC RPCs today and no UI — highest value-per-effort (mostly a BFF
+route + a form).**
+
+### Group A — backend already built, just needs BFF + FE wiring
+
+#### FUT-058 — Proxy-cache upstream management — **Tier 2**
+- Add/list/remove upstream registries (docker.io, ghcr, quay…) from the
+  UI instead of editing deploy config. The `/workspace/proxy-cache` page
+  currently only *reads* upstreams discovered from cached manifests.
+- **Backend ready:** `proxy.v1` `RegisterUpstream` / `ListUpstreams` /
+  `DeleteUpstream` (`proto/proxy/v1/proxy.proto`, impl in `services/proxy`).
+  No BFF route exists yet — add to `services/management` + FE CRUD.
+
+#### FUT-059 — Tenant-wide default security policy — **Tier 2**
+- One screen for org-wide defaults (scan-on-push, block-on-severity,
+  allow-unscanned, signing-required, proxy-cache-enabled, storage quota,
+  exempt repos) instead of per-repo policy only. Slots into
+  `/settings/workspace` (single mode) / `/settings/platform` (multi).
+- **Backend ready:** `tenant.v1` `GetTenantPolicy` / `UpdateTenantPolicy`
+  (`services/tenant/internal/handler/grpc.go`); management never calls them.
+
+#### FUT-060 — Pending-deletion review view — **Tier 2**
+- Aggregate "everything retention + GC will delete on the next run" list
+  with cancel, so operators audit scheduled deletions before they happen.
+  Today only a per-tag `retention_pending_delete_at` pill exists.
+- **Backend ready:** `metadata.v1` `ListPendingDeleteManifests`
+  (`services/metadata/internal/handler/retention_pending.go`); no BFF/FE.
+
+#### FUT-061 — Platform-admin management UI — **Tier 2**
+- Promote/demote global admins (`users.is_global_admin`) from the UI;
+  today it needs the bootstrap CLI or a direct DB edit. Fits a new section
+  on `/settings/platform`.
+- **Backend ready:** `auth.v1` `SetGlobalAdmin` (referenced only in a
+  comment at `services/management/internal/handler/rbac.go:99`).
+
+#### FUT-062 — Per-repo storage quota editing — **Tier 3 (small)**
+- Raise/lower a single repo's quota after creation (schema field
+  `repositories.storage_quota` is set at create-time only; the PATCH repo
+  handler edits description/immutable/require-signature/CVSS but not quota).
+- **Backend ready:** `metadata.v1` `UpdateRepositoryQuota`; add the BFF
+  PATCH field + a form control.
+
+### Group B — net-new features (genuine whitespace, real value)
+
+#### FUT-063 — Image config & history viewer — **Tier 2**
+- Render the image *config blob* on tag detail: env / entrypoint / cmd /
+  exposed ports / working dir + the `history[]` step list (effectively the
+  Dockerfile). The Layers tab shows only the config *descriptor* today.
+  Highest-impact pure-whitespace item — the #1 "what is this image?"
+  surface, and the bytes are already stored. Docker Hub / GHCR / Quay all
+  have it.
+
+#### FUT-064 — Admission-policy decision & violation log — **Tier 2**
+- Queryable feed of denied pulls/pushes and *why* (unsigned, untrusted
+  key, immutable re-push, quarantined, over-quota, CVSS-gated). Operators
+  turning on enforcement currently fly blind on impact / false-positives.
+  `scan.policy_blocked` is already a notification event but isn't queryable.
+
+#### FUT-065 — Markdown README / Overview per repo — **Tier 2**
+- Full markdown README tab (usage, examples, copyable pull commands).
+  `DescriptionCard` is plain-text only today ("no markdown per FE-SEC-011").
+  Needs a sanitising markdown renderer (revisit the FE-SEC-011 XSS concern).
+  Primary repo discoverability/onboarding surface.
+
+#### FUT-066 — GC dry-run preview (mark-sweep) — **Tier 2**
+- "What would this GC reclaim" preview before running destructive blob GC
+  (mirrors retention's mandatory dry-run). Today the GC card only offers
+  status/history/run-now — running blind on a self-hosted volume is risky.
+  Harbor ships exactly this. (Related storage-reclaim reads:
+  `metadata.v1` `ListUntaggedManifests` / `ListOrphanedBlobs`, GC-internal
+  today.)
+
+#### FUT-067 — In-app audit explorer + CSV/JSON export — **Tier 2**
+- Forensic search on `/activity` by actor / resource / action (not just
+  event-type chips + date range) with on-demand export to attach to a
+  ticket. SIEM streaming (audit-export) already exists but assumes you
+  *have* a SIEM. (FUT-057 mentions lazy-loading an "audit explorer" but
+  nothing is specced/built.)
+
+#### FUT-068 — Raw manifest / config JSON inspector on tag detail — **Tier 3 (small)**
+- Show the exact manifest + config bytes for a pushed tag (media-types,
+  annotations, multi-arch shape). Today operators shell out to
+  `crane`/`skopeo`. FUT-016 slates this for *proxy-cache* detail only —
+  this is the same for regular pushed tags.
+
+#### FUT-069 — Discovery: top-pulled leaderboard + OCI label browse/filter — **Tier 3**
+- (a) Tenant-wide ranked "most-pulled / most-active images" view (pull
+  counts already tracked via FE-API-042) — fastest way to see what matters
+  and what's safe to retire. (b) Surface + filter by
+  `org.opencontainers.image.*` annotations and arbitrary labels
+  (maintainer, source, version, team) — invisible today.
+
+### Group C — untracked UX improvements (low effort, high polish)
+
+#### FUT-070 — Navigation & drill-down UX bundle — **Tier 3**
+Pick alongside neighbouring FE work; none justifies its own number:
+- **Dashboard KPI tiles as drill-downs** — the vuln / pulls / repos /
+  storage tiles show numbers but link nowhere; route each to its filtered
+  view (`_authenticated.index.tsx`).
+- **Repo-level security rollup card** — repo detail has no "N open findings
+  across tags" → filtered `/security`; today you open each tag's Security
+  tab (`_authenticated.repositories.$org.$repo.tsx`).
+- **Bulk actions on user-facing tables** — row checkboxes + selection bar
+  for revoke-keys / disable-users / rescan-selected / bulk-delete-tags.
+  (FUT-038 covers admin bulk-*repo* ops only; this is the per-table case.)
+- **"Recently viewed" repos strip** — dashboard/repo-list shortcut so
+  operators stop re-searching the same handful of repos.
+
+---
+
 ## Tier 3 — Nice-to-have polish
 
 Real value, but easy to defer.
