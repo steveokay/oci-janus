@@ -88,39 +88,60 @@ func (s *Service) ListSessions(ctx context.Context, userID, tenantID uuid.UUID) 
 // RevokeSession revokes one of the caller's own sessions and sets the fail-closed
 // Redis gate with a TTL = the session's remaining lifetime (bounded by the 30d
 // max). ok=false means the sid was absent or not owned (-> handler 404).
+//
+// A gate-set failure is propagated as an error (SEC-081), so the handler returns
+// 500 rather than a false 204: because ValidateToken enforces revocation solely
+// via revoke:sid (no DB backstop on the hot path), a silently-dropped gate would
+// leave the outstanding JWT valid — and refreshable — despite the DB row being
+// marked revoked. RevokeOwned is idempotent, so the client's retry re-drives the
+// gate cleanly.
 func (s *Service) RevokeSession(ctx context.Context, userID, sid uuid.UUID) (bool, error) {
 	expiresAt, ok, err := s.sessions.RevokeOwned(ctx, userID, sid)
 	if err != nil || !ok {
 		return false, err
 	}
-	s.setSessionRevokeGate(ctx, sid, expiresAt)
+	if err := s.setSessionRevokeGate(ctx, sid, expiresAt); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
 // RevokeOtherSessions revokes every live session for the caller except keepSID
-// (the current one) and gates each. Returns the count revoked.
+// (the current one) and gates each. Returns the count revoked. A gate-set failure
+// on any session is propagated (SEC-081) — the DB rows are idempotently revoked,
+// so the client's retry re-drives every gate. gate-first is not required here
+// because RevokeOthers already marked the rows revoked in the DB.
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, keepSID uuid.UUID) (int, error) {
 	revoked, err := s.sessions.RevokeOthers(ctx, userID, keepSID)
 	if err != nil {
 		return 0, err
 	}
 	for _, r := range revoked {
-		s.setSessionRevokeGate(ctx, r.SID, r.ExpiresAt)
+		if gerr := s.setSessionRevokeGate(ctx, r.SID, r.ExpiresAt); gerr != nil {
+			return 0, gerr
+		}
 	}
 	return len(revoked), nil
 }
 
 // setSessionRevokeGate sets revoke:sid with a TTL = remaining session lifetime,
 // so the entry self-cleans exactly when the session could no longer exist
-// (SEC-005 TTL-coupling). A non-positive TTL (already expired) is skipped.
-func (s *Service) setSessionRevokeGate(ctx context.Context, sid uuid.UUID, expiresAt time.Time) {
+// (SEC-005 TTL-coupling). A non-positive TTL (already expired) is skipped as a
+// success. The Set error is returned (not swallowed) so callers can surface a
+// failed revocation (SEC-081); a nil redis (sessions disabled / test) is a no-op.
+func (s *Service) setSessionRevokeGate(ctx context.Context, sid uuid.UUID, expiresAt time.Time) error {
+	if s.redis == nil {
+		return nil
+	}
 	ttl := time.Until(expiresAt)
 	if ttl <= 0 {
-		return
+		return nil
 	}
 	if err := s.redis.Set(ctx, sessionRevokeKey(sid.String()), "1", ttl).Err(); err != nil {
 		slog.ErrorContext(ctx, "set revoke:sid gate failed", "sid", sid, "err", err)
+		return err
 	}
+	return nil
 }
 
 // idleCutoff returns now()-idleWindow, honouring the tenant token policy's

@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	argon2pkg "github.com/steveokay/oci-janus/libs/crypto/argon2"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -266,6 +268,36 @@ func TestRevokeSession_setsGateAndRow(t *testing.T) {
 	}
 	if ok, _ := svc.RevokeSession(ctx, uuid.New(), sid); ok {
 		t.Fatal("cross-user RevokeSession must return ok=false")
+	}
+}
+
+// TestRevokeSession_gateSetFailure_returnsError is the SEC-081 regression: when
+// the revoke:sid gate write fails, RevokeSession must surface an error (-> handler
+// 500) rather than falsely report success. A silent no-op would leave the
+// outstanding JWT valid because ValidateToken enforces revocation solely via the
+// gate. We force the failure by closing the miniredis backing the client.
+func TestRevokeSession_gateSetFailure_returnsError(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	sessions := newFakeSessionRepo()
+	svc := newSessionTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	userID := uuid.New()
+	sid := uuid.New()
+	sessions.bySID[sid.String()] = &repository.Session{SID: sid, UserID: userID, ExpiresAt: time.Now().Add(time.Hour)}
+
+	mr.Close() // any subsequent Set errors — the gate write can no longer land.
+
+	ok, err := svc.RevokeSession(ctx, userID, sid)
+	if err == nil {
+		t.Fatal("RevokeSession must return an error when the revoke:sid gate write fails (SEC-081)")
+	}
+	if ok {
+		t.Fatal("RevokeSession must not report success when the gate write fails")
 	}
 }
 
