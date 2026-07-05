@@ -22,20 +22,23 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 ### 1. MFA + session management
 - **Why:** No two-factor enforcement today. A stolen password or JWT is a
   full takeover of every push/pull credential the user holds.
-- **What:**
-  - TOTP enrolment with QR code + 8 backup codes (services/auth migration
-    + new gRPC + `/users/me/mfa` BFF routes + enrolment dialog on `/profile`).
-  - Optional WebAuthn / hardware key support (deferrable; TOTP unblocks
-    most enterprise procurement).
-  - Active session list on `/profile` — device label, IP, last active —
-    with per-row revoke button. Backs onto `auth_login_sessions`
+- **✅ SHIPPED 2026-07-05 (core):** TOTP step-up — enrolment with QR +
+  8 single-use backup codes, `/users/me/mfa*` BFF routes + `/login/mfa`
+  challenge, AES-256-GCM secret under a dedicated `MFA_SECRET_KEY_HEX`
+  KEK, and the "require MFA for all members" policy toggle (deployment-wide
+  in single mode) via `token_policies.require_mfa`. PR #267 (+ SEC-078/079/080
+  hardening in #267/#268). Design: `docs/superpowers/specs/2026-07-05-mfa-totp-design.md`.
+  Resolution rows in [`status.md`](status.md).
+- **Still open (deferred sub-items):**
+  - Optional WebAuthn / hardware key support (deferrable; TOTP already
+    unblocks most enterprise procurement).
+  - Active session list on `/settings/account` — device label, IP, last
+    active — with per-row revoke button. Backs onto `auth_login_sessions`
     (REM-002 already tracks the table).
-  - Workspace policy toggle: "require MFA for all members" — gates token
-    issuance at the auth service.
 - **Affects:** `services/auth`, `services/management`, `frontend`.
 - **REDESIGN-001 note (2026-06-28):** `auth_login_sessions.tenant_id` was
-  dropped per RM-004; sessions are deployment-wide. MFA design still works
-  but the "Workspace policy" toggle becomes deployment-wide in single mode.
+  dropped per RM-004; sessions are deployment-wide. The shipped "require MFA"
+  toggle is therefore deployment-wide in single mode, as designed.
 
 ### 2. Tag immutability + image promotion workflow
 - **Why:** Without an immutability flag, an attacker (or a sleepy
