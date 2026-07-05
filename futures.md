@@ -29,16 +29,24 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   in single mode) via `token_policies.require_mfa`. PR #267 (+ SEC-078/079/080
   hardening in #267/#268). Design: `docs/superpowers/specs/2026-07-05-mfa-totp-design.md`.
   Resolution rows in [`status.md`](status.md).
+- **✅ SHIPPED 2026-07-05 (active-session list):** self-service session
+  management on `/settings/account` — device label, IP, last-active, with
+  per-row revoke + "sign out all others". New `user_sessions` table +
+  stable `sid` JWT claim (preserved across refresh) + fail-closed
+  `revoke:sid` gate + fail-open debounced `last_active` + hourly expiry
+  sweep. PR #270 (squash `91f42f4`). Design/plan under
+  `docs/superpowers/{specs,plans}/2026-07-05-active-session-list*`.
+  Resolution row in [`status.md`](status.md). (Note: built its own
+  `user_sessions` source-of-truth rather than backing onto the SSO-CSRF
+  `auth_login_sessions` table, which is not a session store.)
 - **Still open (deferred sub-items):**
   - Optional WebAuthn / hardware key support (deferrable; TOTP already
     unblocks most enterprise procurement).
-  - Active session list on `/settings/account` — device label, IP, last
-    active — with per-row revoke button. Backs onto `auth_login_sessions`
-    (REM-002 already tracks the table).
 - **Affects:** `services/auth`, `services/management`, `frontend`.
-- **REDESIGN-001 note (2026-06-28):** `auth_login_sessions.tenant_id` was
-  dropped per RM-004; sessions are deployment-wide. The shipped "require MFA"
-  toggle is therefore deployment-wide in single mode, as designed.
+- **REDESIGN-001 note (2026-06-28):** sessions are deployment-wide (single
+  mode). The shipped "require MFA" toggle is therefore deployment-wide, as
+  designed; the new `user_sessions` rows still carry `tenant_id` (populated
+  with the bootstrap tenant id) per the mode-agnostic schema rule.
 
 ### 2. Tag immutability + image promotion workflow
 - **Why:** Without an immutability flag, an attacker (or a sleepy
