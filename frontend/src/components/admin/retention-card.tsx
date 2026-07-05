@@ -50,6 +50,13 @@ const RETENTION_MODES = new Set(["retention", "retention_grace"]);
 // strip above still summarises 24h + 7d totals so a wider window is
 // available to operators at a glance.
 const RECENT_LIMIT = 5;
+// UIR-3: how many GC runs we pull to compute the client-side retention
+// counts. The gc service's ListRuns has no `mode` filter (REM-013 gap 2),
+// so we fetch this many rows and filter locally — which means the 24h/7d
+// counts can UNDER-report on a busy deployment whose retention runs spill
+// past this page. Surfaced as a footnote under the counts. Kept as a single
+// constant so the fetch limit and the caption never drift apart.
+const RETENTION_SCAN_LIMIT = 100;
 
 export function RetentionCard(): React.ReactElement {
   // S-MAINT-1 F2 — server-side filter on the retention listing. Same
@@ -65,7 +72,7 @@ export function RetentionCard(): React.ReactElement {
   // filter) has more rows to pick from. Backend caps at 200 —
   // see admin_gc.go.
   const runs = useGCRuns({
-    limit: 100,
+    limit: RETENTION_SCAN_LIMIT,
     triggeredBy: triggeredBy || undefined,
     dateFrom: dateFrom ? `${dateFrom}T00:00:00Z` : undefined,
     dateTo: dateTo ? `${dateTo}T23:59:59Z` : undefined,
@@ -184,9 +191,19 @@ function Counts({
   count7d: number;
 }): React.ReactElement {
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <Stat label="Last 24h" value={count24h} loading={loading} />
-      <Stat label="Last 7d" value={count7d} loading={loading} />
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-2 gap-3">
+        <Stat label="Last 24h" value={count24h} loading={loading} />
+        <Stat label="Last 7d" value={count7d} loading={loading} />
+      </div>
+      {/* UIR-3: be honest that these are computed from a bounded page, not a
+          server-side aggregate — they can under-report on busy deployments. */}
+      {loading ? null : (
+        <p className="text-[10px] text-[var(--color-fg-subtle)]">
+          Based on the latest {RETENTION_SCAN_LIMIT} garbage-collection runs;
+          busy deployments may see higher actuals.
+        </p>
+      )}
     </div>
   );
 }

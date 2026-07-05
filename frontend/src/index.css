@@ -115,6 +115,7 @@
 
   --color-highlight: var(--color-amber-600);
   --color-highlight-subtle: var(--color-amber-50);
+  --color-highlight-fg: oklch(0.99 0 0);            /* fg overlaid on highlight (amber-600) */
 
   --color-success: var(--color-emerald-600);
   --color-warning: var(--color-amber-700);
@@ -155,6 +156,7 @@
 
   --color-highlight: var(--color-amber-500);
   --color-highlight-subtle: oklch(0.28 0.05 75);
+  --color-highlight-fg: oklch(0.12 0.012 250);      /* dark ink on the brighter amber-500 */
 
   --color-success: var(--color-emerald-500);
   --color-warning: var(--color-amber-500);
@@ -192,6 +194,7 @@
   --color-accent-border: var(--color-accent-border);
   --color-highlight: var(--color-highlight);
   --color-highlight-subtle: var(--color-highlight-subtle);
+  --color-highlight-fg: var(--color-highlight-fg);
   --color-success: var(--color-success);
   --color-warning: var(--color-warning);
   --color-danger: var(--color-danger);

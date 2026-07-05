@@ -100,8 +100,13 @@ export function Topbar({
     void navigate({ to: "/login", replace: true });
   }
 
+  // UIR-7: the topbar is a non-scrolling flex sibling of the
+  // `overflow-y-auto` <main>, so `sticky top-0` / `backdrop-blur` / the `/85`
+  // translucency never fired (nothing scrolls underneath it). Dropped the dead
+  // styles for a solid, opaque bar rather than moving it inside the scroll
+  // container (which would make it scroll away with the content).
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 px-6 backdrop-blur">
+    <header className="flex h-14 items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-6">
       <div className="flex min-w-0 items-center gap-3">
         {/* Phase 4.6 — hamburger that opens the mobile drawer. Hidden lg+
             where the desktop sidebar is visible. Sits before the

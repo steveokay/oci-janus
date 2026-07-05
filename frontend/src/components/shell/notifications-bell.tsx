@@ -78,7 +78,7 @@ export function NotificationsBell(): React.ReactElement {
               aria-hidden
               className={cn(
                 "absolute -right-0.5 -top-0.5 grid min-w-[16px] place-items-center rounded-full",
-                "bg-[var(--color-highlight)] px-1 text-[10px] font-semibold leading-[16px] text-white",
+                "bg-[var(--color-highlight)] px-1 text-[10px] font-semibold leading-[16px] text-[var(--color-highlight-fg)]",
               )}
             >
               {unread > 99 ? "99+" : unread}

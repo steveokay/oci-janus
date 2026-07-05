@@ -55,7 +55,10 @@ export function HealthCard({
             />
           </div>
         )}
-        <Badge tone={state.tone} dot pulse={state.tone !== "success" || !loading}>
+        {/* UIR-2: pulse only for the attention-worthy tones. The prior
+            `|| !loading` made a healthy (success) badge pulse once loaded,
+            diluting the "needs attention" cue. Degraded/critical still pulse. */}
+        <Badge tone={state.tone} dot pulse={state.tone !== "success"}>
           {state.label}
         </Badge>
       </CardContent>
