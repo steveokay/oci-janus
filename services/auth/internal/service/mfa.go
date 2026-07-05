@@ -235,9 +235,14 @@ func (s *Service) ConsumeMFACode(ctx context.Context, userID uuid.UUID, code str
 		if verr == nil && match {
 			// Single-use: mark consumed. A concurrent double-spend loses the
 			// race — MarkBackupCodeUsed returns ErrNotFound once the row is
-			// already stamped, and we report failure rather than success.
+			// already stamped, so we report failure rather than success. Any
+			// other error is a genuine fault and is propagated so the caller
+			// fails closed instead of silently treating it as a bad code.
 			if merr := s.users.MarkBackupCodeUsed(ctx, bc.ID); merr != nil {
-				return false, nil // already used by a racing request
+				if errors.Is(merr, repository.ErrNotFound) {
+					return false, nil // already spent by a racing request
+				}
+				return false, merr
 			}
 			return true, nil
 		}
