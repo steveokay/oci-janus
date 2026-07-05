@@ -90,6 +90,7 @@ func TestPutTokenPolicy_tenantAdmin_returns200(t *testing.T) {
 	payload, _ := json.Marshal(handler.PutTokenPolicyRequestBody{
 		MaxTTLDays:     &maxTTL,
 		IdleRevokeDays: &idle,
+		RequireMFA:     true,
 		// RotationIntervalDays intentionally omitted — preserve existing.
 	})
 	req := newTenantAdminRequest(t, env.srv.URL, http.MethodPut, "/api/v1/access/token-policy", payload)
@@ -110,6 +111,10 @@ func TestPutTokenPolicy_tenantAdmin_returns200(t *testing.T) {
 	}
 	if body.IdleRevokeDays == nil || *body.IdleRevokeDays != 14 {
 		t.Errorf("idle_revoke_days: got %v, want 14 (echoed from request)", body.IdleRevokeDays)
+	}
+	// require_mfa round-trips through the BFF → gRPC → BFF mapping (Task 14).
+	if !body.RequireMFA {
+		t.Errorf("require_mfa: got false, want true (echoed from request)")
 	}
 	// UpdatedByUserID should be the tenant-admin caller's user id — proves
 	// actor_id was plumbed from the JWT sub, not from the request body.
@@ -162,6 +167,7 @@ func (s *fakeAuthServer) PutTokenPolicy(_ context.Context, req *authv1.PutTokenP
 		MaxTtlDays:           req.GetMaxTtlDays(),
 		RotationIntervalDays: req.GetRotationIntervalDays(),
 		IdleRevokeDays:       req.GetIdleRevokeDays(),
+		RequireMfa:           req.GetRequireMfa(),
 		UpdatedAt:            timestamppb.Now(),
 		UpdatedByUserId:      req.GetActorId(),
 	}, nil
