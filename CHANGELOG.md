@@ -15,8 +15,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [2.0.0] — 2026-07-07
+
+First tagged release of the single-tenant (REDESIGN-001) posture. Supersedes
+`v2.0.0-rc1`; the notable changes below are everything merged on top of rc1
+during the soak window (2026-06-30 → 2026-07-07). Operators upgrading from a
+pre-REDESIGN v1 deployment must read
+[`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md) first.
+
 ### Added
 
+- **Machine-identity suite (FUT-001..004)** — the four `/api-keys/*` surfaces
+  went from preview to live: **federated workload identity** (OIDC-trust
+  exchange for CI runners — GitHub Actions / GitLab / Buildkite / generic OIDC —
+  swapping a workload token for a short-lived registry JWT, no static key;
+  PR #224); **token policies** (workspace-wide `max_ttl_days` /
+  `rotation_interval_days` / `idle_revoke_days` + an hourly idle-revoke worker;
+  PR #225); **access review** (weekly stale/rotation-lapsed key flagging with
+  per-row Revoke / Keep / Snooze; PR #227); **credential helpers** (hostname-aware
+  `docker login` / k8s Secret / Terraform / GHA snippets; PR #221).
+- **TOTP multi-factor auth (step-up)** — self-service enrolment (QR + 8 backup
+  codes), a two-step stateless-challenge login, and an admin "require MFA"
+  policy toggle; AES-256-GCM secret at rest under a dedicated `MFA_SECRET_KEY_HEX`
+  KEK (fails closed if unset). SSO accounts exempt. (PRs #267, #268, #269.)
+- **Active session management** — a signed-in user sees their live sessions
+  (device, IP, last-active) on `/profile` with per-row revoke + "sign out all
+  other sessions", backed by a durable `user_sessions` table + a stable `sid`
+  JWT claim and a fail-closed `revoke:sid` gate. Client-side pagination keeps the
+  table compact. (PRs #270, #277.)
+- **OCI Referrers tab** — referrer artifacts attached to an image (Cosign
+  signatures, SBOMs, attestations, scan results) are now a first-class tab on the
+  tag-detail page instead of raw JSON, via a new `registry-core`
+  `CoreService.ListReferrers` gRPC surface. (PR #282.)
+- **Image promotion workflow** — `POST /repositories/{org}/{repo}/tags/{tag}/promote`
+  atomically copies a tag's manifest to a destination with digest verification +
+  audit trail; dashboard dst-org picker with create-if-missing. (PRs #231, #234, #235.)
+- **CVSS-gated admission policy (FUT-021)** — repos gain a nullable
+  `max_cvss_score`; `GetManifest` refuses a pull when the scan's top CVSS exceeds
+  the threshold, closing the scanner → admission loop. (PR #233.)
+- **MCP server (read-only)** — exposes the registry to AI assistants (Claude
+  Desktop / Cursor / continue.dev) over the Model Context Protocol; read-only
+  tools this release. (PR #232.)
+- **Retention savings on the dashboard** — a new
+  `GCService.GetTenantRetentionSavings` RPC surfaces bytes reclaimed via retention
+  on the storage-breakdown card (REM-013 gap 3). (PR #253.)
 - **KEK rotation tool (RED-FU-015)** — per-service `rotate-kek` subcommand
   (`registry-auth` / `registry-proxy` / `registry-webhook` / `registry-audit`,
   dispatched before config load like `bootstrap`), backed by the shared
@@ -32,6 +76,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Settings / Profile information architecture** — Profile split out of Settings
+  into its own top-right surface (identity, API keys, MFA, sessions); Settings
+  retabbed into Workspace / Scanning / Housekeeping / Notifications with
+  Vulnerability scanning on its own tab. (PR #274.)
+- **`/repositories` lists all repositories**, not only those with pushed images
+  (dropped the client-side image filter). (PR #236.)
 - **CI: govulncheck consolidated** — the 13 per-service non-blocking `security:`
   jobs were replaced by one scheduled `.github/workflows/ci-security.yml`
   (nightly + `workflow_dispatch`, matrix over all 14 Go modules). Removed the
@@ -39,6 +89,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **OIDC / JWKS hardening (SEC-057..062)** — SSRF and resource-exhaustion
+  defences on the federated-identity OIDC/JWKS fetch path (FUT-001). (PR #244.)
+- **Password-login kind guard (SEC-075)** + OAuth `email_not_verified` aligned to
+  `403 EMAILNOTVERIFIED`. (PR #263.)
+- **MFA login-step lockout + challenge-token replay cap (SEC-079)** — the login
+  MFA step now checks account lockout before consuming a code and bounds
+  submissions per challenge token. (PR #268.)
+- **Access-review / token-policy defence-in-depth** — SEC-064 + SEC-067 (FUT-003;
+  PR #226), SEC-065 idle-revoke floor + SEC-068 HIGH cross-tenant snooze (FUT-004;
+  PRs #228, #243), SEC-069/070 audit drop-on-malformed. (PR #243.)
+- **Audit tamper-evidence (SEC-051/052)** — `VerifyChain` now surfaces
+  pre-chain-migration rows as unverifiable rather than masking them; added
+  canonicalisation tests. (PR #265.)
+- **KEK rotation hardening (SEC-071/072/073)** — lock-free verify, stdout/stderr
+  split, equal-key guard, `--to-version` bounds, signal-aware cancel. (PR #262.)
+- **Spec-lint tightening (SEC-053/054)** — require a reason on every audit-skip
+  annotation + tighten the mTLS-gate regex. (PR #264.)
+- **Login page reveals account lockout (PENTEST-005 scoped reversal)** — the
+  interactive `/login` now returns a distinct `423 ACCOUNT_LOCKED` with a retry
+  hint; wrong-password / disabled failures and the `/auth/token` machine endpoint
+  still collapse to a generic `401` (no enumeration oracle). Residual exposure
+  accepted for the single-tenant posture; see `security.md`. (PR #275.)
 - **Go toolchain 1.25.7 → 1.25.11 (REM-016)** — clears the five deferred stdlib
   CVEs (GO-2026-5039/5037 in `net/textproto`+`crypto/x509`, GO-2026-4982/4980/4971)
   across every Go module. `services/auth`'s `russellhaering/goxmldsig` bumped
@@ -49,6 +121,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **API keys were silently revoked before first use** — the idle-revoke and
+  access-review workers treated any never-used key as instantly idle; a
+  freshly-issued key was revoked on the next hourly tick. Never-used keys are now
+  measured from `created_at` (`COALESCE(last_used_at, created_at)`), so a new key
+  gets the full idle window. (PR #276.)
+- **Clearer duplicate-API-key-name error** — a `409` on a reserved name now says
+  so instead of a generic "couldn't create key". (PR #275.)
+- **UI polish batch (UIR-1..10)** — the deferred tail of the 2026-07-04 review:
+  GC/HealthCard/retention/notification/topbar/badge/SSO-button/PoliciesPanel/copy
+  fixes; per-cell pending on the notification matrix; login SSO buttons rendered
+  honestly disabled. (PR #279.)
+- **Dialogs scroll when content overflows** the viewport (user report). (PR #229.)
+- **Audit hash-chain migration** reworked to apply on the partitioned
+  `audit_events` parent (REM-022). (PR #223.)
+- **OCI conformance restored on `main`** — cleared gofmt/lint rot that had
+  silently gated the conformance job, and gave the CI conformance auth container
+  an ephemeral `MFA_SECRET_KEY_HEX`. (PRs #254, #255, #271.)
 - **Dashboard UI — 30 fixes from the 2026-07-04 four-agent UX review**
   (PRs #257/#258/#259; full inventory in `FE-STATUS.md` → "UI polish review").
   Highlights: access-review key revocation now requires confirmation; the SA
@@ -236,5 +325,6 @@ in [`futures.md`](futures.md) at close-out — they will land in a later
   runbook covers ~80% of the original threat. Revisit on container
   runtime CVE trigger.
 
-[Unreleased]: https://github.com/steveokay/oci-janus/compare/v2.0.0-rc1...HEAD
+[Unreleased]: https://github.com/steveokay/oci-janus/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/steveokay/oci-janus/compare/v2.0.0-rc1...v2.0.0
 [2.0.0-rc1]: https://github.com/steveokay/oci-janus/releases/tag/v2.0.0-rc1
