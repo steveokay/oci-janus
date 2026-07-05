@@ -214,7 +214,7 @@ func TestVerifyLoginMFA_badChallengeToken_rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// A normal access token has typ="" and must be refused by VerifyLoginMFA.
-	access, err := svc.IssueToken(ctx, userID.String(), u.TenantID.String(), nil, nil, false, "human", []string{"pwd"})
+	access, err := svc.IssueToken(ctx, userID.String(), u.TenantID.String(), nil, nil, false, "human", []string{"pwd"}, "")
 	require.NoError(t, err)
 
 	_, err = svc.VerifyLoginMFA(ctx, access, backupCodes[0])

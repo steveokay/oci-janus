@@ -102,6 +102,12 @@ type Claims struct {
 	// (["pwd"], ["pwd","otp"], ["sso"]). Recorded for audit + future step-up;
 	// RefreshToken copies it verbatim and never upgrades it.
 	Amr []string `json:"amr,omitempty"`
+	// Sid is the stable session id (user_sessions.sid) for interactive logins.
+	// Unlike the JTI, it is preserved verbatim across RefreshToken so a session
+	// can be listed and revoked (revoke:sid gate in ValidateToken) even though
+	// the JTI rotates every 300s. Empty for non-session tokens (OCI /v2 Docker
+	// tokens, workload OIDC, API-key dispatch).
+	Sid string `json:"sid,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -335,7 +341,11 @@ func singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID string) (*keyRing, error)
 // amr records the authentication methods that produced the token (e.g.
 // ["pwd"], ["pwd","otp"], ["sso"]). It is embedded verbatim in the Amr claim
 // for audit + future step-up decisions; RefreshToken forwards it unchanged.
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string, amr []string) (string, error) {
+// sid is the stable session id (user_sessions.sid) for interactive logins; it
+// is embedded in the Sid claim and preserved verbatim across RefreshToken so a
+// session survives JTI rotation. Pass "" for non-session tokens (OCI Docker
+// tokens, workload OIDC, API-key dispatch).
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string, amr []string, sid string) (string, error) {
 	if principalKind == "" {
 		principalKind = "human"
 	}
@@ -355,6 +365,9 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		IsGlobalAdmin: isGlobalAdmin,
 		PrincipalKind: principalKind,
 		Amr:           amr,
+		// Sid ties this token to a listable/revocable session row; preserved
+		// across refresh even as the JTI rotates. Empty for non-session tokens.
+		Sid: sid,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	// Phase 6.5 — stamp the kid header so validators can pick the right
@@ -674,7 +687,10 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	// service-account JWT refreshes to another service-account JWT.
 	// Amr is copied verbatim — refresh preserves the original authentication
 	// methods and never upgrades them (a refreshed token is not a fresh login).
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind, claims.Amr)
+	// Sid is carried forward so the session survives JTI rotation — the whole
+	// point of the stable session id is that revoke:sid keeps working across
+	// refreshes even though the JTI changes every 300s.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind, claims.Amr, claims.Sid)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -779,7 +795,9 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// "human", but we forward the actual column to keep the contract tight.
 	// Login is the password credential path, so the authentication method is
 	// always "pwd" (["pwd"] amr).
-	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"})
+	// sid is "" here: this password-login path does not yet mint a session row
+	// (a later task in the active-session-list feature replaces this).
+	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"}, "")
 	if terr != nil {
 		return LoginResult{}, terr
 	}

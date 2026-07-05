@@ -299,7 +299,9 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	// amr is nil here: the Docker /auth/token endpoint serves both password
 	// and API-key (Bearer key.) principals, so no single authentication method
 	// applies. The dashboard login path (Service.Login) stamps ["pwd"].
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind, nil)
+	// sid is "" here: OCI Docker tokens are not interactive sessions, so they
+	// carry no session id (they are never listed or refreshed).
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind, nil, "")
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")

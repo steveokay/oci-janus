@@ -96,7 +96,9 @@ func (s *Service) IssueMFACompletedToken(ctx context.Context, userID, tenantID u
 	if err != nil {
 		return "", err
 	}
-	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"})
+	// sid is "" here: this MFA-completion path does not yet mint a session row
+	// (a later task in the active-session-list feature will thread it through).
+	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"}, "")
 }
 
 // GetMFAStatus reports whether the user has MFA enabled.

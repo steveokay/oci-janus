@@ -558,7 +558,9 @@ func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []
 	// forwarded verbatim so the contract stays correct if that ever changes.
 	// amr is ["sso"] — the authentication method was a federated SSO/SAML
 	// assertion rather than a local password.
-	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"sso"})
+	// sid is "" here: this SSO path does not yet mint a session row (a later
+	// task in the active-session-list feature will thread it through).
+	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"sso"}, "")
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────
