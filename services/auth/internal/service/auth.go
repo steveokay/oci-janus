@@ -823,7 +823,10 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 // wrong code feeds the SAME account-lockout counter that AuthenticateUser uses,
 // so brute-forcing the second factor is bounded by the existing lockout policy.
 // OTP codes and backup codes are never logged (CLAUDE.md §10).
-func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string) (string, error) {
+// meta carries the client IP + User-Agent captured at the HTTP edge; it is
+// forwarded to IssueMFACompletedToken so a completed second-factor login
+// creates a listable/revocable session row.
+func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string, meta SessionMeta) (string, error) {
 	// The challenge token is only spendable here: ValidateMFAToken enforces
 	// typ==mfa_challenge, so a normal access token (or a setup token) is refused.
 	claims, err := s.ValidateMFAToken(ctx, challengeToken, tokenTypeMFAChallenge)
@@ -874,8 +877,9 @@ func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code strin
 	tenantID, _ := uuid.Parse(claims.TenantID)
 	// Roles + is_global_admin are resolved from the DB by the shared issuer; the
 	// challenge token deliberately carries no roles/access. The MFA login path is
-	// human-only (GetHumanByUsername gates AuthenticateUser).
-	return s.IssueMFACompletedToken(ctx, userID, tenantID)
+	// human-only (GetHumanByUsername gates AuthenticateUser). meta is forwarded so
+	// the completed login mints a session row.
+	return s.IssueMFACompletedToken(ctx, userID, tenantID, meta)
 }
 
 // recordMFAChallengeAttempt atomically counts submissions made against a single

@@ -66,7 +66,11 @@ func (h *HTTPHandler) loginMFA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BADREQUEST", "challenge_token and code are required")
 		return
 	}
-	tok, err := h.svc.VerifyLoginMFA(r.Context(), req.ChallengeToken, req.Code)
+	// Capture the client IP + User-Agent so the completed second-factor login
+	// creates a listable/revocable session row (ip already honours the
+	// trusted-proxy CIDR allowlist via remoteIP above).
+	tok, err := h.svc.VerifyLoginMFA(r.Context(), req.ChallengeToken, req.Code,
+		service.SessionMeta{IP: ip, UserAgent: r.UserAgent()})
 	if err != nil {
 		// Any failure (bad challenge token, wrong/replayed code) collapses to a
 		// single 401 so an attacker cannot distinguish the cause. The service
@@ -190,7 +194,10 @@ func (h *HTTPHandler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		// Resolve roles + is_global_admin from the DB (SEC-080) — the setup token
 		// carries neither, so trusting its claims would silently de-privilege a
 		// force-enrolled global admin for the whole session.
-		access, terr := h.svc.IssueMFACompletedToken(r.Context(), userID, tenantID)
+		// Capture the client IP + User-Agent so the forced-enrolment completion
+		// (which also logs the user in) creates a listable/revocable session row.
+		access, terr := h.svc.IssueMFACompletedToken(r.Context(), userID, tenantID,
+			service.SessionMeta{IP: remoteIP(r), UserAgent: r.UserAgent()})
 		if terr == nil {
 			resp["token"] = access
 		} else {

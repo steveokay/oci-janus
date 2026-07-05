@@ -140,7 +140,7 @@ func TestVerifyLoginMFA_validBackupCode_returnsToken(t *testing.T) {
 	ct, err := svc.IssueMFAChallengeToken(ctx, userID.String(), u.TenantID.String())
 	require.NoError(t, err)
 
-	tok, err := svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	tok, err := svc.VerifyLoginMFA(ctx, ct, backupCodes[0], SessionMeta{})
 	require.NoError(t, err)
 	require.NotEmpty(t, tok, "a full access token must be returned")
 
@@ -166,7 +166,7 @@ func TestVerifyLoginMFA_wrongCode_feedsLockout(t *testing.T) {
 	ct, err := svc.IssueMFAChallengeToken(ctx, userID.String(), u.TenantID.String())
 	require.NoError(t, err)
 
-	_, err = svc.VerifyLoginMFA(ctx, ct, "000000")
+	_, err = svc.VerifyLoginMFA(ctx, ct, "000000", SessionMeta{})
 	require.ErrorIs(t, err, ErrInvalidCredentials)
 	require.Equal(t, 1, users.failedLogins[userID], "a wrong OTP must feed the lockout counter")
 }
@@ -192,7 +192,7 @@ func TestIssueMFACompletedToken_resolvesGlobalAdminFromDB(t *testing.T) {
 		IsGlobalAdmin: true,
 	})
 
-	tok, err := svc.IssueMFACompletedToken(ctx, userID, tenantID)
+	tok, err := svc.IssueMFACompletedToken(ctx, userID, tenantID, SessionMeta{})
 	require.NoError(t, err)
 
 	claims, err := svc.ValidateToken(ctx, tok)
@@ -217,7 +217,7 @@ func TestVerifyLoginMFA_badChallengeToken_rejected(t *testing.T) {
 	access, err := svc.IssueToken(ctx, userID.String(), u.TenantID.String(), nil, nil, false, "human", []string{"pwd"}, "")
 	require.NoError(t, err)
 
-	_, err = svc.VerifyLoginMFA(ctx, access, backupCodes[0])
+	_, err = svc.VerifyLoginMFA(ctx, access, backupCodes[0], SessionMeta{})
 	require.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
@@ -241,7 +241,7 @@ func TestVerifyLoginMFA_lockedAccount_rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Even a correct backup code must be refused while locked.
-	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0], SessionMeta{})
 	require.ErrorIs(t, err, ErrAccountLocked)
 }
 
@@ -268,12 +268,12 @@ func TestVerifyLoginMFA_challengeAttemptCap(t *testing.T) {
 
 	// Exhaust the cap with wrong codes.
 	for i := 0; i < maxMFAChallengeAttempts; i++ {
-		_, verr := svc.VerifyLoginMFA(ctx, ct, "000000")
+		_, verr := svc.VerifyLoginMFA(ctx, ct, "000000", SessionMeta{})
 		require.ErrorIs(t, verr, ErrInvalidCredentials)
 	}
 	// The token is now burned: even a correct backup code is refused (the cap is
 	// checked before the code is consumed).
-	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	_, err = svc.VerifyLoginMFA(ctx, ct, backupCodes[0], SessionMeta{})
 	require.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
@@ -293,12 +293,12 @@ func TestVerifyLoginMFA_success_resetsFailedLogins(t *testing.T) {
 	require.NoError(t, err)
 
 	// One wrong code bumps the counter...
-	_, err = svc.VerifyLoginMFA(ctx, ct, "000000")
+	_, err = svc.VerifyLoginMFA(ctx, ct, "000000", SessionMeta{})
 	require.ErrorIs(t, err, ErrInvalidCredentials)
 	require.Equal(t, 1, users.failedLogins[userID])
 
 	// ...a correct backup code succeeds and clears it.
-	tok, err := svc.VerifyLoginMFA(ctx, ct, backupCodes[0])
+	tok, err := svc.VerifyLoginMFA(ctx, ct, backupCodes[0], SessionMeta{})
 	require.NoError(t, err)
 	require.NotEmpty(t, tok)
 	require.Equal(t, 0, users.failedLogins[userID], "success must reset the failed-login counter")

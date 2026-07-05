@@ -143,6 +143,66 @@ func TestLogin_noMFA_createsSession(t *testing.T) {
 	}
 }
 
+// enrolMFAUserForSession seeds an active human user and drives the full TOTP
+// enrolment flow, returning the user + tenant ids AND the base32 secret so the
+// caller can compute a valid OTP. It mirrors enrolMFAUser (mfa_test.go) but
+// returns the tenant id + secret and derives the enrolment code from svc.now()
+// (the harness pins the clock via loginMFAFixedNow, so codeForSecret is
+// deterministic).
+func enrolMFAUserForSession(t *testing.T, svc *Service, users *fakeUserRepo) (userID, tenantID uuid.UUID, secretBase32 string) {
+	t.Helper()
+	userID = uuid.New()
+	tenantID = uuid.New()
+	users.addUser(&repository.User{
+		ID:       userID,
+		TenantID: tenantID,
+		Username: "u-" + userID.String()[:8],
+		Email:    userID.String()[:8] + "@example.com",
+		IsActive: true,
+		Kind:     "human",
+	})
+	// Enrol under a back-dated clock so CompleteMFAEnrollment consumes an EARLIER
+	// TOTP counter than the one the caller spends at svc.now(). Without this the
+	// replay guard (verifyTOTP: counter must strictly advance past LastUsedCounter)
+	// would reject the identical current-window code when it is re-presented at
+	// VerifyLoginMFA. 90s back = two 30s steps earlier, well outside the accepted
+	// window at enrol time but strictly below the current counter at verify time.
+	realNowFn := svc.nowFn
+	enrolAt := loginMFAFixedNow.Add(-90 * time.Second)
+	svc.nowFn = func() time.Time { return enrolAt }
+	secret, _, err := svc.BeginMFAEnrollment(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("BeginMFAEnrollment: %v", err)
+	}
+	code := codeForSecret(t, secret, enrolAt)
+	if _, err := svc.CompleteMFAEnrollment(context.Background(), userID, code); err != nil {
+		t.Fatalf("CompleteMFAEnrollment: %v", err)
+	}
+	// Restore the pinned clock so the caller's codeForSecret(secret, svc.now())
+	// lands on the current window.
+	svc.nowFn = realNowFn
+	return userID, tenantID, secret
+}
+
+func TestVerifyLoginMFA_createsSession(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	svc, users := newSessionLoginTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	userID, tenantID, secret := enrolMFAUserForSession(t, svc, users)
+	ct, _ := svc.IssueMFAChallengeToken(ctx, userID.String(), tenantID.String())
+	tok, err := svc.VerifyLoginMFA(ctx, ct, codeForSecret(t, secret, svc.now()),
+		SessionMeta{IP: "198.51.100.4", UserAgent: "docker/24.0"})
+	if err != nil {
+		t.Fatalf("VerifyLoginMFA: %v", err)
+	}
+	claims, _ := svc.ValidateToken(ctx, tok)
+	if claims.Sid == "" || sessions.bySID[claims.Sid] == nil {
+		t.Fatal("MFA login must create a session")
+	}
+}
+
 func TestIssueSessionToken_createsRowAndSid(t *testing.T) {
 	rdb := newTestRedis(t)
 	sessions := newFakeSessionRepo()
