@@ -124,13 +124,19 @@ export function MfaEnrollDialog({
     }
   }
 
-  // On the codes step the dialog must not be dismissable by escape/overlay —
-  // block those so the only exit is the explicit confirm. Other steps behave
-  // normally (escape/overlay close is fine before codes are issued).
+  // On the codes step the dialog must not be dismissable — the backup codes are
+  // shown exactly once, so the only exit is the explicit "I've saved these"
+  // confirm. Gate the root onOpenChange itself (not just escape/overlay): the
+  // corner X renders a Radix Close that calls onOpenChange directly and would
+  // otherwise slip past Content-level guards. Mirrors webhooks/secret-reveal.
   const lockDismiss = step === "codes";
+  const guardedOpenChange = (next: boolean) => {
+    if (lockDismiss) return; // swallow X / programmatic close while codes are shown
+    onOpenChange(next);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent
         className="max-w-[480px]"
         onEscapeKeyDown={(e) => {
