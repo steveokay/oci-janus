@@ -1,23 +1,26 @@
-// REDESIGN-001 Phase 4.2.b — /settings becomes a parent route with tab children.
+// /settings is a parent route with tab children. This file is the layout
+// shell — tabs are real child routes (one per URL):
 //
-// Previously /settings was a single page with two URL-search-param tabs
-// (Notifications + Security FUT-019 placeholders). This file is now the
-// layout shell — tabs are real child routes (one per URL):
+//   /settings/workspace     — identity / delivery / sign-in / lifecycle +
+//                             deployment posture.
+//   /settings/scanning      — scan policy + scanner adapters. Single-mode
+//                             only (multi mode → Platform tab).
+//   /settings/housekeeping  — garbage collection + retention. Single-mode
+//                             only (multi mode → Platform tab).
+//   /settings/notifications — the per-category notification-preference matrix.
+//   /settings/platform      — cross-tenant + infra surfaces. Multi-mode +
+//                             is_global_admin only.
 //
-//   /settings/account    — profile, password, notification prefs, my API keys,
-//                          MFA/sessions placeholder.        (this PR)
-//   /settings/workspace  — workspace-level config.          (Phase 4.2.c)
-//   /settings/platform   — cross-tenant + infra surfaces.   (Phase 4.2.d,
-//                          multi-mode + is_global_admin only)
+// Personal account state (identity, password, API keys, MFA, sessions) is NOT
+// here — it moved to the top-level /profile page in the 2026-07-05 UI cleanup.
 //
 // Tab visibility is mode + role gated:
-//   - Account is always shown.
-//   - Workspace is shown when the caller holds ≥ admin on any scope
-//     (workspace admin in single mode == effective platform admin per the
-//     Phase 5.2 helper). Stub content lands in 4.2.c.
+//   - Workspace is shown when the caller holds ≥ admin on any scope.
+//   - Scanning + Housekeeping are shown to those admins in single mode only
+//     (multi mode keeps the maintenance surfaces on Platform).
+//   - Notifications is always shown (personal preference).
 //   - Platform is shown only when DEPLOYMENT_MODE=multi AND
-//     users.is_global_admin=true. Hidden in single mode entirely because
-//     "workspace = deployment = platform" — all surfaces fold into Workspace.
+//     users.is_global_admin=true.
 //
 // Each tab renders inside the persistent header/tab-rail via <Outlet/>, so
 // switching tabs only swaps the right pane without re-mounting the chrome.
@@ -38,11 +41,21 @@ export const Route = createFileRoute("/_authenticated/settings")({
 });
 
 // SettingsTab is the union of tab keys; each maps 1:1 to a child route.
-type SettingsTab = "account" | "workspace" | "platform";
+type SettingsTab =
+  | "workspace"
+  | "scanning"
+  | "housekeeping"
+  | "notifications"
+  | "platform";
 
 interface TabDef {
   key: SettingsTab;
-  to: "/settings/account" | "/settings/workspace" | "/settings/platform";
+  to:
+    | "/settings/workspace"
+    | "/settings/scanning"
+    | "/settings/housekeeping"
+    | "/settings/notifications"
+    | "/settings/platform";
   label: string;
 }
 
@@ -70,33 +83,58 @@ function SettingsLayout(): React.ReactElement {
   }, [abilities]);
 
   // Platform tab is multi-mode + is_global_admin only. Single-mode hides
-  // it entirely so the bootstrap admin doesn't see an empty third tab —
-  // single-mode operators get all the same controls inside Workspace.
+  // it entirely so the bootstrap admin doesn't see an empty tab —
+  // single-mode operators get all the same controls inside Housekeeping.
+  const isSingleMode = deploymentInfo?.deployment_mode === "single";
   const showPlatformTab =
     deploymentInfo?.deployment_mode === "multi" && isGlobalAdmin;
 
   const tabs: TabDef[] = React.useMemo(() => {
-    const out: TabDef[] = [
-      { key: "account", to: "/settings/account", label: "Account" },
-    ];
+    const out: TabDef[] = [];
     if (hasAnyAdminScope) {
       out.push({ key: "workspace", to: "/settings/workspace", label: "Workspace" });
     }
+    // Scanning (scan policy + scanner adapters) and Housekeeping (GC +
+    // retention) are the single-mode home for the maintenance surfaces; in
+    // multi mode they stay on the Platform tab, so both are gated on single
+    // mode + admin.
+    if (hasAnyAdminScope && isSingleMode) {
+      out.push({
+        key: "scanning",
+        to: "/settings/scanning",
+        label: "Scanning",
+      });
+      out.push({
+        key: "housekeeping",
+        to: "/settings/housekeeping",
+        label: "Housekeeping",
+      });
+    }
+    // Notifications is a personal preference — always available to everyone.
+    out.push({
+      key: "notifications",
+      to: "/settings/notifications",
+      label: "Notifications",
+    });
     if (showPlatformTab) {
       out.push({ key: "platform", to: "/settings/platform", label: "Platform" });
     }
     return out;
-  }, [hasAnyAdminScope, showPlatformTab]);
+  }, [hasAnyAdminScope, isSingleMode, showPlatformTab]);
 
   // Eyebrow above the H1 tracks the active tab — it was hardcoded "Account",
   // which read wrong on /settings/workspace and /settings/platform. Derived
   // from the pathname (same source of truth the tab rail uses for its
   // active state) rather than tab state so deep links land correct.
-  const eyebrow = location.pathname.startsWith("/settings/workspace")
-    ? "Workspace"
-    : location.pathname.startsWith("/settings/platform")
-      ? "Platform"
-      : "Account";
+  const eyebrow = location.pathname.startsWith("/settings/scanning")
+    ? "Scanning"
+    : location.pathname.startsWith("/settings/housekeeping")
+      ? "Housekeeping"
+      : location.pathname.startsWith("/settings/notifications")
+        ? "Notifications"
+        : location.pathname.startsWith("/settings/platform")
+          ? "Platform"
+          : "Workspace";
 
   return (
     <div className="space-y-6 p-6">
@@ -108,9 +146,9 @@ function SettingsLayout(): React.ReactElement {
           <SettingsIcon className="size-6" /> Settings
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)]">
-          Personal preferences and{" "}
-          {tabs.length > 1 ? "workspace configuration" : "preferences"} live
-          here. Each tab is its own URL — bookmark or share the one you live in.
+          Workspace, housekeeping, and notification configuration live here.
+          Personal account settings moved to Profile. Each tab is its own URL —
+          bookmark or share the one you live in.
         </p>
       </header>
 

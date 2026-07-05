@@ -2,15 +2,16 @@ import * as React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, test, expect, vi } from "vitest";
-import { ChannelToggleCell } from "../_authenticated.settings.account";
+import { ChannelToggleCell } from "../_authenticated.settings.notifications";
 
-// REDESIGN-001 Phase 4.5 — channel-not-yet-shipped lockout.
+// Channel-not-yet-shipped lockout (moved from Settings › Account to Settings ›
+// Notifications in the 2026-07-05 UI cleanup).
 //
-// Phase 4.2.b shipped the notification matrix with Email/Webhook tooltipped
-// as "Wired in Phase 3+" — but the checkbox was still live, so an operator
-// could enable it, see no toast, and walk away believing alerts were on.
-// This test pins the new behaviour: when `hint` is set, the checkbox is
-// visibly disabled and clicks do NOT fire `onChange`.
+// The notification matrix ships Email/Webhook tooltipped as "Wired in Phase
+// 3+" — but a live checkbox would let an operator enable it, see no toast, and
+// walk away believing alerts were on. This test pins the behaviour: when
+// `hint` is set, the checkbox is visibly disabled and clicks do NOT fire
+// `onChange`.
 
 // ChannelToggleCell renders a <td>; rendering it outside a <table> works in
 // JSDOM but emits an HTML5-validity warning. Wrap in the minimal table chrome
@@ -25,7 +26,7 @@ function renderInTable(cell: React.ReactElement) {
   );
 }
 
-describe("ChannelToggleCell — Phase 4.5 lockout", () => {
+describe("ChannelToggleCell — channel lockout", () => {
   test("with no hint, checkbox is enabled and onChange fires", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();

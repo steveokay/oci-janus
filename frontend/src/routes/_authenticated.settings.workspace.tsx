@@ -1,15 +1,16 @@
-// REDESIGN-001 Phase 4.2.c — Settings › Workspace tab.
+// Settings › Workspace tab.
 //
-// The workhorse tab — 90% of routine workspace config lives here:
-//   - Members + Organizations  (link → /members)
+// The "who/how" tab — identity, delivery, sign-in, lifecycle + deployment
+// posture:
+//   - Posture                   (read-only DeploymentInfoCard; single mode)
+//   - Members + Organizations   (link → /members)
+//   - Workspace webhooks        (link → /webhooks)
 //   - SSO                       (read-only info card; configured in deploy files)
 //   - Retention defaults        (link → per-org settings)
-//   - Scan policies             (embedded tenant-wide ScanPolicyEditor)
-//   - Workspace webhooks        (link → /webhooks)
 //
-// In Phase 4.2.d the single-mode variant of this tab also absorbs
-// Scanner adapters, GC schedule, and Deployment info (single mode has no
-// separate Platform tab — workspace == deployment).
+// The operational-maintenance surfaces (scan policy, scanner adapters, GC,
+// retention runs) moved to Settings › Housekeeping in the 2026-07-05 UI
+// cleanup; in multi mode they remain on the Platform tab.
 //
 // Mode + role rules:
 //   - Parent route already gates the TAB itself on "caller has admin
@@ -33,12 +34,7 @@ import {
   Archive,
 } from "lucide-react";
 import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
-import { ScanPolicyEditor } from "@/components/security/scan-policy-editor";
-import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapters-section";
-import { GCCard } from "@/components/admin/gc-card";
-import { RetentionCard } from "@/components/admin/retention-card";
 import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
-import { SectionAnchorNav } from "@/components/ui/section-anchor-nav";
 import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import { cn } from "@/lib/utils";
 
@@ -60,6 +56,12 @@ function WorkspaceTab(): React.ReactElement {
 
   return (
     <div className="space-y-6">
+      {/* Posture — read-only deployment mode + version + TLS/mTLS flags.
+          Single mode only: in multi mode this lives on the Platform tab
+          (workspace == deployment == platform in single mode). Leads the tab
+          so an operator sees "what kind of deployment is this" first. */}
+      {isSingleMode ? <DeploymentInfoCard /> : null}
+
       {/* Top row: Members/Orgs + Webhooks. Both are quick "go here" cards
           because their real surfaces are already polished elsewhere — the
           Workspace tab is a router, not a re-host. */}
@@ -112,44 +114,10 @@ function WorkspaceTab(): React.ReactElement {
         cta="Pick an organization"
       />
 
-      {/* Embedded ScanPolicyEditor — the only section that doesn't link out
-          because the tenant-wide scan policy has no other home. The editor
-          is RBAC-aware: GET is reader-grade, PUT requires admin on at least
-          one org in the tenant. Non-admins see a disabled "Save" button
-          rather than a 401 toast. */}
-      <ScanPolicyEditor />
-
-      {/* Single-mode-only sections (Phase 4.2.d).
-          These also live on the Platform tab in multi mode; in single mode
-          there IS no Platform tab so they collapse here. Hidden in multi
-          mode to avoid duplicating the editable surface across two tabs —
-          the multi-mode Workspace tab stays scoped to per-workspace
-          concerns. */}
-      {isSingleMode ? (
-        <>
-          {/* Anchor chips for the single-mode-only section stack. Only these
-              four blocks carry #id anchors on this tab, and they only exist
-              in single mode — so the chip row is rendered inside the same
-              conditional and lists exactly the sections below it. */}
-          <SectionAnchorNav
-            ariaLabel="Workspace platform sections"
-            items={[
-              { id: "scanner", label: "Scanner" },
-              { id: "gc", label: "Garbage collection" },
-              { id: "retention", label: "Retention" },
-              { id: "deployment", label: "Deployment" },
-            ]}
-          />
-          <ScannerAdaptersSection />
-          <section id="gc" className="space-y-4 scroll-mt-24">
-            <GCCard />
-          </section>
-          <section id="retention" className="space-y-4 scroll-mt-24">
-            <RetentionCard />
-          </section>
-          <DeploymentInfoCard />
-        </>
-      ) : null}
+      {/* Scan policy, scanner adapters, garbage collection, and retention
+          moved to Settings › Housekeeping (single mode) / the Platform tab
+          (multi mode) — the Workspace tab now stays scoped to identity /
+          delivery / sign-in / lifecycle + deployment posture. */}
     </div>
   );
 }

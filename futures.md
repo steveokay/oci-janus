@@ -382,6 +382,19 @@ the rest.
 per category. Full feature lands across ~1 sprint if dispatched
 agent-style.
 
+**Current state (2026-07-05):** the `/settings` hub + the **Notification
+categories** preference matrix have shipped. As of the 2026-07-05 UI
+cleanup the matrix lives on its own tab — **Settings › Notifications**
+(`routes/_authenticated.settings.notifications.tsx`, `NotificationsSection`
++ `ChannelToggleCell`) — moved out of the old Settings › Account tab.
+**Still open / tracked here:** only the **Bell** delivery channel is live;
+the **Email** and **Webhook** columns render but are visibly locked
+("Wired in Phase 3+") because the BFF drops those writes until the
+delivery worker lands. Wiring Email (Resend default + pluggable SMTP/Gmail,
+per the email-channel plan) + Webhook delivery is the remaining Phase 3
+work — do NOT let the "Notification categories" surface read as complete
+while those two channels are inert.
+
 ---
 
 ## Tier 2 — Access: machine identity & policy
