@@ -58,7 +58,8 @@
 ```
 POST /auth/token          # Docker token endpoint (RFC 7235 flow)
 POST /api/v1/users        # Create user (admin-only — see PENTEST-003)
-POST /api/v1/login        # Issue long-lived session token
+POST /api/v1/login        # Issue long-lived session token (may return mfa_required + challenge)
+POST /api/v1/login/mfa    # Finish two-step login: spend mfa_challenge token + OTP/backup code
 POST /api/v1/apikeys      # Create API key (robot accounts)
 DELETE /api/v1/apikeys/:id
 GET  /api/v1/apikeys      # List API keys for current user
@@ -68,6 +69,15 @@ GET  /api/v1/users/me        # Current user metadata (FE-API-011)
 PATCH /api/v1/users/me       # Update display name + email (FE-API-012)
 POST /api/v1/users/me/password  # Change password (FE-API-013, argon2id + JTI revocation)
 GET  /.well-known/jwks.json  # Public key set for JWT verification
+
+# TOTP MFA — Tier-1 #1 (local password accounts; SSO users exempt)
+GET  /api/v1/users/me/mfa                        # MFA status (enabled? enrolled_at?)
+POST /api/v1/users/me/mfa/enroll                 # Begin enrolment → TOTP secret + otpauth QR URI
+POST /api/v1/users/me/mfa/verify                 # Confirm code → enable MFA + 8 argon2 backup codes
+DELETE /api/v1/users/me/mfa                       # Disable MFA
+POST /api/v1/users/me/mfa/backup-codes/regenerate # Re-mint the 8 single-use backup codes
+# Admin toggle: token_policies.require_mfa forces MFA on all password accounts
+# (un-enrolled users get an mfa_setup token at login to complete forced enrolment).
 
 # SSO — FE-API-034 (OAuth + SAML)
 GET  /api/v1/auth/sso/providers          # List enabled SSO providers for tenant

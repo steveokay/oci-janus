@@ -172,6 +172,97 @@ in `CLAUDE.md` §14 Decision #24 / `docs/adr/ADR-0024-*.md`.
 
 ---
 
+## TOTP MFA (two-step login)
+
+Tier-1 #1. Time-based one-time-password second factor for local
+password accounts (`kind='human'`). **SSO users are exempt** — their
+IdP owns the second factor, so MFA enrolment/challenge is never
+required for an SSO-provisioned login. Implementation lives in
+`services/auth/internal/mfa` (TOTP primitives, no DB/HTTP),
+`internal/service/mfa.go` + `auth.go` (enrolment, login, typed tokens),
+and `internal/repository/mfa.go`.
+
+### Three token types
+
+All three are RS256 tokens from the same key ring, discriminated by the
+`typ` claim (and a dedicated `aud`):
+
+| Token | `typ` | `aud` | TTL | Purpose |
+|---|---|---|---|---|
+| access | `""` (absent) | *(none)* | 5 min | normal authenticated calls |
+| MFA challenge | `mfa_challenge` | `registry-auth-mfa` | 5 min | spent at `POST /login/mfa` to finish a two-step login |
+| MFA setup | `mfa_setup` | `registry-auth-mfa-setup` | 15 min | authorises forced-enrolment `enroll`/`verify` |
+
+`ValidateToken` **rejects any token with a non-empty `typ`** — a
+challenge or setup token can never be replayed as an access token
+(`services/auth/internal/service/auth.go` ValidateToken → the typed
+tokens carry `typ` + a non-access audience and only
+`ValidateMFAToken`/`ValidateMFASetupToken` accept them, each requiring
+its exact `typ`).
+
+### `amr` claim
+
+The access token records the authentication methods that produced it
+in the `amr` claim: `["pwd"]` (password only), `["pwd","otp"]`
+(password + verified TOTP/backup code), or `["sso"]`. `RefreshToken`
+forwards `amr` **verbatim** — a refresh never upgrades or downgrades
+the recorded factors. `amr` is recorded for audit + future step-up
+decisions.
+
+### Enrolment flow
+
+1. `POST /api/v1/users/me/mfa/enroll` — mints a fresh TOTP secret +
+   `otpauth://` URI (FE renders the QR) and returns the base32 secret.
+   The secret is stored **encrypted** (`users.mfa_secret_enc`).
+2. `POST /api/v1/users/me/mfa/verify` — the user submits a code from
+   their authenticator; on success MFA is enabled (`mfa_enabled=true`,
+   `mfa_enrolled_at` set) and **8 single-use argon2id-hashed backup
+   codes** are minted and returned once.
+3. `GET /api/v1/users/me/mfa` reports status; `DELETE
+   /api/v1/users/me/mfa` disables it; `POST
+   /api/v1/users/me/mfa/backup-codes/regenerate` re-mints the 8 codes
+   (invalidating the old set).
+
+### Two-step login
+
+1. `POST /api/v1/login` with password. If the user has MFA enabled the
+   response is `mfa_required` + a short-lived `mfa_challenge` token
+   (no access token is issued yet).
+2. `POST /api/v1/login/mfa` with the challenge token + an OTP or backup
+   code. On success the full access token is minted with
+   `amr=["pwd","otp"]`.
+
+### Replay + single-use guarantees
+
+- **TOTP replay prevention:** each accepted code's time-step counter is
+  stored in `users.mfa_last_used_counter`; a code whose counter is not
+  strictly greater than the last accepted is rejected, so the same code
+  cannot be spent twice within its ±1-step window.
+- **Backup codes are single-use:** each is argon2id-hashed
+  (`user_mfa_backup_codes.code_hash`) and marked `used_at` on
+  redemption; a used code is never accepted again.
+
+### Forced enrolment (`require_mfa`)
+
+`token_policies.require_mfa` (per-tenant row; deployment-wide in single
+mode) forces MFA on all password accounts. When it is on and a user
+without a factor logs in, `POST /login/mfa` is not yet possible — the
+login instead returns an `mfa_setup` token that authorises the
+`enroll`/`verify` pair so the user can complete enrolment before
+receiving an access token. SSO users remain exempt.
+
+### Secrets at rest
+
+TOTP secrets are AES-256-GCM encrypted (`libs/crypto/aes`) under a
+**dedicated** KEK, `MFA_SECRET_KEY_HEX` — separate from the SSO
+credential KEK (`SSO_CREDENTIAL_KEY_HEX`). It is required at startup
+(32 bytes / 64 hex chars) and rotated independently via `registry-auth
+rotate-kek --mfa` (`users.mfa_secret_enc` /
+`users.mfa_secret_kek_version`); see
+[`../infra/runbooks/kek-rotation.md`](../infra/runbooks/kek-rotation.md).
+
+---
+
 ## Dev fallback
 
 When cert paths are unset, services log `slog.Warn` and use
