@@ -67,11 +67,16 @@ func (h *GRPCHandler) PutTokenPolicy(ctx context.Context, req *authv1.PutTokenPo
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid actor_id")
 	}
+	// require_mfa is a plain proto bool (no wrapper), so it is always present
+	// on the wire — take its address unconditionally to hand a non-nil
+	// *bool to the service layer.
+	requireMFA := req.GetRequireMfa()
 	row, err := h.tokenPolicy.Put(ctx, service.PutTokenPolicyInput{
 		TenantID:             tenantID,
 		MaxTTLDays:           unwrapInt32(req.GetMaxTtlDays()),
 		RotationIntervalDays: unwrapInt32(req.GetRotationIntervalDays()),
 		IdleRevokeDays:       unwrapInt32(req.GetIdleRevokeDays()),
+		RequireMFA:           &requireMFA,
 		ActorID:              actorID,
 	})
 	if err != nil {
@@ -115,6 +120,7 @@ func tokenPolicyToProto(row *repository.TokenPolicy) *authv1.TokenPolicy {
 		MaxTtlDays:           wrapInt32(row.MaxTTLDays),
 		RotationIntervalDays: wrapInt32(row.RotationIntervalDays),
 		IdleRevokeDays:       wrapInt32(row.IdleRevokeDays),
+		RequireMfa:           row.RequireMFA,
 		UpdatedAt:            timestamppb.New(row.UpdatedAt),
 		UpdatedByUserId:      updatedBy,
 	}

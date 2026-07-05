@@ -452,6 +452,11 @@ message TokenPolicy {
   google.protobuf.Int32Value idle_revoke_days       = 4;
   google.protobuf.Timestamp updated_at              = 5;
   string updated_by_user_id                         = 6;
+  // require_mfa (TOTP MFA, Tier-1 #1): when true, all local password
+  // (kind='human') accounts in the tenant must present a second factor at
+  // login. Plain bool (not a wrapper) — the column is NOT NULL DEFAULT
+  // false, so "unset" and "false" are indistinguishable by design.
+  bool require_mfa                                  = 7;
 }
 
 // GetTokenPolicyRequest scopes the read to one tenant. Callers get the
@@ -469,6 +474,11 @@ message PutTokenPolicyRequest {
   google.protobuf.Int32Value rotation_interval_days = 3;
   google.protobuf.Int32Value idle_revoke_days       = 4;
   string actor_id                                   = 5;
+  // require_mfa (TOTP MFA, Tier-1 #1): desired admin toggle for enforcing a
+  // second factor on all local password accounts. Plain bool — always set
+  // on the wire (no preserve-existing semantics), so a Put always writes
+  // the caller's value.
+  bool require_mfa                                  = 6;
 }
 
 // FUT-004 — access review messages.
