@@ -112,6 +112,15 @@ func seedKey(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID, name string, 
 	return keyID
 }
 
+// ageCreatedAt back-dates an api_keys row's created_at so tests can make a
+// never-used key look old enough to fall outside the idle grace window.
+func ageCreatedAt(t *testing.T, pool *pgxpool.Pool, keyID uuid.UUID, created time.Time) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`UPDATE api_keys SET created_at = $2 WHERE id = $1`, keyID, created)
+	require.NoError(t, err)
+}
+
 // isActive returns the api_keys.is_active + revoke_reason for the given key.
 func isActive(t *testing.T, pool *pgxpool.Pool, keyID uuid.UUID) (bool, string) {
 	t.Helper()
@@ -137,17 +146,23 @@ func TestIdleRevoke_Tick_RevokesIdleKeys(t *testing.T) {
 	idle := int32(7)
 	tenantID := seedTenantWithPolicy(t, pool, &idle)
 
-	// Seed three keys:
-	//   - idleKey: last_used_at 30 days ago → should be revoked
-	//   - freshKey: last_used_at 1h ago → should NOT be revoked
-	//   - neverUsed: last_used_at NULL → should be revoked (never used counts as idle)
+	// Seed four keys to pin the grace-period semantic (never-used keys are
+	// measured from created_at, not treated as instantly idle):
+	//   - idleKey:      last_used_at 30 days ago            → revoked
+	//   - freshKey:     last_used_at 1h ago                 → kept
+	//   - neverUsedNew: last_used_at NULL, created just now → kept (grace)
+	//   - neverUsedOld: last_used_at NULL, created 30d ago  → revoked
 	now := time.Now().UTC()
 	oldTime := now.Add(-30 * 24 * time.Hour)
 	recentTime := now.Add(-1 * time.Hour)
 
 	idleKey := seedKey(t, pool, tenantID, "idle", &oldTime)
 	freshKey := seedKey(t, pool, tenantID, "fresh", &recentTime)
-	neverUsed := seedKey(t, pool, tenantID, "never", nil)
+	neverUsedNew := seedKey(t, pool, tenantID, "never-new", nil)
+	neverUsedOld := seedKey(t, pool, tenantID, "never-old", nil)
+	// Age the never-used-old key's created_at past the 7-day idle window so
+	// it's genuinely idle; the never-used-new key keeps its now() created_at.
+	ageCreatedAt(t, pool, neverUsedOld, oldTime)
 
 	pub := &capturingPublisher{}
 	w := New(pool,
@@ -164,11 +179,14 @@ func TestIdleRevoke_Tick_RevokesIdleKeys(t *testing.T) {
 	active, _ = isActive(t, pool, freshKey)
 	require.True(t, active, "fresh key should remain active")
 
-	active, reason = isActive(t, pool, neverUsed)
-	require.False(t, active, "never-used key should be revoked")
+	active, _ = isActive(t, pool, neverUsedNew)
+	require.True(t, active, "freshly-created never-used key should stay active (grace period)")
+
+	active, reason = isActive(t, pool, neverUsedOld)
+	require.False(t, active, "never-used key created past the idle window should be revoked")
 	require.Equal(t, "idle_revoked", reason)
 
-	// Publisher should have received 2 revocation events.
+	// Publisher should have received 2 revocation events (idle + never-old).
 	got := pub.all()
 	require.Len(t, got, 2)
 	for _, ev := range got {

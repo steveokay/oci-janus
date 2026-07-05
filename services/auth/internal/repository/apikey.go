@@ -311,11 +311,17 @@ type IdleKey struct {
 	LastUsedAt       *time.Time
 }
 
-// ListIdleKeys returns active (non-revoked) keys whose last_used_at is
-// older than the given cutoff, restricted to the given tenant. Rows with
-// NULL last_used_at are ALSO returned — a key that was created but never
-// used is idle by definition, and letting it linger indefinitely would
-// defeat the purpose of the idle-revoke policy.
+// ListIdleKeys returns active (non-revoked) keys whose last activity is
+// older than the given cutoff, restricted to the given tenant. "Last
+// activity" is COALESCE(last_used_at, created_at): a key that was never
+// used falls back to its creation time, so it earns the SAME idle grace
+// period as a used key measured from its last use.
+//
+// This is deliberate. An earlier form treated *every* NULL last_used_at
+// as instantly idle, which meant a freshly-issued key (never used yet by
+// definition) was revoked on the very next hourly tick — before the
+// operator could ever wire it up. Anchoring never-used keys to created_at
+// gives them the full idle_revoke_days window to be put to work.
 //
 // Uses the partial idx_api_keys_idle_check index (WHERE is_active = true)
 // so scans are proportional to the tenant's live-key count. The worker
@@ -326,7 +332,7 @@ func (r *APIKeyRepository) ListIdleKeys(ctx context.Context, tenantID uuid.UUID,
 		  FROM api_keys
 		 WHERE tenant_id = $1
 		   AND is_active = true
-		   AND (last_used_at IS NULL OR last_used_at < $2)`
+		   AND COALESCE(last_used_at, created_at) < $2`
 	rows, err := r.pool.Query(ctx, q, tenantID, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("list idle keys: %w", err)
@@ -368,9 +374,11 @@ type StaleKey struct {
 // (review_snoozed_until in the future) are excluded so the operator's
 // explicit deferral is respected until it expires.
 //
-// A NULL last_used_at counts as stale — a key that was created but never
-// used is always due for review (mirrors the ListIdleKeys semantic in
-// FUT-003).
+// A never-used key (NULL last_used_at) is measured from created_at via
+// COALESCE, mirroring the ListIdleKeys grace-period semantic in FUT-003:
+// a brand-new key is not "stale", it just hasn't been used yet. It only
+// surfaces for review once it has sat unused past the stale cutoff since
+// creation.
 //
 // OwnerUserID is COALESCEd from user_id (human-owned) or service_accounts.
 // shadow_user_id (SA-owned). Falling back to shadow_user_id lets the BFF
@@ -390,8 +398,7 @@ func (r *APIKeyRepository) ListStaleKeys(ctx context.Context, tenantID uuid.UUID
 		   AND ak.is_active = true
 		   AND (ak.review_snoozed_until IS NULL OR ak.review_snoozed_until < now())
 		   AND (
-		         ak.last_used_at IS NULL
-		         OR ak.last_used_at < $2
+		         COALESCE(ak.last_used_at, ak.created_at) < $2
 		         OR (ak.rotation_due_at IS NOT NULL AND ak.rotation_due_at < now())
 		       )`
 	rows, err := r.pool.Query(ctx, q, tenantID, staleCutoff)
