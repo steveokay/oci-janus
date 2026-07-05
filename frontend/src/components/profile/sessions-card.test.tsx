@@ -3,6 +3,18 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionsCard } from "./sessions-card";
 
+// Mutable session list the mocked useSessions reads from — tests reassign it
+// before render to exercise the paginated path.
+let sessionData = [] as Array<{
+  sid: string;
+  device_label: string;
+  user_agent: string;
+  ip: string;
+  created_at: string;
+  last_active_at: string;
+  current: boolean;
+}>;
+
 // Beacon — SessionsCard tests.
 //
 // The card reads useSessions and drives revoke / revoke-others mutations. We
@@ -37,7 +49,7 @@ const sessions = [
 
 vi.mock("@/lib/api/sessions", () => ({
   useSessions: () => ({
-    data: sessions,
+    data: sessionData,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -62,6 +74,9 @@ vi.mock("@tanstack/react-router", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default every test to the two-session fixture; the pagination test
+  // overrides this with a longer list before rendering.
+  sessionData = sessions;
 });
 
 describe("SessionsCard", () => {
@@ -94,5 +109,46 @@ describe("SessionsCard", () => {
     // Non-current revoke is not a self-logout — no navigation.
     expect(navigateMock).not.toHaveBeenCalled();
     expect(toastSuccess).toHaveBeenCalledWith("Session revoked.");
+  });
+
+  it("paginates when there are more sessions than one page", async () => {
+    // 7 sessions → 2 pages at a page size of 5. Row 0 is the current device.
+    sessionData = Array.from({ length: 7 }, (_, i) => ({
+      sid: `sess-${i}`,
+      device_label: `Device ${i}`,
+      user_agent: `UA ${i}`,
+      ip: `10.0.0.${i}`,
+      created_at: "2026-06-20T08:00:00Z",
+      last_active_at: "2026-07-04T12:00:00Z",
+      current: i === 0,
+    }));
+    const user = userEvent.setup();
+    render(<SessionsCard />);
+
+    // Page 1 shows the first five rows; the 6th is not rendered yet.
+    expect(screen.getByText("Device 0")).toBeInTheDocument();
+    expect(screen.getByText("Device 4")).toBeInTheDocument();
+    expect(screen.queryByText("Device 5")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 1–5 of 7")).toBeInTheDocument();
+    // Previous is disabled on the first page.
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+
+    // Advance to page 2 — the remaining two rows appear, page-1 rows drop out.
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Device 5")).toBeInTheDocument();
+    expect(screen.getByText("Device 6")).toBeInTheDocument();
+    expect(screen.queryByText("Device 0")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 6–7 of 7")).toBeInTheDocument();
+    // Next is now disabled on the last page.
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+  });
+
+  it("shows no pager when sessions fit on one page", () => {
+    // The default two-session fixture is under the page size.
+    render(<SessionsCard />);
+    expect(
+      screen.queryByRole("button", { name: "Next" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
   });
 });
