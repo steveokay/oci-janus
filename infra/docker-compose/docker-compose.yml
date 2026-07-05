@@ -887,6 +887,13 @@ services:
       # (list + stats + evict). Empty leaves them at 404 "route disabled"
       # and the sidebar entry stays hidden via the probe-and-hide hook.
       PROXY_GRPC_ADDR: registry-proxy:50051
+      # CORE_GRPC_ADDR enables the tag-detail Referrers tab
+      # (GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers → core's
+      # CoreService.ListReferrers). registry-core's gRPC listens on :50051
+      # inside the network (compose publishes it to host :50052). Empty leaves
+      # the route at 404 "route disabled" and the Referrers panel shows a
+      # friendly "not enabled" fallback.
+      CORE_GRPC_ADDR: registry-core:50051
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-registry}:${RABBITMQ_DEFAULT_PASS:-registry}@rabbitmq:5672/
       # CORS_ALLOWED_ORIGIN: set to the frontend origin in production.
       # Defaults to http://localhost:5173 inside the service for local dev.

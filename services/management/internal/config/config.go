@@ -64,6 +64,14 @@ type Config struct {
 	// the 404 lands, so an unset addr degrades gracefully.
 	ProxyGRPCAddr string `mapstructure:"PROXY_GRPC_ADDR"`
 
+	// CoreGRPCAddr is optional — required only when the OCI referrers
+	// route (`GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers`)
+	// is enabled. Empty leaves that route returning 404 "route disabled"
+	// so a management deployment without registry-core reachable over
+	// gRPC still serves every other surface. The frontend probes the
+	// route and hides the Referrers tab when the 404 lands.
+	CoreGRPCAddr string `mapstructure:"CORE_GRPC_ADDR"`
+
 	// RabbitMQ connection URL for publishing scan.queued events.
 	RabbitMQURL string `mapstructure:"RABBITMQ_URL"`
 

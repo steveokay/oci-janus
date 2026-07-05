@@ -25,6 +25,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
+	corev1 "github.com/steveokay/oci-janus/proto/gen/go/core/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/core/internal/config"
 	"github.com/steveokay/oci-janus/services/core/internal/handler"
@@ -177,6 +178,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	grpcSrv := grpc.NewServer(grpcOpts...)
 	healthpb.RegisterHealthServer(grpcSrv, health.NewServer())
+	// Referrers tab (FE): expose the OCI referrers listing over gRPC so the
+	// management BFF can call registry-core directly. Reuse the same Registry
+	// already built for the HTTP OCI handler — never construct a second one.
+	corev1.RegisterCoreServiceServer(grpcSrv, handler.NewCoreHandler(registry))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
