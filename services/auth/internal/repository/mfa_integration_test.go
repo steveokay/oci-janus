@@ -100,13 +100,22 @@ func TestMFAState_Lifecycle(t *testing.T) {
 	require.NotNil(t, st.EnrolledAt, "EnableMFA must stamp enrolled_at")
 	require.Equal(t, secret, st.SecretEnc, "secret must survive enable")
 
-	// ── AdvanceMFACounter: last-used counter recorded. ────────────────────────
-	require.NoError(t, users.AdvanceMFACounter(ctx, userID, 42))
+	// ── AdvanceMFACounter: atomic compare-and-swap (SEC-078). ─────────────────
+	advanced, err := users.AdvanceMFACounter(ctx, userID, 42)
+	require.NoError(t, err)
+	require.True(t, advanced, "first advance must win the CAS")
 
 	st, err = users.GetMFAState(ctx, userID)
 	require.NoError(t, err)
 	require.NotNil(t, st.LastUsedCounter)
 	require.Equal(t, int64(42), *st.LastUsedCounter, "counter must round-trip")
+
+	// A second advance at the same (or a lower) counter loses the CAS: this is
+	// the guarantee that two concurrent requests carrying the same OTP cannot
+	// both be accepted — one OTP, one token.
+	replayed, err := users.AdvanceMFACounter(ctx, userID, 42)
+	require.NoError(t, err)
+	require.False(t, replayed, "re-advancing at the same counter must lose the CAS")
 
 	// ── DisableMFA: all MFA state cleared. ────────────────────────────────────
 	require.NoError(t, users.DisableMFA(ctx, userID))

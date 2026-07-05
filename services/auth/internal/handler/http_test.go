@@ -433,15 +433,18 @@ func (f *handlerFakeUserRepo) EnableMFA(_ context.Context, userID uuid.UUID) err
 	return nil
 }
 
-func (f *handlerFakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) error {
+func (f *handlerFakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) (bool, error) {
 	st := f.mfa[userID]
 	if st == nil {
 		st = &repository.MFAState{}
 		f.mfa[userID] = st
 	}
+	if st.LastUsedCounter != nil && counter <= *st.LastUsedCounter {
+		return false, nil
+	}
 	c := counter
 	st.LastUsedCounter = &c
-	return nil
+	return true, nil
 }
 
 func (f *handlerFakeUserRepo) InsertBackupCodes(_ context.Context, _ uuid.UUID, _ []string) error {

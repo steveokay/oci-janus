@@ -92,7 +92,7 @@ type userRepo interface {
 	GetMFAState(ctx context.Context, userID uuid.UUID) (*repository.MFAState, error)
 	SetPendingMFASecret(ctx context.Context, userID uuid.UUID, secretEnc []byte, kekVersion int16) error
 	EnableMFA(ctx context.Context, userID uuid.UUID) error
-	AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) error
+	AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) (bool, error)
 	InsertBackupCodes(ctx context.Context, userID uuid.UUID, hashes []string) error
 	// MFA disable + recovery-code consumption (Task 6). DisableMFA clears all
 	// TOTP state; DeleteBackupCodes removes the recovery codes (the two together

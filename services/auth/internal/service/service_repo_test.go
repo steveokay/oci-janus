@@ -533,15 +533,20 @@ func (f *fakeUserRepo) EnableMFA(_ context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-// AdvanceMFACounter records the last accepted TOTP counter for replay defence.
-func (f *fakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) error {
+// AdvanceMFACounter is the in-memory compare-and-swap mirroring the real repo:
+// it advances only when counter strictly exceeds the stored value, returning
+// false (not an error) when a prior advance already covered this window.
+func (f *fakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) (bool, error) {
 	st, ok := f.mfa[userID]
 	if !ok {
-		return repository.ErrNotFound
+		return false, repository.ErrNotFound
+	}
+	if st.LastUsedCounter != nil && counter <= *st.LastUsedCounter {
+		return false, nil
 	}
 	c := counter
 	st.LastUsedCounter = &c
-	return nil
+	return true, nil
 }
 
 // InsertBackupCodes replaces the user's stored backup-code hashes, minting a

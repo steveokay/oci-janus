@@ -804,16 +804,10 @@ func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code strin
 		return "", ErrInvalidCredentials
 	}
 	tenantID, _ := uuid.Parse(claims.TenantID)
-	roles := s.loadRoleNames(ctx, userID, tenantID)
-	// Re-load the user for the fresh is_global_admin flag — the challenge token
-	// deliberately carries no roles/access, so we resolve them from the DB here.
-	u, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return "", err
-	}
-	// The MFA login path is human-only (GetHumanByUsername gates AuthenticateUser),
-	// so principal_kind is always "human"; amr records both factors.
-	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"})
+	// Roles + is_global_admin are resolved from the DB by the shared issuer; the
+	// challenge token deliberately carries no roles/access. The MFA login path is
+	// human-only (GetHumanByUsername gates AuthenticateUser).
+	return s.IssueMFACompletedToken(ctx, userID, tenantID)
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in

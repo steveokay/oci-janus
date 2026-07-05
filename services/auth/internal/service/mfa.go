@@ -68,13 +68,21 @@ func (s *Service) ValidateMFASetupToken(ctx context.Context, tokenStr string) (*
 	return s.ValidateMFAToken(ctx, tokenStr, tokenTypeMFASetup)
 }
 
-// RolesForUser returns the deduplicated role names a user holds in a tenant.
-// Used by the forced-enrolment verify path to stamp roles into the full access
-// token it issues once the first TOTP code is accepted (mirroring Login). Thin
-// wrapper over loadRoleNames so the handler layer does not reach into the
-// unexported helper directly.
-func (s *Service) RolesForUser(ctx context.Context, userID, tenantID uuid.UUID) []string {
-	return s.loadRoleNames(ctx, userID, tenantID)
+// IssueMFACompletedToken mints the full access token (amr=["pwd","otp"]) for a
+// user who has just proven possession of their second factor. Roles AND
+// is_global_admin are resolved from the DB here — never from a caller-supplied
+// claim — so both the login step-up (VerifyLoginMFA) and the forced-enrolment
+// completion (mfaVerify setup path) issue a correctly-privileged token. A prior
+// bug stamped is_global_admin from the setup token (always false), silently
+// de-privileging a force-enrolled global admin for the session (SEC-080).
+// principal_kind is always "human": MFA is a password-account-only feature.
+func (s *Service) IssueMFACompletedToken(ctx context.Context, userID, tenantID uuid.UUID) (string, error) {
+	roles := s.loadRoleNames(ctx, userID, tenantID)
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"})
 }
 
 // GetMFAStatus reports whether the user has MFA enabled.
@@ -153,14 +161,21 @@ func (s *Service) verifyTOTP(ctx context.Context, userID uuid.UUID, st *reposito
 	if !ok {
 		return false, nil
 	}
-	// Replay guard: reject any code whose time-step counter is at or below the
-	// last one we accepted, so a code (or an earlier one in the skew window)
-	// cannot be spent twice.
+	// Fast path: obvious replay (this exact code, or an earlier one still in the
+	// skew window, was already accepted). Cheap early-out that avoids a write.
 	if st.LastUsedCounter != nil && counter <= *st.LastUsedCounter {
 		return false, nil // replay of an already-used code
 	}
-	if err := s.users.AdvanceMFACounter(ctx, userID, counter); err != nil {
+	// Authoritative guard (SEC-078): the advance is an atomic compare-and-swap,
+	// so of two concurrent requests carrying the same valid OTP only one wins.
+	// A false return means another request already spent this window — treat it
+	// as a replay, not a success.
+	advanced, err := s.users.AdvanceMFACounter(ctx, userID, counter)
+	if err != nil {
 		return false, err
+	}
+	if !advanced {
+		return false, nil
 	}
 	return true, nil
 }

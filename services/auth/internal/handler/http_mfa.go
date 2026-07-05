@@ -187,8 +187,10 @@ func (h *HTTPHandler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 	// already succeeded, so we still return the backup codes and let the FE fall
 	// back to a normal login rather than 500-ing after the factor was enabled.
 	if isSetup {
-		roles := h.svc.RolesForUser(r.Context(), userID, tenantID)
-		access, terr := h.svc.IssueToken(r.Context(), userID.String(), tenantID.String(), nil, roles, claims.IsGlobalAdmin, "human", []string{"pwd", "otp"})
+		// Resolve roles + is_global_admin from the DB (SEC-080) — the setup token
+		// carries neither, so trusting its claims would silently de-privilege a
+		// force-enrolled global admin for the whole session.
+		access, terr := h.svc.IssueMFACompletedToken(r.Context(), userID, tenantID)
 		if terr == nil {
 			resp["token"] = access
 		} else {

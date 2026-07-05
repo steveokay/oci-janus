@@ -170,6 +170,36 @@ func TestVerifyLoginMFA_wrongCode_feedsLockout(t *testing.T) {
 	require.Equal(t, 1, users.failedLogins[userID], "a wrong OTP must feed the lockout counter")
 }
 
+// TestIssueMFACompletedToken_resolvesGlobalAdminFromDB locks SEC-080: the
+// post-second-factor access token must take is_global_admin from the user row,
+// never from a caller-supplied claim. Both the login step-up (VerifyLoginMFA)
+// and the forced-enrolment completion (mfaVerify setup path) route through this
+// method — before the fix the handler stamped it from the always-false setup
+// token, silently de-privileging a force-enrolled global admin for the session.
+func TestIssueMFACompletedToken_resolvesGlobalAdminFromDB(t *testing.T) {
+	ctx := context.Background()
+	svc, users := newLoginMFATestService(t, loginMFAFixedNow)
+
+	tenantID := uuid.New()
+	userID := uuid.New()
+	users.addUser(&repository.User{
+		ID:            userID,
+		TenantID:      tenantID,
+		Username:      "admin",
+		IsActive:      true,
+		Kind:          "human",
+		IsGlobalAdmin: true,
+	})
+
+	tok, err := svc.IssueMFACompletedToken(ctx, userID, tenantID)
+	require.NoError(t, err)
+
+	claims, err := svc.ValidateToken(ctx, tok)
+	require.NoError(t, err)
+	require.True(t, claims.IsGlobalAdmin, "token must carry is_global_admin from the DB row, not a claim")
+	require.Equal(t, []string{"pwd", "otp"}, claims.Amr)
+}
+
 // TestVerifyLoginMFA_badChallengeToken_rejected verifies that a non-challenge
 // token (here an access token) cannot be spent at the /login/mfa step.
 func TestVerifyLoginMFA_badChallengeToken_rejected(t *testing.T) {

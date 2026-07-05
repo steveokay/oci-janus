@@ -79,12 +79,24 @@ func (r *UserRepository) DisableMFA(ctx context.Context, userID uuid.UUID) error
 	return r.execMFAAffectingOne(ctx, "disable mfa", q, userID)
 }
 
-// AdvanceMFACounter records the counter of the last accepted TOTP code so the
-// same code (and any earlier one) cannot be replayed. The service is expected
-// to only call this with a counter strictly greater than the stored value.
-func (r *UserRepository) AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) error {
-	const q = `UPDATE users SET mfa_last_used_counter = $1, updated_at = now() WHERE id = $2`
-	return r.execMFAAffectingOne(ctx, "advance mfa counter", q, counter, userID)
+// AdvanceMFACounter atomically records counter as the last accepted TOTP
+// time-step, but only when it strictly exceeds the stored value (or none is
+// set yet). It returns true when the row advanced, false when a concurrent
+// request had already advanced to counter or beyond. This compare-and-swap is
+// the authoritative replay guard (SEC-078): the service's in-memory
+// counter<=last check is a check-then-act fast path that two parallel requests
+// carrying the same valid OTP can both pass, so the single-winner guarantee has
+// to live in the UPDATE's WHERE clause. A false return is a replay, not an error.
+func (r *UserRepository) AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) (bool, error) {
+	const q = `UPDATE users
+		SET mfa_last_used_counter = $1, updated_at = now()
+		WHERE id = $2
+		  AND (mfa_last_used_counter IS NULL OR mfa_last_used_counter < $1)`
+	tag, err := r.pool.Exec(ctx, q, counter, userID)
+	if err != nil {
+		return false, fmt.Errorf("advance mfa counter: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // InsertBackupCodes replaces the user's backup codes with the given argon2id
