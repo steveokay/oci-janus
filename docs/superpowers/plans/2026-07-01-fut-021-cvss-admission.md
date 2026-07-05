@@ -1,5 +1,7 @@
 # FUT-021 CVSS-gated Admission Policy Implementation Plan
 
+> **✅ SHIPPED — PR #233. Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 **Goal:** Close the scanner → admission loop. Repos gain `max_cvss_score` (nullable INT); on pull, `services/core.GetManifest` checks the scan result and refuses if `top_cvss > threshold`. Ships in ~1 evening — the whole thing mirrors the existing `require_signature` admission code path.
 
 **Branch:** `feat/fut-021-cvss-admission` (already off `main`).

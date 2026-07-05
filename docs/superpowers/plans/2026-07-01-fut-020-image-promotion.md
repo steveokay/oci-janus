@@ -1,5 +1,7 @@
 # FUT-020 Image Promotion Implementation Plan
 
+> **✅ SHIPPED — PR #231 (+#234 follow-up). Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan.
 
 **Goal:** First-class image promotion primitive. `POST /repositories/{org}/{repo}/tags/{tag}/promote` atomically copies a tag's manifest to a destination `{org}/{repo}:{tag}` with digest verification + audit trail. Ships in ~1 evening.

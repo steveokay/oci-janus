@@ -1,5 +1,7 @@
 # FUT-031 MCP Server (read-only tools) Implementation Plan
 
+> **✅ SHIPPED — PR #232. Plan complete; canonical status in `status.md` / `FE-STATUS.md`. Task checkboxes left unticked — this is a subagent-driven execution artifact, not a live tracker.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan.
 
 **Goal:** Expose the registry as a Model Context Protocol (MCP) server so AI coding assistants (Claude Desktop, Cursor, Copilot Workspace) can query it in natural language: "which of our images have log4j 2.14?", "list stale API keys older than 60 days", "show me the last 10 promotions." **Read-only tools only** — no mutating tools this PR; those come in a Wave 2 follow-up with explicit consent UX.
