@@ -556,7 +556,9 @@ func (s *SSO) IssueSSOToken(ctx context.Context, user *repository.User, roles []
 	// SSO callbacks always provision human users — service-account principals
 	// are minted server-side and never appear in the SSO flow. user.Kind is
 	// forwarded verbatim so the contract stays correct if that ever changes.
-	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind)
+	// amr is ["sso"] — the authentication method was a federated SSO/SAML
+	// assertion rather than a local password.
+	return s.auth.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"sso"})
 }
 
 // ── Validation helpers ──────────────────────────────────────────────────────

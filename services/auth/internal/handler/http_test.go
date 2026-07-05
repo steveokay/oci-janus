@@ -545,7 +545,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testCtx) {
 // issueTestToken issues a JWT from the service and returns it.
 func issueTestToken(t *testing.T, svc *service.Service, userID, tenantID string, access []service.RepositoryAccess) string {
 	t.Helper()
-	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil, false, "human")
+	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil, false, "human", nil)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
