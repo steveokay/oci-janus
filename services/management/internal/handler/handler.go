@@ -34,6 +34,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	corev1 "github.com/steveokay/oci-janus/proto/gen/go/core/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
@@ -86,6 +87,14 @@ type Handler struct {
 	// serve every other surface. The frontend probes the route and
 	// hides the sidebar entry when 404 lands.
 	proxy proxyv1.ProxyServiceClient
+	// core is optional — wired only when CORE_GRPC_ADDR is set. nil
+	// disables the OCI referrers route
+	// (`GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers`),
+	// which returns 404 "route disabled" so deployments without
+	// registry-core reachable over gRPC still serve every other
+	// surface. The frontend probes the route and hides the Referrers
+	// tab when 404 lands.
+	core corev1.CoreServiceClient
 	// pub publishes events to the registry.events RabbitMQ exchange.
 	// Typed as an interface so tests can substitute a fake without standing up
 	// a real RabbitMQ broker. *publisher.Publisher satisfies the interface.
@@ -229,6 +238,18 @@ func (h *Handler) WithProxyClient(c proxyv1.ProxyServiceClient) *Handler {
 	return h
 }
 
+// WithCoreClient enables the OCI referrers route:
+//
+//	GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers
+//
+// Nil leaves the route returning 404 "route disabled" so management can
+// deploy without registry-core reachable over gRPC in environments that
+// don't surface the Referrers tab.
+func (h *Handler) WithCoreClient(c corev1.CoreServiceClient) *Handler {
+	h.core = c
+	return h
+}
+
 // WithDeploymentInfo wires the deployment posture and build version that
 // the /api/v1/deployment-info handler needs to tell the FE which chrome
 // to render (tenant switcher, plan badges, etc.). Must be called before
@@ -332,6 +353,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	// Manifest detail for a specific tag (FE-API-002).
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest", authMW(http.HandlerFunc(h.handleGetManifest)))
+
+	// OCI referrers for a specific tag (Referrers tab). Returns 404
+	// "route disabled" when CORE_GRPC_ADDR is unset (h.core is nil) —
+	// the same in-handler opt-in gate used by the signature route above,
+	// so the frontend can hide the Referrers tab on the 404 instead of
+	// surfacing an error.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers", authMW(http.HandlerFunc(h.handleListReferrers)))
 
 	// Signing verification for a specific tag (FE-API-003). 404 when
 	// SIGNER_GRPC_ADDR is unset on the BFF. FE-API-025 layers a

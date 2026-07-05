@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package registry.core.v1;
+
+option go_package = "github.com/steveokay/oci-janus/proto/gen/go/core/v1;corev1";
+
+// CoreService exposes registry-core's internal (non-OCI) read surface to other
+// platform services over gRPC/mTLS. The OCI Distribution /v2/ API stays on
+// core's HTTP server; this gRPC service is for the management BFF (and future
+// internal readers). Today it carries only the referrers listing that backs
+// the tag-detail "Referrers" tab — image-config / raw-manifest reads can hang
+// off this same service later.
+service CoreService {
+  // ListReferrers returns every OCI referrer artifact whose subject points at
+  // the given manifest digest (Cosign signatures, SBOMs, attestations, scan
+  // results, …). Mirrors the OCI referrers API (Distribution Spec v1.1 §4.5)
+  // as an internal gRPC read for the dashboard.
+  rpc ListReferrers(ListReferrersRequest) returns (ListReferrersResponse);
+}
+
+// ListReferrersRequest identifies the subject manifest to list referrers for.
+// tenant_id is passed explicitly (matching the metadata service convention)
+// and enforced server-side — the referrer store is keyed by tenant.
+message ListReferrersRequest {
+  string tenant_id = 1;
+  // repository is the full "<org>/<repo>" OCI name. The referrer store keys on
+  // the name, not the internal repo UUID.
+  string repository = 2;
+  // subject_digest is the "sha256:…" digest of the referenced manifest.
+  string subject_digest = 3;
+  // artifact_type optionally filters to referrers of exactly this
+  // artifactType; empty returns all. When set, `filtered` is true in the
+  // response (OCI §4.5 semantics).
+  string artifact_type = 4;
+}
+
+// ReferrerDescriptor is one OCI referrer artifact descriptor.
+message ReferrerDescriptor {
+  string media_type = 1;
+  string digest = 2;
+  int64 size = 3;
+  string artifact_type = 4;
+  map<string, string> annotations = 5;
+}
+
+// ListReferrersResponse carries the referrer descriptors for the subject.
+message ListReferrersResponse {
+  repeated ReferrerDescriptor referrers = 1;
+  // filtered is true when artifact_type was supplied (OCI §4.5 requires the
+  // client be told the list was filtered).
+  bool filtered = 2;
+}

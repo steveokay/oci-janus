@@ -15,6 +15,7 @@ import (
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	corev1 "github.com/steveokay/oci-janus/proto/gen/go/core/v1"
 	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	proxyv1 "github.com/steveokay/oci-janus/proto/gen/go/proxy/v1"
@@ -180,6 +181,25 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		proxyClient = proxyv1.NewProxyServiceClient(proxyConn)
 	}
 
+	// Referrers-tab core gRPC client. Optional — wired only when
+	// CORE_GRPC_ADDR is set. Nil leaves the
+	// `/api/v1/repositories/{org}/{repo}/tags/{tag}/referrers` route
+	// returning 404 "route disabled" so a management deployment without
+	// registry-core reachable over gRPC still serves every other surface.
+	var coreClient corev1.CoreServiceClient
+	if cfg.CoreGRPCAddr != "" {
+		coreCreds, err := cfg.MTLSClientCreds("registry-core")
+		if err != nil {
+			return fmt.Errorf("build core grpc credentials: %w", err)
+		}
+		coreConn, err := grpc.NewClient(cfg.CoreGRPCAddr, grpc.WithTransportCredentials(coreCreds))
+		if err != nil {
+			return fmt.Errorf("dial core grpc: %w", err)
+		}
+		defer coreConn.Close()
+		coreClient = corev1.NewCoreServiceClient(coreConn)
+	}
+
 	h := handler.New(authClient, metaClient, auditClient, pub, cfg.PlatformAdminTenantID,
 		healthpb.NewHealthClient(authConn),
 		healthpb.NewHealthClient(metaConn),
@@ -191,6 +211,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	h = h.WithScannerClient(scannerClient)
 	h = h.WithGCClient(gcClient)
 	h = h.WithProxyClient(proxyClient)
+	h = h.WithCoreClient(coreClient)
 	h = h.WithDeploymentInfo(cfg.DeploymentMode, cfg.BuildVersion)
 	h = h.WithPlatformHost(cfg.PlatformHost)
 	// PENTEST-014: per-user read rate limit. 20 rps + burst 40 is sized for an
