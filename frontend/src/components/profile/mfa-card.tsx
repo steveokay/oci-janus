@@ -15,20 +15,24 @@ import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 interface MfaCardProps {
   // Opens the enrolment dialog (owned by the route, like the password dialog).
   onEnroll: () => void;
-  // Opens the disable flow (dialog built in the next task).
+  // Opens the disable flow.
   onDisable: () => void;
+  // Opens the regenerate-backup-codes flow.
+  onRegenerate: () => void;
 }
 
 // Beacon — MfaCard.
 //
 // Status surface for TOTP two-factor auth on Settings › Account. Reads
 // useMfaStatus and renders one of three states: loading skeleton, an
-// "enabled" state (enrolled date + Disable), or a "not enabled" explainer
-// with an Enable CTA. The actual enrol/disable dialogs are owned by the
-// route so this card stays a dumb emitter (mirrors IdentityCard).
+// "enabled" state (enrolled date + Disable + Regenerate backup codes), or a
+// "not enabled" explainer with an Enable CTA. The actual enrol/disable/
+// regenerate dialogs are owned by the route so this card stays a dumb
+// emitter (mirrors IdentityCard).
 export function MfaCard({
   onEnroll,
   onDisable,
+  onRegenerate,
 }: MfaCardProps): React.ReactElement {
   const { data, isLoading, isError } = useMfaStatus();
 
@@ -73,7 +77,7 @@ export function MfaCard({
         {isLoading || !data ? (
           <Skeleton className="h-16 w-full" />
         ) : enabled ? (
-          // Enabled state — show when they enrolled + a Disable action.
+          // Enabled state — show when they enrolled + Disable/Regenerate actions.
           <div className="flex items-center justify-between gap-4">
             <p className="text-sm text-[var(--color-fg-muted)]">
               Your account is protected with an authenticator app.
@@ -89,14 +93,14 @@ export function MfaCard({
                 </>
               ) : null}
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onDisable}
-              className="shrink-0"
-            >
-              Disable
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="sm" onClick={onRegenerate}>
+                Regenerate backup codes
+              </Button>
+              <Button variant="outline" size="sm" onClick={onDisable}>
+                Disable
+              </Button>
+            </div>
           </div>
         ) : (
           // Not-enabled state — short explainer + Enable CTA.

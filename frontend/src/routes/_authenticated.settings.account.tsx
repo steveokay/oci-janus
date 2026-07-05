@@ -29,6 +29,8 @@ import { IdentityCard } from "@/components/profile/identity-card";
 import { ChangePasswordDialog } from "@/components/profile/change-password-dialog";
 import { MfaCard } from "@/components/profile/mfa-card";
 import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
+import { MfaDisableDialog } from "@/components/profile/mfa-disable-dialog";
+import { MfaRegenerateDialog } from "@/components/profile/mfa-regenerate-dialog";
 import { ApiKeysSection } from "@/components/profile/api-keys-section";
 import {
   useNotificationPreferences,
@@ -46,10 +48,13 @@ function AccountTab(): React.ReactElement {
   // component (it just emits onChangePassword). Matches the pattern used by
   // the old /profile page so the user behaviour is unchanged.
   const [passwordOpen, setPasswordOpen] = React.useState(false);
-  // MFA enrolment dialog state, owned here alongside the password dialog so
-  // MfaCard stays a dumb emitter. The disable flow's dialog is built in the
-  // next task; for now onDisable is a no-op stub (wired then).
+  // MFA dialog state, owned here alongside the password dialog so MfaCard
+  // stays a dumb emitter. Three independent dialogs — enroll, disable,
+  // regenerate-backup-codes — each toggled by its own boolean so opening one
+  // never disturbs the others' state.
   const [mfaEnrollOpen, setMfaEnrollOpen] = React.useState(false);
+  const [mfaDisableOpen, setMfaDisableOpen] = React.useState(false);
+  const [mfaRegenerateOpen, setMfaRegenerateOpen] = React.useState(false);
 
   return (
     <div className="space-y-6">
@@ -69,13 +74,12 @@ function AccountTab(): React.ReactElement {
       <NotificationsSection />
 
       {/* MFA card. Personal-account hardening; was the old Security tab
-          placeholder. onDisable is a no-op until the disable dialog lands in
-          the next task. */}
+          placeholder. Disable + regenerate-backup-codes both open their own
+          re-auth-gated dialogs below. */}
       <MfaCard
         onEnroll={() => setMfaEnrollOpen(true)}
-        onDisable={() => {
-          // wired in the disable task
-        }}
+        onDisable={() => setMfaDisableOpen(true)}
+        onRegenerate={() => setMfaRegenerateOpen(true)}
       />
 
       {/* REDESIGN-001 Phase 4.3 §3 — replay onboarding link. The first-run
@@ -90,6 +94,11 @@ function AccountTab(): React.ReactElement {
 
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       <MfaEnrollDialog open={mfaEnrollOpen} onOpenChange={setMfaEnrollOpen} />
+      <MfaDisableDialog open={mfaDisableOpen} onOpenChange={setMfaDisableOpen} />
+      <MfaRegenerateDialog
+        open={mfaRegenerateOpen}
+        onOpenChange={setMfaRegenerateOpen}
+      />
     </div>
   );
 }
