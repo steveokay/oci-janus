@@ -176,7 +176,23 @@ type Service struct {
 	// nil (legacy fakes), ValidateAPIKey falls back to the pre-FUT-003
 	// touchLastUsedAsync path so old tests keep passing.
 	lastUsed *lastUsedUpdater
+	// mfaKEK is the 32-byte AES-256 key-encryption key used to encrypt TOTP
+	// secrets at rest (users.mfa_secret_enc). Wired at startup from the
+	// decoded MFA_SECRET_KEY_HEX via SetMFAKEK. Never logged.
+	mfaKEK []byte
+	// mfaIssuer is the otpauth:// issuer label embedded in enrolment URIs — the
+	// name an authenticator app shows next to the account (e.g. "oci-janus").
+	// Defaulted to "oci-janus" in every constructor.
+	mfaIssuer string
+	// nowFn returns the current wall clock. Overridable so enrolment/login MFA
+	// tests can pin the TOTP time step deterministically. nil ⇒ time.Now
+	// (resolved in the now() helper).
+	nowFn func() time.Time
 }
+
+// defaultMFAIssuer is the otpauth:// issuer label used when a constructor does
+// not override it. Kept as a single constant so every constructor agrees.
+const defaultMFAIssuer = "oci-janus"
 
 // tokenPolicyReader is the narrow interface Service uses to consult the
 // workspace token policy on CreateAPIKey. Small so tests can supply a fake
@@ -215,6 +231,7 @@ func New(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	// Auto-wire the FUT-003 debounced last_used_at updater when the caller
 	// passed a non-nil api-key repo (production path). Tests that construct
@@ -255,6 +272,7 @@ func NewWithKeyRing(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	if apiKeys != nil {
 		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())

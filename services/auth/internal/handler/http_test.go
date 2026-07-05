@@ -375,6 +375,35 @@ func (f *handlerFakeUserRepo) MarkOnboardingComplete(_ context.Context, userID u
 	return nil, repository.ErrNotFound
 }
 
+// ── MFA (TOTP) stubs (Task 5) ─────────────────────────────────────────────────
+//
+// The handler package does not exercise the enrolment flow, so these satisfy
+// the service.userRepo interface with minimal in-memory behaviour. GetMFAState
+// returns a not-enrolled zero state for a known user; the mutators are no-ops.
+
+func (f *handlerFakeUserRepo) GetMFAState(_ context.Context, userID uuid.UUID) (*repository.MFAState, error) {
+	for _, u := range f.users {
+		if u.ID == userID {
+			return &repository.MFAState{}, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *handlerFakeUserRepo) SetPendingMFASecret(_ context.Context, _ uuid.UUID, _ []byte, _ int16) error {
+	return nil
+}
+
+func (f *handlerFakeUserRepo) EnableMFA(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *handlerFakeUserRepo) AdvanceMFACounter(_ context.Context, _ uuid.UUID, _ int64) error {
+	return nil
+}
+
+func (f *handlerFakeUserRepo) InsertBackupCodes(_ context.Context, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey

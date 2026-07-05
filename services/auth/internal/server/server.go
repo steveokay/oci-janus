@@ -88,6 +88,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("init service: %w", err)
 	}
+	// Wire the MFA KEK (decoded + length-validated in config.validate) so the
+	// TOTP enrolment path can encrypt secrets at rest. Kept as a setter so the
+	// JWT-posture constructors above stay signature-stable. The raw bytes are
+	// never logged.
+	svc.SetMFAKEK(cfg.MFASecretKey)
 
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
 	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC

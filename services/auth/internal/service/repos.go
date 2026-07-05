@@ -84,6 +84,16 @@ type userRepo interface {
 	// given user. REDESIGN-001 Phase 4.3 — backs the post-login wizard's
 	// "Done" / "Skip" buttons. Idempotent so retries are safe.
 	MarkOnboardingComplete(ctx context.Context, userID uuid.UUID) (*repository.User, error)
+	// MFA (TOTP) enrolment + login methods. Migration 20260705120000 added the
+	// backing columns; the service layer (mfa.go) drives enrolment through
+	// them. Declared on the shared userRepo so both the concrete
+	// *repository.UserRepository (compile-checked below) and the in-memory
+	// test fake satisfy the same surface.
+	GetMFAState(ctx context.Context, userID uuid.UUID) (*repository.MFAState, error)
+	SetPendingMFASecret(ctx context.Context, userID uuid.UUID, secretEnc []byte, kekVersion int16) error
+	EnableMFA(ctx context.Context, userID uuid.UUID) error
+	AdvanceMFACounter(ctx context.Context, userID uuid.UUID, counter int64) error
+	InsertBackupCodes(ctx context.Context, userID uuid.UUID, hashes []string) error
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.
@@ -194,6 +204,7 @@ func NewWithFakes(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	// FUT-003: wire the debounced last_used_at updater so ValidateAPIKey
 	// tests exercise the same touch-path as production. rdb may be nil for
@@ -228,6 +239,7 @@ func NewWithFakesAndRing(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	if apiKeys != nil {
 		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())

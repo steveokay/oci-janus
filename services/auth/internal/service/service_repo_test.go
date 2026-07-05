@@ -57,6 +57,12 @@ type fakeUserRepo struct {
 	// by SEC-041's race-recovery test to simulate the parallel-callback
 	// loser without having to spin up real concurrency.
 	failCreateSSOWith error
+	// mfa holds per-user TOTP state (Task 5), keyed by user ID. Lazily
+	// initialised by the MFA setter methods so non-MFA tests pay nothing.
+	mfa map[uuid.UUID]*repository.MFAState
+	// backupCodes holds the argon2 hashes stored by InsertBackupCodes, keyed
+	// by user ID. Only the count/replacement is asserted by tests.
+	backupCodes map[uuid.UUID][]string
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -461,6 +467,91 @@ func (f *fakeUserRepo) MarkOnboardingComplete(_ context.Context, userID uuid.UUI
 		}
 	}
 	return nil, repository.ErrNotFound
+}
+
+// ── MFA (TOTP) fake methods ───────────────────────────────────────────────────
+//
+// These satisfy the MFA portion of the userRepo interface (Task 5). State is
+// keyed by user ID in lazily-initialised maps so existing fakeUserRepo callers
+// that never touch MFA pay no setup cost. Semantics mirror repository/mfa.go.
+
+// findUserByID returns the in-memory user with the given ID, or nil.
+func (f *fakeUserRepo) findUserByID(id uuid.UUID) *repository.User {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil
+}
+
+// GetMFAState returns the stored MFA state for the user, or a zero-value state
+// (not enrolled) when the user exists but has no MFA rows yet. Returns
+// ErrNotFound when the user id is unknown — matching the real repository.
+func (f *fakeUserRepo) GetMFAState(_ context.Context, userID uuid.UUID) (*repository.MFAState, error) {
+	if f.findUserByID(userID) == nil {
+		return nil, repository.ErrNotFound
+	}
+	if st, ok := f.mfa[userID]; ok {
+		// Return a copy so callers cannot mutate the fake's stored state.
+		cp := *st
+		return &cp, nil
+	}
+	return &repository.MFAState{}, nil
+}
+
+// SetPendingMFASecret stores an encrypted secret with mfa_enabled=false and a
+// cleared replay counter (enrolment step 1).
+func (f *fakeUserRepo) SetPendingMFASecret(_ context.Context, userID uuid.UUID, secretEnc []byte, kekVersion int16) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	if f.mfa == nil {
+		f.mfa = make(map[uuid.UUID]*repository.MFAState)
+	}
+	v := kekVersion
+	f.mfa[userID] = &repository.MFAState{
+		Enabled:          false,
+		SecretEnc:        secretEnc,
+		SecretKEKVersion: &v,
+		LastUsedCounter:  nil,
+	}
+	return nil
+}
+
+// EnableMFA flips mfa_enabled=true and stamps mfa_enrolled_at (enrolment step 2).
+func (f *fakeUserRepo) EnableMFA(_ context.Context, userID uuid.UUID) error {
+	st, ok := f.mfa[userID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	now := time.Now()
+	st.Enabled = true
+	st.EnrolledAt = &now
+	return nil
+}
+
+// AdvanceMFACounter records the last accepted TOTP counter for replay defence.
+func (f *fakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) error {
+	st, ok := f.mfa[userID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	c := counter
+	st.LastUsedCounter = &c
+	return nil
+}
+
+// InsertBackupCodes replaces the user's stored backup-code hashes.
+func (f *fakeUserRepo) InsertBackupCodes(_ context.Context, userID uuid.UUID, hashes []string) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	if f.backupCodes == nil {
+		f.backupCodes = make(map[uuid.UUID][]string)
+	}
+	f.backupCodes[userID] = append([]string(nil), hashes...)
+	return nil
 }
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
