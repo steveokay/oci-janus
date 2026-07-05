@@ -59,6 +59,24 @@ type MFAStatus struct {
 	EnrolledAt *string // RFC3339, nil when not enrolled
 }
 
+// ValidateMFASetupToken validates a forced-enrolment setup token (typ=mfa_setup).
+// It is the thin wrapper the self-service HTTP enrol/verify handlers use to
+// accept a short-lived setup token in place of a normal access token, so a
+// require-MFA-gated user who has no access token yet can still complete
+// enrolment. Delegates to ValidateMFAToken with the mfa_setup type discriminator.
+func (s *Service) ValidateMFASetupToken(ctx context.Context, tokenStr string) (*Claims, error) {
+	return s.ValidateMFAToken(ctx, tokenStr, tokenTypeMFASetup)
+}
+
+// RolesForUser returns the deduplicated role names a user holds in a tenant.
+// Used by the forced-enrolment verify path to stamp roles into the full access
+// token it issues once the first TOTP code is accepted (mirroring Login). Thin
+// wrapper over loadRoleNames so the handler layer does not reach into the
+// unexported helper directly.
+func (s *Service) RolesForUser(ctx context.Context, userID, tenantID uuid.UUID) []string {
+	return s.loadRoleNames(ctx, userID, tenantID)
+}
+
 // GetMFAStatus reports whether the user has MFA enabled.
 func (s *Service) GetMFAStatus(ctx context.Context, userID uuid.UUID) (MFAStatus, error) {
 	st, err := s.users.GetMFAState(ctx, userID)

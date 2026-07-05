@@ -197,6 +197,14 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// Flips users.onboarding_complete = true for the authenticated human user.
 	// Idempotent; service accounts get a 403.
 	mux.HandleFunc("POST /api/v1/users/me/onboarding/complete", h.completeOnboarding)
+	// Tier-1 #1 — TOTP MFA self-service (identity from the Bearer token).
+	// enroll + verify additionally accept a short-lived mfa_setup token so a
+	// require-MFA-gated user can enrol before holding an access token.
+	mux.HandleFunc("GET /api/v1/users/me/mfa", h.mfaStatus)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/enroll", h.mfaEnroll)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/verify", h.mfaVerify)
+	mux.HandleFunc("DELETE /api/v1/users/me/mfa", h.mfaDisable)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/backup-codes/regenerate", h.mfaRegenerateBackupCodes)
 	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.
