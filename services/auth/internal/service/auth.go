@@ -778,6 +778,7 @@ type LoginResult struct {
 //   - Otherwise → a full access token, with the user's RBAC role names and
 //     global-admin flag embedded so downstream services (and the frontend) can
 //     read them without an extra RPC.
+//
 // meta carries the client IP + User-Agent captured at the HTTP edge; it is
 // threaded into the no-MFA branch so a successful password login creates a
 // listable/revocable session row (the active-session-list feature). The
