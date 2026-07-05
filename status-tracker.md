@@ -226,7 +226,7 @@ Prioritised feature work that hasn't been picked up yet lives in [`futures.md`](
 
 Quick pointer to the largest open backlog items (see `futures.md` for full detail):
 
-- **Tier 1 #1** — MFA (TOTP step-up) — ~2 weeks
+- **Tier 1 #1** — MFA (TOTP step-up) — **core SHIPPED 2026-07-05** (PR #267 + SEC-078/079/080 fixes #267/#268; resolution rows in [`status.md`](status.md)). **Residual open:** WebAuthn/hardware keys + active-session list + per-row revoke — see the trimmed Tier-1 #1 in [`futures.md`](futures.md)
 - **Tier 1 #5** — SCIM v2 provisioning — ~1.5 weeks
 - **Tier 1 #3 Phase 3** — multi-key quorum + Fulcio binding — ~1-2 weeks
 - **REM-018-followup** — `/activity` + notifications-bell still render `actor_username || actor_id`; needs `actor_display_name` on `audit.v1.NotificationEvent` + audit-side join so the existing `<UserCell variant="inline">` can replace the text render — ~half day

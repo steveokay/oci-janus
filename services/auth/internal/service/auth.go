@@ -53,6 +53,11 @@ const (
 	mfaSetupTTL           = 15 * time.Minute
 	audienceMFAChallenge  = "registry-auth-mfa"
 	audienceMFASetup      = "registry-auth-mfa-setup"
+	// maxMFAChallengeAttempts caps OTP/backup-code submissions per challenge
+	// token (keyed on its jti) so a single stateless 5-minute challenge cannot be
+	// replayed for unbounded guessing (SEC-079). The per-account lockout is the
+	// hard backstop; this is defence-in-depth bound to the token itself.
+	maxMFAChallengeAttempts = 5
 )
 
 // Claims is the JWT payload for all tokens issued by registry-auth.
@@ -790,6 +795,27 @@ func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code strin
 	if err != nil {
 		return "", ErrInvalidCredentials
 	}
+	// SEC-079: enforce the account lockout at the OTP step too. A wrong OTP feeds
+	// the same counter below, but without this pre-check a locked account could
+	// still be probed by minting fresh challenge tokens. Reject a locked account
+	// before spending any work on the code.
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+		return "", ErrAccountLocked
+	}
+	// SEC-079: cap submissions per challenge token (its jti) so one stateless
+	// 5-minute challenge cannot be replayed for unbounded guesses within its
+	// window. Fail closed on a Redis error, matching the human-auth posture.
+	within, aerr := s.recordMFAChallengeAttempt(ctx, claims.ID)
+	if aerr != nil {
+		return "", aerr
+	}
+	if !within {
+		return "", ErrInvalidCredentials
+	}
 	ok, cerr := s.ConsumeMFACode(ctx, userID, code)
 	if cerr != nil {
 		return "", cerr
@@ -803,11 +829,35 @@ func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code strin
 		}
 		return "", ErrInvalidCredentials
 	}
+	// Success clears the failed-login counter + any lock, mirroring the password
+	// path in AuthenticateUser so a subsequent login starts from a clean slate.
+	_ = s.users.ResetFailedLogins(ctx, userID)
 	tenantID, _ := uuid.Parse(claims.TenantID)
 	// Roles + is_global_admin are resolved from the DB by the shared issuer; the
 	// challenge token deliberately carries no roles/access. The MFA login path is
 	// human-only (GetHumanByUsername gates AuthenticateUser).
 	return s.IssueMFACompletedToken(ctx, userID, tenantID)
+}
+
+// recordMFAChallengeAttempt atomically counts submissions made against a single
+// challenge token (keyed on its jti) and reports whether we are still within
+// maxMFAChallengeAttempts. The counter is seeded with the challenge TTL on the
+// first attempt so it self-expires with the token and never accumulates. This
+// bounds OTP guessing on a stateless challenge that would otherwise be reusable
+// for its full 5-minute lifetime (SEC-079); the per-account lockout remains the
+// authoritative backstop. Returns an error (fail-closed) on a Redis failure,
+// consistent with the human-auth Redis posture elsewhere in this service.
+func (s *Service) recordMFAChallengeAttempt(ctx context.Context, jti string) (bool, error) {
+	key := "mfa:challenge_attempts:" + jti
+	n, err := s.redis.Incr(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("mfa challenge attempt counter: %w", err)
+	}
+	if n == 1 {
+		// First attempt seeds the TTL so the counter cannot outlive the token.
+		_ = s.redis.Expire(ctx, key, mfaChallengeTTL).Err()
+	}
+	return n <= maxMFAChallengeAttempts, nil
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in
