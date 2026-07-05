@@ -45,6 +45,10 @@ type handlerFakeUserRepo struct {
 	// behaviour so existing tests stay green while new ones can express a
 	// precise role posture.
 	explicitRoles map[uuid.UUID][]repository.RoleAssignment
+	// mfa holds per-user TOTP state so the /users/me/mfa handler tests can
+	// round-trip enrolment (SetPendingMFASecret → GetMFAState) and seed an
+	// already-enabled user. A user with no entry is treated as not enrolled.
+	mfa map[uuid.UUID]*repository.MFAState
 }
 
 func newHandlerFakeUserRepo() *handlerFakeUserRepo {
@@ -53,6 +57,7 @@ func newHandlerFakeUserRepo() *handlerFakeUserRepo {
 		failedLogins:  make(map[uuid.UUID]int),
 		adminUsers:    make(map[uuid.UUID]bool),
 		explicitRoles: make(map[uuid.UUID][]repository.RoleAssignment),
+		mfa:           make(map[uuid.UUID]*repository.MFAState),
 	}
 }
 
@@ -375,6 +380,93 @@ func (f *handlerFakeUserRepo) MarkOnboardingComplete(_ context.Context, userID u
 	return nil, repository.ErrNotFound
 }
 
+// ── MFA (TOTP) stateful fakes ─────────────────────────────────────────────────
+//
+// The /users/me/mfa handler tests round-trip enrolment, so the fake tracks
+// per-user MFAState in f.mfa. GetMFAState returns the seeded state when present,
+// a not-enrolled zero state for a known user with no seeded MFA, or ErrNotFound
+// for an unknown user (mirroring the real repository's row-existence semantics).
+
+// seedMFAEnabled marks the user as already-MFA-enabled so enrolment tests can
+// exercise the 409 conflict path without driving a full begin+verify cycle.
+func (f *handlerFakeUserRepo) seedMFAEnabled(userID uuid.UUID) {
+	now := time.Now()
+	f.mfa[userID] = &repository.MFAState{Enabled: true, EnrolledAt: &now}
+}
+
+func (f *handlerFakeUserRepo) GetMFAState(_ context.Context, userID uuid.UUID) (*repository.MFAState, error) {
+	if st, ok := f.mfa[userID]; ok {
+		return st, nil
+	}
+	for _, u := range f.users {
+		if u.ID == userID {
+			return &repository.MFAState{}, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// SetPendingMFASecret stores the encrypted pending secret so a subsequent
+// GetMFAState (during verify) can decrypt it — matching the real repo's
+// persistence. Enabled stays false until EnableMFA.
+func (f *handlerFakeUserRepo) SetPendingMFASecret(_ context.Context, userID uuid.UUID, enc []byte, version int16) error {
+	v := version
+	st := f.mfa[userID]
+	if st == nil {
+		st = &repository.MFAState{}
+		f.mfa[userID] = st
+	}
+	st.SecretEnc = enc
+	st.SecretKEKVersion = &v
+	return nil
+}
+
+func (f *handlerFakeUserRepo) EnableMFA(_ context.Context, userID uuid.UUID) error {
+	st := f.mfa[userID]
+	if st == nil {
+		st = &repository.MFAState{}
+		f.mfa[userID] = st
+	}
+	now := time.Now()
+	st.Enabled = true
+	st.EnrolledAt = &now
+	return nil
+}
+
+func (f *handlerFakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) (bool, error) {
+	st := f.mfa[userID]
+	if st == nil {
+		st = &repository.MFAState{}
+		f.mfa[userID] = st
+	}
+	if st.LastUsedCounter != nil && counter <= *st.LastUsedCounter {
+		return false, nil
+	}
+	c := counter
+	st.LastUsedCounter = &c
+	return true, nil
+}
+
+func (f *handlerFakeUserRepo) InsertBackupCodes(_ context.Context, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
+// MFA disable + recovery-code fakes. Disable clears the user's MFA state so a
+// subsequent GetMFAState reports not-enrolled. The backup-code readers are
+// no-ops: the handler tests never reach a successful backup-code redemption.
+func (f *handlerFakeUserRepo) DisableMFA(_ context.Context, userID uuid.UUID) error {
+	delete(f.mfa, userID)
+	return nil
+}
+
+func (f *handlerFakeUserRepo) DeleteBackupCodes(_ context.Context, _ uuid.UUID) error { return nil }
+
+func (f *handlerFakeUserRepo) ListUnusedBackupCodes(_ context.Context, _ uuid.UUID) ([]repository.BackupCode, error) {
+	return nil, nil
+}
+
+func (f *handlerFakeUserRepo) MarkBackupCodeUsed(_ context.Context, _ uuid.UUID) error { return nil }
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey
@@ -545,7 +637,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *testCtx) {
 // issueTestToken issues a JWT from the service and returns it.
 func issueTestToken(t *testing.T, svc *service.Service, userID, tenantID string, access []service.RepositoryAccess) string {
 	t.Helper()
-	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil, false, "human")
+	tok, err := svc.IssueToken(context.Background(), userID, tenantID, access, nil, false, "human", nil)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

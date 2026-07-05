@@ -57,6 +57,14 @@ type fakeUserRepo struct {
 	// by SEC-041's race-recovery test to simulate the parallel-callback
 	// loser without having to spin up real concurrency.
 	failCreateSSOWith error
+	// mfa holds per-user TOTP state (Task 5), keyed by user ID. Lazily
+	// initialised by the MFA setter methods so non-MFA tests pay nothing.
+	mfa map[uuid.UUID]*repository.MFAState
+	// backupCodes holds the recovery codes stored by InsertBackupCodes, keyed
+	// by user ID. Each entry carries a generated ID + argon2 hash + used flag so
+	// the Task 6 single-use consumption path (ListUnusedBackupCodes /
+	// MarkBackupCodeUsed) has real behaviour to exercise.
+	backupCodes map[uuid.UUID][]repository.BackupCode
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -463,6 +471,148 @@ func (f *fakeUserRepo) MarkOnboardingComplete(_ context.Context, userID uuid.UUI
 	return nil, repository.ErrNotFound
 }
 
+// ── MFA (TOTP) fake methods ───────────────────────────────────────────────────
+//
+// These satisfy the MFA portion of the userRepo interface (Task 5). State is
+// keyed by user ID in lazily-initialised maps so existing fakeUserRepo callers
+// that never touch MFA pay no setup cost. Semantics mirror repository/mfa.go.
+
+// findUserByID returns the in-memory user with the given ID, or nil.
+func (f *fakeUserRepo) findUserByID(id uuid.UUID) *repository.User {
+	for _, u := range f.users {
+		if u.ID == id {
+			return u
+		}
+	}
+	return nil
+}
+
+// GetMFAState returns the stored MFA state for the user, or a zero-value state
+// (not enrolled) when the user exists but has no MFA rows yet. Returns
+// ErrNotFound when the user id is unknown — matching the real repository.
+func (f *fakeUserRepo) GetMFAState(_ context.Context, userID uuid.UUID) (*repository.MFAState, error) {
+	if f.findUserByID(userID) == nil {
+		return nil, repository.ErrNotFound
+	}
+	if st, ok := f.mfa[userID]; ok {
+		// Return a copy so callers cannot mutate the fake's stored state.
+		cp := *st
+		return &cp, nil
+	}
+	return &repository.MFAState{}, nil
+}
+
+// SetPendingMFASecret stores an encrypted secret with mfa_enabled=false and a
+// cleared replay counter (enrolment step 1).
+func (f *fakeUserRepo) SetPendingMFASecret(_ context.Context, userID uuid.UUID, secretEnc []byte, kekVersion int16) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	if f.mfa == nil {
+		f.mfa = make(map[uuid.UUID]*repository.MFAState)
+	}
+	v := kekVersion
+	f.mfa[userID] = &repository.MFAState{
+		Enabled:          false,
+		SecretEnc:        secretEnc,
+		SecretKEKVersion: &v,
+		LastUsedCounter:  nil,
+	}
+	return nil
+}
+
+// EnableMFA flips mfa_enabled=true and stamps mfa_enrolled_at (enrolment step 2).
+func (f *fakeUserRepo) EnableMFA(_ context.Context, userID uuid.UUID) error {
+	st, ok := f.mfa[userID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	now := time.Now()
+	st.Enabled = true
+	st.EnrolledAt = &now
+	return nil
+}
+
+// AdvanceMFACounter is the in-memory compare-and-swap mirroring the real repo:
+// it advances only when counter strictly exceeds the stored value, returning
+// false (not an error) when a prior advance already covered this window.
+func (f *fakeUserRepo) AdvanceMFACounter(_ context.Context, userID uuid.UUID, counter int64) (bool, error) {
+	st, ok := f.mfa[userID]
+	if !ok {
+		return false, repository.ErrNotFound
+	}
+	if st.LastUsedCounter != nil && counter <= *st.LastUsedCounter {
+		return false, nil
+	}
+	c := counter
+	st.LastUsedCounter = &c
+	return true, nil
+}
+
+// InsertBackupCodes replaces the user's stored backup-code hashes, minting a
+// fresh ID + unused flag per code (delete-then-insert, mirroring the real repo).
+func (f *fakeUserRepo) InsertBackupCodes(_ context.Context, userID uuid.UUID, hashes []string) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	if f.backupCodes == nil {
+		f.backupCodes = make(map[uuid.UUID][]repository.BackupCode)
+	}
+	codes := make([]repository.BackupCode, 0, len(hashes))
+	for _, h := range hashes {
+		codes = append(codes, repository.BackupCode{ID: uuid.New(), CodeHash: h, Used: false})
+	}
+	f.backupCodes[userID] = codes
+	return nil
+}
+
+// DisableMFA clears the user's in-memory MFA state (Task 6). Backup codes are
+// cleared separately via DeleteBackupCodes, matching the real repository split.
+func (f *fakeUserRepo) DisableMFA(_ context.Context, userID uuid.UUID) error {
+	if f.findUserByID(userID) == nil {
+		return repository.ErrNotFound
+	}
+	delete(f.mfa, userID)
+	return nil
+}
+
+// DeleteBackupCodes removes all of the user's stored recovery codes. Idempotent:
+// deleting when none exist is not an error (matches the real repo).
+func (f *fakeUserRepo) DeleteBackupCodes(_ context.Context, userID uuid.UUID) error {
+	delete(f.backupCodes, userID)
+	return nil
+}
+
+// ListUnusedBackupCodes returns the user's not-yet-consumed recovery codes so
+// ConsumeMFACode can argon2-compare a submission against each unused hash.
+func (f *fakeUserRepo) ListUnusedBackupCodes(_ context.Context, userID uuid.UUID) ([]repository.BackupCode, error) {
+	var out []repository.BackupCode
+	for _, c := range f.backupCodes[userID] {
+		if !c.Used {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// MarkBackupCodeUsed flips a single code's used flag, but only if it is still
+// unused — a second consume of the same code returns repository.ErrNotFound so
+// a spent code cannot be redeemed twice (mirrors the SQL "AND used_at IS NULL").
+func (f *fakeUserRepo) MarkBackupCodeUsed(_ context.Context, id uuid.UUID) error {
+	for userID, codes := range f.backupCodes {
+		for i := range codes {
+			if codes[i].ID == id {
+				if codes[i].Used {
+					return repository.ErrNotFound
+				}
+				f.backupCodes[userID][i].Used = true
+				return nil
+			}
+		}
+	}
+	return repository.ErrNotFound
+}
+
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
 type fakeAPIKeyRepo struct {
 	keys       map[uuid.UUID]*repository.APIKey
@@ -867,12 +1017,17 @@ func TestLogin_validCredentials_returnsToken(t *testing.T) {
 	svc, tenantID, username, password, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	tok, err := svc.Login(context.Background(), tenantID, username, password)
+	res, err := svc.Login(context.Background(), tenantID, username, password)
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if tok == "" {
+	// This fixture has no MFA and no forced-enrolment policy, so Login returns a
+	// full access token directly.
+	if res.Token == "" {
 		t.Error("expected non-empty token")
+	}
+	if res.MFARequired || res.MFASetupRequired {
+		t.Errorf("expected a plain token result, got MFARequired=%v MFASetupRequired=%v", res.MFARequired, res.MFASetupRequired)
 	}
 }
 
@@ -1313,7 +1468,7 @@ func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
 	ctx := context.Background()
 	userID := uuid.New()
 	tenantID := uuid.New()
-	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false, "human")
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false, "human", nil)
 	if err != nil {
 		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
 	}

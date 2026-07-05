@@ -43,6 +43,18 @@ const (
 	rawSecretLen = 32
 )
 
+// MFA typed-token constants. Challenge/setup tokens carry a non-empty Typ and
+// a dedicated audience so they can never be accepted where an access token is
+// expected (ValidateToken rejects any token with a non-empty Typ).
+const (
+	tokenTypeMFAChallenge = "mfa_challenge"
+	tokenTypeMFASetup     = "mfa_setup"
+	mfaChallengeTTL       = 5 * time.Minute
+	mfaSetupTTL           = 15 * time.Minute
+	audienceMFAChallenge  = "registry-auth-mfa"
+	audienceMFASetup      = "registry-auth-mfa-setup"
+)
+
 // Claims is the JWT payload for all tokens issued by registry-auth.
 // It extends the standard RegisteredClaims with registry-specific fields.
 type Claims struct {
@@ -78,6 +90,13 @@ type Claims struct {
 	// Empty unless Source == "workload_oidc". Lets operators trace a
 	// running CI job back to the trust config that approved it.
 	TrustID string `json:"trust_id,omitempty"`
+	// Typ discriminates non-access tokens. Empty = normal access token.
+	// mfa_challenge / mfa_setup tokens are refused by ValidateToken.
+	Typ string `json:"typ,omitempty"`
+	// Amr records the authentication methods that produced this token
+	// (["pwd"], ["pwd","otp"], ["sso"]). Recorded for audit + future step-up;
+	// RefreshToken copies it verbatim and never upgrades it.
+	Amr []string `json:"amr,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -157,7 +176,23 @@ type Service struct {
 	// nil (legacy fakes), ValidateAPIKey falls back to the pre-FUT-003
 	// touchLastUsedAsync path so old tests keep passing.
 	lastUsed *lastUsedUpdater
+	// mfaKEK is the 32-byte AES-256 key-encryption key used to encrypt TOTP
+	// secrets at rest (users.mfa_secret_enc). Wired at startup from the
+	// decoded MFA_SECRET_KEY_HEX via SetMFAKEK. Never logged.
+	mfaKEK []byte
+	// mfaIssuer is the otpauth:// issuer label embedded in enrolment URIs — the
+	// name an authenticator app shows next to the account (e.g. "oci-janus").
+	// Defaulted to "oci-janus" in every constructor.
+	mfaIssuer string
+	// nowFn returns the current wall clock. Overridable so enrolment/login MFA
+	// tests can pin the TOTP time step deterministically. nil ⇒ time.Now
+	// (resolved in the now() helper).
+	nowFn func() time.Time
 }
+
+// defaultMFAIssuer is the otpauth:// issuer label used when a constructor does
+// not override it. Kept as a single constant so every constructor agrees.
+const defaultMFAIssuer = "oci-janus"
 
 // tokenPolicyReader is the narrow interface Service uses to consult the
 // workspace token policy on CreateAPIKey. Small so tests can supply a fake
@@ -196,6 +231,7 @@ func New(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	// Auto-wire the FUT-003 debounced last_used_at updater when the caller
 	// passed a non-nil api-key repo (production path). Tests that construct
@@ -236,6 +272,7 @@ func NewWithKeyRing(
 		audit:           audit,
 		redis:           rdb,
 		keys:            ring,
+		mfaIssuer:       defaultMFAIssuer,
 	}
 	if apiKeys != nil {
 		s.lastUsed = newLastUsedUpdater(rdb, apiKeys, slog.Default())
@@ -282,7 +319,10 @@ func singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID string) (*keyRing, error)
 // without a separate lookup (REDESIGN-001 Phase 5.4). Empty principalKind
 // is encoded as "human" so legacy callers and tests keep their default
 // behaviour without coordinated update.
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string) (string, error) {
+// amr records the authentication methods that produced the token (e.g.
+// ["pwd"], ["pwd","otp"], ["sso"]). It is embedded verbatim in the Amr claim
+// for audit + future step-up decisions; RefreshToken forwards it unchanged.
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string, amr []string) (string, error) {
 	if principalKind == "" {
 		principalKind = "human"
 	}
@@ -301,6 +341,7 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		Roles:         roles,
 		IsGlobalAdmin: isGlobalAdmin,
 		PrincipalKind: principalKind,
+		Amr:           amr,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	// Phase 6.5 — stamp the kid header so validators can pick the right
@@ -389,64 +430,18 @@ const WorkloadTokenLifetimeSeconds = 15 * 60
 // rotation window) so the worst-case is N signature verifies — cheap
 // compared to the Redis revocation check that follows.
 func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, error) {
-	var claims Claims
-	tok, err := jwt.ParseWithClaims(tokenStr, &claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		// Look up by kid if the JWT supplied one.
-		kid, _ := t.Header["kid"].(string)
-		if kid != "" {
-			if pub := s.keys.find(kid); pub != nil {
-				return pub, nil
-			}
-			// Kid present but not in ring — signal jwt to try the
-			// fallback path. We return the first key's public half so
-			// jwt.ParseWithClaims has something to verify against; if it
-			// fails (which is likely — the token was signed with a kid we
-			// don't know), we re-try below against every other key.
-			//
-			// Returning an error here would short-circuit the whole call
-			// before we get to try the rest of the ring, which is the
-			// opposite of what we want.
-			return s.keys.all()[0].publicKey, nil
-		}
-		// No kid in header — same fallback signal. Return the first key
-		// and let the post-parse retry loop catch the mismatch.
-		return s.keys.all()[0].publicKey, nil
-	})
-	if err != nil || !tok.Valid {
-		// First-pass verify failed. Try every key in the ring in turn —
-		// either the issuer used a kid we did not know about (rotation
-		// race) or the JWT was minted before kids were stamped at all.
-		//
-		// The fallback re-uses the same Claims pointer so a successful
-		// retry populates the same struct. We do NOT touch ctx, the JTI
-		// revocation check, or any side-effect — those still run after
-		// the (now successful) verify below.
-		recovered, recovErr := s.validateWithFallback(tokenStr, &claims)
-		if recovErr != nil {
-			// Preserve the original error in the wrap so the operator
-			// log surface is unchanged from the pre-Phase-6.5 behaviour.
-			return nil, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
-		}
-		tok = recovered
-		// A fallback success means either (a) a legacy token without a
-		// kid, or (b) a token whose kid did not match any ring entry.
-		// Both are operator-visible signals during a rotation. SEC-048
-		// follow-up: bump `registry_auth_jwt_kid_fallback_total` with
-		// the reason label so operators can alert on sustained-high
-		// fallback rates without scraping logs.
-		hdrKid, _ := tok.Header["kid"].(string)
-		reason := "missing_kid"
-		if hdrKid != "" {
-			reason = "unknown_kid"
-		}
-		metrics.AuthJWTKidFallbackTotal.WithLabelValues(reason).Inc()
-		slog.WarnContext(ctx, "auth: JWT validated via ring fallback path",
-			"jwt_kid", hdrKid,
-			"reason", reason,
-		)
+	// parseAndVerify does the signature + expiry + kid-ring work and returns
+	// the validated claims before any revocation checks run.
+	claims, err := s.parseAndVerify(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+	// A challenge/setup token must never be accepted as an access token.
+	// These tokens carry a non-empty Typ + a dedicated audience and are only
+	// spendable via ValidateMFAToken; refusing them here means RefreshToken
+	// (which calls ValidateToken) rejects them too.
+	if claims.Typ != "" {
+		return nil, ErrInvalidCredentials
 	}
 
 	// Check revocation list — the key TTL matches token lifetime so an expired
@@ -482,7 +477,141 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		return nil, status.Error(codes.Unauthenticated, "principal revoked")
 	}
 
+	return claims, nil
+}
+
+// parseAndVerify parses tokenStr, verifies its RS256 signature against the key
+// ring, and enforces the standard registered claims (expiry). It returns the
+// validated claims BEFORE any revocation checks — callers layer their own
+// revocation / typ gates on top. Extracted from ValidateToken so the MFA
+// typed-token validator can reuse the exact same signature-verification path
+// without paying for the access-token revocation lookups.
+//
+// Phase 6.5 kid-ring behaviour (fast kid-targeted verify + full-ring fallback)
+// is preserved verbatim from the original inline ValidateToken body.
+func (s *Service) parseAndVerify(tokenStr string) (*Claims, error) {
+	var claims Claims
+	tok, err := jwt.ParseWithClaims(tokenStr, &claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		// Look up by kid if the JWT supplied one.
+		kid, _ := t.Header["kid"].(string)
+		if kid != "" {
+			if pub := s.keys.find(kid); pub != nil {
+				return pub, nil
+			}
+			// Kid present but not in ring — signal jwt to try the
+			// fallback path. We return the first key's public half so
+			// jwt.ParseWithClaims has something to verify against; if it
+			// fails (which is likely — the token was signed with a kid we
+			// don't know), we re-try below against every other key.
+			//
+			// Returning an error here would short-circuit the whole call
+			// before we get to try the rest of the ring, which is the
+			// opposite of what we want.
+			return s.keys.all()[0].publicKey, nil
+		}
+		// No kid in header — same fallback signal. Return the first key
+		// and let the post-parse retry loop catch the mismatch.
+		return s.keys.all()[0].publicKey, nil
+	})
+	if err != nil || !tok.Valid {
+		// First-pass verify failed. Try every key in the ring in turn —
+		// either the issuer used a kid we did not know about (rotation
+		// race) or the JWT was minted before kids were stamped at all.
+		//
+		// The fallback re-uses the same Claims pointer so a successful
+		// retry populates the same struct.
+		recovered, recovErr := s.validateWithFallback(tokenStr, &claims)
+		if recovErr != nil {
+			// Preserve the original error in the wrap so the operator
+			// log surface is unchanged from the pre-Phase-6.5 behaviour.
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCredentials, err)
+		}
+		tok = recovered
+		// A fallback success means either (a) a legacy token without a
+		// kid, or (b) a token whose kid did not match any ring entry.
+		// Both are operator-visible signals during a rotation. SEC-048
+		// follow-up: bump `registry_auth_jwt_kid_fallback_total` with
+		// the reason label so operators can alert on sustained-high
+		// fallback rates without scraping logs.
+		hdrKid, _ := tok.Header["kid"].(string)
+		reason := "missing_kid"
+		if hdrKid != "" {
+			reason = "unknown_kid"
+		}
+		metrics.AuthJWTKidFallbackTotal.WithLabelValues(reason).Inc()
+		// parseAndVerify has no ctx (it is a pure verify helper); the
+		// fallback metric is the durable operator signal, so we increment
+		// it here and drop the per-call slog line that ValidateToken used
+		// to emit. Sustained fallback is visible via the metric label.
+	}
 	return &claims, nil
+}
+
+// issueTypedToken mints a short-lived RS256 token carrying a non-access `typ`
+// and a dedicated audience, so it can never be accepted where an access token
+// is expected. Used for the two-step-login challenge and forced-enrolment setup
+// tokens. It deliberately carries no roles/access.
+func (s *Service) issueTypedToken(userID, tenantID, typ, audience string, ttl time.Duration) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "registry-auth",
+			Subject:   userID,
+			Audience:  jwt.ClaimStrings{audience},
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ID:        uuid.New().String(),
+		},
+		TenantID: tenantID,
+		Typ:      typ,
+		// The password check has already succeeded by the time these tokens are
+		// minted, so the sole authentication method so far is "pwd". The otp
+		// factor is not added until the challenge is spent successfully.
+		Amr: []string{"pwd"},
+	}
+	// Mirror IssueToken's signing: sign with the ring's current signer and stamp
+	// the kid header so validators can pick the right public key without trying
+	// every one in turn. The kid is non-sensitive (it appears in the JWKS doc).
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signingKID, signingPriv := s.keys.signer()
+	tok.Header["kid"] = signingKID
+	signed, err := tok.SignedString(signingPriv)
+	if err != nil {
+		return "", fmt.Errorf("sign %s token: %w", typ, err)
+	}
+	// Typed tokens are stateless and short-lived — no JTI is recorded in the
+	// active-token set (they are validated via ValidateMFAToken, which does not
+	// consult the revocation list).
+	return signed, nil
+}
+
+// IssueMFAChallengeToken mints the 5-minute token returned after a correct
+// password when MFA is enabled; it is spent at POST /login/mfa.
+func (s *Service) IssueMFAChallengeToken(ctx context.Context, userID, tenantID string) (string, error) {
+	return s.issueTypedToken(userID, tenantID, tokenTypeMFAChallenge, audienceMFAChallenge, mfaChallengeTTL)
+}
+
+// IssueMFASetupToken mints the 15-minute token returned when the require-MFA
+// policy is on and the user is un-enrolled; it authorizes only enroll/verify.
+func (s *Service) IssueMFASetupToken(ctx context.Context, userID, tenantID string) (string, error) {
+	return s.issueTypedToken(userID, tenantID, tokenTypeMFASetup, audienceMFASetup, mfaSetupTTL)
+}
+
+// ValidateMFAToken parses + signature-verifies a token and requires its `typ`
+// to equal wantTyp. It does NOT run the access-token revocation checks (these
+// short-lived tokens are stateless). Returns the claims on success.
+func (s *Service) ValidateMFAToken(ctx context.Context, tokenStr, wantTyp string) (*Claims, error) {
+	claims, err := s.parseAndVerify(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Typ != wantTyp {
+		return nil, ErrInvalidCredentials
+	}
+	return claims, nil
 }
 
 // RevokeToken stores the token's JTI in Redis so ValidateToken rejects it.
@@ -530,7 +659,9 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	// on the next login, like role removals.
 	// PrincipalKind is carried forward — refresh must not mint a new kind. A
 	// service-account JWT refreshes to another service-account JWT.
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind)
+	// Amr is copied verbatim — refresh preserves the original authentication
+	// methods and never upgrades them (a refreshed token is not a fresh login).
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind, claims.Amr)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -552,15 +683,76 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	return newToken, nil
 }
 
-// Login validates credentials, enforces account lockout, and issues a token.
-// The user's RBAC role names and global-admin flag are loaded and embedded in
-// the JWT so downstream services (and the frontend) can read them without an
-// extra RPC.
-func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (string, error) {
+// LoginResult is the outcome of a password login. Exactly one of the three
+// states is set: an access Token, an MFA challenge (MFARequired +
+// ChallengeToken), or a forced-enrolment setup (MFASetupRequired + SetupToken).
+// The handler branches on these flags to shape the HTTP response.
+type LoginResult struct {
+	// Token is the full RS256 access token (amr=["pwd"]). Set only when MFA is
+	// not required for this user.
+	Token string
+	// MFARequired is true when the user has MFA enabled and must complete the
+	// second step at POST /api/v1/login/mfa. ChallengeToken carries the
+	// short-lived typ=mfa_challenge token to spend there.
+	MFARequired    bool
+	ChallengeToken string
+	// MFASetupRequired is true when the workspace policy forces MFA and this
+	// human password user is not yet enrolled. SetupToken carries the
+	// short-lived typ=mfa_setup token that authorizes enroll/verify.
+	MFASetupRequired bool
+	SetupToken       string
+}
+
+// Login validates credentials, enforces account lockout, and returns a
+// LoginResult describing the next step. The three outcomes are:
+//
+//   - MFA enabled → an mfa_challenge token (two-step login); the caller spends
+//     it at POST /login/mfa with an OTP or backup code.
+//   - MFA required by policy but the user is un-enrolled → an mfa_setup token
+//     (forced enrolment); the caller enrols before receiving an access token.
+//   - Otherwise → a full access token, with the user's RBAC role names and
+//     global-admin flag embedded so downstream services (and the frontend) can
+//     read them without an extra RPC.
+func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (LoginResult, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
 	if err != nil {
-		return "", err
+		return LoginResult{}, err
 	}
+
+	// MFA-enabled users never get an access token straight from Login: they
+	// must spend a challenge token at POST /login/mfa (amr becomes ["pwd","otp"]
+	// only after the OTP/backup code is verified there).
+	mfaState, err := s.users.GetMFAState(ctx, user.ID)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	if mfaState.Enabled {
+		ct, terr := s.IssueMFAChallengeToken(ctx, user.ID.String(), user.TenantID.String())
+		if terr != nil {
+			return LoginResult{}, terr
+		}
+		return LoginResult{MFARequired: true, ChallengeToken: ct}, nil
+	}
+
+	// Forced enrolment: the workspace token policy requires MFA and this human
+	// password user has no factor yet. Hand back an mfa_setup token so the FE
+	// can drive enrolment before the user holds an access token. The policy repo
+	// is optional (nil in some test fixtures) — when unwired we skip the gate,
+	// matching the pre-MFA behaviour. Service-account principals never reach this
+	// branch on the password path (GetHumanByUsername filters them), but we still
+	// guard on Kind=="human" so the policy can never force a non-human enrolment.
+	if s.tokenPolicy != nil {
+		policy, perr := s.tokenPolicy.GetOrDefault(ctx, user.TenantID)
+		if perr == nil && policy.RequireMFA && user.Kind == "human" {
+			stk, terr := s.IssueMFASetupToken(ctx, user.ID.String(), user.TenantID.String())
+			if terr != nil {
+				return LoginResult{}, terr
+			}
+			return LoginResult{MFASetupRequired: true, SetupToken: stk}, nil
+		}
+	}
+
+	// No MFA in play — issue the full access token.
 	// Load the user's role names from the role_assignments table; deduplicated
 	// because a user can hold the same role across multiple scopes (e.g. admin
 	// of two orgs). A failure here is non-fatal — log it and issue a token
@@ -572,7 +764,50 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// user.Kind is forwarded as the JWT principal_kind claim — Login is the
 	// human credential path (password), so in practice this is always
 	// "human", but we forward the actual column to keep the contract tight.
-	return s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind)
+	// Login is the password credential path, so the authentication method is
+	// always "pwd" (["pwd"] amr).
+	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"})
+	if terr != nil {
+		return LoginResult{}, terr
+	}
+	return LoginResult{Token: tok}, nil
+}
+
+// VerifyLoginMFA completes the two-step login: it validates the mfa_challenge
+// token minted by Login, verifies the submitted OTP or single-use backup code,
+// and — on success — mints the full access token with amr=["pwd","otp"]. A
+// wrong code feeds the SAME account-lockout counter that AuthenticateUser uses,
+// so brute-forcing the second factor is bounded by the existing lockout policy.
+// OTP codes and backup codes are never logged (CLAUDE.md §10).
+func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string) (string, error) {
+	// The challenge token is only spendable here: ValidateMFAToken enforces
+	// typ==mfa_challenge, so a normal access token (or a setup token) is refused.
+	claims, err := s.ValidateMFAToken(ctx, challengeToken, tokenTypeMFAChallenge)
+	if err != nil {
+		return "", ErrInvalidCredentials
+	}
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return "", ErrInvalidCredentials
+	}
+	ok, cerr := s.ConsumeMFACode(ctx, userID, code)
+	if cerr != nil {
+		return "", cerr
+	}
+	if !ok {
+		// Wrong / replayed code — feed the existing lockout counter exactly the
+		// way AuthenticateUser does (record + lock at the threshold) so the OTP
+		// step cannot be brute-forced past the account-lockout policy.
+		if count, ferr := s.users.RecordFailedLogin(ctx, userID); ferr == nil && count >= maxFailedLogins {
+			_ = s.users.LockUntil(ctx, userID, time.Now().Add(lockoutDuration))
+		}
+		return "", ErrInvalidCredentials
+	}
+	tenantID, _ := uuid.Parse(claims.TenantID)
+	// Roles + is_global_admin are resolved from the DB by the shared issuer; the
+	// challenge token deliberately carries no roles/access. The MFA login path is
+	// human-only (GetHumanByUsername gates AuthenticateUser).
+	return s.IssueMFACompletedToken(ctx, userID, tenantID)
 }
 
 // loadRoleNames returns the deduplicated, sorted role names the user holds in

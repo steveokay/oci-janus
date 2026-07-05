@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   useTokenPolicy,
   usePutTokenPolicy,
@@ -140,7 +141,12 @@ function validateSection(
 
 // buildRequestBody — converts the form state into the PUT payload,
 // coercing disabled sections to null so the BE persists them as unset.
-function buildRequestBody(form: FormState): PutTokenPolicyInput {
+// require_mfa is a plain boolean (no null/unset state) so it is always
+// submitted with its current on/off value.
+function buildRequestBody(
+  form: FormState,
+  requireMfa: boolean,
+): PutTokenPolicyInput {
   return {
     max_ttl_days: form.max_ttl_days.enabled
       ? Number(form.max_ttl_days.value)
@@ -151,6 +157,7 @@ function buildRequestBody(form: FormState): PutTokenPolicyInput {
     idle_revoke_days: form.idle_revoke_days.enabled
       ? Number(form.idle_revoke_days.value)
       : null,
+    require_mfa: requireMfa,
   };
 }
 
@@ -163,6 +170,9 @@ export function PoliciesPanel(): React.ReactElement {
   // it lands, then owned by the panel from then on so typing doesn't
   // fight the query cache.
   const [form, setForm] = React.useState<FormState | null>(null);
+  // require_mfa is a standalone boolean toggle (not one of the three numeric
+  // sections), so it lives in its own state seeded from the fetched policy.
+  const [requireMfa, setRequireMfa] = React.useState<boolean>(false);
   const [validationError, setValidationError] = React.useState<
     string | null
   >(null);
@@ -187,8 +197,19 @@ export function PoliciesPanel(): React.ReactElement {
           DEFAULTS.idle_revoke_days,
         ),
       });
+      // Seed the MFA toggle from the fetched policy at the same time as the
+      // numeric sections so the control reflects the persisted value.
+      setRequireMfa(policy.data.require_mfa);
     }
   }, [policy.data, form]);
+
+  // handleRequireMfaToggle — flip the MFA enforcement switch. Clears the
+  // save-success banner so a stale "saved" message doesn't linger while the
+  // operator has an unsaved change pending.
+  function handleRequireMfaToggle(next: boolean): void {
+    setRequireMfa(next);
+    setSaveSuccess(false);
+  }
 
   // handleToggle — flip a section's enabled flag. Clears validation
   // when disabling (a disabled section can't fail validation).
@@ -232,7 +253,7 @@ export function PoliciesPanel(): React.ReactElement {
     }
     setValidationError(null);
 
-    putPolicy.mutate(buildRequestBody(form), {
+    putPolicy.mutate(buildRequestBody(form, requireMfa), {
       onSuccess: () => {
         setSaveSuccess(true);
       },
@@ -297,6 +318,31 @@ export function PoliciesPanel(): React.ReactElement {
               }
               suffix="days unused"
             />
+
+            {/* Require MFA — a standalone boolean toggle (TOTP MFA Task 14).
+                Unlike the three numeric dimensions it has no value input; it
+                is simply on/off, so it uses a Switch rather than a
+                PolicySection numeric field. */}
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="max-w-lg">
+                  <h2 className="text-sm font-medium">Require MFA</h2>
+                  <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
+                    Require MFA for all password accounts. Members without an
+                    authenticator will be prompted to set one up at next
+                    sign-in.
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center">
+                  <Switch
+                    checked={requireMfa}
+                    onCheckedChange={handleRequireMfaToggle}
+                    aria-label="Require MFA for all password accounts"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Inline status banners. Client-side validation always takes

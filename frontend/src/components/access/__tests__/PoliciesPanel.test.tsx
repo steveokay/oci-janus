@@ -42,6 +42,7 @@ function fixturePolicy(overrides: Partial<TokenPolicy> = {}): TokenPolicy {
     max_ttl_days: 90,
     rotation_interval_days: 365,
     idle_revoke_days: 30,
+    require_mfa: false,
     updated_at: "2026-07-01T00:00:00Z",
     updated_by_user_id: "user-1",
     ...overrides,
@@ -151,6 +152,40 @@ describe("PoliciesPanel", () => {
           rotation_interval_days: 365,
           idle_revoke_days: null,
         }),
+        expect.any(Object),
+      ),
+    );
+  });
+
+  // TOTP MFA Task 14: the Require MFA switch reflects the fetched policy and
+  // its value round-trips into the PUT payload.
+  it("reflects require_mfa=true from the fetched policy on the switch", () => {
+    mockData = fixturePolicy({ require_mfa: true });
+    renderPanel();
+
+    expect(
+      screen.getByRole("switch", {
+        name: /require mfa for all password accounts/i,
+      }),
+    ).toBeChecked();
+  });
+
+  it("toggling Require MFA on and saving includes require_mfa in the payload", async () => {
+    const user = userEvent.setup();
+    mockData = fixturePolicy({ require_mfa: false });
+    renderPanel();
+
+    const mfaSwitch = screen.getByRole("switch", {
+      name: /require mfa for all password accounts/i,
+    });
+    expect(mfaSwitch).not.toBeChecked();
+    await user.click(mfaSwitch);
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(mockMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ require_mfa: true }),
         expect.any(Object),
       ),
     );

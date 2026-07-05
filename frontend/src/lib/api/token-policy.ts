@@ -36,6 +36,10 @@ export interface TokenPolicy {
   max_ttl_days: number | null;
   rotation_interval_days: number | null;
   idle_revoke_days: number | null;
+  // require_mfa (TOTP MFA Task 14): when true, every local password account
+  // must enroll an authenticator before completing sign-in. Plain boolean —
+  // the proto field is a plain bool with no "unset" state, so it is never null.
+  require_mfa: boolean;
   updated_at: string;
   updated_by_user_id: string | null;
 }
@@ -47,6 +51,10 @@ export interface PutTokenPolicyInput {
   max_ttl_days: number | null;
   rotation_interval_days: number | null;
   idle_revoke_days: number | null;
+  // require_mfa (TOTP MFA Task 14): admin toggle for enforcing MFA on all
+  // local password accounts. Always submitted (on/off) — no partial-update
+  // semantics because the proto field is a plain bool.
+  require_mfa: boolean;
 }
 
 // Query key factory — one namespace so future policy-related hooks

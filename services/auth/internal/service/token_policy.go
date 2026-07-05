@@ -76,6 +76,13 @@ type PutTokenPolicyInput struct {
 	MaxTTLDays           *int32
 	RotationIntervalDays *int32
 	IdleRevokeDays       *int32
+	// RequireMFA is the admin TOTP-MFA-enforcement toggle (Tier-1 #1). A
+	// pointer for symmetry with the other optional fields (nil = "not
+	// supplied"), but note the repository column is a plain non-nullable
+	// bool: nil is coerced to false at write time (see Put), so nil and
+	// &false are indistinguishable at the DB. The gRPC handler always
+	// supplies a non-nil pointer because the proto field is a plain bool.
+	RequireMFA *bool
 	// ActorID is the caller's user_id — the BFF plumbs it from the JWT
 	// sub. Recorded in updated_by_user_id and in the audit event.
 	ActorID uuid.UUID
@@ -128,11 +135,19 @@ func (s *TokenPolicyService) Put(ctx context.Context, in PutTokenPolicyInput) (*
 	}
 
 	actorID := in.ActorID
+	// require_mfa has no NULL/preserve state at the DB (plain bool column),
+	// so a nil input pointer is coerced to false rather than passed through
+	// like the *int32 limit fields.
+	requireMFA := false
+	if in.RequireMFA != nil {
+		requireMFA = *in.RequireMFA
+	}
 	after, err := s.repo.Upsert(ctx, repository.TokenPolicy{
 		TenantID:             in.TenantID,
 		MaxTTLDays:           in.MaxTTLDays,
 		RotationIntervalDays: in.RotationIntervalDays,
 		IdleRevokeDays:       in.IdleRevokeDays,
+		RequireMFA:           requireMFA,
 		UpdatedByUserID:      &actorID,
 	})
 	if err != nil {

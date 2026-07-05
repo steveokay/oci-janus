@@ -40,8 +40,10 @@ func TestTokenPolicyRepo(t *testing.T) {
 	require.NoError(t, err, "pgxpool.New")
 	t.Cleanup(pool.Close)
 
-	// Migrate up to and including the FUT-003 token-policies migration.
-	gooseUpTo(t, dsn, "20260702000001")
+	// Migrate up to and including the TOTP-MFA migration (20260705120000)
+	// which adds token_policies.require_mfa — needed by the require_mfa
+	// round-trip sub-test below.
+	gooseUpTo(t, dsn, "20260705120000")
 
 	repo := NewTokenPolicyRepo(pool)
 
@@ -130,6 +132,38 @@ func TestTokenPolicyRepo(t *testing.T) {
 		require.Equal(t, int32(90), *got.RotationIntervalDays)
 		require.NotNil(t, got.IdleRevokeDays, "IdleRevokeDays should have been preserved")
 		require.Equal(t, int32(45), *got.IdleRevokeDays)
+	})
+
+	t.Run("RequireMFA_RoundTripsAndDefaultsFalse", func(t *testing.T) {
+		// Default: an unset tenant reads require_mfa=false.
+		unset := uuid.New()
+		got, err := repo.GetOrDefault(ctx, unset)
+		require.NoError(t, err)
+		require.False(t, got.RequireMFA, "unset tenant defaults to require_mfa=false")
+
+		// Upsert require_mfa=true, then read it back.
+		tenantID := uuid.New()
+		actor := uuid.New()
+		up, err := repo.Upsert(ctx, TokenPolicy{
+			TenantID:        tenantID,
+			RequireMFA:      true,
+			UpdatedByUserID: &actor,
+		})
+		require.NoError(t, err)
+		require.True(t, up.RequireMFA, "Upsert should persist require_mfa=true")
+
+		read, err := repo.GetOrDefault(ctx, tenantID)
+		require.NoError(t, err)
+		require.True(t, read.RequireMFA, "GetOrDefault should return persisted require_mfa=true")
+
+		// Flipping back to false is an unconditional write (no preserve).
+		down, err := repo.Upsert(ctx, TokenPolicy{
+			TenantID:        tenantID,
+			RequireMFA:      false,
+			UpdatedByUserID: &actor,
+		})
+		require.NoError(t, err)
+		require.False(t, down.RequireMFA, "Upsert should overwrite require_mfa back to false")
 	})
 
 	t.Run("ListTenantsWithIdleRevoke_ReturnsOnlyConfigured", func(t *testing.T) {

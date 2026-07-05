@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
@@ -68,6 +69,21 @@ type Config struct {
 	// to decrypt OAuth client_secret_enc values stored in global_sso_config.
 	// When empty, SSO routes are not registered. Required in production.
 	SSOCredentialKeyHex string `mapstructure:"SSO_CREDENTIAL_KEY_HEX"`
+
+	// MFA TOTP — key-encryption key for secrets at rest.
+	//
+	// MFASecretKeyHex is the 64-character (32-byte) hex AES-256 KEK used to
+	// encrypt users.mfa_secret_enc TOTP secrets. Required and validated at
+	// startup (must decode to exactly 32 bytes) — a weak or missing KEK would
+	// leave enrolled second factors recoverable, so the service fails closed
+	// rather than starting without it. The raw value is never logged.
+	MFASecretKeyHex string `mapstructure:"MFA_SECRET_KEY_HEX"`
+
+	// MFASecretKey is the decoded 32-byte KEK, populated by validate() from
+	// MFASecretKeyHex. Not bound to an env var directly (mapstructure:"-") — it
+	// exists so the server wiring can hand the raw bytes to the Service without
+	// re-decoding (and re-validating) the hex string.
+	MFASecretKey []byte `mapstructure:"-"`
 
 	// DefaultTenantID is the fallback tenant UUID used when auto-provisioning
 	// a new SSO user and no existing user row can be matched by email
@@ -197,8 +213,9 @@ func validate(cfg *Config) error {
 	// mTLS cert paths are required in production but optional for local dev.
 	// The server will warn and run without TLS if they are absent.
 	required := map[string]string{
-		"DB_DSN":     cfg.DBDSN,
-		"REDIS_ADDR": cfg.RedisAddr,
+		"DB_DSN":             cfg.DBDSN,
+		"REDIS_ADDR":         cfg.RedisAddr,
+		"MFA_SECRET_KEY_HEX": cfg.MFASecretKeyHex,
 	}
 	// Phase 6.5 — JWT key material can come from either the single-key
 	// trio (JWT_PRIVATE_KEY_B64 + JWT_PUBLIC_KEY_B64 + JWT_KEY_ID) OR from
@@ -214,5 +231,19 @@ func validate(cfg *Config) error {
 		// one source of truth for the active signing material.
 		return fmt.Errorf("invalid config: JWT_KEY_RING_PATH is set; JWT_PRIVATE_KEY_B64 / JWT_PUBLIC_KEY_B64 / JWT_KEY_ID must be empty (pick exactly one path)")
 	}
-	return loader.RequireFields(required)
+	if err := loader.RequireFields(required); err != nil {
+		return err
+	}
+	// MFA KEK: presence is covered by RequireFields above; here we enforce that
+	// the value hex-decodes to exactly 32 bytes (AES-256). Fail closed on any
+	// problem and NEVER include the value in the error message.
+	kek, err := hex.DecodeString(cfg.MFASecretKeyHex)
+	if err != nil {
+		return fmt.Errorf("invalid config: MFA_SECRET_KEY_HEX must be valid hex (64 chars / 32 bytes)")
+	}
+	if len(kek) != 32 {
+		return fmt.Errorf("invalid config: MFA_SECRET_KEY_HEX must decode to exactly 32 bytes (got %d)", len(kek))
+	}
+	cfg.MFASecretKey = kek
+	return nil
 }

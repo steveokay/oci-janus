@@ -184,6 +184,11 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /auth/token/workload", h.HandleWorkloadTokenExchange)
 	mux.HandleFunc("POST /api/v1/users", h.createUser)
 	mux.HandleFunc("POST /api/v1/login", h.login)
+	// Tier-1 #1 — step 2 of two-step login: exchange an mfa_challenge token +
+	// OTP/backup code for a full access token. Public (the challenge token is
+	// the credential); shares the login handler's per-IP rate-limit + auth-
+	// failure recording so the OTP step is brute-force-bounded like /login.
+	mux.HandleFunc("POST /api/v1/login/mfa", h.loginMFA)
 	mux.HandleFunc("POST /api/v1/logout", h.logout)
 	mux.HandleFunc("POST /api/v1/token/refresh", h.refreshToken)
 	mux.HandleFunc("POST /api/v1/apikeys", h.createAPIKey)
@@ -197,6 +202,14 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// Flips users.onboarding_complete = true for the authenticated human user.
 	// Idempotent; service accounts get a 403.
 	mux.HandleFunc("POST /api/v1/users/me/onboarding/complete", h.completeOnboarding)
+	// Tier-1 #1 — TOTP MFA self-service (identity from the Bearer token).
+	// enroll + verify additionally accept a short-lived mfa_setup token so a
+	// require-MFA-gated user can enrol before holding an access token.
+	mux.HandleFunc("GET /api/v1/users/me/mfa", h.mfaStatus)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/enroll", h.mfaEnroll)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/verify", h.mfaVerify)
+	mux.HandleFunc("DELETE /api/v1/users/me/mfa", h.mfaDisable)
+	mux.HandleFunc("POST /api/v1/users/me/mfa/backup-codes/regenerate", h.mfaRegenerateBackupCodes)
 	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.
@@ -283,7 +296,10 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/login path goes through Service.Login() which embeds roles.
 	// is_global_admin is also false here — OCI clients don't need platform-admin
 	// context; they only need the scoped access list.
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind)
+	// amr is nil here: the Docker /auth/token endpoint serves both password
+	// and API-key (Bearer key.) principals, so no single authentication method
+	// applies. The dashboard login path (Service.Login) stamps ["pwd"].
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind, nil)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
@@ -503,7 +519,7 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
+	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
 		// PENTEST-005: collapse all auth failure variants into one 401 response.
@@ -512,7 +528,18 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	// Two-step login: branch on the LoginResult. An MFA-enabled user gets a
+	// challenge token (spent at POST /login/mfa); a policy-forced un-enrolled
+	// user gets a setup token; otherwise the full access token is returned under
+	// the same {"token": ...} shape the single-step flow always used.
+	switch {
+	case res.MFARequired:
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "challenge_token": res.ChallengeToken})
+	case res.MFASetupRequired:
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_setup_required": true, "setup_token": res.SetupToken})
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"token": res.Token})
+	}
 }
 
 // logAuthFailure emits a structured server-side log entry classifying an

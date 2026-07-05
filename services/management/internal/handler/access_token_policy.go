@@ -50,12 +50,17 @@ import (
 // limit is not set" (null) from an explicit zero (which is not a legal value
 // anyway, but the wire distinction still matters for consistency).
 type TokenPolicyResponse struct {
-	TenantID             string    `json:"tenant_id"`
-	MaxTTLDays           *int32    `json:"max_ttl_days"`
-	RotationIntervalDays *int32    `json:"rotation_interval_days"`
-	IdleRevokeDays       *int32    `json:"idle_revoke_days"`
-	UpdatedAt            time.Time `json:"updated_at"`
-	UpdatedByUserID      string    `json:"updated_by_user_id"`
+	TenantID             string `json:"tenant_id"`
+	MaxTTLDays           *int32 `json:"max_ttl_days"`
+	RotationIntervalDays *int32 `json:"rotation_interval_days"`
+	IdleRevokeDays       *int32 `json:"idle_revoke_days"`
+	// RequireMFA (TOTP MFA Task 14): when true, every local password account
+	// must enroll an authenticator before it can complete sign-in. Plain bool
+	// (not nullable) because the proto field is a plain bool — there is no
+	// "unset" state, only on/off.
+	RequireMFA      bool      `json:"require_mfa"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	UpdatedByUserID string    `json:"updated_by_user_id"`
 }
 
 // PutTokenPolicyRequestBody is the JSON body accepted by PUT. All three
@@ -67,6 +72,11 @@ type PutTokenPolicyRequestBody struct {
 	MaxTTLDays           *int32 `json:"max_ttl_days,omitempty"`
 	RotationIntervalDays *int32 `json:"rotation_interval_days,omitempty"`
 	IdleRevokeDays       *int32 `json:"idle_revoke_days,omitempty"`
+	// RequireMFA (TOTP MFA Task 14): admin toggle for enforcing MFA on all
+	// local password accounts. Plain bool — the proto field is a plain bool
+	// with no wrapper, so the FE always submits the current on/off value and
+	// there is no partial-update / preserve-existing case for this dimension.
+	RequireMFA bool `json:"require_mfa"`
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────
@@ -116,6 +126,7 @@ func (h *Handler) handlePutTokenPolicy(w http.ResponseWriter, r *http.Request) {
 		MaxTtlDays:           intPtrToWrapper(body.MaxTTLDays),
 		RotationIntervalDays: intPtrToWrapper(body.RotationIntervalDays),
 		IdleRevokeDays:       intPtrToWrapper(body.IdleRevokeDays),
+		RequireMfa:           body.RequireMFA,
 		ActorId:              actorID,
 	})
 	if err != nil {
@@ -160,6 +171,7 @@ func toTokenPolicyResponse(p *authv1.TokenPolicy) TokenPolicyResponse {
 		MaxTTLDays:           wrapperToIntPtr(p.GetMaxTtlDays()),
 		RotationIntervalDays: wrapperToIntPtr(p.GetRotationIntervalDays()),
 		IdleRevokeDays:       wrapperToIntPtr(p.GetIdleRevokeDays()),
+		RequireMFA:           p.GetRequireMfa(),
 		UpdatedByUserID:      p.GetUpdatedByUserId(),
 	}
 	if ts := p.GetUpdatedAt(); ts != nil {

@@ -54,6 +54,9 @@ func (r *tpTestRepo) Upsert(_ context.Context, in repository.TokenPolicy) (*repo
 	if in.IdleRevokeDays != nil {
 		existing.IdleRevokeDays = in.IdleRevokeDays
 	}
+	// require_mfa is a plain bool with no preserve semantics — mirror the
+	// real repo's unconditional EXCLUDED.require_mfa write.
+	existing.RequireMFA = in.RequireMFA
 	existing.UpdatedByUserID = in.UpdatedByUserID
 	r.rows[in.TenantID] = existing
 	out := existing
@@ -99,6 +102,37 @@ func TestGRPCHandler_PutTokenPolicy_HappyPath(t *testing.T) {
 	require.Equal(t, int32(30), got.GetRotationIntervalDays().GetValue())
 	require.Equal(t, int32(30), got.GetIdleRevokeDays().GetValue())
 	require.Equal(t, actorID.String(), got.GetUpdatedByUserId())
+}
+
+// TestGRPCHandler_TokenPolicy_RequireMFARoundTrip verifies the require_mfa
+// toggle threads request → service → repo and back through the response on
+// both Put and Get (TOTP MFA, Tier-1 #1).
+func TestGRPCHandler_TokenPolicy_RequireMFARoundTrip(t *testing.T) {
+	repo := newTPTestRepo()
+	svc := service.NewTokenPolicyService(repo, nil)
+	h := (&GRPCHandler{}).WithTokenPolicyService(svc)
+
+	tenantID := uuid.New()
+	actorID := uuid.New()
+
+	// Put with require_mfa=true — the Put response must echo it back.
+	put, err := h.PutTokenPolicy(context.Background(), &authv1.PutTokenPolicyRequest{
+		TenantId:   tenantID.String(),
+		ActorId:    actorID.String(),
+		RequireMfa: true,
+	})
+	require.NoError(t, err)
+	require.True(t, put.GetRequireMfa(), "Put response should echo require_mfa=true")
+
+	// Get must return the persisted require_mfa=true.
+	got, err := h.GetTokenPolicy(context.Background(), &authv1.GetTokenPolicyRequest{TenantId: tenantID.String()})
+	require.NoError(t, err)
+	require.True(t, got.GetRequireMfa(), "Get should return persisted require_mfa=true")
+
+	// A fresh tenant with no policy row defaults to require_mfa=false.
+	other, err := h.GetTokenPolicy(context.Background(), &authv1.GetTokenPolicyRequest{TenantId: uuid.NewString()})
+	require.NoError(t, err)
+	require.False(t, other.GetRequireMfa(), "unset tenant defaults to require_mfa=false")
 }
 
 func TestGRPCHandler_PutTokenPolicy_RejectsInvalidTenantID(t *testing.T) {

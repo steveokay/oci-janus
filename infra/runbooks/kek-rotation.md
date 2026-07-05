@@ -4,15 +4,28 @@ Rotate a per-service key-encryption key (KEK) that protects secrets at rest.
 Four services own an independent KEK; rotate each one separately. There is **no
 single master KEK**.
 
-| Service | Secrets protected | DSN env | KEK env (runtime) |
-|---|---|---|---|
-| registry-auth | SSO OAuth client secrets | `AUTH_DB_DSN` | `SSO_CREDENTIAL_KEY_HEX` |
-| registry-proxy | upstream registry passwords | `DB_DSN` | `CREDENTIAL_KEY_HEX` |
-| registry-webhook | webhook HMAC keys | `DB_DSN` | `CREDENTIAL_KEY_HEX` |
-| registry-audit | export HMAC secret + bearer token | `DB_DSN` | `AUDIT_EXPORT_SECRETS_KEY_HEX` |
+| Service | Secrets protected | DSN env | KEK env (runtime) | `rotate-kek` flag |
+|---|---|---|---|---|
+| registry-auth | SSO OAuth client secrets (`oauth_client_secret_enc`) | `AUTH_DB_DSN` | `SSO_CREDENTIAL_KEY_HEX` | *(none)* |
+| registry-auth | TOTP MFA secrets (`users.mfa_secret_enc`) | `AUTH_DB_DSN` | `MFA_SECRET_KEY_HEX` | `--mfa` |
+| registry-proxy | upstream registry passwords | `DB_DSN` | `CREDENTIAL_KEY_HEX` | *(none)* |
+| registry-webhook | webhook HMAC keys | `DB_DSN` | `CREDENTIAL_KEY_HEX` | *(none)* |
+| registry-audit | export HMAC secret + bearer token | `DB_DSN` | `AUDIT_EXPORT_SECRETS_KEY_HEX` | *(none)* |
 
 > `CREDENTIAL_KEY_HEX` is the *same variable name* in proxy and webhook but a
 > **different value per deployment**. Rotating one does not affect the other.
+
+> **registry-auth has TWO independent KEK domains.** Its SSO credentials and its
+> TOTP MFA secrets are encrypted under *different* keys
+> (`SSO_CREDENTIAL_KEY_HEX` vs `MFA_SECRET_KEY_HEX`) and are rotated by
+> **separate invocations**. A single `rotate-kek` run applies one
+> `KEK_OLD_HEX`/`KEK_NEW_HEX` pair to whichever domain is selected, so the two
+> cannot be combined (decrypting an MFA secret with the SSO key is a GCM auth
+> failure). To rotate the MFA KEK, add the `--mfa` flag to every command below
+> and set `KEK_OLD_HEX`/`KEK_NEW_HEX` to the old/new **MFA** key material — the
+> sweep then targets `users.mfa_secret_enc` / `users.mfa_secret_kek_version`.
+> Example: `KEK_OLD_HEX=<old-mfa> KEK_NEW_HEX=<new-mfa> registry-auth rotate-kek --mfa`.
+> Unenrolled users have a NULL `mfa_secret_enc` and are skipped automatically.
 
 The `rotate-kek` subcommand reads the OLD and NEW keys from `KEK_OLD_HEX` /
 `KEK_NEW_HEX` (never flags — avoids shell-history leakage). Keys are 32-byte

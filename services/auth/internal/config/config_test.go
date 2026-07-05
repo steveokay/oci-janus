@@ -18,6 +18,8 @@ func setMinimalValidEnv(t *testing.T) {
 	t.Setenv("JWT_PRIVATE_KEY_B64", "ZmFrZXByaXZhdGVrZXk=") // base64("fakeprivatekey")
 	t.Setenv("JWT_PUBLIC_KEY_B64", "ZmFrZXB1YmxpY2tleQ==")  // base64("fakepublickey")
 	t.Setenv("JWT_KEY_ID", "key-v1")
+	// 64 hex chars = 32 bytes, a valid AES-256 MFA KEK.
+	t.Setenv("MFA_SECRET_KEY_HEX", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 }
 
 // TestLoad_validEnv verifies that a complete set of required environment
@@ -158,6 +160,65 @@ func TestLoad_multipleMissingFields_reportsAll(t *testing.T) {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error does not mention %q: %v", key, err)
 		}
+	}
+}
+
+// TestLoad_missingMFAKey verifies that omitting MFA_SECRET_KEY_HEX fails Load()
+// (the MFA KEK is mandatory — the TOTP secret column would otherwise be
+// unencryptable / recoverable).
+func TestLoad_missingMFAKey_returnsError(t *testing.T) {
+	setMinimalValidEnv(t)
+	t.Setenv("MFA_SECRET_KEY_HEX", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Error("expected error when MFA_SECRET_KEY_HEX is empty, got nil")
+	}
+}
+
+// TestLoad_MFAKeyWrongLength verifies that a hex value that decodes to anything
+// other than 32 bytes is rejected — a short key would silently weaken AES-256.
+func TestLoad_MFAKeyWrongLength_returnsError(t *testing.T) {
+	setMinimalValidEnv(t)
+	// 16 hex chars = 8 bytes, valid hex but not a 32-byte AES-256 key.
+	t.Setenv("MFA_SECRET_KEY_HEX", "0123456789abcdef")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when MFA_SECRET_KEY_HEX is not 32 bytes, got nil")
+	}
+	if !strings.Contains(err.Error(), "MFA_SECRET_KEY_HEX") {
+		t.Errorf("error should name MFA_SECRET_KEY_HEX: %v", err)
+	}
+}
+
+// TestLoad_MFAKeyNotHex verifies that a non-hex value is rejected with a clear
+// error that names the offending env var (but never echoes its value).
+func TestLoad_MFAKeyNotHex_returnsError(t *testing.T) {
+	setMinimalValidEnv(t)
+	// 'z' is not a hex digit; length is otherwise 64 chars.
+	t.Setenv("MFA_SECRET_KEY_HEX", "zzzz456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when MFA_SECRET_KEY_HEX is not valid hex, got nil")
+	}
+	if !strings.Contains(err.Error(), "MFA_SECRET_KEY_HEX") {
+		t.Errorf("error should name MFA_SECRET_KEY_HEX: %v", err)
+	}
+}
+
+// TestLoad_MFAKeyDecoded verifies that a valid hex key is decoded into the
+// MFASecretKey byte slice for the server wiring to consume without re-decoding.
+func TestLoad_MFAKeyDecoded_populatesBytes(t *testing.T) {
+	setMinimalValidEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if len(cfg.MFASecretKey) != 32 {
+		t.Errorf("MFASecretKey: got %d bytes, want 32", len(cfg.MFASecretKey))
 	}
 }
 

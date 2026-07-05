@@ -389,7 +389,7 @@ func (e *saTestEnv) issueAdminToken(t *testing.T) (token string, userID uuid.UUI
 		Kind:     "human",
 	}
 	e.tc.users.users[u.Username] = u
-	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), e.tenantID.String(), nil, []string{"admin"}, false, "human")
+	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), e.tenantID.String(), nil, []string{"admin"}, false, "human", nil)
 	if err != nil {
 		t.Fatalf("IssueToken (admin): %v", err)
 	}
@@ -411,7 +411,7 @@ func (e *saTestEnv) issueReaderToken(t *testing.T) string {
 		Kind:     "human",
 	}
 	e.tc.users.users[u.Username] = u
-	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), e.tenantID.String(), nil, []string{"reader"}, false, "human")
+	tok, err := e.tc.svc.IssueToken(context.Background(), userID.String(), e.tenantID.String(), nil, []string{"reader"}, false, "human", nil)
 	if err != nil {
 		t.Fatalf("IssueToken (reader): %v", err)
 	}
@@ -747,7 +747,7 @@ func TestHTTP_ServiceAccountRoutes_When_NoSAService_Return501(t *testing.T) {
 		Kind:     "human",
 	}
 	tc.users.users[u.Username] = u
-	tok, err := tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, []string{"admin"}, false, "human")
+	tok, err := tc.svc.IssueToken(context.Background(), userID.String(), tenantID.String(), nil, []string{"admin"}, false, "human", nil)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

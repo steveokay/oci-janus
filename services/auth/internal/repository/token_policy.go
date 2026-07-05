@@ -36,8 +36,13 @@ type TokenPolicy struct {
 	MaxTTLDays           *int32
 	RotationIntervalDays *int32
 	IdleRevokeDays       *int32
-	UpdatedAt            time.Time
-	UpdatedByUserID      *uuid.UUID
+	// RequireMFA is the admin "force TOTP MFA on all local password
+	// accounts" toggle (TOTP MFA, Tier-1 #1). Plain bool — the column is
+	// NOT NULL DEFAULT false, so there is no "unset" state to preserve; a
+	// missing row reads as false.
+	RequireMFA      bool
+	UpdatedAt       time.Time
+	UpdatedByUserID *uuid.UUID
 }
 
 // TokenPolicyRepo performs database operations on the token_policies table.
@@ -62,12 +67,12 @@ func NewTokenPolicyRepo(pool *pgxpool.Pool) *TokenPolicyRepo {
 func (r *TokenPolicyRepo) GetOrDefault(ctx context.Context, tenantID uuid.UUID) (*TokenPolicy, error) {
 	const q = `
 		SELECT tenant_id, max_ttl_days, rotation_interval_days, idle_revoke_days,
-		       updated_at, updated_by_user_id
+		       require_mfa, updated_at, updated_by_user_id
 		  FROM token_policies WHERE tenant_id = $1`
 	var out TokenPolicy
 	err := r.pool.QueryRow(ctx, q, tenantID).Scan(
 		&out.TenantID, &out.MaxTTLDays, &out.RotationIntervalDays,
-		&out.IdleRevokeDays, &out.UpdatedAt, &out.UpdatedByUserID,
+		&out.IdleRevokeDays, &out.RequireMFA, &out.UpdatedAt, &out.UpdatedByUserID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &TokenPolicy{TenantID: tenantID}, nil
@@ -91,18 +96,24 @@ func (r *TokenPolicyRepo) GetOrDefault(ctx context.Context, tenantID uuid.UUID) 
 // semantically saying "no change, but stamp me as the last toucher" —
 // unusual but supported.
 func (r *TokenPolicyRepo) Upsert(ctx context.Context, in TokenPolicy) (*TokenPolicy, error) {
+	// require_mfa is a plain (non-nullable) bool, so unlike the three limit
+	// fields it carries no "unset → preserve" semantics: EXCLUDED.require_mfa
+	// is written unconditionally on conflict. Callers that want to leave the
+	// toggle untouched must read-then-write the current value (the service
+	// layer's Put derefs a *bool with a false default before reaching here).
 	const q = `
 		INSERT INTO token_policies (tenant_id, max_ttl_days, rotation_interval_days,
-		                            idle_revoke_days, updated_by_user_id, updated_at)
-		     VALUES ($1, $2, $3, $4, $5, now())
+		                            idle_revoke_days, require_mfa, updated_by_user_id, updated_at)
+		     VALUES ($1, $2, $3, $4, $5, $6, now())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 		    max_ttl_days           = COALESCE(EXCLUDED.max_ttl_days,           token_policies.max_ttl_days),
 		    rotation_interval_days = COALESCE(EXCLUDED.rotation_interval_days, token_policies.rotation_interval_days),
 		    idle_revoke_days       = COALESCE(EXCLUDED.idle_revoke_days,       token_policies.idle_revoke_days),
+		    require_mfa            = EXCLUDED.require_mfa,
 		    updated_by_user_id     = EXCLUDED.updated_by_user_id,
 		    updated_at             = now()`
 	_, err := r.pool.Exec(ctx, q,
-		in.TenantID, in.MaxTTLDays, in.RotationIntervalDays, in.IdleRevokeDays, in.UpdatedByUserID,
+		in.TenantID, in.MaxTTLDays, in.RotationIntervalDays, in.IdleRevokeDays, in.RequireMFA, in.UpdatedByUserID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("upsert token policy: %w", err)
