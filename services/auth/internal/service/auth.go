@@ -191,6 +191,12 @@ type Service struct {
 	// secrets at rest (users.mfa_secret_enc). Wired at startup from the
 	// decoded MFA_SECRET_KEY_HEX via SetMFAKEK. Never logged.
 	mfaKEK []byte
+	// sessions is the user_sessions repository backing the active-session list
+	// (sid lifecycle: issue → list → revoke). Wired via SetSessionRepo. When
+	// nil, sessions are disabled and issueSessionToken mints plain (no-sid)
+	// tokens so every login/MFA/SSO test that does not wire a session repo
+	// keeps passing.
+	sessions sessionRepo
 	// mfaIssuer is the otpauth:// issuer label embedded in enrolment URIs — the
 	// name an authenticator app shows next to the account (e.g. "oci-janus").
 	// Defaulted to "oci-janus" in every constructor.
