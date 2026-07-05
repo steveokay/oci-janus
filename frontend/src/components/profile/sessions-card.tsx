@@ -31,6 +31,13 @@ import {
   type Session,
 } from "@/lib/api/sessions";
 
+// Client-side page size for the sessions table. The live-session list is
+// already bounded server-side (revoked / expired / idle rows are excluded and
+// a sweep worker prunes them), so it never returns thousands of rows — a small
+// fixed page keeps the card compact for the power user who racks up a dozen+
+// devices without pulling in a server-pagination contract the data doesn't need.
+const SESSIONS_PAGE_SIZE = 5;
+
 // Beacon — SessionsCard (Tier-1 #1 session management).
 //
 // Lists the account's active sign-in sessions on Settings › Account and lets
@@ -90,6 +97,21 @@ export function SessionsCard(): React.ReactElement {
   // "Sign out others" only makes sense when there's at least one non-current
   // session to revoke.
   const hasOthers = sessions.some((s) => !s.current);
+
+  // Client-side pagination. Sessions arrive sorted last-active DESC, so the
+  // caller's current device (active "now") sits on page 0 and stays reachable.
+  const [page, setPage] = React.useState(0);
+  const pageCount = Math.max(1, Math.ceil(sessions.length / SESSIONS_PAGE_SIZE));
+  // Clamp the page if the list shrinks under us (e.g. after a revoke drops the
+  // last row of the final page) so we never render a blank page.
+  React.useEffect(() => {
+    if (page > pageCount - 1) setPage(pageCount - 1);
+  }, [page, pageCount]);
+  const safePage = Math.min(page, pageCount - 1);
+  const pageStart = safePage * SESSIONS_PAGE_SIZE;
+  const pageSessions = sessions.slice(pageStart, pageStart + SESSIONS_PAGE_SIZE);
+  // Only show the pager once the list spills past a single page.
+  const showPager = !isLoading && !isError && sessions.length > SESSIONS_PAGE_SIZE;
 
   return (
     <Card>
@@ -155,7 +177,7 @@ export function SessionsCard(): React.ReactElement {
                       <TableCell />
                     </TableRow>
                   ))
-                : sessions.map((s) => (
+                : pageSessions.map((s) => (
                     <TableRow key={s.sid}>
                       <TableCell>
                         {/* Full UA string on hover; short label inline. */}
@@ -199,6 +221,37 @@ export function SessionsCard(): React.ReactElement {
             </TableBody>
           </Table>
         )}
+
+        {/* Compact pager — only rendered when the list spills past one page. */}
+        {showPager ? (
+          <div className="mt-3 flex items-center justify-between text-xs text-[var(--color-fg-muted)]">
+            <span>
+              Showing {pageStart + 1}–{pageStart + pageSessions.length} of{" "}
+              {sessions.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+              >
+                Previous
+              </Button>
+              <span className="tabular-nums">
+                Page {safePage + 1} of {pageCount}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                disabled={safePage >= pageCount - 1}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
 
       {/* Single low-severity confirm dialog reused for every row. Copy + label */}
