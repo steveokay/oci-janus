@@ -75,6 +75,10 @@ async function refreshOnce(): Promise<string | null> {
 // (QA-021).
 const NO_REFRESH_PATHS = new Set<string>([
   "/login",
+  // Second-factor step (Task 13). A 401 here means "wrong OTP", not "expired
+  // session" — there is no session yet — so it must never trigger a refresh
+  // retry loop. Mirror /login's exemption.
+  "/login/mfa",
   "/token/refresh",
   "/logout",
   "/auth/token",

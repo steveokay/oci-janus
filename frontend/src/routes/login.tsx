@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
 import { SSOButtons } from "@/components/auth/sso-buttons";
+import { MfaChallenge } from "@/components/auth/mfa-challenge";
+import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
 import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
 
 // FE-SEC-005 — vague error messages on both the inline form error AND the
@@ -60,6 +62,12 @@ function LoginPage(): React.ReactElement {
   const { from } = Route.useSearch();
   const [submitting, setSubmitting] = React.useState(false);
   const [rootError, setRootError] = React.useState<string | null>(null);
+  // Two-step login state (Task 13). Exactly one of these is set once /login
+  // reports an MFA branch; both null means we're still on the password form.
+  const [challengeToken, setChallengeToken] = React.useState<string | null>(
+    null,
+  );
+  const [setupToken, setSetupToken] = React.useState<string | null>(null);
   // REDESIGN-001 Phase 2.5 (RM-007) — gate hostile "ask your platform
   // administrator" copy on multi mode. In single-tenant the user IS the
   // platform administrator, so that copy is circular and unhelpful. The
@@ -87,6 +95,16 @@ function LoginPage(): React.ReactElement {
   const tenantId =
     import.meta.env.VITE_DEFAULT_TENANT_ID ?? "";
 
+  // Post-login navigation — shared by the plain-token path and both MFA
+  // branches so every success lands the user in the same place. Bounces back
+  // to where the auth guard interrupted, but only to an internal absolute
+  // path (see safeInternalPath) — a raw ?from= would otherwise be an open
+  // redirect. `to` accepts the runtime string; the guard guarantees it's one
+  // of our own paths or "/".
+  const goPostLogin = React.useCallback(() => {
+    void navigate({ to: safeInternalPath(from), replace: true });
+  }, [navigate, from]);
+
   async function onSubmit(values: FormValues): Promise<void> {
     setRootError(null);
     setSubmitting(true);
@@ -97,14 +115,24 @@ function LoginPage(): React.ReactElement {
         );
         return;
       }
-      await login(values.username, values.password, tenantId);
-      // Bounce back to where the auth guard interrupted the user, but only
-      // to an internal absolute path (see safeInternalPath) — a raw ?from=
-      // would otherwise be an open redirect. `to` accepts the runtime
-      // string; the guard guarantees it's one of our own paths or "/".
-      void navigate({ to: safeInternalPath(from), replace: true });
+      const result = await login(values.username, values.password, tenantId);
+      // Branch on the login outcome. Password was correct in all three cases;
+      // only "token" is immediately done.
+      switch (result.kind) {
+        case "token":
+          goPostLogin();
+          break;
+        case "mfa":
+          // Show the OTP step; hide the password form until it resolves.
+          setChallengeToken(result.challengeToken);
+          break;
+        case "mfa_setup":
+          // Forced enrolment — open the enroll dialog in setup-token mode.
+          setSetupToken(result.setupToken);
+          break;
+      }
     } catch {
-      // Single error path for every failure mode — see FE-SEC-005.
+      // Single error path for every password failure — see FE-SEC-005.
       setRootError(LOGIN_ERROR);
     } finally {
       setSubmitting(false);
@@ -148,6 +176,12 @@ function LoginPage(): React.ReactElement {
           </div>
         </div>
 
+        {/* Second-factor step — swap the credential card for the OTP form
+            while an MFA challenge is pending. Same post-login navigation as
+            the plain-token path (goPostLogin). */}
+        {challengeToken ? (
+          <MfaChallenge challengeToken={challengeToken} onDone={goPostLogin} />
+        ) : (
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-elevated)]">
           <SSOButtons />
 
@@ -221,6 +255,28 @@ function LoginPage(): React.ReactElement {
           </Button>
         </form>
         </div>
+        )}
+
+        {/* Forced enrolment — the account must set up MFA before it can get a
+            token. The dialog runs in setup-token mode (enroll/verify authorised
+            by the setup token, no session yet). onComplete stores the access
+            token minted by verify and navigates, so the user ends logged in.
+            The login page stays underneath the modal. */}
+        {setupToken ? (
+          <MfaEnrollDialog
+            open
+            setupToken={setupToken}
+            onComplete={(token) => {
+              authStore.setToken(token);
+              goPostLogin();
+            }}
+            onOpenChange={(next) => {
+              // Only a close (cancel) reaches here while codes aren't shown;
+              // drop the setup token to return to the password form.
+              if (!next) setSetupToken(null);
+            }}
+          />
+        ) : null}
 
         <div className="mt-6 flex flex-col items-center gap-1 text-center text-xs text-[var(--color-fg-subtle)]">
           {singleMode ? (

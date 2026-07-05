@@ -22,6 +22,7 @@ import {
   useMfaVerify,
   type MfaEnrollResponse,
 } from "@/lib/api/mfa";
+import { enrollWithSetupToken, verifyWithSetupToken } from "@/lib/api/auth";
 import { MfaBackupCodes } from "./mfa-backup-codes";
 
 // Six-digit TOTP code — mirror the backend's expectation (numeric, exactly 6).
@@ -35,6 +36,14 @@ type VerifyValues = z.infer<typeof verifySchema>;
 interface MfaEnrollDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // Forced-enrolment mode (Task 13). When a setup token is supplied there is
+  // no session bearer yet, so enroll/verify go through the setup-token helpers
+  // instead of the session-authenticated hooks. On verify the backend also
+  // returns a full access token; onComplete receives it once the user confirms
+  // their backup codes, ending the flow logged in. When both are omitted the
+  // dialog behaves exactly as the self-service path (unchanged).
+  setupToken?: string;
+  onComplete?: (token: string) => void;
 }
 
 // Beacon — MfaEnrollDialog.
@@ -54,15 +63,23 @@ interface MfaEnrollDialogProps {
 export function MfaEnrollDialog({
   open,
   onOpenChange,
+  setupToken,
+  onComplete,
 }: MfaEnrollDialogProps): React.ReactElement {
   const enroll = useMfaEnroll();
   const verify = useMfaVerify();
+  // Forced-enrolment mode is active when a setup token was passed. Captured
+  // once per render so the effect/handlers below can branch consistently.
+  const forced = Boolean(setupToken);
 
   const [step, setStep] = React.useState<"scan" | "verify" | "codes">("scan");
   const [enrollment, setEnrollment] = React.useState<MfaEnrollResponse | null>(
     null,
   );
   const [backupCodes, setBackupCodes] = React.useState<string[]>([]);
+  // Access token minted by the setup-token verify call. Only populated in
+  // forced mode; handed to onComplete when the user confirms their codes.
+  const [accessToken, setAccessToken] = React.useState<string | null>(null);
 
   const {
     register,
@@ -82,7 +99,11 @@ export function MfaEnrollDialog({
     let cancelled = false;
     void (async () => {
       try {
-        const data = await enroll.mutateAsync();
+        // Forced mode has no session bearer — authorise the enroll with the
+        // setup token instead of the session-authenticated hook.
+        const data = setupToken
+          ? await enrollWithSetupToken(setupToken)
+          : await enroll.mutateAsync();
         if (!cancelled) setEnrollment(data);
       } catch {
         if (!cancelled) {
@@ -106,6 +127,7 @@ export function MfaEnrollDialog({
       setStep("scan");
       setEnrollment(null);
       setBackupCodes([]);
+      setAccessToken(null);
       reset();
     }
   }, [open, reset]);
@@ -114,8 +136,20 @@ export function MfaEnrollDialog({
   // the one-time backup codes; we stash them and move to the codes step.
   async function onVerify(values: VerifyValues): Promise<void> {
     try {
-      const { backup_codes } = await verify.mutateAsync(values.code);
-      setBackupCodes(backup_codes);
+      // Forced mode verifies via the setup token and ALSO receives an access
+      // token (there's no session yet). Self-service mode uses the hook and
+      // relies on the existing session.
+      if (setupToken) {
+        const { backup_codes, token } = await verifyWithSetupToken(
+          setupToken,
+          values.code,
+        );
+        setBackupCodes(backup_codes);
+        if (token) setAccessToken(token);
+      } else {
+        const { backup_codes } = await verify.mutateAsync(values.code);
+        setBackupCodes(backup_codes);
+      }
       setStep("codes");
     } catch {
       // 400 = wrong/expired code. Keep the dialog on the verify step so the
@@ -249,7 +283,16 @@ export function MfaEnrollDialog({
         {step === "codes" ? (
           <MfaBackupCodes
             codes={backupCodes}
-            onConfirm={() => onOpenChange(false)}
+            onConfirm={() => {
+              // Forced enrolment ends logged-in: hand the freshly minted
+              // access token to onComplete (which stores it + navigates).
+              // Self-service just closes the dialog.
+              if (forced && accessToken) {
+                onComplete?.(accessToken);
+              } else {
+                onOpenChange(false);
+              }
+            }}
           />
         ) : null}
       </DialogContent>
