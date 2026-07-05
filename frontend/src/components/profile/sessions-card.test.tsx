@@ -1,0 +1,98 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { SessionsCard } from "./sessions-card";
+
+// Beacon — SessionsCard tests.
+//
+// The card reads useSessions and drives revoke / revoke-others mutations. We
+// mock the hooks module so no network is hit, mock sonner for toast asserts,
+// and mock @tanstack/react-router's useNavigate so we can assert the
+// self-logout redirect fires only for the current session.
+
+const revokeMutate = vi.fn();
+const revokeOthersMutate = vi.fn();
+
+// Loaded session fixture: one current device + one other device.
+const sessions = [
+  {
+    sid: "sess-current",
+    device_label: "Chrome on macOS",
+    user_agent: "Mozilla/5.0 (Macintosh)",
+    ip: "10.0.0.1",
+    created_at: "2026-07-01T10:00:00Z",
+    last_active_at: "2026-07-05T09:00:00Z",
+    current: true,
+  },
+  {
+    sid: "sess-other",
+    device_label: "Firefox on Linux",
+    user_agent: "Mozilla/5.0 (X11)",
+    ip: "10.0.0.2",
+    created_at: "2026-06-20T08:00:00Z",
+    last_active_at: "2026-07-04T12:00:00Z",
+    current: false,
+  },
+];
+
+vi.mock("@/lib/api/sessions", () => ({
+  useSessions: () => ({
+    data: sessions,
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+  useRevokeSession: () => ({ mutateAsync: revokeMutate }),
+  useRevokeOtherSessions: () => ({ mutateAsync: revokeOthersMutate }),
+}));
+
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...a: unknown[]) => toastSuccess(...a),
+    error: (...a: unknown[]) => toastError(...a),
+  },
+}));
+
+const navigateMock = vi.fn();
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => navigateMock,
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("SessionsCard", () => {
+  it("lists sessions and flags the current device", () => {
+    render(<SessionsCard />);
+
+    // Both device labels are visible.
+    expect(screen.getByText("Chrome on macOS")).toBeInTheDocument();
+    expect(screen.getByText("Firefox on Linux")).toBeInTheDocument();
+    // The current session is badged.
+    expect(screen.getByText("This device")).toBeInTheDocument();
+  });
+
+  it("revokes a non-current session by sid and does NOT log out", async () => {
+    revokeMutate.mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<SessionsCard />);
+
+    // The non-current row's action button reads "Revoke".
+    await user.click(screen.getByRole("button", { name: "Revoke" }));
+
+    // A confirm dialog appears; scope the confirm click to the dialog so the
+    // row button (also "Revoke") doesn't create selector ambiguity.
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+    await waitFor(() => {
+      expect(revokeMutate).toHaveBeenCalledWith("sess-other");
+    });
+    // Non-current revoke is not a self-logout — no navigation.
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(toastSuccess).toHaveBeenCalledWith("Session revoked.");
+  });
+});

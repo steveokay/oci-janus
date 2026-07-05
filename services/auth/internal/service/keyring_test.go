@@ -147,7 +147,7 @@ func TestValidateToken_SignAValidateAB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("svc signer: %v", err)
 	}
-	token, err := svcSigner.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil)
+	token, err := svcSigner.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil, "")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestValidateToken_SignAValidateBOnly_fails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("svc A: %v", err)
 	}
-	token, err := svcA.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil)
+	token, err := svcA.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil, "")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestSingleKeyRingFromB64_roundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithFakes: %v", err)
 	}
-	token, err := svc.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil)
+	token, err := svc.IssueToken(ctx, uuid.New().String(), uuid.New().String(), nil, nil, false, "human", nil, "")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

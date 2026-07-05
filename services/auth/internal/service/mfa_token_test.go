@@ -60,7 +60,7 @@ func TestMFAChallengeToken_RejectedAsAccessToken(t *testing.T) {
 func TestAccessTokenCarriesAMRAndSurvivesRefresh(t *testing.T) {
 	s := newSigningTestService(t)
 	ctx := context.Background()
-	tok, err := s.IssueToken(ctx, "u", "tn", nil, nil, false, "human", []string{"pwd", "otp"})
+	tok, err := s.IssueToken(ctx, "u", "tn", nil, nil, false, "human", []string{"pwd", "otp"}, "")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}

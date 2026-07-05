@@ -331,7 +331,10 @@ func (h *HTTPHandler) callbackOAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := h.sso.IssueSSOToken(r.Context(), user, roles)
+	// Capture the client IP + User-Agent so the SSO login creates a
+	// listable/revocable session row (the active-session-list feature).
+	tok, err := h.sso.IssueSSOToken(r.Context(), user, roles,
+		service.SessionMeta{IP: remoteIP(r), UserAgent: r.UserAgent()})
 	if err != nil {
 		slog.ErrorContext(r.Context(), "sso: IssueSSOToken", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")

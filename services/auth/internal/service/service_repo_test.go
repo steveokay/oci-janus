@@ -1017,7 +1017,7 @@ func TestLogin_validCredentials_returnsToken(t *testing.T) {
 	svc, tenantID, username, password, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	res, err := svc.Login(context.Background(), tenantID, username, password)
+	res, err := svc.Login(context.Background(), tenantID, username, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -1037,7 +1037,7 @@ func TestLogin_invalidCredentials_returnsError(t *testing.T) {
 	svc, tenantID, username, _, cleanup := authenticateSetup(t)
 	defer cleanup()
 
-	_, err := svc.Login(context.Background(), tenantID, username, "WrongPassword!999")
+	_, err := svc.Login(context.Background(), tenantID, username, "WrongPassword!999", SessionMeta{})
 	if err == nil {
 		t.Error("expected error for wrong password, got nil")
 	}
@@ -1468,7 +1468,7 @@ func (f *authFakes) issueJWT(svc *Service, username string) (string, *Claims) {
 	ctx := context.Background()
 	userID := uuid.New()
 	tenantID := uuid.New()
-	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false, "human", nil)
+	token, err := svc.IssueToken(ctx, userID.String(), tenantID.String(), nil, nil, false, "human", nil, "")
 	if err != nil {
 		panic("issueJWT: IssueToken failed for " + username + ": " + err.Error())
 	}

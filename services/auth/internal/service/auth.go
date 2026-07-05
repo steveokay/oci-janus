@@ -102,6 +102,12 @@ type Claims struct {
 	// (["pwd"], ["pwd","otp"], ["sso"]). Recorded for audit + future step-up;
 	// RefreshToken copies it verbatim and never upgrades it.
 	Amr []string `json:"amr,omitempty"`
+	// Sid is the stable session id (user_sessions.sid) for interactive logins.
+	// Unlike the JTI, it is preserved verbatim across RefreshToken so a session
+	// can be listed and revoked (revoke:sid gate in ValidateToken) even though
+	// the JTI rotates every 300s. Empty for non-session tokens (OCI /v2 Docker
+	// tokens, workload OIDC, API-key dispatch).
+	Sid string `json:"sid,omitempty"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.
@@ -185,6 +191,17 @@ type Service struct {
 	// secrets at rest (users.mfa_secret_enc). Wired at startup from the
 	// decoded MFA_SECRET_KEY_HEX via SetMFAKEK. Never logged.
 	mfaKEK []byte
+	// sessions is the user_sessions repository backing the active-session list
+	// (sid lifecycle: issue → list → revoke). Wired via SetSessionRepo. When
+	// nil, sessions are disabled and issueSessionToken mints plain (no-sid)
+	// tokens so every login/MFA/SSO test that does not wire a session repo
+	// keeps passing.
+	sessions sessionRepo
+	// sessionActive is the Redis-debounced user_sessions.last_active_at updater
+	// fired from the ValidateToken hot path. When nil (legacy fakes / dev stacks
+	// without the wiring), ValidateToken skips the last_active bump entirely —
+	// last_active is telemetry, so its absence never blocks validation.
+	sessionActive *sessionActiveUpdater
 	// mfaIssuer is the otpauth:// issuer label embedded in enrolment URIs — the
 	// name an authenticator app shows next to the account (e.g. "oci-janus").
 	// Defaulted to "oci-janus" in every constructor.
@@ -335,7 +352,11 @@ func singleKeyRingFromB64(privKeyB64, pubKeyB64, keyID string) (*keyRing, error)
 // amr records the authentication methods that produced the token (e.g.
 // ["pwd"], ["pwd","otp"], ["sso"]). It is embedded verbatim in the Amr claim
 // for audit + future step-up decisions; RefreshToken forwards it unchanged.
-func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string, amr []string) (string, error) {
+// sid is the stable session id (user_sessions.sid) for interactive logins; it
+// is embedded in the Sid claim and preserved verbatim across RefreshToken so a
+// session survives JTI rotation. Pass "" for non-session tokens (OCI Docker
+// tokens, workload OIDC, API-key dispatch).
+func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, access []RepositoryAccess, roles []string, isGlobalAdmin bool, principalKind string, amr []string, sid string) (string, error) {
 	if principalKind == "" {
 		principalKind = "human"
 	}
@@ -355,6 +376,9 @@ func (s *Service) IssueToken(ctx context.Context, userID, tenantID string, acces
 		IsGlobalAdmin: isGlobalAdmin,
 		PrincipalKind: principalKind,
 		Amr:           amr,
+		// Sid ties this token to a listable/revocable session row; preserved
+		// across refresh even as the JTI rotates. Empty for non-session tokens.
+		Sid: sid,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	// Phase 6.5 — stamp the kid header so validators can pick the right
@@ -488,6 +512,31 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 	}
 	if val != "" {
 		return nil, status.Error(codes.Unauthenticated, "principal revoked")
+	}
+
+	// Session revocation (revoke:sid): a listed session can be killed even though
+	// the JTI rotates on every refresh. Fail-CLOSED on a Redis error, exactly
+	// like the principal (revoke:user) check above — a Redis outage must not let
+	// a revoked session keep validating.
+	if claims.Sid != "" {
+		sv, serr := s.redis.Get(ctx, sessionRevokeKey(claims.Sid)).Result()
+		if serr != nil && !errors.Is(serr, redis.Nil) {
+			slog.ErrorContext(ctx, "session revocation check failed; failing closed", "err", serr)
+			return nil, status.Error(codes.Unavailable, "session revocation check unavailable")
+		}
+		if sv != "" {
+			return nil, status.Error(codes.Unauthenticated, "session revoked")
+		}
+	}
+
+	// Debounced last_active telemetry: bump user_sessions.last_active_at at most
+	// once per session per minute. Fire-and-forget on a background context so a
+	// client disconnect doesn't cancel the write, and never on the request's
+	// critical path. A parse failure or unwired updater is a silent no-op.
+	if claims.Sid != "" && s.sessionActive != nil {
+		if sid, perr := uuid.Parse(claims.Sid); perr == nil {
+			s.sessionActive.Touch(context.Background(), sid)
+		}
 	}
 
 	return claims, nil
@@ -674,7 +723,10 @@ func (s *Service) RefreshToken(ctx context.Context, tokenStr string) (string, er
 	// service-account JWT refreshes to another service-account JWT.
 	// Amr is copied verbatim — refresh preserves the original authentication
 	// methods and never upgrades them (a refreshed token is not a fresh login).
-	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind, claims.Amr)
+	// Sid is carried forward so the session survives JTI rotation — the whole
+	// point of the stable session id is that revoke:sid keeps working across
+	// refreshes even though the JTI changes every 300s.
+	newToken, err := s.IssueToken(ctx, claims.Subject, claims.TenantID, claims.Access, claims.Roles, claims.IsGlobalAdmin, claims.PrincipalKind, claims.Amr, claims.Sid)
 	if err != nil {
 		return "", fmt.Errorf("issue refresh token: %w", err)
 	}
@@ -726,7 +778,13 @@ type LoginResult struct {
 //   - Otherwise → a full access token, with the user's RBAC role names and
 //     global-admin flag embedded so downstream services (and the frontend) can
 //     read them without an extra RPC.
-func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string) (LoginResult, error) {
+//
+// meta carries the client IP + User-Agent captured at the HTTP edge; it is
+// threaded into the no-MFA branch so a successful password login creates a
+// listable/revocable session row (the active-session-list feature). The
+// MFA-required and setup-required branches create no session — they return
+// short-lived challenge/setup tokens, not access tokens.
+func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, password string, meta SessionMeta) (LoginResult, error) {
 	user, err := s.AuthenticateUser(ctx, tenantID, username, password)
 	if err != nil {
 		return LoginResult{}, err
@@ -779,7 +837,11 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 	// "human", but we forward the actual column to keep the contract tight.
 	// Login is the password credential path, so the authentication method is
 	// always "pwd" (["pwd"] amr).
-	tok, terr := s.IssueToken(ctx, user.ID.String(), user.TenantID.String(), nil, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"})
+	// issueSessionToken mints a sid, persists the user_sessions row stamped with
+	// the captured client meta, and embeds the sid in the JWT so the login can be
+	// listed and revoked. When no session repo is wired it degrades to a plain
+	// (no-sid) token — keeping existing login unit tests green.
+	tok, terr := s.issueSessionToken(ctx, user.ID, user.TenantID, roles, user.IsGlobalAdmin, user.Kind, []string{"pwd"}, meta)
 	if terr != nil {
 		return LoginResult{}, terr
 	}
@@ -792,7 +854,10 @@ func (s *Service) Login(ctx context.Context, tenantID uuid.UUID, username, passw
 // wrong code feeds the SAME account-lockout counter that AuthenticateUser uses,
 // so brute-forcing the second factor is bounded by the existing lockout policy.
 // OTP codes and backup codes are never logged (CLAUDE.md §10).
-func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string) (string, error) {
+// meta carries the client IP + User-Agent captured at the HTTP edge; it is
+// forwarded to IssueMFACompletedToken so a completed second-factor login
+// creates a listable/revocable session row.
+func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code string, meta SessionMeta) (string, error) {
 	// The challenge token is only spendable here: ValidateMFAToken enforces
 	// typ==mfa_challenge, so a normal access token (or a setup token) is refused.
 	claims, err := s.ValidateMFAToken(ctx, challengeToken, tokenTypeMFAChallenge)
@@ -843,8 +908,9 @@ func (s *Service) VerifyLoginMFA(ctx context.Context, challengeToken, code strin
 	tenantID, _ := uuid.Parse(claims.TenantID)
 	// Roles + is_global_admin are resolved from the DB by the shared issuer; the
 	// challenge token deliberately carries no roles/access. The MFA login path is
-	// human-only (GetHumanByUsername gates AuthenticateUser).
-	return s.IssueMFACompletedToken(ctx, userID, tenantID)
+	// human-only (GetHumanByUsername gates AuthenticateUser). meta is forwarded so
+	// the completed login mints a session row.
+	return s.IssueMFACompletedToken(ctx, userID, tenantID, meta)
 }
 
 // recordMFAChallengeAttempt atomically counts submissions made against a single

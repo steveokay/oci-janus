@@ -210,6 +210,12 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/users/me/mfa/verify", h.mfaVerify)
 	mux.HandleFunc("DELETE /api/v1/users/me/mfa", h.mfaDisable)
 	mux.HandleFunc("POST /api/v1/users/me/mfa/backup-codes/regenerate", h.mfaRegenerateBackupCodes)
+	// Tier-1 #1 — self-service active session list + revoke. Identity comes from
+	// the Bearer token; ownership is enforced in the service/repo layer so a sid
+	// belonging to another user surfaces as 404, never a cross-user revoke.
+	mux.HandleFunc("GET /api/v1/users/me/sessions", h.listSessions)
+	mux.HandleFunc("DELETE /api/v1/users/me/sessions/{sid}", h.revokeSession)
+	mux.HandleFunc("POST /api/v1/users/me/sessions/revoke-others", h.revokeOtherSessions)
 	// FE-API-034 — SSO providers + OAuth flow + admin CRUD. The RegisterSSO
 	// call no-ops when WithSSO() was not invoked, so dev deployments without
 	// SSO_CREDENTIAL_KEY simply skip these routes.
@@ -299,7 +305,9 @@ func (h *HTTPHandler) token(w http.ResponseWriter, r *http.Request) {
 	// amr is nil here: the Docker /auth/token endpoint serves both password
 	// and API-key (Bearer key.) principals, so no single authentication method
 	// applies. The dashboard login path (Service.Login) stamps ["pwd"].
-	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind, nil)
+	// sid is "" here: OCI Docker tokens are not interactive sessions, so they
+	// carry no session id (they are never listed or refreshed).
+	tok, err := h.svc.IssueToken(r.Context(), userID, userTenantID, access, nil, false, principalKind, nil, "")
 	if err != nil {
 		slog.ErrorContext(r.Context(), "issue token failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
@@ -519,7 +527,11 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password)
+	// Capture the client IP + User-Agent so a successful login creates a
+	// listable/revocable session row (the active-session-list feature). ip is
+	// already resolved above (remoteIP honours the trusted-proxy CIDR allowlist).
+	res, err := h.svc.Login(r.Context(), tenantID, req.Username, req.Password,
+		service.SessionMeta{IP: ip, UserAgent: r.UserAgent()})
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
 		// PENTEST-005: collapse all auth failure variants into one 401 response.

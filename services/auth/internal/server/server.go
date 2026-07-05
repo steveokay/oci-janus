@@ -98,6 +98,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// ignored by the setter, leaving the default generation of 1.
 	svc.SetMFAKEKVersion(cfg.MFASecretKEKVersion)
 
+	// Active session list (Tier-1 #1 session management): a durable user_sessions
+	// source of truth + a Redis-debounced last_active updater on the validate path.
+	// SetSessionRepo lights up issue/list/revoke; SetSessionActiveUpdater debounces
+	// the last_active bump the same way FUT-003 debounces API-key last_used_at.
+	sessionRepo := repository.NewSessionRepository(pool)
+	svc.SetSessionRepo(sessionRepo)
+	svc.SetSessionActiveUpdater(service.NewSessionActiveUpdater(rdb, sessionRepo, slog.Default()))
+
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
 	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC
 	// events are skipped silently. In production the URL must be set.
@@ -214,6 +222,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	slog.Info("FUT-004 access-review worker started",
 		"cadence", accessReviewWorker.RunningKeyLabel(),
 	)
+
+	// Garbage-collect expired / long-idle sessions hourly (idle window matches the
+	// service default; absolute expiry is enforced by expires_at at insert time).
+	// Same lifecycle ctx as the other workers — cancels on Run()'s ctx.Done().
+	sessionSweeper := worker.NewSessionSweeper(sessionRepo, 14*24*time.Hour, time.Hour, slog.Default())
+	go sessionSweeper.Run(ctx)
+	slog.Info("session expiry sweep worker started", "idle_window", "336h", "cadence", "1h")
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

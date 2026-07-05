@@ -266,6 +266,34 @@ in lock-step with a `--mfa` sweep so fresh enrolments don't stamp a
 stale version. The otpauth account label embedded in enrolment QR codes
 is the user's email (then username), not the raw user id.
 
+### Sessions (session list + revoke)
+
+Every **interactive** login — password (`POST /login`), MFA completion
+(`POST /login/mfa` and forced-enrol verify), and the SSO callback — mints
+a stable session id (`sid`) and persists a `user_sessions` row (device
+label parsed from the User-Agent, client IP via the SEC-009 trusted-proxy
+`remoteIP`, `created_at`/`last_active_at`/`expires_at`). The `sid` is
+embedded in the JWT as the `sid` claim and, unlike the JTI, is **preserved
+verbatim across `RefreshToken`** — so a session stays listable/revocable
+even though the JTI rotates every 300s. Machine identities carry no `sid`
+and create no session: the OCI `/auth/token` Docker flow, workload-OIDC
+tokens, and API-key (`Bearer key.*`) dispatch.
+
+`ValidateToken` gains a **fail-closed `revoke:sid:<sid>` Redis gate**
+alongside the existing `revoke:user` check (a Redis error denies, returning
+`codes.Unavailable`) plus a **fail-open, Redis-debounced (`sid_active:<sid>`,
+60s) `last_active_at` update** mirroring the FUT-003 API-key `last_used`
+debouncer. Revoking a session sets `revoke:sid` with a TTL equal to the
+session's remaining lifetime (SEC-005 TTL-coupling), so the current token is
+denied on its next request and cannot be refreshed.
+
+A session ends on: explicit revoke; **idle** (`last_active_at` older than
+`token_policies.idle_revoke_days`, default 14d); or **absolute max** (30d
+after `created_at`). An hourly sweep GCs dead rows. Self-service routes
+(`requireAuth`, normal access token only — a setup token cannot manage
+sessions): `GET /users/me/sessions`, `DELETE /users/me/sessions/{sid}`
+(ownership-scoped → 404 otherwise), `POST /users/me/sessions/revoke-others`.
+
 ---
 
 ## Dev fallback

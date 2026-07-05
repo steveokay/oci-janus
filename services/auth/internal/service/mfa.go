@@ -90,13 +90,19 @@ func (s *Service) ValidateMFASetupToken(ctx context.Context, tokenStr string) (*
 // bug stamped is_global_admin from the setup token (always false), silently
 // de-privileging a force-enrolled global admin for the session (SEC-080).
 // principal_kind is always "human": MFA is a password-account-only feature.
-func (s *Service) IssueMFACompletedToken(ctx context.Context, userID, tenantID uuid.UUID) (string, error) {
+// meta carries the client IP + User-Agent captured at the HTTP edge so the
+// completed MFA login (both the two-step VerifyLoginMFA path and the
+// forced-enrolment completion) creates a listable/revocable session row.
+func (s *Service) IssueMFACompletedToken(ctx context.Context, userID, tenantID uuid.UUID, meta SessionMeta) (string, error) {
 	roles := s.loadRoleNames(ctx, userID, tenantID)
 	u, err := s.users.GetByID(ctx, userID)
 	if err != nil {
 		return "", err
 	}
-	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"})
+	// issueSessionToken mints a sid, persists the user_sessions row stamped with
+	// the captured client meta, and embeds the sid in the JWT. Degrades to a
+	// plain (no-sid) token when no session repo is wired.
+	return s.issueSessionToken(ctx, userID, tenantID, roles, u.IsGlobalAdmin, "human", []string{"pwd", "otp"}, meta)
 }
 
 // GetMFAStatus reports whether the user has MFA enabled.

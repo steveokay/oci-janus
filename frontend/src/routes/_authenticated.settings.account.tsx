@@ -32,6 +32,7 @@ import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
 import { MfaDisableDialog } from "@/components/profile/mfa-disable-dialog";
 import { MfaRegenerateDialog } from "@/components/profile/mfa-regenerate-dialog";
 import { ApiKeysSection } from "@/components/profile/api-keys-section";
+import { SessionsCard } from "@/components/profile/sessions-card";
 import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
@@ -81,6 +82,11 @@ function AccountTab(): React.ReactElement {
         onDisable={() => setMfaDisableOpen(true)}
         onRegenerate={() => setMfaRegenerateOpen(true)}
       />
+
+      {/* Active sessions — lists signed-in devices and lets the user revoke
+          any one of them (or sign out all other devices). Sits directly below
+          the MFA card as part of the personal-account hardening cluster. */}
+      <SessionsCard />
 
       {/* REDESIGN-001 Phase 4.3 §3 — replay onboarding link. The first-run
           wizard auto-shows on the dashboard for users with

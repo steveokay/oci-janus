@@ -340,7 +340,10 @@ func (h *HTTPHandler) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := h.sso.IssueSSOToken(r.Context(), user, roles)
+	// Capture the client IP + User-Agent so the SAML login creates a
+	// listable/revocable session row (the active-session-list feature).
+	tok, err := h.sso.IssueSSOToken(r.Context(), user, roles,
+		service.SessionMeta{IP: remoteIP(r), UserAgent: r.UserAgent()})
 	if err != nil {
 		slog.ErrorContext(r.Context(), "saml: IssueSSOToken", "err", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not issue token")

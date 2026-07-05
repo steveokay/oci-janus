@@ -79,6 +79,11 @@ POST /api/v1/users/me/mfa/backup-codes/regenerate # Re-mint the 8 single-use bac
 # Admin toggle: token_policies.require_mfa forces MFA on all password accounts
 # (un-enrolled users get an mfa_setup token at login to complete forced enrolment).
 
+# Active sessions — Tier-1 #1 (session management; self-service)
+GET    /api/v1/users/me/sessions                 # list live sessions (current flagged via the sid claim)
+DELETE /api/v1/users/me/sessions/{sid}           # revoke one owned session (404 if not owned)
+POST   /api/v1/users/me/sessions/revoke-others   # revoke all sessions except the current one
+
 # SSO — FE-API-034 (OAuth + SAML)
 GET  /api/v1/auth/sso/providers          # List enabled SSO providers for tenant
 GET  /api/v1/auth/oauth/start            # Begin OAuth (PKCE S256 + single-use state)
