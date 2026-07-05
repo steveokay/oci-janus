@@ -13,7 +13,8 @@
 // Sub-tests:
 //   - ListStaleKeys_IdleKeyReturned
 //   - ListStaleKeys_RotationLapsedReturned
-//   - ListStaleKeys_NeverUsedReturned
+//   - ListStaleKeys_NeverUsedButOldReturned
+//   - ListStaleKeys_NeverUsedButRecentExcluded
 //   - ListStaleKeys_SnoozedKeyExcluded
 //   - ListStaleKeys_RecentKeyExcluded
 //   - ListStaleKeys_RevokedKeyExcluded
@@ -135,17 +136,36 @@ func TestAPIKeyRepo_ListStaleKeys(t *testing.T) {
 		require.Equal(t, keyID, got[0].ID)
 	})
 
-	t.Run("NeverUsedReturned", func(t *testing.T) {
+	t.Run("NeverUsedButOldReturned", func(t *testing.T) {
 		f := setupReviewFixture(t, ctx)
 		u := f.seedHumanUser(t, ctx)
-		// last_used_at NULL — never used is stale by definition.
-		keyID := f.seedKey(t, ctx, u, "neverused", nil, nil, nil, true)
+		// last_used_at NULL — a never-used key is stale only once it has sat
+		// unused past the cutoff SINCE CREATION, so age created_at back.
+		keyID := f.seedKey(t, ctx, u, "neverused-old", nil, nil, nil, true)
+		_, err := f.pool.Exec(ctx,
+			`UPDATE api_keys SET created_at = now() - interval '100 days' WHERE id = $1`, keyID)
+		require.NoError(t, err)
 
 		cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
 		got, err := f.apiKeys.ListStaleKeys(ctx, f.tenant, cutoff)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		require.Equal(t, keyID, got[0].ID)
+	})
+
+	t.Run("NeverUsedButRecentExcluded", func(t *testing.T) {
+		f := setupReviewFixture(t, ctx)
+		u := f.seedHumanUser(t, ctx)
+		// A brand-new never-used key (created_at defaults to now()) is NOT
+		// stale — it just hasn't been put to work yet. This pins the grace
+		// period that keeps freshly-issued keys from being flagged/revoked
+		// before the operator can use them (the FUT-003 idle-revoke fix).
+		_ = f.seedKey(t, ctx, u, "neverused-new", nil, nil, nil, true)
+
+		cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+		got, err := f.apiKeys.ListStaleKeys(ctx, f.tenant, cutoff)
+		require.NoError(t, err)
+		require.Empty(t, got, "freshly-created never-used key must not be stale")
 	})
 
 	t.Run("SnoozedKeyExcluded", func(t *testing.T) {
