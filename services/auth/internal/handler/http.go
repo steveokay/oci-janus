@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -534,8 +535,30 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 		service.SessionMeta{IP: ip, UserAgent: r.UserAgent()})
 	if err != nil {
 		h.svc.RecordAuthFailure(r.Context(), ip)
-		// PENTEST-005: collapse all auth failure variants into one 401 response.
 		logAuthFailure(r.Context(), err, req.Username, ip)
+		// Account lockout is surfaced to the caller (a deliberate, scoped
+		// reversal of PENTEST-005's blanket generic-401 for the interactive
+		// /login page only — see security.md). Knowing "you're locked, retry
+		// in N minutes" is high-value UX for the operator, and the enumeration
+		// exposure is acceptable for the single-tenant self-hosted posture.
+		// Disabled + invalid-credential failures still collapse to a generic
+		// 401 below. The /token machine endpoint is unchanged (still generic).
+		var locked *service.AccountLockedError
+		if errors.As(err, &locked) {
+			retryAfter := int(time.Until(locked.Until).Seconds())
+			if retryAfter < 0 {
+				retryAfter = 0
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			writeJSON(w, http.StatusLocked, map[string]any{
+				"errors": []map[string]any{{
+					"code":                "ACCOUNT_LOCKED",
+					"message":             "account temporarily locked after too many failed attempts",
+					"retry_after_seconds": retryAfter,
+				}},
+			})
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 		return
 	}

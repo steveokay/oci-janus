@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
+import { lockoutMessage } from "@/lib/auth/lockout-message";
 import { SSOButtons } from "@/components/auth/sso-buttons";
 import { MfaChallenge } from "@/components/auth/mfa-challenge";
 import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
@@ -131,9 +132,12 @@ function LoginPage(): React.ReactElement {
           setSetupToken(result.setupToken);
           break;
       }
-    } catch {
-      // Single error path for every password failure — see FE-SEC-005.
-      setRootError(LOGIN_ERROR);
+    } catch (e) {
+      // A locked account gets a specific "try again in N" message (the backend
+      // signals it via 423 ACCOUNT_LOCKED); every other failure stays on the
+      // vague generic error so a wrong password can't enumerate accounts
+      // (FE-SEC-005).
+      setRootError(lockoutMessage(e) ?? LOGIN_ERROR);
     } finally {
       setSubmitting(false);
     }

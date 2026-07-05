@@ -35,6 +35,21 @@ var (
 	ErrKeyExpired         = errors.New("api key has expired")
 )
 
+// AccountLockedError is a locked-account failure that carries the unlock time
+// so the /login handler can tell the user when to retry. It unwraps to
+// ErrAccountLocked, so existing `errors.Is(err, ErrAccountLocked)` checks (e.g.
+// the audit-log classifier and the /token handler's generic-401 path) keep
+// working unchanged; only callers that want the timestamp use errors.As.
+type AccountLockedError struct {
+	// Until is when the lockout expires (users.locked_until).
+	Until time.Time
+}
+
+func (e *AccountLockedError) Error() string { return ErrAccountLocked.Error() }
+
+// Unwrap lets errors.Is(err, ErrAccountLocked) match this typed error.
+func (e *AccountLockedError) Unwrap() error { return ErrAccountLocked }
+
 const (
 	tokenTTL        = 5 * time.Minute
 	lockoutDuration = 15 * time.Minute
@@ -1461,7 +1476,10 @@ func (s *Service) AuthenticateUser(ctx context.Context, tenantID uuid.UUID, user
 		return nil, ErrAccountDisabled
 	}
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
-		return nil, ErrAccountLocked
+		// Carry the unlock time so the /login handler can surface a
+		// "try again in N minutes" message. Unwraps to ErrAccountLocked, so
+		// every existing errors.Is check is unaffected.
+		return nil, &AccountLockedError{Until: *user.LockedUntil}
 	}
 
 	ok, err := argon2pkg.Verify(password, user.PasswordHash)
