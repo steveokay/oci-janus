@@ -1,6 +1,5 @@
 import * as React from "react";
 import { Github, KeyRound } from "lucide-react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // Beacon — SSO sign-in buttons.
@@ -47,36 +46,41 @@ interface SSOButtonsProps {
 }
 
 export function SSOButtons({ className }: SSOButtonsProps): React.ReactElement {
-  function handleClick(provider: Provider): void {
-    // Stubbed pending backend Sprint 1a. The pattern when wiring up:
-    //   - Generate state token, persist in sessionStorage
-    //   - window.location = `/auth/sso/${provider.id}?state=…`
-    //   - Callback route exchanges the code for a JWT via the auth service
-    toast.message("Single sign-on launches with the next release.", {
-      description: `${provider.label.replace("Continue with ", "")} — wiring up server-side.`,
-    });
-  }
-
+  // UIR-5: the login-page SSO flow isn't wired yet (the old handler only
+  // toasted "coming soon" while the buttons rendered fully active — they
+  // looked clickable but did nothing). Render them visibly disabled with a
+  // caption so the state is honest. When the client flow lands, drop
+  // `disabled`, add the click handler, and delete this note:
+  //   - Generate a state token, persist in sessionStorage
+  //   - window.location = `/auth/sso/${provider.id}?state=…`
+  //   - Callback route exchanges the code for a JWT via the auth service
   return (
-    <div className={cn("grid grid-cols-2 gap-2", className)}>
-      {PROVIDERS.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          onClick={() => handleClick(p)}
-          className={cn(
-            "group inline-flex items-center justify-center gap-2 rounded-md",
-            "border border-[var(--color-border-strong)] bg-[var(--color-surface)]",
-            "px-3 py-2.5 text-sm font-medium text-[var(--color-fg)]",
-            "transition-colors hover:bg-[var(--color-surface-sunken)]",
-            "focus-visible:outline-none",
-          )}
-          aria-label={p.label}
-        >
-          <span className="shrink-0">{p.icon}</span>
-          <span className="truncate">{shortLabel(p)}</span>
-        </button>
-      ))}
+    <div className={className}>
+      <div className="grid grid-cols-2 gap-2">
+        {PROVIDERS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            disabled
+            title="Single sign-on launches with the next release"
+            className={cn(
+              "group inline-flex items-center justify-center gap-2 rounded-md",
+              "border border-[var(--color-border-strong)] bg-[var(--color-surface)]",
+              "px-3 py-2.5 text-sm font-medium text-[var(--color-fg)]",
+              "transition-colors hover:bg-[var(--color-surface-sunken)]",
+              "focus-visible:outline-none",
+              "disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-[var(--color-surface)]",
+            )}
+            aria-label={`${p.label} (coming soon)`}
+          >
+            <span className="shrink-0">{p.icon}</span>
+            <span className="truncate">{shortLabel(p)}</span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-center text-[11px] text-[var(--color-fg-subtle)]">
+        Single sign-on is coming soon.
+      </p>
     </div>
   );
 }

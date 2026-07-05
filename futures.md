@@ -792,44 +792,29 @@ Lower priority — pick when picking up neighbouring work in the same file:
 ### UI-REVIEW-2026-07 — deferred nits from the 2026-07-04 four-agent UI sweep
 
 The 2026-07-04 UI review produced 47 findings; batches 1–3 shipped 30 of them
-(PRs #257/#258/#259 — see `FE-STATUS.md` → "UI polish review"). These are the
-deliberately-deferred remainder. All small; pick up when touching the
-neighbouring file:
+(PRs #257/#258/#259 — see `FE-STATUS.md` → "UI polish review").
 
-- **UIR-1** — GC card renders its "best-effort" disclaimer caption even when
-  `next_scheduled_at` is null ("Unknown" + an explanation of a value that
-  isn't there). Render the caption only when a timestamp exists.
-  (`gc-card.tsx`) **Effort:** S.
-- **UIR-2** — `HealthCard` pulse animation fires on the healthy/success state
-  too, diluting the "needs attention" cue. Restrict pulse to non-success
-  tones. (`dashboard/health-card.tsx`) **Effort:** S.
-- **UIR-3** — Retention admin tile computes 24h/7d counts + the runs table
-  from a client-side filter over one 100-row GC page — counts can silently
-  under-report on busy deployments. Add a "based on the latest 100 runs"
-  footnote or a mode-scoped count endpoint. (`retention-card.tsx`)
-  **Effort:** M.
-- **UIR-4** — Notification channel toggles disable the whole 12-checkbox
-  matrix during any single update and give no optimistic feedback. Optimistic
-  update or per-cell pending state. (`settings.account.tsx`) **Effort:** M.
-- **UIR-5** — Login SSO provider buttons render fully active but only toast
-  "launches with the next release" — render visibly disabled/"coming soon"
-  until wired. (`auth/sso-buttons.tsx`) **Effort:** S.
-- **UIR-6** — Access-review Owner column prints a raw user UUID; resolve via
-  `UserCell` (or BFF join). (`access/ReviewPanel.tsx`) **Effort:** M.
-- **UIR-7** — Topbar `sticky top-0` + `backdrop-blur` is a no-op (the scroll
-  container is `<main>`, the topbar never scrolls) — drop the dead styles or
-  move the bar inside the scroll container. (`shell/topbar.tsx`,
-  `app-shell.tsx`) **Effort:** S.
-- **UIR-8** — Notifications unread badge hardcodes `text-white` over
-  `--color-highlight`; pair it with a fg token. (`notifications-bell.tsx`)
-  **Effort:** S.
-- **UIR-9** — PoliciesPanel renders save success/error as muted inline text
-  ("no toast infra yet" comment predates sonner adoption); switch to
-  `toast.success/error`, keep inline for field validation.
-  (`access/PoliciesPanel.tsx`) **Effort:** M.
-- **UIR-10** — SecretRevealDialog's copy control is icon-only; a labelled
-  "Copy secret" button would de-risk dismiss-without-copy.
-  (`webhooks/secret-reveal-dialog.tsx`) **Effort:** S.
+**UIR-1..10 — SHIPPED 2026-07-05 (PR #279, FE-API-054).** The deferred
+remainder landed as one polish batch: GC "best-effort" caption gated on a real
+timestamp (UIR-1); HealthCard pulse restricted to non-success tones (UIR-2);
+retention 24h/7d "based on the latest N runs" caveat + hoisted scan-limit
+constant (UIR-3); per-cell pending on the notification matrix so one write no
+longer freezes all 12 checkboxes (UIR-4); login SSO buttons rendered visibly
+disabled with a "coming soon" caption (UIR-5); access-review owner UUID
+shortened + tooltip + copy (UIR-6, *partial* — see residual below); dead
+`sticky`/`backdrop-blur` dropped from the topbar (UIR-7); notifications unread
+badge paired with a new `--color-highlight-fg` token (UIR-8); PoliciesPanel
+save success/error moved to sonner toasts (UIR-9); labelled "Copy secret"
+button on SecretRevealDialog (UIR-10).
+
+**Residual OPEN — UIR-6 owner name resolution (backend).** The access-review
+row (`StaleKey`) only carries `owner_user_id` on the wire, so the FE can only
+shorten/tooltip the UUID — it can't render `@username` / display name via
+`UserCell` (which needs those fields, and the owner may be a service-account
+shadow user absent from any org-members list). Proper fix: a BFF join adding
+`owner_username` + `owner_display_name` to the `ListStaleKeys` response, then
+swap the owner cell to `<UserCell variant="inline">`. **Effort:** ~half day
+(proto field + audit/auth join + FE swap).
 
 ### REM-017 — Platform-admin "claim a new org" route (chicken-egg)
 

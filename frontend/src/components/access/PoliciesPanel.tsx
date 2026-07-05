@@ -1,4 +1,5 @@
 import * as React from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -173,11 +174,12 @@ export function PoliciesPanel(): React.ReactElement {
   // require_mfa is a standalone boolean toggle (not one of the three numeric
   // sections), so it lives in its own state seeded from the fetched policy.
   const [requireMfa, setRequireMfa] = React.useState<boolean>(false);
+  // UIR-9: save success/error now surface as sonner toasts (see handleSave).
+  // Only client-side field validation stays inline — it's tied to a specific
+  // input and must persist next to it until the operator fixes the value.
   const [validationError, setValidationError] = React.useState<
     string | null
   >(null);
-  const [saveError, setSaveError] = React.useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = React.useState<boolean>(false);
 
   // seedForm — sync local state with the server value once (and after
   // every successful PUT, via invalidation + refetch).
@@ -203,12 +205,9 @@ export function PoliciesPanel(): React.ReactElement {
     }
   }, [policy.data, form]);
 
-  // handleRequireMfaToggle — flip the MFA enforcement switch. Clears the
-  // save-success banner so a stale "saved" message doesn't linger while the
-  // operator has an unsaved change pending.
+  // handleRequireMfaToggle — flip the MFA enforcement switch.
   function handleRequireMfaToggle(next: boolean): void {
     setRequireMfa(next);
-    setSaveSuccess(false);
   }
 
   // handleToggle — flip a section's enabled flag. Clears validation
@@ -220,7 +219,6 @@ export function PoliciesPanel(): React.ReactElement {
       [key]: { ...form[key], enabled },
     });
     setValidationError(null);
-    setSaveSuccess(false);
   }
 
   // handleValueChange — write-through for a section's numeric input.
@@ -232,7 +230,6 @@ export function PoliciesPanel(): React.ReactElement {
       [key]: { ...form[key], value },
     });
     setValidationError(null);
-    setSaveSuccess(false);
   }
 
   // handleSave — validates every enabled section, then fires the PUT
@@ -240,8 +237,6 @@ export function PoliciesPanel(): React.ReactElement {
   // banner instead of a round-trip.
   function handleSave(): void {
     if (!form) return;
-    setSaveError(null);
-    setSaveSuccess(false);
 
     // Validate every dimension. First error wins.
     for (const key of Object.keys(form) as PolicyFieldKey[]) {
@@ -255,14 +250,13 @@ export function PoliciesPanel(): React.ReactElement {
 
     putPolicy.mutate(buildRequestBody(form, requireMfa), {
       onSuccess: () => {
-        setSaveSuccess(true);
+        // UIR-9: toast the outcome instead of a muted inline banner.
+        toast.success("Token policy saved.");
       },
       onError: (err) => {
-        // Surface any server-side error text in an inline banner —
-        // matches the sibling panels' pattern (no toast infra yet).
         const msg =
           err instanceof Error ? err.message : "Failed to save policy";
-        setSaveError(msg);
+        toast.error(msg);
       },
     });
   }
@@ -345,23 +339,12 @@ export function PoliciesPanel(): React.ReactElement {
             </div>
           </div>
 
-          {/* Inline status banners. Client-side validation always takes
-              precedence over save-success/save-error so the user sees
-              the actionable error first. */}
+          {/* Inline field-validation banner only (UIR-9: save success/error
+              are toasts now). Validation is tied to a specific input, so it
+              stays inline next to the form until the operator fixes it. */}
           {validationError ? (
             <div role="alert" className="text-sm text-[var(--color-danger)]">
               {validationError}
-            </div>
-          ) : saveError ? (
-            <div role="alert" className="text-sm text-[var(--color-danger)]">
-              {saveError}
-            </div>
-          ) : saveSuccess ? (
-            <div
-              role="status"
-              className="text-sm text-[var(--color-fg-muted)]"
-            >
-              Token policy saved.
             </div>
           ) : null}
 

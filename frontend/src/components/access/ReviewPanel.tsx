@@ -11,6 +11,7 @@ import {
 import { useDeleteApiKey } from "@/lib/api/api-keys";
 import { formatRelativeDate } from "@/lib/format";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { CopyButton } from "@/components/ui/copy-button";
 
 // ReviewPanel — live FUT-004 access-review surface. Replaces
 // ReviewPreview. Mirrors the shape of PoliciesPanel / TrustPanel
@@ -313,8 +314,22 @@ function ReviewRow({
   return (
     <tr>
       <td className="px-4 py-3 font-mono text-xs">{row.name}</td>
-      <td className="px-4 py-3 text-[var(--color-fg-muted)]">
-        {row.owner_user_id}
+      {/* UIR-6: the owner cell used to print the full raw UUID, which sprawled
+          and read as noise. Shorten it to a monospace prefix with the full id
+          one hover (title) or click (copy) away. NOTE: proper name resolution
+          (owner @username / display name) needs a BFF join to add
+          owner_username/owner_display_name to the StaleKey wire — the row only
+          carries owner_user_id today; tracked as a follow-up. */}
+      <td className="px-4 py-3">
+        <span className="inline-flex items-center gap-1">
+          <code
+            className="font-mono text-xs text-[var(--color-fg-muted)]"
+            title={row.owner_user_id}
+          >
+            {row.owner_user_id.slice(0, 8)}…
+          </code>
+          <CopyButton value={row.owner_user_id} label="Copy owner id" iconOnly />
+        </span>
       </td>
       <td className="px-4 py-3 text-[var(--color-fg-muted)]">
         {lastUsed}

@@ -47,6 +47,10 @@ function NotificationsTab(): React.ReactElement {
 function NotificationsSection(): React.ReactElement {
   const { data, isLoading, isError, refetch } = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
+  // UIR-4: track the single in-flight cell as "<category>:<channel>" so only
+  // the toggled checkbox shows a pending/disabled state — the prior
+  // `update.isPending` froze the entire 12-cell matrix on any one write.
+  const [pendingCell, setPendingCell] = React.useState<string | null>(null);
 
   if (isError) {
     return (
@@ -83,11 +87,15 @@ function NotificationsSection(): React.ReactElement {
             webhook_enabled: p.webhook_enabled,
           },
     );
+    // Mark just this cell in-flight for the duration of the write.
+    setPendingCell(`${row.key}:${channel}`);
     try {
       await update.mutateAsync({ preferences: patched });
       toast.success(`${row.label}: ${channel} ${next ? "enabled" : "disabled"}.`);
     } catch {
       toast.error("Couldn't save preferences. Try again, or check the BFF logs.");
+    } finally {
+      setPendingCell(null);
     }
   }
 
@@ -133,18 +141,18 @@ function NotificationsSection(): React.ReactElement {
                   </TableCell>
                   <ChannelToggleCell
                     enabled={row.bell_enabled}
-                    pending={update.isPending}
+                    pending={pendingCell === `${row.key}:bell`}
                     onChange={(v) => void toggleChannel(row, "bell", v)}
                   />
                   <ChannelToggleCell
                     enabled={row.email_enabled}
-                    pending={update.isPending}
+                    pending={pendingCell === `${row.key}:email`}
                     onChange={(v) => void toggleChannel(row, "email", v)}
                     hint="Wired in Phase 3+"
                   />
                   <ChannelToggleCell
                     enabled={row.webhook_enabled}
-                    pending={update.isPending}
+                    pending={pendingCell === `${row.key}:webhook`}
                     onChange={(v) => void toggleChannel(row, "webhook", v)}
                     hint="Wired in Phase 3+"
                   />

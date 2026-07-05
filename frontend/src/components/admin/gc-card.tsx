@@ -219,9 +219,14 @@ export function GCCard(): React.ReactElement {
                   )
                 }
                 secondary={
-                  <span className="text-[10px] text-[var(--color-fg-subtle)]">
-                    Best-effort — the in-process ticker is the real source.
-                  </span>
+                  // UIR-1: only explain the "best-effort" caveat when there's
+                  // actually a scheduled timestamp to caveat. When it's
+                  // "Unknown", the caption described a value that isn't there.
+                  status.data.next_scheduled_at ? (
+                    <span className="text-[10px] text-[var(--color-fg-subtle)]">
+                      Best-effort — the in-process ticker is the real source.
+                    </span>
+                  ) : null
                 }
               />
             </div>

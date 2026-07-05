@@ -99,7 +99,10 @@ export function SecretRevealDialog({
               )}
               {revealed ? "Hide" : "Reveal"}
             </Button>
-            <CopyButton value={secret} iconOnly />
+            {/* UIR-10: labelled (not icon-only) so the primary "get the
+                secret out" action is unmistakable — this dialog is the only
+                chance to copy a shown-once secret. */}
+            <CopyButton value={secret} label="Copy secret" />
           </div>
 
           <div className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 px-3 py-2 text-xs text-[var(--color-fg)]">
