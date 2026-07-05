@@ -509,6 +509,21 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Claims, 
 		return nil, status.Error(codes.Unauthenticated, "principal revoked")
 	}
 
+	// Session revocation (revoke:sid): a listed session can be killed even though
+	// the JTI rotates on every refresh. Fail-CLOSED on a Redis error, exactly
+	// like the principal (revoke:user) check above — a Redis outage must not let
+	// a revoked session keep validating.
+	if claims.Sid != "" {
+		sv, serr := s.redis.Get(ctx, sessionRevokeKey(claims.Sid)).Result()
+		if serr != nil && !errors.Is(serr, redis.Nil) {
+			slog.ErrorContext(ctx, "session revocation check failed; failing closed", "err", serr)
+			return nil, status.Error(codes.Unavailable, "session revocation check unavailable")
+		}
+		if sv != "" {
+			return nil, status.Error(codes.Unauthenticated, "session revoked")
+		}
+	}
+
 	return claims, nil
 }
 

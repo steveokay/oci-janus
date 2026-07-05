@@ -229,6 +229,24 @@ func TestIssueSSOToken_createsSession(t *testing.T) {
 	}
 }
 
+func TestValidateToken_revokedSid_denied(t *testing.T) {
+	rdb := newTestRedis(t)
+	sessions := newFakeSessionRepo()
+	svc := newSessionTestService(t, rdb, sessions)
+	ctx := context.Background()
+
+	tok, _ := svc.issueSessionToken(ctx, uuid.New(), uuid.New(), nil, false, "human",
+		[]string{"pwd"}, SessionMeta{IP: "203.0.113.1", UserAgent: "x"})
+	claims, _ := svc.ValidateToken(ctx, tok)
+
+	if err := rdb.Set(ctx, "revoke:sid:"+claims.Sid, "1", time.Hour).Err(); err != nil {
+		t.Fatalf("seed revoke:sid: %v", err)
+	}
+	if _, err := svc.ValidateToken(ctx, tok); err == nil {
+		t.Fatal("ValidateToken must reject a token whose sid is revoked")
+	}
+}
+
 func TestIssueSessionToken_createsRowAndSid(t *testing.T) {
 	rdb := newTestRedis(t)
 	sessions := newFakeSessionRepo()

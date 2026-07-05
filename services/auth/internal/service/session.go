@@ -71,6 +71,10 @@ func (s *Service) issueSessionToken(ctx context.Context, userID, tenantID uuid.U
 	return s.IssueToken(ctx, userID.String(), tenantID.String(), nil, roles, isGlobalAdmin, kind, amr, sid.String())
 }
 
+// sessionRevokeKey is the Redis key that marks a session revoked. Consulted
+// fail-closed by ValidateToken, mirroring revoke:user.
+func sessionRevokeKey(sid string) string { return "revoke:sid:" + sid }
+
 // idleCutoff returns now()-idleWindow, honouring the tenant token policy's
 // idle_revoke_days when configured, else the default sessionIdleWindow.
 func (s *Service) idleCutoff(ctx context.Context, tenantID uuid.UUID) time.Time {
