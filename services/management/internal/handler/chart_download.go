@@ -128,7 +128,7 @@ func (h *Handler) handleDownloadChart(w http.ResponseWriter, r *http.Request) {
 		}
 		if rerr != nil {
 			// Headers already sent — can't change the status; log + truncate.
-			slog.Error("chart download: mid-stream read failed", "err", rerr, "digest", contentDigest)
+			slog.ErrorContext(r.Context(), "chart download: mid-stream read failed", "err", rerr, "tenant_id", tenantID, "digest", contentDigest)
 			return
 		}
 		if _, werr := w.Write(chunk.GetData()); werr != nil {

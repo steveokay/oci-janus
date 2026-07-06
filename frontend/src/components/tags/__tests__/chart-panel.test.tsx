@@ -66,6 +66,9 @@ describe("ChartPanel", () => {
     } as unknown as ReturnType<typeof api.useChart>);
     renderPanel();
     expect(screen.getByText(/not (available|enabled)/i)).toBeInTheDocument();
+    // Guard against a regression that moves the download button above the
+    // early return: it must be absent in the not-enabled (null) state.
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
   });
 
   it("renders a skeleton while loading", () => {
@@ -78,6 +81,8 @@ describe("ChartPanel", () => {
     // The metadata heading must be absent and skeleton placeholders present.
     expect(screen.queryByText("web")).toBeNull();
     expect(container.querySelector(".skeleton-shimmer")).not.toBeNull();
+    // The download button must not render while chart detail is loading.
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
   });
 
   it("renders an error state with a retry affordance", () => {
@@ -92,6 +97,8 @@ describe("ChartPanel", () => {
     expect(
       screen.getByRole("button", { name: /retry/i }),
     ).toBeInTheDocument();
+    // The download button must not render in the error state.
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
   });
 
   it("renders maintainers", () => {

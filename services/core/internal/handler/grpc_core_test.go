@@ -249,6 +249,17 @@ func TestGetBlobStream_streamsBytes(t *testing.T) {
 	}
 }
 
+// TestGetBlobStream_missingTenant_invalidArgument — parity with the unary
+// GetBlob guard: an absent tenant_id is rejected with InvalidArgument before
+// any blob read is attempted.
+func TestGetBlobStream_missingTenant_invalidArgument(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{})
+	err := h.GetBlobStream(&corev1.GetBlobRequest{Digest: "sha256:" + strings.Repeat("a", 64)}, &fakeBlobStream{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
 func TestGetBlobStream_badDigest_invalidArgument(t *testing.T) {
 	h := NewCoreHandler(&fakeReferrerLister{})
 	err := h.GetBlobStream(&corev1.GetBlobRequest{TenantId: "t1", Digest: "nope"}, &fakeBlobStream{})

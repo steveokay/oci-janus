@@ -202,8 +202,10 @@ type grpcChunkWriter struct {
 
 // Write sends p to the client as one GetBlobChunk and reports it fully written.
 func (w grpcChunkWriter) Write(p []byte) (int, error) {
-	// Copy p: the storage layer may reuse the chunk slice after Write returns,
-	// and Send may serialise it asynchronously.
+	// Copy p: the io.Writer contract lets the caller (the storage layer) reuse
+	// the slice after Write returns, so we must not hand p's backing array to
+	// Send. (grpc-go marshals synchronously, but the copy keeps us correct
+	// against the Writer contract regardless.)
 	if err := w.stream.Send(&corev1.GetBlobChunk{Data: append([]byte(nil), p...)}); err != nil {
 		return 0, err
 	}

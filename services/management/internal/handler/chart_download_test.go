@@ -94,6 +94,20 @@ func TestHandleDownloadChart_helm_streamsBytes(t *testing.T) {
 	}
 }
 
+// TestHandleDownloadChart_tagNotFound_404 — when metadata's GetManifest errors
+// (tag/manifest does not exist), the handler maps it to a 404 before any blob
+// stream is opened.
+func TestHandleDownloadChart_tagNotFound_404(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+	setManifest(t, nil, status.Error(codes.NotFound, "no such tag"))
+
+	resp := env.get(t, chartDownloadPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 when tag/manifest not found, got %d", resp.StatusCode)
+	}
+}
+
 // TestHandleDownloadChart_coreNotFound_404 — the content blob is unknown to
 // registry-core (NotFound on the first stream recv); the handler maps it to a
 // clean 404 rather than a truncated 200.
