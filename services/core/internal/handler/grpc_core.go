@@ -192,3 +192,43 @@ func (h *CoreHandler) GetBlob(ctx context.Context, req *corev1.GetBlobRequest) (
 	data := cb.buf.Bytes()
 	return &corev1.GetBlobResponse{Data: data, Size: int64(len(data))}, nil
 }
+
+// grpcChunkWriter forwards each Write to the gRPC stream as a GetBlobChunk, so
+// Registry.GetBlob can stream storage bytes straight to the client with no
+// intermediate buffering.
+type grpcChunkWriter struct {
+	stream corev1.CoreService_GetBlobStreamServer
+}
+
+// Write sends p to the client as one GetBlobChunk and reports it fully written.
+func (w grpcChunkWriter) Write(p []byte) (int, error) {
+	// Copy p: the storage layer may reuse the chunk slice after Write returns,
+	// and Send may serialise it asynchronously.
+	if err := w.stream.Send(&corev1.GetBlobChunk{Data: append([]byte(nil), p...)}); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// GetBlobStream streams a blob's raw bytes to the client in chunks. Validates
+// tenant_id + digest exactly like GetBlob (max_bytes is ignored — streaming is
+// unbounded). Like GetBlob it authorises on tenant + digest only; callers MUST
+// gate repo access first (the BFF download route does via findRepo).
+func (h *CoreHandler) GetBlobStream(req *corev1.GetBlobRequest, stream corev1.CoreService_GetBlobStreamServer) error {
+	if req.GetTenantId() == "" {
+		return status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if !digestRE.MatchString(req.GetDigest()) {
+		return status.Error(codes.InvalidArgument, "digest must match sha256:<hex64>")
+	}
+	ctx := stream.Context()
+	if _, err := h.registry.GetBlob(ctx, req.GetTenantId(), req.GetDigest(), grpcChunkWriter{stream: stream}); err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			return status.Error(codes.NotFound, "blob not found")
+		}
+		slog.ErrorContext(ctx, "GetBlobStream: read failed",
+			"tenant_id", req.GetTenantId(), "digest", req.GetDigest(), "error", err)
+		return status.Error(codes.Internal, "failed to read blob")
+	}
+	return nil
+}
