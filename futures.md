@@ -1366,6 +1366,8 @@ Docker v2 manifest list shapes are well-defined.
   (may need to publish scan-complete events reliably), `frontend`.
 
 #### FUT-022 — OCI artifacts as first-class citizens
+- **Helm-detail scope SHIPPED 2026-07-06** (branch `feat/fut-022-helm-chart-detail`) — the tag-detail **Chart tab** (gated on `artifact_type === "helm"`) renders `Chart.yaml` metadata + `values.yaml` inline via a new generic size-capped `CoreService.GetBlob` gRPC + BFF `GET .../tags/{tag}/chart`. See `status.md` / `FE-STATUS.md` (FE-API-055).
+  - **Deferred remainder:** generic `/artifacts` mediaType landing page (redundant with the existing `/helm` page + artifact-type chips under the single-tenant posture); richer referrer rendering (SBOM package tables, inline signature verification); `helm template` dry-run / provenance verification; streaming `GetBlobStream` for large blobs (current `GetBlob` is unary + size-capped). Original entry body below retained for that deferred context.
 - **Why:** The registry is already OCI v1.1 compliant with referrers
   support — Helm charts, Wasm modules, SBOMs, OPA bundles, Cosign
   signatures, in-toto attestations all push cleanly today, but the
