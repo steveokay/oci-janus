@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Ship } from "lucide-react";
+import { Download, Ship } from "lucide-react";
+import { toast } from "sonner";
 import {
   Table,
   TableBody,
@@ -21,6 +22,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { CopyButton } from "@/components/ui/copy-button";
 import {
   useChart,
+  useDownloadChart,
   type ChartMetadata,
   type ChartDependency,
   type ChartMaintainer,
@@ -59,6 +61,7 @@ export function ChartPanel({
     tag,
     active,
   );
+  const download = useDownloadChart();
 
   if (isError) {
     return (
@@ -88,6 +91,27 @@ export function ChartPanel({
 
   return (
     <div className="space-y-4">
+      {/* Download the chart .tgz. Rendered on the real-chart path only (data
+          non-null) — never on the loading / error / not-enabled branches. The
+          click fires an authenticated blob fetch (a plain <a href> can't carry
+          the JWT); errors surface as a toast rather than a navigation. */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() =>
+            download.mutate(
+              { org, repo, tag },
+              { onError: (e) => toast.error(e.message) },
+            )
+          }
+          disabled={download.isPending}
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)] disabled:opacity-50"
+        >
+          <Download className="size-3.5" aria-hidden />
+          {download.isPending ? "Downloading…" : "Download chart"}
+        </button>
+      </div>
+
       {/* Metadata card — or an inline error when the config blob was unreadable. */}
       {data.metadata ? (
         <MetadataCard metadata={data.metadata} />
