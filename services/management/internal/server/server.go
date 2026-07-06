@@ -192,7 +192,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("build core grpc credentials: %w", err)
 		}
-		coreConn, err := grpc.NewClient(cfg.CoreGRPCAddr, grpc.WithTransportCredentials(coreCreds))
+		coreConn, err := grpc.NewClient(cfg.CoreGRPCAddr,
+			grpc.WithTransportCredentials(coreCreds),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(16<<20)), // FUT-022: GetBlob payloads
+		)
 		if err != nil {
 			return fmt.Errorf("dial core grpc: %w", err)
 		}

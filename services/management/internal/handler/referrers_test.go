@@ -46,6 +46,11 @@ type fakeCoreServer struct {
 	// lastReq captures the last request so tests can assert forwarding of
 	// tenant_id / repository / subject_digest.
 	lastReq *corev1.ListReferrersRequest
+
+	// blobs maps a digest -> canned blob bytes for GetBlob (FUT-022 chart
+	// tab). blobErr, when non-nil, is returned by GetBlob instead.
+	blobs   map[string][]byte
+	blobErr error
 }
 
 func (s *fakeCoreServer) ListReferrers(_ context.Context, req *corev1.ListReferrersRequest) (*corev1.ListReferrersResponse, error) {
@@ -54,6 +59,20 @@ func (s *fakeCoreServer) ListReferrers(_ context.Context, req *corev1.ListReferr
 		return nil, s.listErr
 	}
 	return &corev1.ListReferrersResponse{Referrers: s.referrers, Filtered: s.filtered}, nil
+}
+
+// GetBlob returns the canned bytes seeded in s.blobs keyed by digest, or a
+// NotFound status when the digest is unknown. FUT-022 chart-detail tests use
+// it to serve the config + content-layer blobs.
+func (s *fakeCoreServer) GetBlob(_ context.Context, req *corev1.GetBlobRequest) (*corev1.GetBlobResponse, error) {
+	if s.blobErr != nil {
+		return nil, s.blobErr
+	}
+	data, ok := s.blobs[req.GetDigest()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "blob not found")
+	}
+	return &corev1.GetBlobResponse{Data: data, Size: int64(len(data))}, nil
 }
 
 // referrersTestEnv wraps an httptest.Server with the fake core server so
