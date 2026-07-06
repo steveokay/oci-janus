@@ -194,7 +194,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		coreConn, err := grpc.NewClient(cfg.CoreGRPCAddr,
 			grpc.WithTransportCredentials(coreCreds),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(16<<20)), // FUT-022: GetBlob payloads
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(20<<20)), // FUT-022: headroom above hardBlobCap (16 MiB) for gRPC framing
 		)
 		if err != nil {
 			return fmt.Errorf("dial core grpc: %w", err)

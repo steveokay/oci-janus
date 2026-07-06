@@ -48,9 +48,14 @@ type fakeCoreServer struct {
 	lastReq *corev1.ListReferrersRequest
 
 	// blobs maps a digest -> canned blob bytes for GetBlob (FUT-022 chart
-	// tab). blobErr, when non-nil, is returned by GetBlob instead.
+	// tab). blobErr, when non-nil, is returned by GetBlob instead (global —
+	// fails ALL GetBlob calls, e.g. the core-down test).
 	blobs   map[string][]byte
 	blobErr error
+	// blobErrs maps a digest -> per-digest error so a test can fail one blob
+	// (e.g. the content layer) while another (the config) still succeeds.
+	// Checked before blobErr / blobs. FUT-022 review coverage.
+	blobErrs map[string]error
 }
 
 func (s *fakeCoreServer) ListReferrers(_ context.Context, req *corev1.ListReferrersRequest) (*corev1.ListReferrersResponse, error) {
@@ -65,6 +70,9 @@ func (s *fakeCoreServer) ListReferrers(_ context.Context, req *corev1.ListReferr
 // NotFound status when the digest is unknown. FUT-022 chart-detail tests use
 // it to serve the config + content-layer blobs.
 func (s *fakeCoreServer) GetBlob(_ context.Context, req *corev1.GetBlobRequest) (*corev1.GetBlobResponse, error) {
+	if e, ok := s.blobErrs[req.GetDigest()]; ok {
+		return nil, e
+	}
 	if s.blobErr != nil {
 		return nil, s.blobErr
 	}

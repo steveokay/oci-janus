@@ -215,7 +215,22 @@ function MetadataDefs({
   );
 }
 
+// safeHref returns href only for http(s) URLs (defence-in-depth — the BFF
+// already strips non-http(s) Chart.yaml URLs, but never render an
+// attacker-controlled javascript:/data: URL as an anchor href). FUT-022 SEC#1.
+function safeHref(u?: string): string | undefined {
+  if (!u) return undefined;
+  try {
+    const scheme = new URL(u).protocol;
+    return scheme === "http:" || scheme === "https:" ? u : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ExternalLink is a subdued external anchor used for home/icon/source URLs.
+// A URL that isn't http(s) (safeHref → undefined) renders as plain text rather
+// than an anchor, so a javascript:/data: URL can never become a live href.
 function ExternalLink({
   href,
   label,
@@ -223,13 +238,24 @@ function ExternalLink({
   href: string;
   label: string;
 }): React.ReactElement {
+  const safe = safeHref(href);
+  if (!safe) {
+    return (
+      <span
+        className="truncate text-[var(--color-fg-muted)]"
+        title={label}
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <a
-      href={href}
+      href={safe}
       target="_blank"
       rel="noreferrer"
       className="truncate text-[var(--color-accent)] hover:underline"
-      title={href}
+      title={safe}
     >
       {label}
     </a>
@@ -332,9 +358,12 @@ function MaintainerLine({
   maintainer: ChartMaintainer;
 }): React.ReactElement {
   const name = maintainer.name ?? maintainer.email ?? "Unknown";
+  // mailto: is constructed by the FE from the email field, so it is safe as-is;
+  // the maintainer homepage URL is attacker-controlled and passes through
+  // safeHref so a javascript:/data: value never becomes a live href.
   const href = maintainer.email
     ? `mailto:${maintainer.email}`
-    : maintainer.url;
+    : safeHref(maintainer.url);
   if (href) {
     return (
       <a

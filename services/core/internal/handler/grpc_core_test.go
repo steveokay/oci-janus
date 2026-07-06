@@ -153,7 +153,7 @@ func TestListReferrers_storeError(t *testing.T) {
 	}
 }
 
-func TestGetBlob_returnsBytes(t *testing.T) {
+func TestGetBlob_validRequest_returnsBytes(t *testing.T) {
 	h := NewCoreHandler(&fakeReferrerLister{blob: []byte("hello-chart")})
 	resp, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
 		TenantId: "t1",

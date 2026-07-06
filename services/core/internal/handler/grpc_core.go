@@ -122,7 +122,7 @@ func (h *CoreHandler) ListReferrers(ctx context.Context, req *corev1.ListReferre
 // a client can't ask the server to buffer an unbounded blob into one message.
 const (
 	defaultBlobCap = 10 << 20 // 10 MiB
-	hardBlobCap    = 16 << 20 // 16 MiB — matches the server MaxSendMsgSize
+	hardBlobCap    = 16 << 20 // 16 MiB — the gRPC MaxSendMsgSize sits above this (20 MiB) for framing headroom
 )
 
 // errBlobTooLarge is the sentinel returned by cappedBuffer once a write would
@@ -148,6 +148,11 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 }
 
 // GetBlob returns the raw bytes of a blob by digest, capped at max_bytes.
+//
+// Authorization: this RPC authorizes on tenant_id + digest only and does NOT
+// enforce repo-level RBAC — callers MUST gate repo access before calling it.
+// The sole caller (the BFF chart route) does so via findRepo before it fetches
+// any blob; any future caller must uphold the same contract.
 //
 // Validation: tenant_id is required and digest must be a well-formed
 // "sha256:<hex64>" (reusing the package-level digestRE). max_bytes<=0 falls

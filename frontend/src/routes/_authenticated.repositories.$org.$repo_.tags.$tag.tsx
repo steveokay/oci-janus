@@ -56,24 +56,12 @@ function TagDetail(): React.ReactElement {
   const { tab } = Route.useSearch();
   const navigate = Route.useNavigate();
   const [deleteOpen, setDeleteOpen] = React.useState(false);
-  // The URL is the single source of truth for the active tab; absent/invalid
-  // resolves to the default. setActiveTab navigates (replace:true) so the
-  // empty-state sibling-tab links (DSGN-019) drive the same URL param instead
-  // of local state — keeping deep-links and the tab bar in sync.
-  const activeTab: TagDetailTab = tab ?? DEFAULT_TAG_TAB;
-  const setActiveTab = React.useCallback(
-    (value: TagDetailTab): void => {
-      void navigate({
-        search: (prev) => ({ ...prev, tab: value }),
-        replace: true,
-      });
-    },
-    [navigate],
-  );
 
   // No per-tag GET endpoint exists yet; we read from the tag list and pick
   // the row by name. This is fine for the page sizes we expect and the list
-  // is already cached by useTags from the repo detail page.
+  // is already cached by useTags from the repo detail page. Resolved here
+  // (above activeTab) because the Chart-tab deep-link fallback depends on
+  // isHelm.
   const {
     data: tags,
     isLoading: tagsLoading,
@@ -88,6 +76,25 @@ function TagDetail(): React.ReactElement {
   // FUT-022 — the Chart tab only exists for Helm artifacts. artifact_type is
   // derived server-side from the manifest's config.mediaType.
   const isHelm = tagRow?.artifact_type === "helm";
+
+  // The URL is the single source of truth for the active tab; absent/invalid
+  // resolves to the default. setActiveTab navigates (replace:true) so the
+  // empty-state sibling-tab links (DSGN-019) drive the same URL param instead
+  // of local state — keeping deep-links and the tab bar in sync. A ?tab=chart
+  // deep-link on a non-Helm tag (no Chart trigger/content renders) falls back
+  // to the default so the tab region is never blank. While tags are still
+  // loading isHelm is false, so the fallback correctly holds until known.
+  const activeTab: TagDetailTab =
+    tab === "chart" && !isHelm ? DEFAULT_TAG_TAB : (tab ?? DEFAULT_TAG_TAB);
+  const setActiveTab = React.useCallback(
+    (value: TagDetailTab): void => {
+      void navigate({
+        search: (prev) => ({ ...prev, tab: value }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   const {
     data: scan,

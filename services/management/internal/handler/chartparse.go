@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"path"
 	"strings"
 )
@@ -123,8 +124,32 @@ type helmConfig struct {
 	Annotations map[string]string `json:"annotations"`
 }
 
+// safeExternalURL returns u only if it is an http(s) URL (or a mailto: URL when
+// allowMailto). Chart.yaml URL fields are attacker-controlled (any pusher), so
+// a javascript:/data: value must never reach the FE as an anchor href — React
+// does not strip those. Anything else becomes "" (dropped). FUT-022 review SEC#1.
+func safeExternalURL(u string, allowMailto bool) string {
+	if u == "" {
+		return ""
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return u
+	case "mailto":
+		if allowMailto {
+			return u
+		}
+	}
+	return ""
+}
+
 // parseChartMetadata unmarshals a Helm config blob into the snake_case
-// ChartMetadata returned to the FE.
+// ChartMetadata returned to the FE. URL fields are sanitized through
+// safeExternalURL so only http(s) URLs survive (FUT-022 review SEC#1).
 func parseChartMetadata(configJSON []byte) (ChartMetadata, error) {
 	var c helmConfig
 	if err := json.Unmarshal(configJSON, &c); err != nil {
@@ -133,12 +158,24 @@ func parseChartMetadata(configJSON []byte) (ChartMetadata, error) {
 	m := ChartMetadata{
 		Name: c.Name, Version: c.Version, AppVersion: c.AppVersion,
 		Description: c.Description, APIVersion: c.APIVersion, Type: c.Type,
-		KubeVersion: c.KubeVersion, Home: c.Home, Icon: c.Icon,
-		Deprecated: c.Deprecated, Keywords: c.Keywords, Sources: c.Sources,
+		KubeVersion: c.KubeVersion,
+		Home:        safeExternalURL(c.Home, false),
+		Icon:        safeExternalURL(c.Icon, false),
+		Deprecated:  c.Deprecated, Keywords: c.Keywords,
 		Annotations: c.Annotations,
 	}
+	// Drop any source URL that isn't http(s) rather than passing it through.
+	for _, src := range c.Sources {
+		if s := safeExternalURL(src, false); s != "" {
+			m.Sources = append(m.Sources, s)
+		}
+	}
 	for _, mt := range c.Maintainers {
-		m.Maintainers = append(m.Maintainers, ChartMaintainer{Name: mt.Name, Email: mt.Email, URL: mt.URL})
+		m.Maintainers = append(m.Maintainers, ChartMaintainer{
+			Name:  mt.Name,
+			Email: mt.Email,
+			URL:   safeExternalURL(mt.URL, false),
+		})
 	}
 	for _, d := range c.Dependencies {
 		m.Dependencies = append(m.Dependencies, ChartDependency{Name: d.Name, Version: d.Version, Repository: d.Repository})
@@ -148,6 +185,12 @@ func parseChartMetadata(configJSON []byte) (ChartMetadata, error) {
 
 // errValuesNotFound is returned when no chart-root values.yaml is in the archive.
 var errValuesNotFound = errors.New("values.yaml not found in chart archive")
+
+// maxDecompressedBytes bounds the total gunzip output fed to the tar reader so a
+// decompression bomb (a small .tgz that expands to gigabytes) can't burn BFF CPU
+// as tar.Next() skips through oversized entries. A real chart archive is far
+// under this. Declared as a var so tests can lower it. FUT-022 review SEC#2.
+var maxDecompressedBytes int64 = 64 << 20 // 64 MiB
 
 // extractValuesYAML gunzips + untars a chart .tgz and returns the chart-root
 // values.yaml (a path shaped "<single-segment>/values.yaml"). It ignores
@@ -162,7 +205,9 @@ func extractValuesYAML(tgz []byte, limit int) (values string, truncated bool, er
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// Bound the decompressed stream so a gzip bomb can't expand unboundedly as
+	// tar.Next() skips through entries (FUT-022 review SEC#2).
+	tr := tar.NewReader(io.LimitReader(gr, maxDecompressedBytes))
 	for i := 0; i < maxTarEntries; i++ {
 		hdr, err := tr.Next()
 		if err == io.EOF {

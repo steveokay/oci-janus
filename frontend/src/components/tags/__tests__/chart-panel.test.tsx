@@ -60,4 +60,68 @@ describe("ChartPanel", () => {
     renderPanel();
     expect(screen.getByText(/not (available|enabled)/i)).toBeInTheDocument();
   });
+
+  it("renders a skeleton while loading", () => {
+    vi.spyOn(api, "useChart").mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    } as unknown as ReturnType<typeof api.useChart>);
+    const { container } = renderPanel();
+    // The metadata heading must be absent and skeleton placeholders present.
+    expect(screen.queryByText("web")).toBeNull();
+    expect(container.querySelector(".skeleton-shimmer")).not.toBeNull();
+  });
+
+  it("renders an error state with a retry affordance", () => {
+    vi.spyOn(api, "useChart").mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof api.useChart>);
+    renderPanel();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /retry/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders maintainers", () => {
+    vi.spyOn(api, "useChart").mockReturnValue({
+      data: {
+        metadata: {
+          name: "web",
+          version: "1.0.0",
+          maintainers: [{ name: "Ada", email: "a@x.io" }],
+        },
+        values: "",
+        values_truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof api.useChart>);
+    renderPanel();
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+  });
+
+  it("never renders a javascript: home URL as a link", () => {
+    vi.spyOn(api, "useChart").mockReturnValue({
+      data: {
+        metadata: {
+          name: "web",
+          version: "1.0.0",
+          home: "javascript:alert(1)",
+        },
+        values: "",
+        values_truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof api.useChart>);
+    renderPanel();
+    // The unsafe home URL renders as plain text, not an anchor.
+    expect(screen.queryByRole("link", { name: /home/i })).toBeNull();
+    expect(screen.getByText("Home")).toBeInTheDocument();
+  });
 });

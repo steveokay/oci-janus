@@ -13,7 +13,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -129,8 +128,12 @@ func (h *Handler) handleGetChart(w http.ResponseWriter, r *http.Request) {
 		resp.ValuesTruncated = truncated
 	}
 
-	// Only hard-fail when BOTH halves failed to read (likely core is down).
-	if resp.Metadata == nil && resp.Values == "" && resp.MetadataError != "" && resp.ValuesError != "" {
+	// Hard-fail only when the config fetch hit a transport error (core
+	// unreachable / timed out) — both halves are then unreadable and there is
+	// nothing to render. A merely-unparseable config or a values-only failure
+	// still returns 200 with the partial data + the relevant *_error field.
+	// (FUT-022 review CR#2.)
+	if cerr != nil && isTransportError(cerr) {
 		writeError(w, http.StatusInternalServerError, "failed to read chart")
 		return
 	}
@@ -150,5 +153,16 @@ func (h *Handler) fetchBlob(ctx context.Context, tenantID, digest string, maxByt
 	if err != nil {
 		return nil, err
 	}
-	return bytes.Clone(resp.GetData()), nil
+	return resp.GetData(), nil
+}
+
+// isTransportError reports whether err is a gRPC transport-level failure
+// (core unreachable or timed out) rather than an application error. FUT-022 CR#2.
+func isTransportError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
 }

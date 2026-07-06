@@ -20,6 +20,9 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
@@ -191,5 +194,116 @@ func TestHandleGetChart_malformedConfig_metadataError(t *testing.T) {
 	}
 	if !strings.Contains(body.Values, "replicaCount: 3") {
 		t.Errorf("values: got %q, want to contain replicaCount: 3", body.Values)
+	}
+}
+
+// TestHandleGetChart_coreDown_500 — when the config-blob fetch hits a transport
+// error (core Unavailable) both halves are unreadable, so the route hard-fails
+// with 500. Uses the global blobErr so every GetBlob call fails.
+func TestHandleGetChart_coreDown_500(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+	setManifest(t, helmManifestJSON(), nil)
+	env.core.blobErr = status.Error(codes.Unavailable, "down")
+
+	resp := env.get(t, chartPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when core is down, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandleGetChart_valuesFails_metadataOK — the config blob parses fine but
+// the content-layer fetch fails (non-FailedPrecondition): metadata still
+// populates while values fail independently, so overall 200.
+func TestHandleGetChart_valuesFails_metadataOK(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+	setManifest(t, helmManifestJSON(), nil)
+
+	env.core.blobs = map[string][]byte{
+		cfgDigest: []byte(`{"name":"web","version":"1.0.0"}`),
+	}
+	env.core.blobErrs = map[string]error{
+		contentDigest: status.Error(codes.Internal, "boom"),
+	}
+
+	resp := env.get(t, chartPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.ChartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Metadata == nil {
+		t.Fatalf("expected metadata, got nil (err=%q)", body.MetadataError)
+	}
+	if body.ValuesError == "" {
+		t.Errorf("expected non-empty values_error")
+	}
+	if body.Values != "" {
+		t.Errorf("expected empty values, got %q", body.Values)
+	}
+}
+
+// TestHandleGetChart_contentTooLarge_truncated — a FailedPrecondition on the
+// content-layer fetch (blob exceeds cap) marks values as truncated with an
+// error note, still returning 200 with the metadata half intact.
+func TestHandleGetChart_contentTooLarge_truncated(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+	setManifest(t, helmManifestJSON(), nil)
+
+	env.core.blobs = map[string][]byte{
+		cfgDigest: []byte(`{"name":"web","version":"1.0.0"}`),
+	}
+	env.core.blobErrs = map[string]error{
+		contentDigest: status.Error(codes.FailedPrecondition, "too big"),
+	}
+
+	resp := env.get(t, chartPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.ChartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.ValuesTruncated {
+		t.Errorf("expected values_truncated=true")
+	}
+	if body.ValuesError == "" {
+		t.Errorf("expected non-empty values_error")
+	}
+}
+
+// TestHandleGetChart_noContentLayer — a Helm manifest with no helm content
+// layer yields "chart has no content layer" for values while metadata renders.
+func TestHandleGetChart_noContentLayer(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+	noLayerManifest := `{"config":{"mediaType":"application/vnd.cncf.helm.config.v1+json","digest":"` + cfgDigest + `"},"layers":[]}`
+	setManifest(t, []byte(noLayerManifest), nil)
+
+	env.core.blobs = map[string][]byte{
+		cfgDigest: []byte(`{"name":"web","version":"1.0.0"}`),
+	}
+
+	resp := env.get(t, chartPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body handler.ChartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Metadata == nil {
+		t.Fatalf("expected metadata, got nil (err=%q)", body.MetadataError)
+	}
+	if body.ValuesError != "chart has no content layer" {
+		t.Errorf("values_error: got %q, want %q", body.ValuesError, "chart has no content layer")
 	}
 }

@@ -232,7 +232,7 @@ func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor
 		grpcmw.OTELServerHandler(),
 		grpc.ChainUnaryInterceptor(chain...),
 		grpc.ChainStreamInterceptor(grpcmw.StreamServerInterceptors()...),
-		grpc.MaxSendMsgSize(16 << 20), // FUT-022: GetBlob may return up to hardBlobCap
+		grpc.MaxSendMsgSize(20 << 20), // FUT-022: headroom above hardBlobCap (16 MiB) for gRPC framing
 	}
 
 	if cfg.MTLSCACertPath != "" && cfg.MTLSCertPath != "" && cfg.MTLSKeyPath != "" {

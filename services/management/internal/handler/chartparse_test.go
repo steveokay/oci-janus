@@ -127,3 +127,60 @@ func TestExtractValuesYAML_badGzip(t *testing.T) {
 		t.Fatal("expected error on non-gzip input")
 	}
 }
+
+// TestParseChartMetadata_dropsUnsafeURLs verifies that non-http(s) URL fields
+// (javascript:/data:) are stripped so they never reach the FE as anchor hrefs.
+func TestParseChartMetadata_dropsUnsafeURLs(t *testing.T) {
+	cfg := []byte(`{"home":"javascript:alert(1)","icon":"http://ok/i.png","sources":["javascript:evil","https://ok"],"maintainers":[{"name":"A","url":"data:x"}]}`)
+	m, err := parseChartMetadata(cfg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.Home != "" {
+		t.Errorf("home: got %q, want empty (javascript: stripped)", m.Home)
+	}
+	if m.Icon != "http://ok/i.png" {
+		t.Errorf("icon: got %q, want http://ok/i.png", m.Icon)
+	}
+	if len(m.Sources) != 1 || m.Sources[0] != "https://ok" {
+		t.Errorf("sources: got %v, want [https://ok]", m.Sources)
+	}
+	if len(m.Maintainers) != 1 || m.Maintainers[0].URL != "" {
+		t.Errorf("maintainer url: got %q, want empty (data: stripped)", m.Maintainers[0].URL)
+	}
+}
+
+// TestExtractValuesYAML_decompressionBounded verifies the maxDecompressedBytes
+// bound truncates the gzip stream before an oversized leading entry is skipped,
+// surfacing an error rather than decompressing unboundedly.
+func TestExtractValuesYAML_decompressionBounded(t *testing.T) {
+	orig := maxDecompressedBytes
+	defer func() { maxDecompressedBytes = orig }()
+	maxDecompressedBytes = 32
+
+	tgz := makeChartTGZ(t, map[string]string{
+		// A leading entry whose body exceeds the 32-byte bound, so the tar
+		// reader hits the truncated gzip stream before reaching values.yaml.
+		"myapp/big.txt":     strings.Repeat("x", 4096),
+		"myapp/values.yaml": "replicaCount: 1\n",
+	})
+	if _, _, err := extractValuesYAML(tgz, valuesCap); err == nil {
+		t.Fatal("expected error when the decompression bound truncates the stream")
+	}
+}
+
+// TestExtractValuesYAML_traversalIgnored verifies a directory-traversal entry
+// ("../evil/values.yaml") is skipped and the chart-root values.yaml is used.
+func TestExtractValuesYAML_traversalIgnored(t *testing.T) {
+	tgz := makeChartTGZ(t, map[string]string{
+		"../evil/values.yaml": "pwned: true\n",
+		"myapp/values.yaml":   "replicaCount: 1\n",
+	})
+	got, _, err := extractValuesYAML(tgz, valuesCap)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if got != "replicaCount: 1\n" {
+		t.Fatalf("got %q, want the chart-root values.yaml", got)
+	}
+}
