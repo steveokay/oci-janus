@@ -83,6 +83,27 @@ func (s *fakeCoreServer) GetBlob(_ context.Context, req *corev1.GetBlobRequest) 
 	return &corev1.GetBlobResponse{Data: data, Size: int64(len(data))}, nil
 }
 
+// GetBlobStream streams a canned blob for the chart-download route. Reuses the
+// same blobs/blobErr/blobErrs fields as GetBlob; sends the bytes in two chunks
+// so tests exercise multi-chunk reassembly.
+func (s *fakeCoreServer) GetBlobStream(req *corev1.GetBlobRequest, stream corev1.CoreService_GetBlobStreamServer) error {
+	if e, ok := s.blobErrs[req.GetDigest()]; ok {
+		return e
+	}
+	if s.blobErr != nil {
+		return s.blobErr
+	}
+	data, ok := s.blobs[req.GetDigest()]
+	if !ok {
+		return status.Error(codes.NotFound, "blob not found")
+	}
+	mid := len(data) / 2
+	if err := stream.Send(&corev1.GetBlobChunk{Data: data[:mid]}); err != nil {
+		return err
+	}
+	return stream.Send(&corev1.GetBlobChunk{Data: data[mid:]})
+}
+
 // referrersTestEnv wraps an httptest.Server with the fake core server so
 // tests can configure it per case.
 type referrersTestEnv struct {

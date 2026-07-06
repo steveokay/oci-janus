@@ -367,6 +367,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// (h.core is nil) so the frontend can hide the Chart tab.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart", authMW(http.HandlerFunc(h.handleGetChart)))
 
+	// Chart download (Task 3): streams the tag's Helm chart .tgz content layer
+	// to the browser byte-identical to `helm pull`. Uses r.Context() directly —
+	// GetBlobStream is a server stream and must not be capped by a short unary
+	// timeout. Returns 404 "route disabled" when CORE_GRPC_ADDR is unset.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart/download", authMW(http.HandlerFunc(h.handleDownloadChart)))
+
 	// Signing verification for a specific tag (FE-API-003). 404 when
 	// SIGNER_GRPC_ADDR is unset on the BFF. FE-API-025 layers a
 	// ?verify=true query param on top for opt-in cryptographic verification.
