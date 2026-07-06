@@ -13,6 +13,7 @@ import { DeleteTagDialog } from "@/components/tags/delete-tag-dialog";
 import { LayersPanel } from "@/components/tags/layers-panel";
 import { SigningPanel } from "@/components/tags/signing-panel";
 import { ReferrersPanel } from "@/components/tags/referrers-panel";
+import { ChartPanel } from "@/components/tags/chart-panel";
 import {
   Tabs,
   TabsContent,
@@ -26,7 +27,7 @@ import { ErrorState } from "@/components/ui/error-state";
 // — it's the most informative surface when a scan exists, and the empty
 // state for an unscanned tag offers an inline "Other views" affordance
 // (DSGN-019) so the operator can hop to a sibling tab without bouncing.
-const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers"] as const;
+const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers", "chart"] as const;
 type TagDetailTab = (typeof TAG_TAB_VALUES)[number];
 const DEFAULT_TAG_TAB: TagDetailTab = "security";
 
@@ -83,6 +84,10 @@ function TagDetail(): React.ReactElement {
     () => tags?.find((t) => t.name === tag),
     [tags, tag],
   );
+
+  // FUT-022 — the Chart tab only exists for Helm artifacts. artifact_type is
+  // derived server-side from the manifest's config.mediaType.
+  const isHelm = tagRow?.artifact_type === "helm";
 
   const {
     data: scan,
@@ -156,6 +161,7 @@ function TagDetail(): React.ReactElement {
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="signing">Signing</TabsTrigger>
           <TabsTrigger value="referrers">Referrers</TabsTrigger>
+          {isHelm ? <TabsTrigger value="chart">Chart</TabsTrigger> : null}
         </TabsList>
 
         <TabsContent value="security" className="space-y-4">
@@ -195,6 +201,17 @@ function TagDetail(): React.ReactElement {
         <TabsContent value="referrers">
           <ReferrersPanel org={org} repo={repo} tag={tag} />
         </TabsContent>
+
+        {isHelm ? (
+          <TabsContent value="chart">
+            <ChartPanel
+              org={org}
+              repo={repo}
+              tag={tag}
+              active={activeTab === "chart"}
+            />
+          </TabsContent>
+        ) : null}
       </Tabs>
 
       <DeleteTagDialog
