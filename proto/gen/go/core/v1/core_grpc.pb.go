@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion8
 const (
 	CoreService_ListReferrers_FullMethodName = "/registry.core.v1.CoreService/ListReferrers"
 	CoreService_GetBlob_FullMethodName       = "/registry.core.v1.CoreService/GetBlob"
+	CoreService_GetBlobStream_FullMethodName = "/registry.core.v1.CoreService/GetBlobStream"
 )
 
 // CoreServiceClient is the client API for CoreService service.
@@ -45,6 +46,11 @@ type CoreServiceClient interface {
 	// The server refuses (FailedPrecondition) once a blob exceeds max_bytes
 	// rather than truncating silently.
 	GetBlob(ctx context.Context, in *GetBlobRequest, opts ...grpc.CallOption) (*GetBlobResponse, error)
+	// GetBlobStream streams a blob's raw bytes in chunks, for downloads that may
+	// exceed the unary GetBlob size cap (e.g. a chart .tgz). Reuses GetBlobRequest
+	// (max_bytes is ignored — streaming is unbounded by design; the blob is a
+	// stored artifact the caller already has pull access to).
+	GetBlobStream(ctx context.Context, in *GetBlobRequest, opts ...grpc.CallOption) (CoreService_GetBlobStreamClient, error)
 }
 
 type coreServiceClient struct {
@@ -75,6 +81,39 @@ func (c *coreServiceClient) GetBlob(ctx context.Context, in *GetBlobRequest, opt
 	return out, nil
 }
 
+func (c *coreServiceClient) GetBlobStream(ctx context.Context, in *GetBlobRequest, opts ...grpc.CallOption) (CoreService_GetBlobStreamClient, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CoreService_ServiceDesc.Streams[0], CoreService_GetBlobStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &coreServiceGetBlobStreamClient{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type CoreService_GetBlobStreamClient interface {
+	Recv() (*GetBlobChunk, error)
+	grpc.ClientStream
+}
+
+type coreServiceGetBlobStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *coreServiceGetBlobStreamClient) Recv() (*GetBlobChunk, error) {
+	m := new(GetBlobChunk)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // CoreServiceServer is the server API for CoreService service.
 // All implementations should embed UnimplementedCoreServiceServer
 // for forward compatibility
@@ -97,6 +136,11 @@ type CoreServiceServer interface {
 	// The server refuses (FailedPrecondition) once a blob exceeds max_bytes
 	// rather than truncating silently.
 	GetBlob(context.Context, *GetBlobRequest) (*GetBlobResponse, error)
+	// GetBlobStream streams a blob's raw bytes in chunks, for downloads that may
+	// exceed the unary GetBlob size cap (e.g. a chart .tgz). Reuses GetBlobRequest
+	// (max_bytes is ignored — streaming is unbounded by design; the blob is a
+	// stored artifact the caller already has pull access to).
+	GetBlobStream(*GetBlobRequest, CoreService_GetBlobStreamServer) error
 }
 
 // UnimplementedCoreServiceServer should be embedded to have forward compatible implementations.
@@ -108,6 +152,9 @@ func (UnimplementedCoreServiceServer) ListReferrers(context.Context, *ListReferr
 }
 func (UnimplementedCoreServiceServer) GetBlob(context.Context, *GetBlobRequest) (*GetBlobResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlob not implemented")
+}
+func (UnimplementedCoreServiceServer) GetBlobStream(*GetBlobRequest, CoreService_GetBlobStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method GetBlobStream not implemented")
 }
 
 // UnsafeCoreServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -157,6 +204,27 @@ func _CoreService_GetBlob_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoreService_GetBlobStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetBlobRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CoreServiceServer).GetBlobStream(m, &coreServiceGetBlobStreamServer{ServerStream: stream})
+}
+
+type CoreService_GetBlobStreamServer interface {
+	Send(*GetBlobChunk) error
+	grpc.ServerStream
+}
+
+type coreServiceGetBlobStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *coreServiceGetBlobStreamServer) Send(m *GetBlobChunk) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // CoreService_ServiceDesc is the grpc.ServiceDesc for CoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -173,6 +241,12 @@ var CoreService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CoreService_GetBlob_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "GetBlobStream",
+			Handler:       _CoreService_GetBlobStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "core/v1/core.proto",
 }
