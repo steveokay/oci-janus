@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion8
 
 const (
 	CoreService_ListReferrers_FullMethodName = "/registry.core.v1.CoreService/ListReferrers"
+	CoreService_GetBlob_FullMethodName       = "/registry.core.v1.CoreService/GetBlob"
 )
 
 // CoreServiceClient is the client API for CoreService service.
@@ -38,6 +39,12 @@ type CoreServiceClient interface {
 	// results, …). Mirrors the OCI referrers API (Distribution Spec v1.1 §4.5)
 	// as an internal gRPC read for the dashboard.
 	ListReferrers(ctx context.Context, in *ListReferrersRequest, opts ...grpc.CallOption) (*ListReferrersResponse, error)
+	// GetBlob returns the raw bytes of a blob by digest, capped at max_bytes.
+	// Generic (not Helm-specific): the management BFF uses it to fetch a Helm
+	// chart's config + content-layer blobs, but any internal reader can use it.
+	// The server refuses (FailedPrecondition) once a blob exceeds max_bytes
+	// rather than truncating silently.
+	GetBlob(ctx context.Context, in *GetBlobRequest, opts ...grpc.CallOption) (*GetBlobResponse, error)
 }
 
 type coreServiceClient struct {
@@ -52,6 +59,16 @@ func (c *coreServiceClient) ListReferrers(ctx context.Context, in *ListReferrers
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListReferrersResponse)
 	err := c.cc.Invoke(ctx, CoreService_ListReferrers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreServiceClient) GetBlob(ctx context.Context, in *GetBlobRequest, opts ...grpc.CallOption) (*GetBlobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlobResponse)
+	err := c.cc.Invoke(ctx, CoreService_GetBlob_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +91,12 @@ type CoreServiceServer interface {
 	// results, …). Mirrors the OCI referrers API (Distribution Spec v1.1 §4.5)
 	// as an internal gRPC read for the dashboard.
 	ListReferrers(context.Context, *ListReferrersRequest) (*ListReferrersResponse, error)
+	// GetBlob returns the raw bytes of a blob by digest, capped at max_bytes.
+	// Generic (not Helm-specific): the management BFF uses it to fetch a Helm
+	// chart's config + content-layer blobs, but any internal reader can use it.
+	// The server refuses (FailedPrecondition) once a blob exceeds max_bytes
+	// rather than truncating silently.
+	GetBlob(context.Context, *GetBlobRequest) (*GetBlobResponse, error)
 }
 
 // UnimplementedCoreServiceServer should be embedded to have forward compatible implementations.
@@ -82,6 +105,9 @@ type UnimplementedCoreServiceServer struct {
 
 func (UnimplementedCoreServiceServer) ListReferrers(context.Context, *ListReferrersRequest) (*ListReferrersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListReferrers not implemented")
+}
+func (UnimplementedCoreServiceServer) GetBlob(context.Context, *GetBlobRequest) (*GetBlobResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlob not implemented")
 }
 
 // UnsafeCoreServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -113,6 +139,24 @@ func _CoreService_ListReferrers_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoreService_GetBlob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreServiceServer).GetBlob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreService_GetBlob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreServiceServer).GetBlob(ctx, req.(*GetBlobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CoreService_ServiceDesc is the grpc.ServiceDesc for CoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -123,6 +167,10 @@ var CoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListReferrers",
 			Handler:    _CoreService_ListReferrers_Handler,
+		},
+		{
+			MethodName: "GetBlob",
+			Handler:    _CoreService_GetBlob_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -19,6 +22,11 @@ type fakeReferrerLister struct {
 	filtered bool
 	err      error
 
+	// blob is the payload GetBlob streams into the writer; blobErr, when set,
+	// short-circuits the write and is returned instead (e.g. service.ErrNotFound).
+	blob    []byte
+	blobErr error
+
 	// captured args from the last call, for assertion.
 	gotTenant, gotRepo, gotDigest, gotArtifactType string
 }
@@ -29,6 +37,15 @@ func (f *fakeReferrerLister) GetReferrers(_ context.Context, tenantID, repoName,
 		return nil, false, f.err
 	}
 	return f.descs, f.filtered, nil
+}
+
+// GetBlob lets the same fake back the coreReader seam GetBlob depends on.
+func (f *fakeReferrerLister) GetBlob(_ context.Context, _, digest string, w io.Writer) (int64, error) {
+	if f.blobErr != nil {
+		return 0, f.blobErr
+	}
+	n, err := w.Write(f.blob)
+	return int64(n), err
 }
 
 const validDigest = "sha256:" + "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
@@ -133,5 +150,60 @@ func TestListReferrers_storeError(t *testing.T) {
 	})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal, got %v", err)
+	}
+}
+
+func TestGetBlob_validRequest_returnsBytes(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{blob: []byte("hello-chart")})
+	resp, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
+		TenantId: "t1",
+		Digest:   "sha256:" + strings.Repeat("a", 64),
+		MaxBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("GetBlob: %v", err)
+	}
+	if string(resp.GetData()) != "hello-chart" || resp.GetSize() != 11 {
+		t.Fatalf("got %q size=%d", resp.GetData(), resp.GetSize())
+	}
+}
+
+func TestGetBlob_missingTenant_invalidArgument(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{})
+	_, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
+		Digest: "sha256:" + strings.Repeat("a", 64),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
+func TestGetBlob_badDigest_invalidArgument(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{})
+	_, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
+		TenantId: "t1", Digest: "not-a-digest",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
+func TestGetBlob_notFound(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{blobErr: service.ErrNotFound})
+	_, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
+		TenantId: "t1", Digest: "sha256:" + strings.Repeat("a", 64),
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestGetBlob_exceedsCap_failedPrecondition(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{blob: bytes.Repeat([]byte("x"), 2048)})
+	_, err := h.GetBlob(context.Background(), &corev1.GetBlobRequest{
+		TenantId: "t1", Digest: "sha256:" + strings.Repeat("a", 64), MaxBytes: 1024,
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("want FailedPrecondition, got %v", err)
 	}
 }

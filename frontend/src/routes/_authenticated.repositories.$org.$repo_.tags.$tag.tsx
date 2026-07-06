@@ -13,6 +13,7 @@ import { DeleteTagDialog } from "@/components/tags/delete-tag-dialog";
 import { LayersPanel } from "@/components/tags/layers-panel";
 import { SigningPanel } from "@/components/tags/signing-panel";
 import { ReferrersPanel } from "@/components/tags/referrers-panel";
+import { ChartPanel } from "@/components/tags/chart-panel";
 import {
   Tabs,
   TabsContent,
@@ -26,7 +27,7 @@ import { ErrorState } from "@/components/ui/error-state";
 // — it's the most informative surface when a scan exists, and the empty
 // state for an unscanned tag offers an inline "Other views" affordance
 // (DSGN-019) so the operator can hop to a sibling tab without bouncing.
-const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers"] as const;
+const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers", "chart"] as const;
 type TagDetailTab = (typeof TAG_TAB_VALUES)[number];
 const DEFAULT_TAG_TAB: TagDetailTab = "security";
 
@@ -55,24 +56,12 @@ function TagDetail(): React.ReactElement {
   const { tab } = Route.useSearch();
   const navigate = Route.useNavigate();
   const [deleteOpen, setDeleteOpen] = React.useState(false);
-  // The URL is the single source of truth for the active tab; absent/invalid
-  // resolves to the default. setActiveTab navigates (replace:true) so the
-  // empty-state sibling-tab links (DSGN-019) drive the same URL param instead
-  // of local state — keeping deep-links and the tab bar in sync.
-  const activeTab: TagDetailTab = tab ?? DEFAULT_TAG_TAB;
-  const setActiveTab = React.useCallback(
-    (value: TagDetailTab): void => {
-      void navigate({
-        search: (prev) => ({ ...prev, tab: value }),
-        replace: true,
-      });
-    },
-    [navigate],
-  );
 
   // No per-tag GET endpoint exists yet; we read from the tag list and pick
   // the row by name. This is fine for the page sizes we expect and the list
-  // is already cached by useTags from the repo detail page.
+  // is already cached by useTags from the repo detail page. Resolved here
+  // (above activeTab) because the Chart-tab deep-link fallback depends on
+  // isHelm.
   const {
     data: tags,
     isLoading: tagsLoading,
@@ -82,6 +71,29 @@ function TagDetail(): React.ReactElement {
   const tagRow = React.useMemo(
     () => tags?.find((t) => t.name === tag),
     [tags, tag],
+  );
+
+  // FUT-022 — the Chart tab only exists for Helm artifacts. artifact_type is
+  // derived server-side from the manifest's config.mediaType.
+  const isHelm = tagRow?.artifact_type === "helm";
+
+  // The URL is the single source of truth for the active tab; absent/invalid
+  // resolves to the default. setActiveTab navigates (replace:true) so the
+  // empty-state sibling-tab links (DSGN-019) drive the same URL param instead
+  // of local state — keeping deep-links and the tab bar in sync. A ?tab=chart
+  // deep-link on a non-Helm tag (no Chart trigger/content renders) falls back
+  // to the default so the tab region is never blank. While tags are still
+  // loading isHelm is false, so the fallback correctly holds until known.
+  const activeTab: TagDetailTab =
+    tab === "chart" && !isHelm ? DEFAULT_TAG_TAB : (tab ?? DEFAULT_TAG_TAB);
+  const setActiveTab = React.useCallback(
+    (value: TagDetailTab): void => {
+      void navigate({
+        search: (prev) => ({ ...prev, tab: value }),
+        replace: true,
+      });
+    },
+    [navigate],
   );
 
   const {
@@ -156,6 +168,7 @@ function TagDetail(): React.ReactElement {
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="signing">Signing</TabsTrigger>
           <TabsTrigger value="referrers">Referrers</TabsTrigger>
+          {isHelm ? <TabsTrigger value="chart">Chart</TabsTrigger> : null}
         </TabsList>
 
         <TabsContent value="security" className="space-y-4">
@@ -195,6 +208,17 @@ function TagDetail(): React.ReactElement {
         <TabsContent value="referrers">
           <ReferrersPanel org={org} repo={repo} tag={tag} />
         </TabsContent>
+
+        {isHelm ? (
+          <TabsContent value="chart">
+            <ChartPanel
+              org={org}
+              repo={repo}
+              tag={tag}
+              active={activeTab === "chart"}
+            />
+          </TabsContent>
+        ) : null}
       </Tabs>
 
       <DeleteTagDialog

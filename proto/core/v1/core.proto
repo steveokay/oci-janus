@@ -16,6 +16,13 @@ service CoreService {
   // results, …). Mirrors the OCI referrers API (Distribution Spec v1.1 §4.5)
   // as an internal gRPC read for the dashboard.
   rpc ListReferrers(ListReferrersRequest) returns (ListReferrersResponse);
+
+  // GetBlob returns the raw bytes of a blob by digest, capped at max_bytes.
+  // Generic (not Helm-specific): the management BFF uses it to fetch a Helm
+  // chart's config + content-layer blobs, but any internal reader can use it.
+  // The server refuses (FailedPrecondition) once a blob exceeds max_bytes
+  // rather than truncating silently.
+  rpc GetBlob(GetBlobRequest) returns (GetBlobResponse);
 }
 
 // ListReferrersRequest identifies the subject manifest to list referrers for.
@@ -49,4 +56,22 @@ message ListReferrersResponse {
   // filtered is true when artifact_type was supplied (OCI §4.5 requires the
   // client be told the list was filtered).
   bool filtered = 2;
+}
+
+// GetBlobRequest identifies a blob by tenant + digest. max_bytes is a hard
+// ceiling on the returned payload so a caller can't pull an arbitrarily large
+// blob into a unary gRPC message. 0 means "use the server default cap".
+message GetBlobRequest {
+  string tenant_id = 1;
+  string digest    = 2; // "sha256:<hex64>"
+  int64  max_bytes = 3;
+}
+
+// GetBlobResponse carries the blob bytes. size == len(data). media_type is
+// reserved for future use (storage does not persist a per-blob media type
+// today) and is empty.
+message GetBlobResponse {
+  bytes  data       = 1;
+  int64  size       = 2;
+  string media_type = 3;
 }

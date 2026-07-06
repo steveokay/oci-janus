@@ -361,6 +361,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// surfacing an error.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers", authMW(http.HandlerFunc(h.handleListReferrers)))
 
+	// Helm chart detail for a specific tag (Chart tab, FUT-022). Resolves the
+	// tag's manifest + fetches the Helm config + content-layer blobs from
+	// registry-core. Returns 404 "route disabled" when CORE_GRPC_ADDR is unset
+	// (h.core is nil) so the frontend can hide the Chart tab.
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart", authMW(http.HandlerFunc(h.handleGetChart)))
+
 	// Signing verification for a specific tag (FE-API-003). 404 when
 	// SIGNER_GRPC_ADDR is unset on the BFF. FE-API-025 layers a
 	// ?verify=true query param on top for opt-in cryptographic verification.
