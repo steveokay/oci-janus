@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -205,5 +206,74 @@ func TestGetBlob_exceedsCap_failedPrecondition(t *testing.T) {
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("want FailedPrecondition, got %v", err)
+	}
+}
+
+// fakeBlobStream is a minimal corev1.CoreService_GetBlobStreamServer for
+// unit-testing GetBlobStream without a live gRPC server. It collects Sent
+// chunks; only Send + Context are exercised by the handler, so the embedded
+// grpc.ServerStream (nil) is never touched.
+type fakeBlobStream struct {
+	grpc.ServerStream
+	ctx  context.Context
+	sent [][]byte
+}
+
+func (f *fakeBlobStream) Send(c *corev1.GetBlobChunk) error {
+	f.sent = append(f.sent, append([]byte(nil), c.GetData()...))
+	return nil
+}
+
+func (f *fakeBlobStream) Context() context.Context {
+	if f.ctx != nil {
+		return f.ctx
+	}
+	return context.Background()
+}
+
+func TestGetBlobStream_streamsBytes(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{blob: []byte("chart-tgz-bytes")})
+	fs := &fakeBlobStream{}
+	err := h.GetBlobStream(&corev1.GetBlobRequest{
+		TenantId: "t1", Digest: "sha256:" + strings.Repeat("a", 64),
+	}, fs)
+	if err != nil {
+		t.Fatalf("GetBlobStream: %v", err)
+	}
+	var got []byte
+	for _, c := range fs.sent {
+		got = append(got, c...)
+	}
+	if string(got) != "chart-tgz-bytes" {
+		t.Fatalf("reassembled %q", got)
+	}
+}
+
+// TestGetBlobStream_missingTenant_invalidArgument — parity with the unary
+// GetBlob guard: an absent tenant_id is rejected with InvalidArgument before
+// any blob read is attempted.
+func TestGetBlobStream_missingTenant_invalidArgument(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{})
+	err := h.GetBlobStream(&corev1.GetBlobRequest{Digest: "sha256:" + strings.Repeat("a", 64)}, &fakeBlobStream{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
+func TestGetBlobStream_badDigest_invalidArgument(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{})
+	err := h.GetBlobStream(&corev1.GetBlobRequest{TenantId: "t1", Digest: "nope"}, &fakeBlobStream{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("want InvalidArgument, got %v", err)
+	}
+}
+
+func TestGetBlobStream_notFound(t *testing.T) {
+	h := NewCoreHandler(&fakeReferrerLister{blobErr: service.ErrNotFound})
+	err := h.GetBlobStream(&corev1.GetBlobRequest{
+		TenantId: "t1", Digest: "sha256:" + strings.Repeat("a", 64),
+	}, &fakeBlobStream{})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("want NotFound, got %v", err)
 	}
 }

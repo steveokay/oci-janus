@@ -291,6 +291,7 @@ GET  /v2/<name>/referrers/<digest>                  # OCI referrers API (§4.5)
 Beyond the OCI HTTP API, registry-core exposes a small internal gRPC surface (`proto/core/v1/core.proto`) consumed by `registry-management`:
 - `ListReferrers(ListReferrersRequest) → ListReferrersResponse` — every OCI referrer artifact whose subject points at a manifest digest; backs the tag-detail Referrers tab (PR #282).
 - `GetBlob(GetBlobRequest) → GetBlobResponse` — generic size-capped blob fetch (digest→bytes, `max_bytes` ceiling; the server refuses with `FailedPrecondition` once a blob exceeds the cap rather than truncating silently). Used by the BFF chart route to read a chart's config + content-layer blobs (FUT-022).
+- `GetBlobStream(GetBlobRequest) → stream GetBlobChunk` — server-streaming blob fetch for downloads that exceed the unary `GetBlob` cap; used by the BFF chart-download route.
 
 **gRPC calls made by this service:**
 - `registry-auth`: ValidateToken, ValidateAPIKey, GetUserPermissions (RBAC enforcement on every push/pull)
@@ -891,6 +892,7 @@ GET    /api/v1/repositories/:org/:repo/tags/:tag/signature[?verify=true]
 POST   /api/v1/repositories/:org/:repo/tags/:tag/sign
 GET    /api/v1/repositories/:org/:repo/tags/:tag/sbom?format=spdx-json
 GET    /api/v1/repositories/:org/:repo/tags/:tag/chart # Helm chart detail (FUT-022): Chart.yaml metadata + values.yaml; 404 when core gRPC unset; 400 when the tag isn't a Helm chart
+GET    /api/v1/repositories/:org/:repo/tags/:tag/chart/download # streams a Helm chart's .tgz (Content-Disposition attachment; byte-identical to helm pull); 404 when core gRPC unset, 400 when the tag isn't a Helm chart
 GET    /api/v1/repositories/:org/:repo/activity        # FE-API-004
 DELETE /api/v1/repositories/:org/:repo/tags            # Bulk tag delete (FE-API-036; body {tag_names[]})
 
@@ -924,7 +926,7 @@ POST   /api/v1/admin/gc/run
 - `registry-scanner` (opt-in via `SCANNER_GRPC_ADDR`): scan-policy + compliance-report RPCs
 - `registry-webhook` (opt-in via `WEBHOOK_GRPC_ADDR`): endpoint CRUD + deliveries + test/rotate
 - `registry-gc` (opt-in via `GC_GRPC_ADDR`): `GetStatus`, `RunNow`, `ListRuns`
-- `registry-core` (opt-in via `CORE_GRPC_ADDR`): `GetBlob` — backs the Helm chart-detail route (FUT-022); route returns 404 when unset
+- `registry-core` (opt-in via `CORE_GRPC_ADDR`): `GetBlob` — backs the Helm chart-detail route (FUT-022); `GetBlobStream` — backs the Helm chart-download route; both routes return 404 when unset
 
 When a downstream service's gRPC address is unset, the BFF returns `404 "route disabled"` on the corresponding routes rather than failing the whole service.
 

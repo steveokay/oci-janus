@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { apiClient } from "./client";
 
@@ -86,5 +86,38 @@ export function useChart(
     },
     staleTime: 30_000,
     enabled: enabled && Boolean(org && repo && tag),
+  });
+}
+
+// useDownloadChart fetches a Helm chart's .tgz as an authenticated blob and
+// triggers a browser download (a plain <a href> can't carry the JWT). Mirrors
+// useDownloadReport (compliance-reports.ts): blob -> object URL -> anchor click.
+// The suggested filename is "<repo>-<tag>.tgz", matching the BFF's
+// Content-Disposition.
+export function useDownloadChart() {
+  return useMutation<void, Error, { org: string; repo: string; tag: string }>({
+    mutationFn: async ({ org, repo, tag }) => {
+      try {
+        const res = await apiClient.get<Blob>(
+          `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(
+            repo,
+          )}/tags/${encodeURIComponent(tag)}/chart/download`,
+          { responseType: "blob" },
+        );
+        const url = window.URL.createObjectURL(res.data);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${repo}-${tag}.tgz`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 1_000);
+      } catch (e) {
+        if (e instanceof AxiosError && e.response?.status === 400) {
+          throw new Error("This tag isn't a Helm chart.");
+        }
+        throw new Error("Couldn't download the chart. Check the BFF logs.");
+      }
+    },
   });
 }

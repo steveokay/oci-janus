@@ -23,6 +23,12 @@ service CoreService {
   // The server refuses (FailedPrecondition) once a blob exceeds max_bytes
   // rather than truncating silently.
   rpc GetBlob(GetBlobRequest) returns (GetBlobResponse);
+
+  // GetBlobStream streams a blob's raw bytes in chunks, for downloads that may
+  // exceed the unary GetBlob size cap (e.g. a chart .tgz). Reuses GetBlobRequest
+  // (max_bytes is ignored — streaming is unbounded by design; the blob is a
+  // stored artifact the caller already has pull access to).
+  rpc GetBlobStream(GetBlobRequest) returns (stream GetBlobChunk);
 }
 
 // ListReferrersRequest identifies the subject manifest to list referrers for.
@@ -74,4 +80,9 @@ message GetBlobResponse {
   bytes  data       = 1;
   int64  size       = 2;
   string media_type = 3;
+}
+
+// GetBlobChunk is one slice of a streamed blob's bytes.
+message GetBlobChunk {
+  bytes data = 1;
 }
