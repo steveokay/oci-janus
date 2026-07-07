@@ -28,6 +28,7 @@ const (
 	AuthService_ListMembers_FullMethodName           = "/registry.auth.v1.AuthService/ListMembers"
 	AuthService_CountTenantUsers_FullMethodName      = "/registry.auth.v1.AuthService/CountTenantUsers"
 	AuthService_LookupUsernames_FullMethodName       = "/registry.auth.v1.AuthService/LookupUsernames"
+	AuthService_ResolveUserEmails_FullMethodName     = "/registry.auth.v1.AuthService/ResolveUserEmails"
 	AuthService_ListTenantUsers_FullMethodName       = "/registry.auth.v1.AuthService/ListTenantUsers"
 	AuthService_InviteUser_FullMethodName            = "/registry.auth.v1.AuthService/InviteUser"
 	AuthService_SetUserDisabled_FullMethodName       = "/registry.auth.v1.AuthService/SetUserDisabled"
@@ -73,6 +74,10 @@ type AuthServiceClient interface {
 	// raw UUID / system label fallback". Anonymous / "system" sentinel
 	// strings should be filtered out by the caller before the RPC.
 	LookupUsernames(ctx context.Context, in *LookupUsernamesRequest, opts ...grpc.CallOption) (*LookupUsernamesResponse, error)
+	// ResolveUserEmails maps a batch of user ids to their email addresses within
+	// a tenant. Used by registry-audit to resolve email-notification recipients.
+	// Users with no email are omitted from the response.
+	ResolveUserEmails(ctx context.Context, in *ResolveUserEmailsRequest, opts ...grpc.CallOption) (*ResolveUserEmailsResponse, error)
 	// FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
 	// gated on tenant-admin OR platform-admin in services/management's
 	// BFF. The handler-side check enforces the same shape so a
@@ -210,6 +215,16 @@ func (c *authServiceClient) LookupUsernames(ctx context.Context, in *LookupUsern
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupUsernamesResponse)
 	err := c.cc.Invoke(ctx, AuthService_LookupUsernames_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) ResolveUserEmails(ctx context.Context, in *ResolveUserEmailsRequest, opts ...grpc.CallOption) (*ResolveUserEmailsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveUserEmailsResponse)
+	err := c.cc.Invoke(ctx, AuthService_ResolveUserEmails_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +391,10 @@ type AuthServiceServer interface {
 	// raw UUID / system label fallback". Anonymous / "system" sentinel
 	// strings should be filtered out by the caller before the RPC.
 	LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error)
+	// ResolveUserEmails maps a batch of user ids to their email addresses within
+	// a tenant. Used by registry-audit to resolve email-notification recipients.
+	// Users with no email are omitted from the response.
+	ResolveUserEmails(context.Context, *ResolveUserEmailsRequest) (*ResolveUserEmailsResponse, error)
 	// FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
 	// gated on tenant-admin OR platform-admin in services/management's
 	// BFF. The handler-side check enforces the same shape so a
@@ -458,6 +477,9 @@ func (UnimplementedAuthServiceServer) CountTenantUsers(context.Context, *CountTe
 }
 func (UnimplementedAuthServiceServer) LookupUsernames(context.Context, *LookupUsernamesRequest) (*LookupUsernamesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupUsernames not implemented")
+}
+func (UnimplementedAuthServiceServer) ResolveUserEmails(context.Context, *ResolveUserEmailsRequest) (*ResolveUserEmailsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveUserEmails not implemented")
 }
 func (UnimplementedAuthServiceServer) ListTenantUsers(context.Context, *ListTenantUsersRequest) (*ListTenantUsersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListTenantUsers not implemented")
@@ -650,6 +672,24 @@ func _AuthService_LookupUsernames_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).LookupUsernames(ctx, req.(*LookupUsernamesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_ResolveUserEmails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveUserEmailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ResolveUserEmails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ResolveUserEmails_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ResolveUserEmails(ctx, req.(*ResolveUserEmailsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -926,6 +966,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LookupUsernames",
 			Handler:    _AuthService_LookupUsernames_Handler,
+		},
+		{
+			MethodName: "ResolveUserEmails",
+			Handler:    _AuthService_ResolveUserEmails_Handler,
 		},
 		{
 			MethodName: "ListTenantUsers",

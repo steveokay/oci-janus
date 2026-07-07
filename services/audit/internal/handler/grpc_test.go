@@ -68,6 +68,19 @@ type fakeRepo struct {
 	// keys by tenant so tests can assert per-tenant isolation in one fake.
 	lastPushFor map[uuid.UUID]time.Time
 	lastPushErr error
+
+	// FUT-019 Phase 3 — email channel fake state (see grpc_email_test.go for
+	// the method implementations). emailCfg is the row Get returns; Upsert
+	// captures the sealed config + refreshes emailCfg so a follow-up Get
+	// reflects the write. testResult* capture the last UpdateEmailTestResult.
+	emailCfg        *repository.EmailTransportConfig
+	emailCfgErr     error
+	upsertedEmail   *repository.EmailTransportConfig
+	testResultSet   bool
+	testResultOK    bool
+	testResultErr   string
+	emailDeliveries []*repository.EmailDelivery
+	lastListLimit   int
 }
 
 // analyticsCall captures the parameters passed to one GetAnalytics call.

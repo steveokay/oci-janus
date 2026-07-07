@@ -289,6 +289,30 @@ func (f *fakeUserRepo) LookupByIDs(_ context.Context, tenantID uuid.UUID, ids []
 	return out, nil
 }
 
+// ResolveEmails (FUT-019 Phase 3) filters the in-memory users by (tenant_id,
+// id) and drops rows with no email, mirroring the real repo's kind='human' +
+// non-empty-email SQL. EmailVerified is always false — no backing column.
+func (f *fakeUserRepo) ResolveEmails(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.EmailLookup, error) {
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := make([]repository.EmailLookup, 0, len(ids))
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if _, ok := want[u.ID]; !ok {
+			continue
+		}
+		if u.Email == "" {
+			continue
+		}
+		out = append(out, repository.EmailLookup{ID: u.ID, Email: u.Email, EmailVerified: false})
+	}
+	return out, nil
+}
+
 // SSO fake methods — FE-API-034. Note that the in-memory store is keyed by
 // username, so lookups by email/ID iterate the map.
 func (f *fakeUserRepo) GetByEmail(_ context.Context, tenantID uuid.UUID, email string) (*repository.User, error) {

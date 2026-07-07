@@ -255,6 +255,33 @@ func (f *handlerFakeUserRepo) LookupByIDs(_ context.Context, _ uuid.UUID, _ []uu
 	return nil, nil
 }
 
+// ResolveEmails (FUT-019 Phase 3) mirrors the real repo query: it returns
+// (id, email) for the given ids within the tenant, dropping users with no
+// stored email. EmailVerified is always false because the users table does not
+// track a verification flag (informational-only field). Filtering in-memory by
+// (tenant_id, id, non-empty email) lets the ResolveUserEmails handler test
+// assert the tenant scope + empty-email omission without a real DB.
+func (f *handlerFakeUserRepo) ResolveEmails(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.EmailLookup, error) {
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	out := make([]repository.EmailLookup, 0, len(ids))
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if _, ok := want[u.ID]; !ok {
+			continue
+		}
+		if u.Email == "" {
+			continue
+		}
+		out = append(out, repository.EmailLookup{ID: u.ID, Email: u.Email, EmailVerified: false})
+	}
+	return out, nil
+}
+
 // FUT-012 Phase A: same posture as LookupByIDs — handler tests don't
 // exercise these paths, but the stubs are required so the fake
 // satisfies userRepo. Phase B BFF tests will use a dedicated fake.

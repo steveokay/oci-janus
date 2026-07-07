@@ -89,6 +89,12 @@ service AuditService {
   // they opt in.
   rpc GetUserNotificationPreferences(GetUserNotificationPreferencesRequest) returns (GetUserNotificationPreferencesResponse);
   rpc UpdateUserNotificationPreferences(UpdateUserNotificationPreferencesRequest) returns (UpdateUserNotificationPreferencesResponse);
+
+  // FUT-019 Phase 3 — email transport config + delivery log.
+  rpc GetEmailTransportConfig(GetEmailTransportConfigRequest) returns (EmailTransportConfig);
+  rpc PutEmailTransportConfig(PutEmailTransportConfigRequest) returns (EmailTransportConfig);
+  rpc SendTestEmail(SendTestEmailRequest) returns (SendTestEmailResponse);
+  rpc ListEmailDeliveries(ListEmailDeliveriesRequest) returns (ListEmailDeliveriesResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -472,4 +478,72 @@ message UpdateUserNotificationPreferencesRequest {
 
 message UpdateUserNotificationPreferencesResponse {
   repeated NotificationPreference preferences = 1;
+}
+
+// FUT-019 Phase 3 messages ─────────────────────────────────────────────
+// Email transport config + delivery log. Secrets (Resend API key, SMTP
+// password) are write-only on the Put path and NEVER echoed back — the
+// returned EmailTransportConfig carries has_resend_key / has_smtp_password
+// booleans instead so the FE can render "(saved)" placeholders.
+
+message GetEmailTransportConfigRequest { string tenant_id = 1; }
+
+message EmailTransportConfig {
+  string provider = 1;              // resend | smtp
+  bool   enabled = 2;
+  string from_address = 3;
+  string from_name = 4;
+  string smtp_host = 5;
+  int32  smtp_port = 6;
+  string smtp_username = 7;
+  string smtp_tls_mode = 8;
+  bool   has_resend_key = 9;        // true when a key is stored (never the value)
+  bool   has_smtp_password = 10;
+  google.protobuf.Timestamp last_test_at = 11;
+  bool   last_test_ok = 12;
+  string last_test_error = 13;
+}
+
+message PutEmailTransportConfigRequest {
+  string tenant_id = 1;
+  string updated_by = 2;
+  string provider = 3;
+  bool   enabled = 4;
+  string from_address = 5;
+  string from_name = 6;
+  string smtp_host = 7;
+  int32  smtp_port = 8;
+  string smtp_username = 9;
+  string smtp_tls_mode = 10;
+  // Secrets: empty means "keep existing"; a value replaces it. Never echoed back.
+  string resend_api_key = 11;
+  string smtp_password = 12;
+}
+
+message SendTestEmailRequest {
+  string tenant_id = 1;
+  string to_address = 2;   // resolved by the BFF to the caller's own email
+}
+message SendTestEmailResponse {
+  bool   ok = 1;
+  string error = 2;
+}
+
+message ListEmailDeliveriesRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  int32  page_size = 3;
+}
+message ListEmailDeliveriesResponse {
+  repeated EmailDelivery deliveries = 1;
+}
+message EmailDelivery {
+  string id = 1;
+  string category = 2;
+  string subject = 3;
+  string to_address = 4;
+  string status = 5;       // pending | sent | failed
+  string last_error = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp sent_at = 8;
 }

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 	"github.com/steveokay/oci-janus/services/auth/internal/service"
 )
 
@@ -725,5 +726,88 @@ func TestScopesToProto_withScopes_wrapsAsWildcardAccess(t *testing.T) {
 	}
 	if len(result[0].Actions) != len(scopes) {
 		t.Errorf("Actions len: got %d, want %d", len(result[0].Actions), len(scopes))
+	}
+}
+
+// ── ResolveUserEmails (FUT-019 Phase 3) ───────────────────────────────────────
+//
+// Near-clone of LookupUsernames: batch, dedupe, per-request cap. The handler
+// forwards the parsed id set to the repo (via the service), which drops users
+// with no email — so the response can be shorter than the request.
+
+// TestResolveUserEmails_invalidTenantID_returnsInvalidArgument verifies a
+// non-UUID tenant_id is rejected before any repo call (mirrors LookupUsernames).
+func TestResolveUserEmails_invalidTenantID_returnsInvalidArgument(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	_, err := h.ResolveUserEmails(context.Background(), &authv1.ResolveUserEmailsRequest{
+		TenantId: "not-a-uuid",
+		UserIds:  []string{uuid.New().String()},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("code: got %v, want InvalidArgument", st.Code())
+	}
+}
+
+// TestResolveUserEmails_emptyIDs_returnsEmpty verifies an empty user_ids set
+// short-circuits to an empty response without error (mirrors LookupUsernames).
+func TestResolveUserEmails_emptyIDs_returnsEmpty(t *testing.T) {
+	h, _ := buildGRPCHandler(t)
+
+	resp, err := h.ResolveUserEmails(context.Background(), &authv1.ResolveUserEmailsRequest{
+		TenantId: uuid.New().String(),
+		UserIds:  nil,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetEmails()) != 0 {
+		t.Errorf("expected empty response, got %d entries", len(resp.GetEmails()))
+	}
+}
+
+// TestResolveUserEmails_resolvesTwo_omitsEmptyEmail seeds three users in one
+// tenant — two with emails, one without — and verifies the handler returns
+// exactly the two resolvable addresses. The empty-email user is dropped by the
+// repo, matching the "users with no email are omitted" contract.
+func TestResolveUserEmails_resolvesTwo_omitsEmptyEmail(t *testing.T) {
+	h, tc := buildGRPCHandler(t)
+
+	tenantID := uuid.New()
+	id1, id2, id3 := uuid.New(), uuid.New(), uuid.New()
+	// Seed directly into the fake store (same package) so we control emails.
+	tc.users.users["alice"] = &repository.User{ID: id1, TenantID: tenantID, Username: "alice", Email: "alice@example.com"}
+	tc.users.users["bob"] = &repository.User{ID: id2, TenantID: tenantID, Username: "bob", Email: "bob@example.com"}
+	tc.users.users["carol"] = &repository.User{ID: id3, TenantID: tenantID, Username: "carol", Email: ""} // no email → omitted
+
+	resp, err := h.ResolveUserEmails(context.Background(), &authv1.ResolveUserEmailsRequest{
+		TenantId: tenantID.String(),
+		UserIds:  []string{id1.String(), id2.String(), id3.String()},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetEmails()) != 2 {
+		t.Fatalf("expected 2 emails, got %d", len(resp.GetEmails()))
+	}
+	got := map[string]string{}
+	for _, e := range resp.GetEmails() {
+		got[e.GetUserId()] = e.GetEmail()
+	}
+	if got[id1.String()] != "alice@example.com" {
+		t.Errorf("id1 email: got %q, want alice@example.com", got[id1.String()])
+	}
+	if got[id2.String()] != "bob@example.com" {
+		t.Errorf("id2 email: got %q, want bob@example.com", got[id2.String()])
+	}
+	if _, present := got[id3.String()]; present {
+		t.Errorf("id3 (no email) should have been omitted, got %q", got[id3.String()])
 	}
 }

@@ -471,6 +471,19 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v1/users/me/notification-preferences",
 		authMW(http.HandlerFunc(h.handlePatchNotificationPreferences)))
 
+	// FUT-019 Phase 3 — email transport (admin) + per-user delivery log.
+	// The config routes gate on the platform-admin primitive inside each
+	// handler (requireEmailAdmin); the delivery-log route is open to any
+	// logged-in user but scopes to their own JWT user_id.
+	mux.Handle("GET /api/v1/notifications/email-transport",
+		authMW(http.HandlerFunc(h.handleGetEmailTransport)))
+	mux.Handle("PUT /api/v1/notifications/email-transport",
+		authMW(http.HandlerFunc(h.handlePutEmailTransport)))
+	mux.Handle("POST /api/v1/notifications/email-transport/test",
+		authMW(http.HandlerFunc(h.handleTestEmailTransport)))
+	mux.Handle("GET /api/v1/notifications/email-deliveries",
+		authMW(http.HandlerFunc(h.handleListEmailDeliveries)))
+
 	// FUT-012 Phase B — tenant-user lifecycle endpoints. Gated on
 	// tenant-admin OR platform-admin marker inside each handler.
 	mux.Handle("GET /api/v1/tenant/users",

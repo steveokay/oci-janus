@@ -1547,6 +1547,14 @@ func (s *Service) LookupUsernames(ctx context.Context, tenantID uuid.UUID, ids [
 	return s.users.LookupByIDs(ctx, tenantID, ids)
 }
 
+// ResolveUserEmails batch-resolves user_ids within a tenant to (id, email)
+// tuples (FUT-019 Phase 3). Users with no email are dropped by the repo, so the
+// returned slice may be shorter than ids. Mirrors LookupUsernames — the handler
+// owns dedupe/cap; this layer just forwards to the repository.
+func (s *Service) ResolveUserEmails(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.EmailLookup, error) {
+	return s.users.ResolveEmails(ctx, tenantID, ids)
+}
+
 // GetUserRoles returns all role assignments for a user within a tenant.
 func (s *Service) GetUserRoles(ctx context.Context, userID, tenantID uuid.UUID) ([]repository.RoleAssignment, error) {
 	return s.users.GetUserRoles(ctx, userID, tenantID)

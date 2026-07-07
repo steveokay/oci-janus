@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -32,6 +33,24 @@ type Config struct {
 	// FailedPrecondition with a clear error. Audit streaming over
 	// syslog (which doesn't use HMAC) still works without the key.
 	ExportSecretsKeyHex string `mapstructure:"AUDIT_EXPORT_SECRETS_KEY_HEX"`
+
+	// NotifyEmailKeyHex (FUT-019 Phase 3) is the 64-char hex AES-256-GCM key
+	// sealing email_transport_config secrets (resend_api_key / smtp_password).
+	// Empty disables the email channel: transport RPCs writing a secret return
+	// FailedPrecondition and the send loop idles. Set-but-not-32-bytes fails
+	// closed at startup (a bad KEK would silently corrupt secrets).
+	NotifyEmailKeyHex string `mapstructure:"NOTIFY_EMAIL_KEY_HEX"`
+
+	// AuthGRPCAddr (FUT-019 Phase 3) is the mTLS target for
+	// registry-auth.ResolveUserEmails, used by the dispatcher to resolve
+	// recipient email addresses. Empty disables email fan-out.
+	AuthGRPCAddr string `mapstructure:"AUTH_GRPC_ADDR"`
+
+	// PlatformHost (FUT-019 Phase 3) is the public base URL (scheme + host,
+	// no trailing path) used by the email send loop to build absolute CTA
+	// links, e.g. "https://registry.example.com". Optional + unvalidated:
+	// empty leaves email links relative, which still resolve in-app.
+	PlatformHost string `mapstructure:"PLATFORM_HOST"`
 
 	// RabbitMQMgmtURL (futures.md Tier 1 #4 Phase 2) overrides the
 	// auto-derived RabbitMQ Management HTTP API endpoint used to
@@ -96,6 +115,16 @@ func validate(cfg *Config) error {
 	for k, v := range required {
 		if v == "" {
 			return fmt.Errorf("%s is required", k)
+		}
+	}
+	// FUT-019 Phase 3 — email KEK is optional (unset disables email), but a
+	// set-but-malformed key must fail closed rather than silently corrupt rows.
+	if cfg.NotifyEmailKeyHex != "" {
+		if _, err := hex.DecodeString(cfg.NotifyEmailKeyHex); err != nil {
+			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: not valid hex: %w", err)
+		}
+		if len(cfg.NotifyEmailKeyHex) != 64 {
+			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: expected 64 hex chars (32 bytes), got %d", len(cfg.NotifyEmailKeyHex))
 		}
 	}
 	return nil

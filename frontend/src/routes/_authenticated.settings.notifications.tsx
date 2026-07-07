@@ -5,9 +5,11 @@
 // me, on which channel"), so it belongs under Settings alongside the other
 // workspace/housekeeping config — not on the personal Profile page.
 //
-// Backend + delivery-channel state is unchanged: the bell channel is live;
-// email + webhook are shown but locked ("Wired in Phase 3+") until the
-// FUT-019 Phase 3 delivery worker lands (tracked in futures.md).
+// Backend + delivery-channel state: the bell channel is live; the email
+// channel is now live too (FUT-019 Phase 3 — configured via the transport
+// panel mounted above the matrix). Webhook remains shown-but-locked
+// ("Wired in Phase 3+") until its delivery worker lands (tracked in
+// futures.md).
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -28,6 +30,8 @@ import {
   useUpdateNotificationPreferences,
   type NotificationPreferenceRow,
 } from "@/lib/api/notification-preferences";
+import { useEmailTransport } from "@/lib/api/email-transport";
+import { EmailTransportPanel } from "@/components/settings/email-transport-panel";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings/notifications")({
@@ -37,6 +41,8 @@ export const Route = createFileRoute("/_authenticated/settings/notifications")({
 function NotificationsTab(): React.ReactElement {
   return (
     <div className="space-y-6">
+      {/* Email transport config — admin-only; renders null for non-admins. */}
+      <EmailTransportPanel />
       <NotificationsSection />
     </div>
   );
@@ -47,6 +53,10 @@ function NotificationsTab(): React.ReactElement {
 function NotificationsSection(): React.ReactElement {
   const { data, isLoading, isError, refetch } = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
+  // FUT-019 Phase 3 — surface whether the email transport is actually
+  // enabled. When it isn't, the Email column toggles still work but nothing
+  // is delivered until an admin configures the transport panel above.
+  const transportEnabled = useEmailTransport().data?.enabled === true;
   // UIR-4: track the single in-flight cell as "<category>:<channel>" so only
   // the toggled checkbox shows a pending/disabled state — the prior
   // `update.isPending` froze the entire 12-cell matrix on any one write.
@@ -107,8 +117,9 @@ function NotificationsSection(): React.ReactElement {
       </div>
       <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
         Toggle which scheduled notifications you want delivered to which
-        channels. Bell shows in the topbar feed; email and webhook deliver
-        when those channels are wired (Phase 3+).
+        channels. Bell shows in the topbar feed; email delivers once an email
+        transport is configured above; webhook delivers when that channel is
+        wired (Phase 3+).
       </p>
 
       <div className="mt-4 overflow-hidden rounded-md border border-[var(--color-border)]">
@@ -148,7 +159,6 @@ function NotificationsSection(): React.ReactElement {
                     enabled={row.email_enabled}
                     pending={pendingCell === `${row.key}:email`}
                     onChange={(v) => void toggleChannel(row, "email", v)}
-                    hint="Wired in Phase 3+"
                   />
                   <ChannelToggleCell
                     enabled={row.webhook_enabled}
@@ -162,6 +172,14 @@ function NotificationsSection(): React.ReactElement {
           </TableBody>
         </Table>
       </div>
+
+      {/* FUT-019 Phase 3 — nudge the operator to configure a transport when
+          the Email column is unlocked but no transport is enabled yet. */}
+      {!transportEnabled ? (
+        <p className="mt-3 text-xs text-[var(--color-fg-subtle)]">
+          Configure an email transport above to receive these.
+        </p>
+      ) : null}
     </section>
   );
 }

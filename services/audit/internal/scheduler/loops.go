@@ -70,11 +70,41 @@ func (c *RunnerConfig) defaults() {
 	}
 }
 
+// schedulerRepo is the repository surface the Runner depends on. It is
+// declared as an interface (satisfied by *repository.Repository) so the
+// loops can be exercised against a fake in unit tests without standing up
+// a live Postgres. Production code always passes the concrete repo.
+type schedulerRepo interface {
+	ListActiveTenants(ctx context.Context, window time.Duration) ([]uuid.UUID, error)
+	LastScheduledAt(ctx context.Context, tenantID uuid.UUID, category string) (time.Time, error)
+	ScheduleNotification(ctx context.Context, tenantID uuid.UUID, category string, dueAt time.Time, payload json.RawMessage) (bool, error)
+	RevertStuckInProgress(ctx context.Context, maxAge time.Duration) (int64, error)
+	ClaimDueNotifications(ctx context.Context, now time.Time, limit int) ([]*repository.ScheduledNotification, error)
+	MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) error
+	MarkDelivered(ctx context.Context, id uuid.UUID) error
+	Insert(ctx context.Context, e *repository.AuditEvent) error
+	// FUT-019 Phase 3 — email fan-out surface.
+	ListEmailRecipients(ctx context.Context, tenantID uuid.UUID, category string) ([]uuid.UUID, error)
+	EnqueueEmailDelivery(ctx context.Context, d repository.EmailDelivery) error
+}
+
+// EmailRecipientResolver resolves user ids to email addresses. Implemented by a
+// thin adapter over authv1.AuthServiceClient (wired in server.go, Task 10); nil
+// disables email fan-out.
+type EmailRecipientResolver interface {
+	ResolveEmails(ctx context.Context, tenantID uuid.UUID, userIDs []uuid.UUID) (map[uuid.UUID]string, error)
+}
+
 // Runner orchestrates the scheduler + dispatcher.
 type Runner struct {
-	repo       *repository.Repository
+	repo       schedulerRepo
 	categories []Category
 	cfg        RunnerConfig
+	// resolver turns opted-in user ids into email addresses for the
+	// FUT-019 Phase 3 fan-out. Nil (the default) disables email enqueue
+	// entirely — server.go attaches it via WithEmailResolver only when
+	// AUTH_GRPC_ADDR is configured.
+	resolver EmailRecipientResolver
 }
 
 // New returns a Runner ready to Start. Pass the categories the
@@ -82,6 +112,13 @@ type Runner struct {
 func New(repo *repository.Repository, categories []Category, cfg RunnerConfig) *Runner {
 	cfg.defaults()
 	return &Runner{repo: repo, categories: categories, cfg: cfg}
+}
+
+// WithEmailResolver attaches the recipient resolver for FUT-019 email fan-out.
+// Nil (the default) disables email enqueue entirely. Returns the Runner for chaining.
+func (r *Runner) WithEmailResolver(resolver EmailRecipientResolver) *Runner {
+	r.resolver = resolver
+	return r
 }
 
 // Start launches both loops. Blocks until ctx is cancelled. Errors
@@ -280,7 +317,64 @@ func (r *Runner) dispatchOne(
 	}); err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
 	}
+	// FUT-019 Phase 3 — best-effort email fan-out. Never fails the bell write.
+	r.enqueueEmail(ctx, sn, rendered)
 	return nil
+}
+
+// enqueueEmail fans a rendered notification out to the email_deliveries queue,
+// one row per user who has email_enabled for this category. Best-effort: every
+// failure logs + returns so a mail problem never fails bell delivery. A nil
+// resolver (email disabled) short-circuits before any work.
+func (r *Runner) enqueueEmail(
+	ctx context.Context,
+	sn *repository.ScheduledNotification,
+	rendered RenderedNotification,
+) {
+	if r.resolver == nil {
+		return
+	}
+	// Only users who explicitly opted in (email_enabled=true) for this
+	// category are candidates — the repo query already enforces that.
+	recipients, err := r.repo.ListEmailRecipients(ctx, sn.TenantID, sn.Category)
+	if err != nil {
+		slog.WarnContext(ctx, "FUT-019 email: list recipients failed",
+			"err", err, "category", sn.Category)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	// Resolve user ids → email addresses via the auth adapter. A failure
+	// here silences email for this notification only; the bell row already
+	// landed, so the user still sees it in-app.
+	emails, err := r.resolver.ResolveEmails(ctx, sn.TenantID, recipients)
+	if err != nil {
+		slog.WarnContext(ctx, "FUT-019 email: resolve emails failed", "err", err)
+		return
+	}
+	for uid, addr := range emails {
+		// Skip users the resolver couldn't map to a usable address.
+		if addr == "" {
+			continue
+		}
+		// EnqueueEmailDelivery is idempotent on (source_scheduled_id, user_id),
+		// so a dispatcher retry never double-sends. Per-row failures are logged
+		// and skipped — one bad recipient must not block the rest.
+		if err := r.repo.EnqueueEmailDelivery(ctx, repository.EmailDelivery{
+			TenantID:          sn.TenantID,
+			UserID:            uid,
+			ToAddress:         addr,
+			Category:          sn.Category,
+			Subject:           rendered.Title,
+			BodySummary:       rendered.Summary,
+			Link:              rendered.Link,
+			SourceScheduledID: sn.ID,
+		}); err != nil {
+			slog.WarnContext(ctx, "FUT-019 email: enqueue failed",
+				"err", err, "user_id", uid)
+		}
+	}
 }
 
 // ErrUnknownCategory is returned by dispatchOne when a row's category

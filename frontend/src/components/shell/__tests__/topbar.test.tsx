@@ -64,6 +64,10 @@ vi.mock("../notifications-bell", () => ({
   NotificationsBell: () => null,
 }));
 
+vi.mock("../email-activity-menu", () => ({
+  EmailActivityMenu: () => null,
+}));
+
 vi.mock("../theme-toggle", () => ({
   ThemeToggle: () => null,
 }));

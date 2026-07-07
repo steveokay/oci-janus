@@ -91,6 +91,21 @@ func (f *fakeAuditClient) UpdateUserNotificationPreferences(_ context.Context, _
 	return nil, nil
 }
 
+// FUT-019 Phase 3 email-channel RPCs — stubbed; the activity handler never calls
+// them, but they're part of the AuditServiceClient interface the fake satisfies.
+func (f *fakeAuditClient) GetEmailTransportConfig(_ context.Context, _ *auditv1.GetEmailTransportConfigRequest, _ ...grpc.CallOption) (*auditv1.EmailTransportConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) PutEmailTransportConfig(_ context.Context, _ *auditv1.PutEmailTransportConfigRequest, _ ...grpc.CallOption) (*auditv1.EmailTransportConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) SendTestEmail(_ context.Context, _ *auditv1.SendTestEmailRequest, _ ...grpc.CallOption) (*auditv1.SendTestEmailResponse, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) ListEmailDeliveries(_ context.Context, _ *auditv1.ListEmailDeliveriesRequest, _ ...grpc.CallOption) (*auditv1.ListEmailDeliveriesResponse, error) {
+	return nil, nil
+}
+
 // ── activityTestEnv ───────────────────────────────────────────────────────────
 
 // activityTestEnv bundles the pieces needed to drive activity handler tests.

@@ -32,6 +32,10 @@ const (
 	AuditService_DrainAuditExportDLX_FullMethodName               = "/registry.audit.v1.AuditService/DrainAuditExportDLX"
 	AuditService_GetUserNotificationPreferences_FullMethodName    = "/registry.audit.v1.AuditService/GetUserNotificationPreferences"
 	AuditService_UpdateUserNotificationPreferences_FullMethodName = "/registry.audit.v1.AuditService/UpdateUserNotificationPreferences"
+	AuditService_GetEmailTransportConfig_FullMethodName           = "/registry.audit.v1.AuditService/GetEmailTransportConfig"
+	AuditService_PutEmailTransportConfig_FullMethodName           = "/registry.audit.v1.AuditService/PutEmailTransportConfig"
+	AuditService_SendTestEmail_FullMethodName                     = "/registry.audit.v1.AuditService/SendTestEmail"
+	AuditService_ListEmailDeliveries_FullMethodName               = "/registry.audit.v1.AuditService/ListEmailDeliveries"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -114,6 +118,11 @@ type AuditServiceClient interface {
 	// they opt in.
 	GetUserNotificationPreferences(ctx context.Context, in *GetUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*GetUserNotificationPreferencesResponse, error)
 	UpdateUserNotificationPreferences(ctx context.Context, in *UpdateUserNotificationPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserNotificationPreferencesResponse, error)
+	// FUT-019 Phase 3 — email transport config + delivery log.
+	GetEmailTransportConfig(ctx context.Context, in *GetEmailTransportConfigRequest, opts ...grpc.CallOption) (*EmailTransportConfig, error)
+	PutEmailTransportConfig(ctx context.Context, in *PutEmailTransportConfigRequest, opts ...grpc.CallOption) (*EmailTransportConfig, error)
+	SendTestEmail(ctx context.Context, in *SendTestEmailRequest, opts ...grpc.CallOption) (*SendTestEmailResponse, error)
+	ListEmailDeliveries(ctx context.Context, in *ListEmailDeliveriesRequest, opts ...grpc.CallOption) (*ListEmailDeliveriesResponse, error)
 }
 
 type auditServiceClient struct {
@@ -254,6 +263,46 @@ func (c *auditServiceClient) UpdateUserNotificationPreferences(ctx context.Conte
 	return out, nil
 }
 
+func (c *auditServiceClient) GetEmailTransportConfig(ctx context.Context, in *GetEmailTransportConfigRequest, opts ...grpc.CallOption) (*EmailTransportConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailTransportConfig)
+	err := c.cc.Invoke(ctx, AuditService_GetEmailTransportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) PutEmailTransportConfig(ctx context.Context, in *PutEmailTransportConfigRequest, opts ...grpc.CallOption) (*EmailTransportConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailTransportConfig)
+	err := c.cc.Invoke(ctx, AuditService_PutEmailTransportConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) SendTestEmail(ctx context.Context, in *SendTestEmailRequest, opts ...grpc.CallOption) (*SendTestEmailResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendTestEmailResponse)
+	err := c.cc.Invoke(ctx, AuditService_SendTestEmail_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) ListEmailDeliveries(ctx context.Context, in *ListEmailDeliveriesRequest, opts ...grpc.CallOption) (*ListEmailDeliveriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEmailDeliveriesResponse)
+	err := c.cc.Invoke(ctx, AuditService_ListEmailDeliveries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -334,6 +383,11 @@ type AuditServiceServer interface {
 	// they opt in.
 	GetUserNotificationPreferences(context.Context, *GetUserNotificationPreferencesRequest) (*GetUserNotificationPreferencesResponse, error)
 	UpdateUserNotificationPreferences(context.Context, *UpdateUserNotificationPreferencesRequest) (*UpdateUserNotificationPreferencesResponse, error)
+	// FUT-019 Phase 3 — email transport config + delivery log.
+	GetEmailTransportConfig(context.Context, *GetEmailTransportConfigRequest) (*EmailTransportConfig, error)
+	PutEmailTransportConfig(context.Context, *PutEmailTransportConfigRequest) (*EmailTransportConfig, error)
+	SendTestEmail(context.Context, *SendTestEmailRequest) (*SendTestEmailResponse, error)
+	ListEmailDeliveries(context.Context, *ListEmailDeliveriesRequest) (*ListEmailDeliveriesResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -378,6 +432,18 @@ func (UnimplementedAuditServiceServer) GetUserNotificationPreferences(context.Co
 }
 func (UnimplementedAuditServiceServer) UpdateUserNotificationPreferences(context.Context, *UpdateUserNotificationPreferencesRequest) (*UpdateUserNotificationPreferencesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateUserNotificationPreferences not implemented")
+}
+func (UnimplementedAuditServiceServer) GetEmailTransportConfig(context.Context, *GetEmailTransportConfigRequest) (*EmailTransportConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEmailTransportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) PutEmailTransportConfig(context.Context, *PutEmailTransportConfigRequest) (*EmailTransportConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutEmailTransportConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) SendTestEmail(context.Context, *SendTestEmailRequest) (*SendTestEmailResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendTestEmail not implemented")
+}
+func (UnimplementedAuditServiceServer) ListEmailDeliveries(context.Context, *ListEmailDeliveriesRequest) (*ListEmailDeliveriesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListEmailDeliveries not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -625,6 +691,78 @@ func _AuditService_UpdateUserNotificationPreferences_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetEmailTransportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEmailTransportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetEmailTransportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetEmailTransportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetEmailTransportConfig(ctx, req.(*GetEmailTransportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_PutEmailTransportConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutEmailTransportConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).PutEmailTransportConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_PutEmailTransportConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).PutEmailTransportConfig(ctx, req.(*PutEmailTransportConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_SendTestEmail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendTestEmailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).SendTestEmail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_SendTestEmail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).SendTestEmail(ctx, req.(*SendTestEmailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_ListEmailDeliveries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEmailDeliveriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).ListEmailDeliveries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_ListEmailDeliveries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).ListEmailDeliveries(ctx, req.(*ListEmailDeliveriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -683,6 +821,22 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateUserNotificationPreferences",
 			Handler:    _AuditService_UpdateUserNotificationPreferences_Handler,
+		},
+		{
+			MethodName: "GetEmailTransportConfig",
+			Handler:    _AuditService_GetEmailTransportConfig_Handler,
+		},
+		{
+			MethodName: "PutEmailTransportConfig",
+			Handler:    _AuditService_PutEmailTransportConfig_Handler,
+		},
+		{
+			MethodName: "SendTestEmail",
+			Handler:    _AuditService_SendTestEmail_Handler,
+		},
+		{
+			MethodName: "ListEmailDeliveries",
+			Handler:    _AuditService_ListEmailDeliveries_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
