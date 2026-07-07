@@ -36,6 +36,9 @@ const (
 	AuditService_PutEmailTransportConfig_FullMethodName           = "/registry.audit.v1.AuditService/PutEmailTransportConfig"
 	AuditService_SendTestEmail_FullMethodName                     = "/registry.audit.v1.AuditService/SendTestEmail"
 	AuditService_ListEmailDeliveries_FullMethodName               = "/registry.audit.v1.AuditService/ListEmailDeliveries"
+	AuditService_GetNotificationWebhookConfig_FullMethodName      = "/registry.audit.v1.AuditService/GetNotificationWebhookConfig"
+	AuditService_PutNotificationWebhookConfig_FullMethodName      = "/registry.audit.v1.AuditService/PutNotificationWebhookConfig"
+	AuditService_SendTestNotificationWebhook_FullMethodName       = "/registry.audit.v1.AuditService/SendTestNotificationWebhook"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -123,6 +126,10 @@ type AuditServiceClient interface {
 	PutEmailTransportConfig(ctx context.Context, in *PutEmailTransportConfigRequest, opts ...grpc.CallOption) (*EmailTransportConfig, error)
 	SendTestEmail(ctx context.Context, in *SendTestEmailRequest, opts ...grpc.CallOption) (*SendTestEmailResponse, error)
 	ListEmailDeliveries(ctx context.Context, in *ListEmailDeliveriesRequest, opts ...grpc.CallOption) (*ListEmailDeliveriesResponse, error)
+	// FUT-019 webhook notification channel (admin-configured org webhook).
+	GetNotificationWebhookConfig(ctx context.Context, in *GetNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error)
+	PutNotificationWebhookConfig(ctx context.Context, in *PutNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error)
+	SendTestNotificationWebhook(ctx context.Context, in *SendTestNotificationWebhookRequest, opts ...grpc.CallOption) (*SendTestNotificationWebhookResponse, error)
 }
 
 type auditServiceClient struct {
@@ -303,6 +310,36 @@ func (c *auditServiceClient) ListEmailDeliveries(ctx context.Context, in *ListEm
 	return out, nil
 }
 
+func (c *auditServiceClient) GetNotificationWebhookConfig(ctx context.Context, in *GetNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotificationWebhookConfig)
+	err := c.cc.Invoke(ctx, AuditService_GetNotificationWebhookConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) PutNotificationWebhookConfig(ctx context.Context, in *PutNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotificationWebhookConfig)
+	err := c.cc.Invoke(ctx, AuditService_PutNotificationWebhookConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *auditServiceClient) SendTestNotificationWebhook(ctx context.Context, in *SendTestNotificationWebhookRequest, opts ...grpc.CallOption) (*SendTestNotificationWebhookResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendTestNotificationWebhookResponse)
+	err := c.cc.Invoke(ctx, AuditService_SendTestNotificationWebhook_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -388,6 +425,10 @@ type AuditServiceServer interface {
 	PutEmailTransportConfig(context.Context, *PutEmailTransportConfigRequest) (*EmailTransportConfig, error)
 	SendTestEmail(context.Context, *SendTestEmailRequest) (*SendTestEmailResponse, error)
 	ListEmailDeliveries(context.Context, *ListEmailDeliveriesRequest) (*ListEmailDeliveriesResponse, error)
+	// FUT-019 webhook notification channel (admin-configured org webhook).
+	GetNotificationWebhookConfig(context.Context, *GetNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error)
+	PutNotificationWebhookConfig(context.Context, *PutNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error)
+	SendTestNotificationWebhook(context.Context, *SendTestNotificationWebhookRequest) (*SendTestNotificationWebhookResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -444,6 +485,15 @@ func (UnimplementedAuditServiceServer) SendTestEmail(context.Context, *SendTestE
 }
 func (UnimplementedAuditServiceServer) ListEmailDeliveries(context.Context, *ListEmailDeliveriesRequest) (*ListEmailDeliveriesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListEmailDeliveries not implemented")
+}
+func (UnimplementedAuditServiceServer) GetNotificationWebhookConfig(context.Context, *GetNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNotificationWebhookConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) PutNotificationWebhookConfig(context.Context, *PutNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutNotificationWebhookConfig not implemented")
+}
+func (UnimplementedAuditServiceServer) SendTestNotificationWebhook(context.Context, *SendTestNotificationWebhookRequest) (*SendTestNotificationWebhookResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendTestNotificationWebhook not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -763,6 +813,60 @@ func _AuditService_ListEmailDeliveries_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_GetNotificationWebhookConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNotificationWebhookConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).GetNotificationWebhookConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_GetNotificationWebhookConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).GetNotificationWebhookConfig(ctx, req.(*GetNotificationWebhookConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_PutNotificationWebhookConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutNotificationWebhookConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).PutNotificationWebhookConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_PutNotificationWebhookConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).PutNotificationWebhookConfig(ctx, req.(*PutNotificationWebhookConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuditService_SendTestNotificationWebhook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendTestNotificationWebhookRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).SendTestNotificationWebhook(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_SendTestNotificationWebhook_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).SendTestNotificationWebhook(ctx, req.(*SendTestNotificationWebhookRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -837,6 +941,18 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListEmailDeliveries",
 			Handler:    _AuditService_ListEmailDeliveries_Handler,
+		},
+		{
+			MethodName: "GetNotificationWebhookConfig",
+			Handler:    _AuditService_GetNotificationWebhookConfig_Handler,
+		},
+		{
+			MethodName: "PutNotificationWebhookConfig",
+			Handler:    _AuditService_PutNotificationWebhookConfig_Handler,
+		},
+		{
+			MethodName: "SendTestNotificationWebhook",
+			Handler:    _AuditService_SendTestNotificationWebhook_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
