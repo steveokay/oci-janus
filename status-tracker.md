@@ -22,20 +22,6 @@
 
 ## Open remediation items
 
-### REDESIGN-001 — v2.0.0 soak window (residual)
-
-**Status:** rewrite shipped. `v2.0.0-rc1` tagged 2026-06-30 (`4dd3e63` → commit `f0896ff`, pushed to origin). Phases 0–8.2 all DONE; resolution row in [`status.md`](status.md) (2026-06-30). Plan dashboard ticked in `.claude/plans/2026-06-26-single-tenant-redesign.md`.
-
-**Remaining:** calendar-only — soak `v2.0.0-rc1` until **≥ 2026-07-07**, then tag `v2.0.0` + cut the GitHub release. Once `v2.0.0` is tagged, delete this entry.
-
-**Tail SEC follow-ups — SHIPPED 2026-07-04:** SEC-051/052 (#265), SEC-053/054 (#264), SEC-075 + the 5.6 OAuth `ErrEmailNotVerified` → 403/EMAILNOTVERIFIED alignment (#263), SEC-071/072/073 + `--to-version` bounds + signal-aware cancel (#262). Resolution rows in [`status.md`](status.md); full triage in [`security.md`](security.md). **Residual OPEN:** SEC-074 (INFO, plaintext buffer zeroing — accepted as best-effort defense-in-depth, consistent with the `libs/crypto/aes` posture, not a regression).
-
-**Deferred to `futures.md`:** RED-FU-016 (SAML v0.5.x bump, LOW), RED-FU-017 (audit checkpoint signing, LOW), RED-FU-018 (scanner in-process sandbox, PARKED). *(RED-FU-015 KEK rotation tool **SHIPPED 2026-07-03**, PR #249 — resolution row in [`status.md`](status.md); review follow-ups tracked below.)*
-
-**Unblocked once v2.0.0 ships:** FUT-019 Phase 3 (email channel).
-
----
-
 ### RED-FU-015 follow-ups — KEK rotation tool post-merge hardening
 
 **Status:** OPEN (non-blocking; mostly cleared). RED-FU-015 shipped in PR #249; the bulk of the should-fix follow-ups shipped in **PR #262 (2026-07-04)**: SEC-071/072/073 (lock-free verify, stdout/stderr split, equal-key guard), code-review #3 (`--to-version` bounds), code-review #5 (`signal.NotifyContext(SIGINT,SIGTERM)`), and the QA flag-plumbing test gaps (`cli_test.go` covering mutual-exclusion / bounds / bad-missing-equal keys / missing DSN / `--generate`, plus `Rekey`/`OnNewKey` empty+nil ciphertext and a `selectSQL` FOR-UPDATE lock-clause assertion). Resolution rows in [`status.md`](status.md).
