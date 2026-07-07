@@ -179,8 +179,13 @@ service AuthService {
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
   // FE-API-028 — used by the platform-admin tenant-detail view
   rpc CountTenantUsers(CountTenantUsersRequest) returns (CountTenantUsersResponse);
+  // FUT-019 Phase 3 — batch-resolves user ids to email addresses within a tenant,
+  // called by registry-audit to resolve email-notification recipients.
+  rpc ResolveUserEmails(ResolveUserEmailsRequest) returns (ResolveUserEmailsResponse);
 }
 ```
+
+`ResolveUserEmails(tenant_id, user_ids[]) → [{user_id, email, email_verified}]` is tenant-scoped (`WHERE tenant_id = $1 AND id = ANY($2)`) and omits users with no email. `email_verified` is currently always `false` (the `users` table has no such column yet) — it is returned for future gating but never blocks delivery. New audit → auth mTLS peer edge; see [`docs/AUTH.md`](AUTH.md).
 
 **Auth schema additions for FE-API-034 (SSO):**
 - `auth_providers(id, tenant_id, type, display_name, enabled, oauth_client_id, oauth_client_secret_encrypted, oauth_issuer_url, oauth_scopes, saml_entity_id, saml_audience, saml_idp_metadata_xml, …)` — `type` enum: `google` | `github` | `microsoft` | `oidc` | `saml`; canonical-type providers (Google/GitHub/Microsoft) have a per-tenant unique constraint.
@@ -692,6 +697,25 @@ type AuditEvent struct {
 - `GetAnalytics(tenant_id, scope_type, repo_id, range_secs, bucket_secs)` — FE-API-030; PG14 `date_bin` time-series; BFF pre-allocates empty buckets so quiet periods return `count=0`
 - `GetLastTenantPush(tenant_id)` — FE-API-028; serialised as JSON `null` when no push activity yet
 
+**Email notification channel (FUT-019 Phase 3):**
+
+`services/audit` owns the email notification pipeline. The per-minute dispatcher, after writing the bell `audit_events` row, best-effort enqueues one `email_deliveries` row per opted-in recipient (recipient addresses resolved via `registry-auth.ResolveUserEmails`). A send loop drains the queue with `FOR UPDATE SKIP LOCKED` + webhook-style backoff (`5s → 30s → 5m → 30m → 2h`, 5 attempts) via a pluggable transport — **Resend** (default, HTTP API) or **SMTP** (Gmail is an SMTP preset: app-password, no OAuth).
+
+New tables (migration `services/audit/migrations/20260707120000_email_channel.sql`):
+- `email_transport_config(tenant_id PK, provider, enabled, from_address, from_name, resend_api_key_enc, smtp_host/port/username, smtp_password_enc, smtp_tls_mode, kek_version, last_test_at/ok/error, updated_at/by)` — one row per tenant; `provider` ∈ `{resend, smtp}`, `smtp_tls_mode` ∈ `{starttls, implicit, none}`. Secret columns are `BYTEA`, AES-256-GCM-sealed under `NOTIFY_EMAIL_KEY_HEX`; `kek_version` is the `rotate-kek` (RED-FU-015) target.
+- `email_deliveries(id, tenant_id, user_id, to_address, category, subject, body_summary, link, source_scheduled_id, status, attempts, next_attempt_at, last_error, provider, created_at, sent_at)` — per-send log **and** send queue; `status` ∈ `{pending, sent, failed}`. Idempotent fan-out via `UNIQUE (source_scheduled_id, user_id)`.
+
+New RPCs on `AuditService`:
+- `GetEmailTransportConfig(tenant_id)` — returns config with **secrets never echoed**; exposes `has_resend_key` / `has_smtp_password` booleans instead of the values.
+- `PutEmailTransportConfig(config)` — upsert with **write-only secrets** (empty secret field means "keep existing"); stamps `kek_version`. Returns `FailedPrecondition` when a secret is supplied but `NOTIFY_EMAIL_KEY_HEX` is unset.
+- `SendTestEmail(tenant_id, to_address)` — synchronous test-send (the BFF passes the caller's own email), records `last_test_*`, returns `{ok, error}` (redacted).
+- `ListEmailDeliveries(tenant_id, user_id, page_size)` — per-user delivery log, newest first.
+
+New env vars (see `services/audit/.env.example`):
+- `NOTIFY_EMAIL_KEY_HEX` — 64-hex (32-byte) AES-256-GCM KEK for transport secrets. Unset disables the email channel; set-but-wrong-length fails closed at startup.
+- `AUTH_GRPC_ADDR` — mTLS target for `registry-auth.ResolveUserEmails`. Unset disables email fan-out (bell channel unaffected).
+- `PLATFORM_HOST` — optional public base URL for absolute email CTA links; empty → relative links.
+
 ---
 
 ## 11. registry-gc
@@ -870,6 +894,13 @@ DELETE /api/v1/workspace/me/domains/:domain            # X-Janus-Warning header 
 
 # Notifications / analytics (FE-API-008, 030)
 GET    /api/v1/notifications                           # Poll-based notifications (since, event_types, unread_only)
+
+# Email notification transport + delivery log (FUT-019 Phase 3)
+GET    /api/v1/notifications/email-transport           # Get transport config (admin; secrets masked to has_* booleans)
+PUT    /api/v1/notifications/email-transport           # Save transport config (admin; write-only secrets)
+POST   /api/v1/notifications/email-transport/test      # Send a test email to the caller's own address (admin)
+GET    /api/v1/notifications/email-deliveries          # Current user's email delivery log
+
 GET    /api/v1/repositories/:org/:repo/analytics       # Repo-scoped time-series
 GET    /api/v1/stats/analytics                         # Tenant-wide analytics
 GET    /api/v1/stats/storage                           # Per-repo storage breakdown (FE-API-031)
@@ -920,7 +951,7 @@ POST   /api/v1/admin/gc/run
 **gRPC calls made by this service:**
 - `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`, `CountTenantUsers`
 - `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5
-- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`
+- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`, `GetEmailTransportConfig`, `PutEmailTransportConfig`, `SendTestEmail`, `ListEmailDeliveries` (FUT-019 Phase 3 — the email-transport routes map `FailedPrecondition` → `409` when email isn't configured)
 - `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`, `ListTenantDomains`, `VerifyDomainNow`, `SetPrimaryDomain`, `DeleteDomain`
 - `registry-signer` (opt-in via `SIGNER_GRPC_ADDR`): `ListSignatures`, `SignManifest`, `VerifyManifest`
 - `registry-scanner` (opt-in via `SCANNER_GRPC_ADDR`): scan-policy + compliance-report RPCs

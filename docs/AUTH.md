@@ -63,6 +63,14 @@ and rejects gRPC requests whose client cert CN is not on the list.
 
 Closed by REDESIGN-001 Phase 6.10 (PR #204).
 
+**FUT-019 Phase 3 — new audit → auth peer edge.** `registry-audit` now dials
+`registry-auth.ResolveUserEmails` (to resolve email-notification recipients),
+using `loader.BaseConfig.MTLSClientCreds("registry-auth")` with an eager
+`conn.Connect()` at startup. `registry-auth`'s `MTLS_PEER_CN_ALLOWLIST` must
+therefore include `registry-audit`'s client CN, otherwise the resolve call is
+rejected at the peer-CN gate (and the email channel silently resolves no
+recipients while the bell channel is unaffected).
+
 ## Client-side serverName pinning
 
 `loader.BaseConfig.MTLSClientCreds(serverName)` is the canonical wrapper

@@ -387,13 +387,19 @@ categories** preference matrix have shipped. As of the 2026-07-05 UI
 cleanup the matrix lives on its own tab — **Settings › Notifications**
 (`routes/_authenticated.settings.notifications.tsx`, `NotificationsSection`
 + `ChannelToggleCell`) — moved out of the old Settings › Account tab.
-**Still open / tracked here:** only the **Bell** delivery channel is live;
-the **Email** and **Webhook** columns render but are visibly locked
-("Wired in Phase 3+") because the BFF drops those writes until the
-delivery worker lands. Wiring Email (Resend default + pluggable SMTP/Gmail,
-per the email-channel plan) + Webhook delivery is the remaining Phase 3
-work — do NOT let the "Notification categories" surface read as complete
-while those two channels are inert.
+**Update (2026-07-07):** the **Email** channel has **SHIPPED** (branch
+`feat/fut-019-email-channel`) — Resend default + pluggable SMTP/Gmail
+transport, a per-tenant transport config panel on Settings › Notifications
+(AES-256-GCM secrets under `NOTIFY_EMAIL_KEY_HEX`), a per-user delivery send
+loop that resolves recipients through the new `registry-auth.ResolveUserEmails`
+RPC, and a topbar ✉️ delivery-log dropdown. The **Email** matrix column is now
+unlocked and live.
+
+**Still open / tracked here:** the **Webhook** column is the last locked
+channel ("Wired in Phase 3+") and the remaining Phase 3 work — unlock it using
+the `services/webhook` delivery machinery (retries + HMAC + SSRF already exist
+there). The **Bell** and **Email** channels are both live; do NOT let the
+"Notification categories" surface read as fully complete while Webhook is inert.
 
 ---
 
