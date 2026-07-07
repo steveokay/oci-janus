@@ -108,20 +108,32 @@ func (h *Handler) handleGetNotificationPreferences(w http.ResponseWriter, r *htt
 	for _, p := range resp.GetPreferences() {
 		dbByCategory[p.GetCategory()] = p
 	}
+	// FUT-019 webhook channel — the Webhook matrix column is tenant-level, not
+	// per-user: it reflects the org webhook config's enabled_categories. Fetch
+	// it once and overlay below (the per-user webhook_enabled flag is ignored).
+	// A webhook-config error is non-fatal — the matrix still renders bell+email;
+	// the Webhook column just shows all-off until the config loads.
+	webhookCats := map[string]struct{}{}
+	if wc, werr := h.audit.GetNotificationWebhookConfig(r.Context(), &auditv1.GetNotificationWebhookConfigRequest{TenantId: tenantID}); werr == nil {
+		for _, c := range wc.GetEnabledCategories() {
+			webhookCats[c] = struct{}{}
+		}
+	}
 	out := NotificationPreferencesResponse{
 		Preferences: make([]NotificationPreferenceRow, 0, len(knownNotificationCategories)),
 	}
 	for _, cat := range knownNotificationCategories {
 		row := NotificationPreferenceRow{
 			NotificationCategoryMeta: cat,
-			// Defaults: bell on, email + webhook off.
+			// Defaults: bell on, email off. Webhook is set from the overlay below.
 			BellEnabled: true,
 		}
 		if pref, ok := dbByCategory[cat.Key]; ok {
 			row.BellEnabled = pref.GetBellEnabled()
 			row.EmailEnabled = pref.GetEmailEnabled()
-			row.WebhookEnabled = pref.GetWebhookEnabled()
 		}
+		// Webhook is tenant-level (org config), not per-user.
+		_, row.WebhookEnabled = webhookCats[cat.Key]
 		out.Preferences = append(out.Preferences, row)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -159,10 +171,13 @@ func (h *Handler) handlePatchNotificationPreferences(w http.ResponseWriter, r *h
 			return
 		}
 		patchProtos = append(patchProtos, &auditv1.NotificationPreference{
-			Category:       row.Category,
-			BellEnabled:    row.BellEnabled,
-			EmailEnabled:   row.EmailEnabled,
-			WebhookEnabled: row.WebhookEnabled,
+			Category:     row.Category,
+			BellEnabled:  row.BellEnabled,
+			EmailEnabled: row.EmailEnabled,
+			// FUT-019 webhook channel — webhook is tenant-level + admin-gated;
+			// the per-user PATCH never writes it (admins use the webhook-config
+			// PUT). Force false so a stale client body can't persist it.
+			WebhookEnabled: false,
 		})
 	}
 	if _, err := h.audit.UpdateUserNotificationPreferences(r.Context(), &auditv1.UpdateUserNotificationPreferencesRequest{
