@@ -23,7 +23,7 @@ func TestResendTransport_send_postsExpectedShape(t *testing.T) {
 	defer srv.Close()
 
 	tr := &resendTransport{
-		apiKey: "re_secret", from: "Reg <n@example.com>",
+		apiKey: "test-resend-key", from: "Reg <n@example.com>",
 		endpoint: srv.URL, client: srv.Client(),
 	}
 	err := tr.Send(context.Background(), Message{
@@ -32,7 +32,7 @@ func TestResendTransport_send_postsExpectedShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotAuth != "Bearer re_secret" {
+	if gotAuth != "Bearer test-resend-key" {
 		t.Fatalf("auth header = %q", gotAuth)
 	}
 	var payload map[string]any
@@ -47,15 +47,15 @@ func TestResendTransport_send_postsExpectedShape(t *testing.T) {
 func TestResendTransport_send_redactsKeyOnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"message":"bad key re_secret"}`))
+		_, _ = w.Write([]byte(`{"message":"bad key test-resend-key"}`))
 	}))
 	defer srv.Close()
-	tr := &resendTransport{apiKey: "re_secret", from: "f", endpoint: srv.URL, client: srv.Client()}
+	tr := &resendTransport{apiKey: "test-resend-key", from: "f", endpoint: srv.URL, client: srv.Client()}
 	err := tr.Send(context.Background(), Message{To: "u@example.com", Subject: "s"})
 	if err == nil {
 		t.Fatal("expected error on 401")
 	}
-	if strings.Contains(err.Error(), "re_secret") {
+	if strings.Contains(err.Error(), "test-resend-key") {
 		t.Fatalf("error leaked the API key: %v", err)
 	}
 }
