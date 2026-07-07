@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,7 +225,11 @@ func TestSender_runTick_idlesWithoutKEK(t *testing.T) {
 	}
 }
 
-func TestSender_runTick_disabledConfigLeavesPending(t *testing.T) {
+// FIX 2: a disabled/misconfigured transport must age the leased row toward a
+// terminal state (via fail()), NOT leave it pending — otherwise the row is
+// re-claimed every minute forever. This tick bumps attempts (0→1) and, because
+// the config is disabled, records the failure without ever sending.
+func TestSender_runTick_disabledConfigFailsRow(t *testing.T) {
 	tid := uuid.New()
 	cfg := enabledConfig(tid)
 	cfg.Enabled = false // config exists but disabled
@@ -237,10 +242,88 @@ func TestSender_runTick_disabledConfigLeavesPending(t *testing.T) {
 
 	s.runTick(context.Background())
 
-	if repo.sentCalled || repo.failedCalled {
-		t.Fatalf("expected the row left untouched (pending) when config is disabled")
+	if repo.sentCalled {
+		t.Fatalf("did not expect MarkEmailSent when config is disabled")
+	}
+	if !repo.failedCalled {
+		t.Fatalf("expected MarkEmailFailed to age the row when config is disabled")
+	}
+	if repo.failedAttempts != 1 {
+		t.Fatalf("expected attempts=1 after one disabled tick, got %d", repo.failedAttempts)
 	}
 	if len(tr.sent) != 0 {
 		t.Fatalf("expected no transport.Send when config disabled")
+	}
+}
+
+// FIX 2 (terminal): once a disabled row has burned its retry budget the failure
+// must flip it to 'failed' so it stops being re-claimed.
+func TestSender_runTick_disabledConfigTerminatesAtMaxAttempts(t *testing.T) {
+	tid := uuid.New()
+	cfg := enabledConfig(tid)
+	cfg.Enabled = false
+	repo := &fakeSenderRepo{
+		cfg:     cfg,
+		pending: []*repository.EmailDelivery{pendingDelivery(tid, MaxAttempts-1)},
+	}
+	tr := &fakeTransport{name: "resend"}
+	s := newTestSender(repo, tr)
+
+	s.runTick(context.Background())
+
+	if !repo.failedCalled {
+		t.Fatalf("expected MarkEmailFailed to be called")
+	}
+	if repo.failedAttempts != MaxAttempts {
+		t.Fatalf("expected attempts=%d, got %d", MaxAttempts, repo.failedAttempts)
+	}
+	if !repo.failedFlag {
+		t.Fatalf("expected failed=true on the MaxAttempts-th disabled tick")
+	}
+}
+
+// TestRenderMessage_escapesHTML verifies the security-relevant escape: a crafted
+// event summary / category must appear HTML-escaped in the HTML body, never as
+// live markup (FIX 4 test gap).
+func TestRenderMessage_escapesHTML(t *testing.T) {
+	tid := uuid.New()
+	d := pendingDelivery(tid, 0)
+	d.BodySummary = "<script>alert(1)</script>"
+	d.Category = "<b>digest</b>"
+
+	msg := renderMessage("https://janus.example.com", d)
+
+	if strings.Contains(msg.HTMLBody, "<script>") {
+		t.Fatalf("HTML body contains raw <script>: %q", msg.HTMLBody)
+	}
+	if !strings.Contains(msg.HTMLBody, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("HTML body missing escaped summary: %q", msg.HTMLBody)
+	}
+	if strings.Contains(msg.HTMLBody, "<b>digest</b>") {
+		t.Fatalf("HTML body contains raw category markup: %q", msg.HTMLBody)
+	}
+	if !strings.Contains(msg.HTMLBody, "&lt;b&gt;digest&lt;/b&gt;") {
+		t.Fatalf("HTML body missing escaped category: %q", msg.HTMLBody)
+	}
+}
+
+// TestRenderMessage_absoluteFooterLink verifies the footer "Manage preferences"
+// link is absolutized against platformHost the same way the CTA is (FIX 4).
+func TestRenderMessage_absoluteFooterLink(t *testing.T) {
+	tid := uuid.New()
+	d := pendingDelivery(tid, 0)
+
+	msg := renderMessage("https://janus.example.com", d)
+	if !strings.Contains(msg.HTMLBody, `href="https://janus.example.com/settings/notifications"`) {
+		t.Fatalf("expected absolute footer link, got %q", msg.HTMLBody)
+	}
+	if !strings.Contains(msg.TextBody, "https://janus.example.com/settings/notifications") {
+		t.Fatalf("expected absolute footer link in text body, got %q", msg.TextBody)
+	}
+
+	// With no host configured the footer falls back to the relative path.
+	rel := renderMessage("", d)
+	if !strings.Contains(rel.HTMLBody, `href="/settings/notifications"`) {
+		t.Fatalf("expected relative footer link when host empty, got %q", rel.HTMLBody)
 	}
 }

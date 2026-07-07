@@ -10,11 +10,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/smtp"
 	"strings"
 	"time"
 )
+
+// smtpDialTimeout bounds the TCP/TLS dial so a hung or unreachable SMTP server
+// cannot stall the single-goroutine send loop forever. net/smtp ignores the
+// request context on its own, so the timeout is applied at the dialer.
+const smtpDialTimeout = 15 * time.Second
 
 // Message is one rendered email ready to send.
 type Message struct {
@@ -154,36 +160,77 @@ func (t *smtpTransport) Name() string { return "smtp" }
 
 func (t *smtpTransport) Send(ctx context.Context, msg Message) error {
 	addr := fmt.Sprintf("%s:%d", t.cfg.SMTPHost, t.cfg.SMTPPort)
-	auth := smtp.PlainAuth("", t.cfg.SMTPUsername, t.cfg.SMTPPassword, t.cfg.SMTPHost)
 	raw := buildMIME(t.cfg.fromHeader(), msg)
 
-	send := func() error {
-		switch t.cfg.SMTPTLSMode {
-		case "implicit":
-			return t.sendImplicitTLS(addr, auth, msg.To, raw)
-		default: // starttls / none — smtp.SendMail negotiates STARTTLS when offered.
-			return smtp.SendMail(addr, auth, t.cfg.FromAddress, []string{msg.To}, raw)
-		}
+	var err error
+	switch t.cfg.SMTPTLSMode {
+	case "implicit":
+		err = t.sendImplicitTLS(ctx, addr, msg.To, raw)
+	default: // starttls / none
+		err = t.sendStartTLS(ctx, addr, msg.To, raw)
 	}
-	if err := send(); err != nil {
+	if err != nil {
 		return fmt.Errorf("smtp send failed: %s", redact(err.Error(), t.cfg.SMTPPassword))
 	}
 	return nil
 }
 
 // sendImplicitTLS dials a TLS socket first (port 465 style) then speaks SMTP.
-func (t *smtpTransport) sendImplicitTLS(addr string, auth smtp.Auth, to string, raw []byte) error {
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: t.cfg.SMTPHost, MinVersion: tls.VersionTLS12})
+// The bounded tls.Dialer replaces the timeout-less tls.Dial so a hung server
+// trips smtpDialTimeout instead of blocking the send loop indefinitely (FIX 1).
+func (t *smtpTransport) sendImplicitTLS(ctx context.Context, addr, to string, raw []byte) error {
+	d := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: smtpDialTimeout},
+		Config:    &tls.Config{ServerName: t.cfg.SMTPHost, MinVersion: tls.VersionTLS12},
+	}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 	c, err := smtp.NewClient(conn, t.cfg.SMTPHost)
 	if err != nil {
+		_ = conn.Close()
 		return err
 	}
-	defer func() { _ = c.Close() }()
-	if err := c.Auth(auth); err != nil {
+	return t.deliver(c, to, raw)
+}
+
+// sendStartTLS dials a plaintext socket with a bounded timeout, optionally
+// upgrades it via STARTTLS (when the mode is "starttls" and the server offers
+// the extension), then speaks SMTP. Replaces the timeout-less smtp.SendMail
+// (which net/smtp dials with no deadline) so a hung server trips smtpDialTimeout
+// (FIX 1).
+func (t *smtpTransport) sendStartTLS(ctx context.Context, addr, to string, raw []byte) error {
+	conn, err := (&net.Dialer{Timeout: smtpDialTimeout}).DialContext(ctx, "tcp", addr)
+	if err != nil {
 		return err
+	}
+	c, err := smtp.NewClient(conn, t.cfg.SMTPHost)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if t.cfg.SMTPTLSMode == "starttls" {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: t.cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+				_ = c.Close()
+				return err
+			}
+		}
+	}
+	return t.deliver(c, to, raw)
+}
+
+// deliver runs the shared SMTP conversation over an already-established client:
+// optional auth (only when a username is configured), MAIL/RCPT/DATA, then QUIT.
+// Both the implicit-TLS and STARTTLS paths funnel through here (DRY).
+func (t *smtpTransport) deliver(c *smtp.Client, to string, raw []byte) error {
+	defer func() { _ = c.Close() }()
+	if t.cfg.SMTPUsername != "" {
+		auth := smtp.PlainAuth("", t.cfg.SMTPUsername, t.cfg.SMTPPassword, t.cfg.SMTPHost)
+		if err := c.Auth(auth); err != nil {
+			return err
+		}
 	}
 	if err := c.Mail(t.cfg.FromAddress); err != nil {
 		return err
@@ -204,13 +251,23 @@ func (t *smtpTransport) sendImplicitTLS(addr string, auth smtp.Auth, to string, 
 	return c.Quit()
 }
 
+// stripCRLF removes carriage returns and line feeds from a header value so a
+// crafted To / Subject cannot inject additional SMTP headers (e.g. a Bcc: line).
+// Header-injection defense for the SMTP path (FIX 3); the Resend path is
+// JSON-encoded and therefore unaffected.
+func stripCRLF(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 // buildMIME renders a minimal multipart/alternative message (text + html).
+// To / Subject / From are run through stripCRLF so untrusted values cannot smuggle
+// extra header lines into the message.
 func buildMIME(from string, msg Message) []byte {
 	const boundary = "janus-mime-boundary-8f2c"
 	var b strings.Builder
-	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", msg.To)
-	fmt.Fprintf(&b, "Subject: %s\r\n", msg.Subject)
+	fmt.Fprintf(&b, "From: %s\r\n", stripCRLF(from))
+	fmt.Fprintf(&b, "To: %s\r\n", stripCRLF(msg.To))
+	fmt.Fprintf(&b, "Subject: %s\r\n", stripCRLF(msg.Subject))
 	b.WriteString("MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", boundary, msg.TextBody)

@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -89,7 +90,13 @@ func (s *Sender) runTick(ctx context.Context) {
 			continue
 		}
 		if tr == nil {
-			continue // config disabled — leave pending (lease expires, retried)
+			// Config disabled/absent. ClaimPendingEmailDeliveries already leased
+			// this row (next_attempt_at = now()+1min), so a plain `continue` would
+			// leave it pending and re-claim it every minute forever (unbounded
+			// churn). Age it toward a terminal state instead: fail() bumps attempts,
+			// applies Backoff, and flips to 'failed' at MaxAttempts (FIX 2).
+			s.fail(ctx, d, errors.New("email transport not enabled or not configured"))
+			continue
 		}
 		msg := renderMessage(s.platformHost, d)
 		if err := tr.Send(ctx, msg); err != nil {
@@ -182,9 +189,18 @@ func renderMessage(platformHost string, d *repository.EmailDelivery) Message {
 		cta = platformHost + d.Link
 	}
 
+	// Resolve the footer "Manage preferences" link the same way as the CTA:
+	// absolute when a host is configured, else the relative settings path (FIX 4).
+	const prefsPath = "/settings/notifications"
+	prefs := prefsPath
+	if platformHost != "" {
+		prefs = platformHost + prefsPath
+	}
+
 	summaryHTML := html.EscapeString(d.BodySummary)
 	categoryHTML := html.EscapeString(d.Category)
 	ctaHTML := html.EscapeString(cta)
+	prefsHTML := html.EscapeString(prefs)
 
 	// Plaintext body.
 	text := d.BodySummary
@@ -192,8 +208,8 @@ func renderMessage(platformHost string, d *repository.EmailDelivery) Message {
 		text += "\n\n" + cta
 	}
 	text += fmt.Sprintf(
-		"\n\nYou're receiving this because %s email is enabled. Manage preferences → /settings/notifications",
-		d.Category,
+		"\n\nYou're receiving this because %s email is enabled. Manage preferences → %s",
+		d.Category, prefs,
 	)
 
 	// HTML body — minimal, self-contained markup.
@@ -204,8 +220,8 @@ func renderMessage(platformHost string, d *repository.EmailDelivery) Message {
 	}
 	htmlBody += fmt.Sprintf(
 		`<hr><p style="color:#888;font-size:12px">You're receiving this because %s email is enabled. `+
-			`<a href="/settings/notifications">Manage preferences</a></p>`,
-		categoryHTML,
+			`<a href="%s">Manage preferences</a></p>`,
+		categoryHTML, prefsHTML,
 	)
 
 	return Message{
