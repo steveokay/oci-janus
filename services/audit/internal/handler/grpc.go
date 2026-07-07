@@ -20,6 +20,7 @@ import (
 
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	"github.com/steveokay/oci-janus/services/audit/internal/email"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 )
 
@@ -77,6 +78,14 @@ type auditRepo interface {
 	// FUT-019 Phase 2 — per-user notification preferences.
 	GetUserPreferences(ctx context.Context, userID uuid.UUID) ([]*repository.NotificationPreference, error)
 	UpsertUserPreference(ctx context.Context, p repository.NotificationPreference) error
+	// FUT-019 Phase 3 — email transport config + delivery log (see
+	// grpc_email.go). The secret columns on EmailTransportConfig are sealed
+	// ciphertext; the handler owns the AES-256-GCM seal/open with the email
+	// KEK, exactly as audit_export keeps that concern out of the repo.
+	GetEmailTransportConfig(ctx context.Context, tenantID uuid.UUID) (*repository.EmailTransportConfig, error)
+	UpsertEmailTransportConfig(ctx context.Context, cfg repository.EmailTransportConfig) error
+	UpdateEmailTestResult(ctx context.Context, tenantID uuid.UUID, ok bool, errMsg string) error
+	ListEmailDeliveries(ctx context.Context, tenantID, userID uuid.UUID, limit int) ([]*repository.EmailDelivery, error)
 }
 
 // AuditExportDLXProbe surfaces the live RabbitMQ DLX queue depth +
@@ -158,6 +167,16 @@ type GRPCHandler struct {
 	// path (futures.md Tier 1 #4 Phase 2). nil → Drain returns
 	// Unavailable + Get/Put return dlx_queue_depth = -1.
 	dlxProbe AuditExportDLXProbe
+	// FUT-019 Phase 3 — email channel. emailKEK is the AES-256-GCM key
+	// used to seal resend_api_key + smtp_password on
+	// email_transport_config. It may be empty (email disabled): a Put
+	// carrying a secret then returns FailedPrecondition, matching the
+	// audit-export posture. newEmailTransport is injected so tests can
+	// fake the transport for SendTestEmail; when nil it defaults to
+	// email.NewTransport at call time. Both are wired in Task 8 via
+	// WithEmailKEK / WithEmailTransport.
+	emailKEK          []byte
+	newEmailTransport func(email.DecryptedConfig) (email.Transport, error)
 }
 
 // AuditExportTester decouples the gRPC handler from the exporter
