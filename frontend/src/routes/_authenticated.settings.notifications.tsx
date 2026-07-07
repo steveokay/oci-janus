@@ -7,9 +7,9 @@
 //
 // Backend + delivery-channel state: the bell channel is live; the email
 // channel is now live too (FUT-019 Phase 3 — configured via the transport
-// panel mounted above the matrix). Webhook remains shown-but-locked
-// ("Wired in Phase 3+") until its delivery worker lands (tracked in
-// futures.md).
+// panel mounted above the matrix). The webhook channel is now live as well
+// (FUT-019 webhook channel — configured via the webhook panel mounted above
+// the matrix); its per-category enablement is admin-managed here.
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -31,7 +31,13 @@ import {
   type NotificationPreferenceRow,
 } from "@/lib/api/notification-preferences";
 import { useEmailTransport } from "@/lib/api/email-transport";
+import { useIsGlobalAdmin } from "@/lib/api/abilities";
+import {
+  useNotificationWebhook,
+  useUpdateNotificationWebhook,
+} from "@/lib/api/notification-webhook";
 import { EmailTransportPanel } from "@/components/settings/email-transport-panel";
+import { NotificationWebhookPanel } from "@/components/settings/notification-webhook-panel";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings/notifications")({
@@ -43,6 +49,8 @@ function NotificationsTab(): React.ReactElement {
     <div className="space-y-6">
       {/* Email transport config — admin-only; renders null for non-admins. */}
       <EmailTransportPanel />
+      {/* Webhook config — admin-only; renders null for non-admins. */}
+      <NotificationWebhookPanel />
       <NotificationsSection />
     </div>
   );
@@ -50,13 +58,20 @@ function NotificationsTab(): React.ReactElement {
 
 // ── Notifications section ────────────────────────────────────────────
 
-function NotificationsSection(): React.ReactElement {
+export function NotificationsSection(): React.ReactElement {
   const { data, isLoading, isError, refetch } = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
   // FUT-019 Phase 3 — surface whether the email transport is actually
   // enabled. When it isn't, the Email column toggles still work but nothing
   // is delivered until an admin configures the transport panel above.
   const transportEnabled = useEmailTransport().data?.enabled === true;
+  // FUT-019 webhook channel — the matrix Webhook column is now editable by
+  // admins (read-only for everyone else). The per-category enablement lives on
+  // the webhook config (owned by the webhook panel above), not on the
+  // per-user preference matrix, so we read + write it separately.
+  const isAdmin = useIsGlobalAdmin();
+  const webhookCfg = useNotificationWebhook().data;
+  const updateWebhook = useUpdateNotificationWebhook();
   // UIR-4: track the single in-flight cell as "<category>:<channel>" so only
   // the toggled checkbox shows a pending/disabled state — the prior
   // `update.isPending` froze the entire 12-cell matrix on any one write.
@@ -109,6 +124,34 @@ function NotificationsSection(): React.ReactElement {
     }
   }
 
+  // toggleWebhookCategory flips a single category's webhook enablement via a
+  // read-modify-write PUT on the org webhook config. Unlike the bell/email
+  // toggles (which target the per-user preference matrix), the webhook column
+  // is backed by the org-wide `enabled_categories` set.
+  async function toggleWebhookCategory(
+    category: string,
+    next: boolean,
+  ): Promise<void> {
+    if (!webhookCfg) return;
+    const set = new Set(webhookCfg.enabled_categories);
+    if (next) set.add(category);
+    else set.delete(category);
+    setPendingCell(`${category}:webhook`);
+    try {
+      await updateWebhook.mutateAsync({
+        url: webhookCfg.url,
+        enabled: webhookCfg.enabled,
+        secret: "", // keep existing
+        enabled_categories: Array.from(set),
+      });
+      toast.success(`Webhook ${next ? "enabled" : "disabled"} for this category.`);
+    } catch {
+      toast.error("Couldn't update the webhook. Check the BFF logs.");
+    } finally {
+      setPendingCell(null);
+    }
+  }
+
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-card)]">
       <div className="flex items-center gap-2">
@@ -118,8 +161,8 @@ function NotificationsSection(): React.ReactElement {
       <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
         Toggle which scheduled notifications you want delivered to which
         channels. Bell shows in the topbar feed; email delivers once an email
-        transport is configured above; webhook delivers when that channel is
-        wired (Phase 3+).
+        transport is configured above; webhook posts to the org endpoint
+        configured above (admin-managed).
       </p>
 
       <div className="mt-4 overflow-hidden rounded-md border border-[var(--color-border)]">
@@ -161,10 +204,10 @@ function NotificationsSection(): React.ReactElement {
                     onChange={(v) => void toggleChannel(row, "email", v)}
                   />
                   <ChannelToggleCell
-                    enabled={row.webhook_enabled}
+                    enabled={(webhookCfg?.enabled_categories ?? []).includes(row.key)}
                     pending={pendingCell === `${row.key}:webhook`}
-                    onChange={(v) => void toggleChannel(row, "webhook", v)}
-                    hint="Wired in Phase 3+"
+                    onChange={(v) => void toggleWebhookCategory(row.key, v)}
+                    hint={isAdmin ? undefined : "Admin-managed"}
                   />
                 </TableRow>
               ))
