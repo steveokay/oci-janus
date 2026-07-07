@@ -81,6 +81,11 @@ type fakeRepo struct {
 	testResultErr   string
 	emailDeliveries []*repository.EmailDelivery
 	lastListLimit   int
+
+	// FUT-019 Webhook channel fake state (see grpc_notification_webhook_test.go
+	// for the method implementations). webhookCfg is the row Get returns; Upsert
+	// stores into it so the Put→reload roundtrip reflects the write.
+	webhookCfg *repository.NotificationWebhookConfig
 }
 
 // analyticsCall captures the parameters passed to one GetAnalytics call.

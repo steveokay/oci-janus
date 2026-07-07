@@ -126,6 +126,13 @@ func (p *Poster) Post(ctx context.Context, targetURL string, body, secret []byte
 	return resp.StatusCode, nil
 }
 
+// TestPayload builds the canned body used by SendTestNotificationWebhook.
+func TestPayload(tenantID string) []byte {
+	return buildPayload("test", "OCI Janus — test notification webhook",
+		"This is a test webhook from your OCI Janus registry. If you received it, your webhook transport is configured correctly.",
+		"", tenantID, time.Now().UTC())
+}
+
 // buildPayload renders the generic signed notification envelope.
 func buildPayload(category, subject, summary, link, tenantID string, ts time.Time) []byte {
 	b, _ := json.Marshal(map[string]any{
