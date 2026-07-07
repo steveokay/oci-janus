@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -143,15 +144,68 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Retention cleanup goroutine.
 	go runRetentionLoop(ctx, repo, cfg.RetentionDays)
 
+	// FUT-019 Phase 3 — decode the email KEK once at boot. The per-tenant
+	// email transport config (SMTP creds / Resend API key) is sealed with
+	// this AES-256-GCM key; empty key idles the send loop. Decoded here (ahead
+	// of the runner + sender goroutines) so both the send loop and the gRPC
+	// handlers share the same key material. Reuses the 32-byte-checking helper.
+	var emailKEK []byte
+	if keyHex := cfg.NotifyEmailKeyHex; keyHex != "" {
+		k, err := decodeHexKey(keyHex)
+		if err != nil {
+			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: %w", err)
+		}
+		emailKEK = k
+	}
+
+	// FUT-019 Phase 3 — dial registry-auth for recipient resolution. The
+	// resolver adapter (authEmailResolver) is attached to the runner below and
+	// the client is reused; dialing at boot keeps the mTLS creds + eager
+	// connection setup alongside the other outbound dials (registry-tenant).
+	// Optional: when AUTH_GRPC_ADDR is unset, email recipient resolution + the
+	// email fan-out are disabled (runner keeps its nil resolver).
+	var authClient authv1.AuthServiceClient
+	if cfg.AuthGRPCAddr != "" {
+		authCreds, err := cfg.MTLSClientCreds("registry-auth")
+		if err != nil {
+			return fmt.Errorf("build auth gRPC creds: %w", err)
+		}
+		authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(authCreds))
+		if err != nil {
+			return fmt.Errorf("dial auth gRPC: %w", err)
+		}
+		defer func() { _ = authConn.Close() }()
+		// Eager connect so the first recipient-resolution RPC does not stall
+		// on the TLS/HTTP-2 handshake (CLAUDE.md §6 gRPC conventions).
+		authConn.Connect()
+		authClient = authv1.NewAuthServiceClient(authConn)
+	}
+
 	// FUT-019 Phase 2 — scheduled-notifications scheduler + dispatcher.
 	// Both loops live behind a single Runner; the scheduler ticks
 	// hourly, the dispatcher every minute. Best-effort — failures log
 	// and continue, the loops never panic the process.
+	//
+	// Phase 3 — attach the email recipient resolver only when registry-auth
+	// is dialled; otherwise the runner keeps its nil resolver and skips the
+	// email fan-out entirely.
 	go func() {
 		slog.Info("FUT-019: starting scheduled-notifications runner")
 		runner := scheduler.New(repo, scheduler.Registry(), scheduler.RunnerConfig{})
+		if authClient != nil {
+			runner.WithEmailResolver(authEmailResolver{c: authClient})
+		}
 		runner.Start(ctx)
 		slog.Info("FUT-019: runner stopped")
+	}()
+
+	// FUT-019 Phase 3 — email send loop. Drains the email_deliveries queue and
+	// sends via the per-tenant transport (Resend / SMTP). Idles when emailKEK
+	// is empty (email channel disabled); runs alongside the runner goroutine.
+	go func() {
+		slog.Info("FUT-019: starting email sender loop")
+		email.NewSender(repo, emailKEK, cfg.PlatformHost).Start(ctx)
+		slog.Info("FUT-019: email sender stopped")
 	}()
 
 	// HTTP server: liveness probe only.
@@ -234,43 +288,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		secretsKey = k
 	}
 
-	// FUT-019 Phase 3 — decode the email KEK once at boot. The per-tenant
-	// email transport config (SMTP creds / Resend API key) is sealed with
-	// this AES-256-GCM key by the CRUD handlers; empty key leaves the email
-	// notification RPCs functional only for configs that carry no secret
-	// (and rejects sealing plaintext with FailedPrecondition). Reuses the
-	// same 32-byte-checking helper as the export secrets key.
-	var emailKEK []byte
-	if keyHex := cfg.NotifyEmailKeyHex; keyHex != "" {
-		k, err := decodeHexKey(keyHex)
-		if err != nil {
-			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: %w", err)
-		}
-		emailKEK = k
-	}
-
-	// FUT-019 Phase 3 — dial registry-auth for recipient resolution. The
-	// client is held here and consumed by the email send loop / resolver in
-	// Task 10; dialing it at boot keeps the mTLS creds + eager connection
-	// setup alongside the other outbound dials (registry-tenant). Optional:
-	// when AUTH_GRPC_ADDR is unset, email recipient resolution is disabled.
-	var authClient authv1.AuthServiceClient
-	if cfg.AuthGRPCAddr != "" {
-		authCreds, err := cfg.MTLSClientCreds("registry-auth")
-		if err != nil {
-			return fmt.Errorf("build auth gRPC creds: %w", err)
-		}
-		authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(authCreds))
-		if err != nil {
-			return fmt.Errorf("dial auth gRPC: %w", err)
-		}
-		defer func() { _ = authConn.Close() }()
-		// Eager connect so the first recipient-resolution RPC does not stall
-		// on the TLS/HTTP-2 handshake (CLAUDE.md §6 gRPC conventions).
-		authConn.Connect()
-		authClient = authv1.NewAuthServiceClient(authConn)
-	}
-	_ = authClient // consumed by the email send loop / resolver in Task 10
+	// emailKEK was decoded + authClient dialled earlier (ahead of the runner
+	// + sender goroutines). Both are reused here to attach the email KEK +
+	// transport factory to the gRPC handlers.
 
 	auditHandler := handler.NewGRPC(repo).
 		WithSecretsKey(secretsKey).
@@ -323,6 +343,35 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// authEmailResolver adapts registry-auth's ResolveUserEmails RPC to the
+// scheduler's EmailRecipientResolver interface (FUT-019 Phase 3). It turns a
+// batch of user ids into a user-id→email map, silently dropping ids that fail
+// to parse in the response.
+type authEmailResolver struct{ c authv1.AuthServiceClient }
+
+// ResolveEmails calls registry-auth.ResolveUserEmails for the given tenant +
+// user ids and returns the resolved user-id→email map.
+func (a authEmailResolver) ResolveEmails(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	strIDs := make([]string, len(ids))
+	for i, id := range ids {
+		strIDs[i] = id.String()
+	}
+	resp, err := a.c.ResolveUserEmails(ctx, &authv1.ResolveUserEmailsRequest{
+		TenantId: tenantID.String(),
+		UserIds:  strIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]string, len(resp.GetEmails()))
+	for _, e := range resp.GetEmails() {
+		if id, perr := uuid.Parse(e.GetUserId()); perr == nil {
+			out[id] = e.GetEmail()
+		}
+	}
+	return out, nil
 }
 
 // runRetentionLoop deletes audit events older than retentionDays once per day.

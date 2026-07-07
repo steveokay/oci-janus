@@ -46,6 +46,12 @@ type Config struct {
 	// recipient email addresses. Empty disables email fan-out.
 	AuthGRPCAddr string `mapstructure:"AUTH_GRPC_ADDR"`
 
+	// PlatformHost (FUT-019 Phase 3) is the public base URL (scheme + host,
+	// no trailing path) used by the email send loop to build absolute CTA
+	// links, e.g. "https://registry.example.com". Optional + unvalidated:
+	// empty leaves email links relative, which still resolve in-app.
+	PlatformHost string `mapstructure:"PLATFORM_HOST"`
+
 	// RabbitMQMgmtURL (futures.md Tier 1 #4 Phase 2) overrides the
 	// auto-derived RabbitMQ Management HTTP API endpoint used to
 	// query live `audit.export.dlx` queue depth. Empty falls back to
