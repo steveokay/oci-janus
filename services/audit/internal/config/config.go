@@ -41,6 +41,13 @@ type Config struct {
 	// closed at startup (a bad KEK would silently corrupt secrets).
 	NotifyEmailKeyHex string `mapstructure:"NOTIFY_EMAIL_KEY_HEX"`
 
+	// NotifyWebhookKeyHex (FUT-019 webhook channel) is the 64-char hex
+	// AES-256-GCM key sealing notification_webhook_config.secret_enc (the org
+	// webhook HMAC secret). Empty disables the webhook channel: the config PUT
+	// rejects a secret with FailedPrecondition and the send loop idles.
+	// Set-but-not-32-bytes fails closed at startup.
+	NotifyWebhookKeyHex string `mapstructure:"NOTIFY_WEBHOOK_KEY_HEX"`
+
 	// AuthGRPCAddr (FUT-019 Phase 3) is the mTLS target for
 	// registry-auth.ResolveUserEmails, used by the dispatcher to resolve
 	// recipient email addresses. Empty disables email fan-out.
@@ -125,6 +132,15 @@ func validate(cfg *Config) error {
 		}
 		if len(cfg.NotifyEmailKeyHex) != 64 {
 			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: expected 64 hex chars (32 bytes), got %d", len(cfg.NotifyEmailKeyHex))
+		}
+	}
+	// FUT-019 webhook channel — same fail-closed posture as the email KEK.
+	if cfg.NotifyWebhookKeyHex != "" {
+		if _, err := hex.DecodeString(cfg.NotifyWebhookKeyHex); err != nil {
+			return fmt.Errorf("NOTIFY_WEBHOOK_KEY_HEX: not valid hex: %w", err)
+		}
+		if len(cfg.NotifyWebhookKeyHex) != 64 {
+			return fmt.Errorf("NOTIFY_WEBHOOK_KEY_HEX: expected 64 hex chars (32 bytes), got %d", len(cfg.NotifyWebhookKeyHex))
 		}
 	}
 	return nil
