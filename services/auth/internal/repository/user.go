@@ -548,6 +548,49 @@ func (r *UserRepository) LookupByIDs(ctx context.Context, tenantID uuid.UUID, id
 	return out, rows.Err()
 }
 
+// EmailLookup is one resolved email recipient (FUT-019 Phase 3). EmailVerified
+// is reported for the caller's information only — it never gates delivery — and
+// is always false here because the users table does not carry a verification
+// column (see ResolveEmails).
+type EmailLookup struct {
+	ID            uuid.UUID
+	Email         string
+	EmailVerified bool
+}
+
+// ResolveEmails returns (id, email) for the given ids within a tenant, skipping
+// users with no email and service-account shadow rows (kind='human' only).
+// Used by registry-audit (via services/auth's ResolveUserEmails RPC) to resolve
+// email-notification recipients. FUT-019 Phase 3.
+//
+// Note: the users table has no email_verified column, so EmailVerified is
+// hard-coded to false — the field is informational and callers must not gate on
+// it. If a verification column is added later, select it here.
+func (r *UserRepository) ResolveEmails(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]EmailLookup, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	const q = `
+		SELECT id, COALESCE(email, '')
+		FROM   users
+		WHERE  tenant_id = $1 AND id = ANY($2) AND kind = 'human' AND COALESCE(email,'') <> ''`
+	rows, err := r.pool.Query(ctx, q, tenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("resolve emails: %w", err)
+	}
+	defer rows.Close()
+	out := make([]EmailLookup, 0, len(ids))
+	for rows.Next() {
+		var e EmailLookup
+		// EmailVerified stays false — no backing column (see doc above).
+		if err := rows.Scan(&e.ID, &e.Email); err != nil {
+			return nil, fmt.Errorf("scan email lookup: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ResetFailedLogins clears failed_logins and locked_until and records the login time.
 // Called on every successful authentication.
 func (r *UserRepository) ResetFailedLogins(ctx context.Context, id uuid.UUID) error {

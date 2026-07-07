@@ -43,6 +43,10 @@ type userRepo interface {
 	// tuples within a tenant (REM-018-followup). Used by services/management
 	// to enrich the activity / notifications feed.
 	LookupByIDs(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.UserSummary, error)
+	// ResolveEmails batch-resolves user ids to (id, email) within a tenant,
+	// dropping users with no email (FUT-019 Phase 3). Used by registry-audit
+	// (via the ResolveUserEmails RPC) to resolve email-notification recipients.
+	ResolveEmails(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) ([]repository.EmailLookup, error)
 	// FUT-012 Phase A — tenant-user lifecycle methods.
 	ListTenantUsers(ctx context.Context, tenantID uuid.UUID, opts repository.ListTenantUsersOpts) ([]repository.TenantUserSummary, string, int32, error)
 	CreateInvitedUser(ctx context.Context, req repository.CreateInvitedUserRequest) (*repository.User, error)

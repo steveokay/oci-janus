@@ -35,6 +35,11 @@ service AuthService {
   // strings should be filtered out by the caller before the RPC.
   rpc LookupUsernames(LookupUsernamesRequest) returns (LookupUsernamesResponse);
 
+  // ResolveUserEmails maps a batch of user ids to their email addresses within
+  // a tenant. Used by registry-audit to resolve email-notification recipients.
+  // Users with no email are omitted from the response.
+  rpc ResolveUserEmails(ResolveUserEmailsRequest) returns (ResolveUserEmailsResponse);
+
   // FUT-012 Phase A — tenant-user lifecycle management. Three new RPCs
   // gated on tenant-admin OR platform-admin in services/management's
   // BFF. The handler-side check enforces the same shape so a
@@ -253,6 +258,31 @@ message UserLookupResult {
 // absence as "not in this tenant, render the UUID / system fallback".
 message LookupUsernamesResponse {
   repeated UserLookupResult users = 1;
+}
+
+// ResolveUserEmailsRequest carries the batch of user_ids whose email
+// addresses registry-audit needs to resolve. Bounded by the same 200-id
+// batch cap as LookupUsernames — the handler returns InvalidArgument above
+// that.
+message ResolveUserEmailsRequest {
+  string tenant_id = 1;
+  repeated string user_ids = 2;
+}
+
+// ResolveUserEmailsResponse returns one entry per resolved user_id. Users
+// with no stored email are silently dropped, so the response may be shorter
+// than the request set.
+message ResolveUserEmailsResponse {
+  repeated ResolvedEmail emails = 1;
+}
+
+// ResolvedEmail is the resolved email for one user_id. email_verified is
+// informational only (never gates delivery); it is reported as false when the
+// backing store does not track verification state.
+message ResolvedEmail {
+  string user_id = 1;
+  string email = 2;
+  bool email_verified = 3;
 }
 
 // FUT-012 Phase A messages ──────────────────────────────────────────────

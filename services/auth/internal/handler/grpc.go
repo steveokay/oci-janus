@@ -556,6 +556,60 @@ func (h *GRPCHandler) LookupUsernames(ctx context.Context, req *authv1.LookupUse
 	return &authv1.LookupUsernamesResponse{Users: out}, nil
 }
 
+// ResolveUserEmails (FUT-019 Phase 3) batch-resolves a set of user_ids to their
+// email addresses within a tenant. Used by registry-audit to resolve
+// email-notification recipients. Near-clone of LookupUsernames: same tenant
+// parse, empty short-circuit, per-request batch cap, and non-UUID dedupe.
+// Users with no email are dropped by the repo, so the response may be shorter
+// than the request set. email_verified is informational only (currently always
+// false — the users table has no verification column) and never gates delivery.
+func (h *GRPCHandler) ResolveUserEmails(ctx context.Context, req *authv1.ResolveUserEmailsRequest) (*authv1.ResolveUserEmailsResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	raw := req.GetUserIds()
+	if len(raw) == 0 {
+		return &authv1.ResolveUserEmailsResponse{}, nil
+	}
+	// Reuse the LookupUsernames batch cap — same upstream call shape.
+	if len(raw) > lookupUsernamesMaxBatch {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"user_ids exceeds batch cap of %d", lookupUsernamesMaxBatch)
+	}
+	// Dedupe + parse. Drop non-UUID values silently so the caller can pass a
+	// raw recipient id list through without pre-filtering sentinel strings.
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	parsed := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, perr := uuid.Parse(s)
+		if perr != nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		parsed = append(parsed, id)
+	}
+	if len(parsed) == 0 {
+		return &authv1.ResolveUserEmailsResponse{}, nil
+	}
+	emails, err := h.svc.ResolveUserEmails(ctx, tenantID, parsed)
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "resolve user emails")
+	}
+	out := make([]*authv1.ResolvedEmail, len(emails))
+	for i, e := range emails {
+		out[i] = &authv1.ResolvedEmail{
+			UserId:        e.ID.String(),
+			Email:         e.Email,
+			EmailVerified: e.EmailVerified,
+		}
+	}
+	return &authv1.ResolveUserEmailsResponse{Emails: out}, nil
+}
+
 // SetGlobalAdmin sets or clears users.is_global_admin for the given user.
 // Only callers that are themselves global admins may invoke this (enforced
 // in the management BFF); the bootstrap CLI writes the flag directly via SQL
