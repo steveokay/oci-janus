@@ -395,11 +395,15 @@ loop that resolves recipients through the new `registry-auth.ResolveUserEmails`
 RPC, and a topbar ✉️ delivery-log dropdown. The **Email** matrix column is now
 unlocked and live.
 
-**Still open / tracked here:** the **Webhook** column is the last locked
-channel ("Wired in Phase 3+") and the remaining Phase 3 work — unlock it using
-the `services/webhook` delivery machinery (retries + HMAC + SSRF already exist
-there). The **Bell** and **Email** channels are both live; do NOT let the
-"Notification categories" surface read as fully complete while Webhook is inert.
+**Update (2026-07-08): the Webhook channel has SHIPPED** (branch
+`feat/fut-019-webhook-channel`; see `status.md`) — a shared per-tenant org
+webhook receives one HMAC-signed POST per scheduled notification for the
+selected categories. `services/audit` owns it (`notification_webhook_config`
++ `notification_webhook_deliveries`, AES-256-GCM secret under
+`NOTIFY_WEBHOOK_KEY_HEX`, send loop reusing `services/webhook` retry/HMAC/SSRF
+patterns; no new mTLS peer edge). FE: admin `NotificationWebhookPanel` + the
+**Webhook** matrix column unlocked (FE-API-058). **Bell, Email, and Webhook are
+now all live — the "Notification categories" surface is complete.**
 
 ---
 
