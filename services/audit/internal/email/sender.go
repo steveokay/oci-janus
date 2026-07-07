@@ -216,7 +216,9 @@ func renderMessage(platformHost string, d *repository.EmailDelivery) Message {
 	var htmlBody string
 	htmlBody += fmt.Sprintf("<p>%s</p>", summaryHTML)
 	if cta != "" {
-		htmlBody += fmt.Sprintf(`<p><a href="%s">View in Janus</a></p>`, ctaHTML)
+		// Concatenation (not Sprintf) keeps the literal href quotes out of the
+		// format string; ctaHTML is already html-escaped above.
+		htmlBody += `<p><a href="` + ctaHTML + `">View in Janus</a></p>`
 	}
 	htmlBody += fmt.Sprintf(
 		`<hr><p style="color:#888;font-size:12px">You're receiving this because %s email is enabled. `+

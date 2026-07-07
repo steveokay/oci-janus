@@ -509,6 +509,8 @@ const lookupUsernamesMaxBatch = 200
 //
 // Unknown / cross-tenant ids are dropped from the result. Caller iterates
 // by its input set and renders the UUID / system fallback for absent ids.
+//
+//nolint:dupl // parallel batch-RPC handler; ResolveUserEmails deliberately mirrors this parse/dedupe/cap shape.
 func (h *GRPCHandler) LookupUsernames(ctx context.Context, req *authv1.LookupUsernamesRequest) (*authv1.LookupUsernamesResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
@@ -563,6 +565,8 @@ func (h *GRPCHandler) LookupUsernames(ctx context.Context, req *authv1.LookupUse
 // Users with no email are dropped by the repo, so the response may be shorter
 // than the request set. email_verified is informational only (currently always
 // false — the users table has no verification column) and never gates delivery.
+//
+//nolint:dupl // intentional parallel batch-RPC handler; deliberately mirrors LookupUsernames (same parse/dedupe/cap shape), not worth a shared helper that couples two RPCs.
 func (h *GRPCHandler) ResolveUserEmails(ctx context.Context, req *authv1.ResolveUserEmailsRequest) (*authv1.ResolveUserEmailsResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {

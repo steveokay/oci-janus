@@ -17,11 +17,11 @@ import (
 // hands back a configurable transport config, and records the Mark* calls so the
 // test can assert on the delivery outcome.
 type fakeSenderRepo struct {
-	cfg       *repository.EmailTransportConfig
-	cfgErr    error
-	pending   []*repository.EmailDelivery
-	claimErr  error
-	claimed   bool
+	cfg      *repository.EmailTransportConfig
+	cfgErr   error
+	pending  []*repository.EmailDelivery
+	claimErr error
+	claimed  bool
 
 	sentID       uuid.UUID
 	sentProvider string
