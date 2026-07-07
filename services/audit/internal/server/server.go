@@ -41,6 +41,7 @@ import (
 	"github.com/steveokay/oci-janus/services/audit/internal/handler"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
 	"github.com/steveokay/oci-janus/services/audit/internal/scheduler"
+	"github.com/steveokay/oci-janus/services/audit/internal/webhook"
 	auditmigrations "github.com/steveokay/oci-janus/services/audit/migrations"
 )
 
@@ -158,6 +159,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		emailKEK = k
 	}
 
+	// FUT-019 webhook channel — decode the org-webhook HMAC KEK once at boot
+	// (same 32-byte-checking helper as the email KEK). Empty idles the webhook
+	// send loop and disables the runner's webhook fan-out.
+	var webhookKEK []byte
+	if keyHex := cfg.NotifyWebhookKeyHex; keyHex != "" {
+		k, err := decodeHexKey(keyHex)
+		if err != nil {
+			return fmt.Errorf("NOTIFY_WEBHOOK_KEY_HEX: %w", err)
+		}
+		webhookKEK = k
+	}
+
 	// FUT-019 Phase 3 — dial registry-auth for recipient resolution. The
 	// resolver adapter (authEmailResolver) is attached to the runner below and
 	// the client is reused; dialing at boot keeps the mTLS creds + eager
@@ -195,6 +208,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		if authClient != nil {
 			runner.WithEmailResolver(authEmailResolver{c: authClient})
 		}
+		// FUT-019 webhook channel — enable org-webhook fan-out only when the
+		// webhook KEK is present (so the send loop can actually deliver).
+		if len(webhookKEK) > 0 {
+			runner.WithWebhookEnabled()
+		}
 		runner.Start(ctx)
 		slog.Info("FUT-019: runner stopped")
 	}()
@@ -206,6 +224,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("FUT-019: starting email sender loop")
 		email.NewSender(repo, emailKEK, cfg.PlatformHost).Start(ctx)
 		slog.Info("FUT-019: email sender stopped")
+	}()
+
+	// FUT-019 webhook channel — send loop. Drains notification_webhook_deliveries
+	// and POSTs to the per-tenant org webhook. Idles when webhookKEK is empty.
+	go func() {
+		slog.Info("FUT-019: starting webhook sender loop")
+		webhook.NewSender(repo, webhookKEK, cfg.PlatformHost).Start(ctx)
+		slog.Info("FUT-019: webhook sender stopped")
 	}()
 
 	// HTTP server: liveness probe only.
@@ -299,7 +325,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		// SendTestEmail / per-tenant email CRUD handlers can unseal configs
 		// and dial the SMTP/Resend transport.
 		WithEmailKEK(emailKEK).
-		WithEmailTransport(email.NewTransport)
+		WithEmailTransport(email.NewTransport).
+		// FUT-019 webhook channel — attach the org-webhook HMAC KEK so the
+		// Get/Put/SendTest handlers can seal/unseal the secret + post a test.
+		WithWebhookKEK(webhookKEK)
 	// Phase 2 — wire the DLX probe + drain (futures.md Tier 1 #4).
 	// Nil when RABBITMQ_URL is unset (legacy / unit-test stack) so
 	// the handler falls back to Phase 1 behaviour (Drain returns
