@@ -5,6 +5,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { toast } from "sonner";
 import { ThemeToggle } from "./theme-toggle";
 import { NotificationsBell } from "./notifications-bell";
+import { EmailActivityMenu } from "./email-activity-menu";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth/store";
 import { logout } from "@/lib/api/auth";
@@ -125,6 +126,9 @@ export function Topbar({
         {breadcrumb}
       </div>
       <div className="flex items-center gap-1">
+        {/* FUT-019 Phase 3 — email delivery-log dropdown. Sits BEFORE the
+            bell so the topbar reads: mail → bell → theme. */}
+        <EmailActivityMenu />
         <NotificationsBell />
         <ThemeToggle />
 
