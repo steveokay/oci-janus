@@ -27,11 +27,13 @@ import (
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/services/audit/internal/config"
+	"github.com/steveokay/oci-janus/services/audit/internal/email"
 	"github.com/steveokay/oci-janus/services/audit/internal/eventconsumer"
 	"github.com/steveokay/oci-janus/services/audit/internal/export"
 	"github.com/steveokay/oci-janus/services/audit/internal/exportworker"
@@ -231,9 +233,53 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		secretsKey = k
 	}
+
+	// FUT-019 Phase 3 — decode the email KEK once at boot. The per-tenant
+	// email transport config (SMTP creds / Resend API key) is sealed with
+	// this AES-256-GCM key by the CRUD handlers; empty key leaves the email
+	// notification RPCs functional only for configs that carry no secret
+	// (and rejects sealing plaintext with FailedPrecondition). Reuses the
+	// same 32-byte-checking helper as the export secrets key.
+	var emailKEK []byte
+	if keyHex := cfg.NotifyEmailKeyHex; keyHex != "" {
+		k, err := decodeHexKey(keyHex)
+		if err != nil {
+			return fmt.Errorf("NOTIFY_EMAIL_KEY_HEX: %w", err)
+		}
+		emailKEK = k
+	}
+
+	// FUT-019 Phase 3 — dial registry-auth for recipient resolution. The
+	// client is held here and consumed by the email send loop / resolver in
+	// Task 10; dialing it at boot keeps the mTLS creds + eager connection
+	// setup alongside the other outbound dials (registry-tenant). Optional:
+	// when AUTH_GRPC_ADDR is unset, email recipient resolution is disabled.
+	var authClient authv1.AuthServiceClient
+	if cfg.AuthGRPCAddr != "" {
+		authCreds, err := cfg.MTLSClientCreds("registry-auth")
+		if err != nil {
+			return fmt.Errorf("build auth gRPC creds: %w", err)
+		}
+		authConn, err := grpc.NewClient(cfg.AuthGRPCAddr, grpc.WithTransportCredentials(authCreds))
+		if err != nil {
+			return fmt.Errorf("dial auth gRPC: %w", err)
+		}
+		defer func() { _ = authConn.Close() }()
+		// Eager connect so the first recipient-resolution RPC does not stall
+		// on the TLS/HTTP-2 handshake (CLAUDE.md §6 gRPC conventions).
+		authConn.Connect()
+		authClient = authv1.NewAuthServiceClient(authConn)
+	}
+	_ = authClient // consumed by the email send loop / resolver in Task 10
+
 	auditHandler := handler.NewGRPC(repo).
 		WithSecretsKey(secretsKey).
-		WithExportTester(export.NewTester())
+		WithExportTester(export.NewTester()).
+		// FUT-019 Phase 3 — attach the email KEK + transport factory so the
+		// SendTestEmail / per-tenant email CRUD handlers can unseal configs
+		// and dial the SMTP/Resend transport.
+		WithEmailKEK(emailKEK).
+		WithEmailTransport(email.NewTransport)
 	// Phase 2 — wire the DLX probe + drain (futures.md Tier 1 #4).
 	// Nil when RABBITMQ_URL is unset (legacy / unit-test stack) so
 	// the handler falls back to Phase 1 behaviour (Drain returns
