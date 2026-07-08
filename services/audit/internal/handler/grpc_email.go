@@ -92,11 +92,11 @@ func (h *GRPCHandler) PutEmailTransportConfig(ctx context.Context, req *auditv1.
 		existingSMTP = existing.SMTPPasswordEnc
 	}
 
-	resendCT, err := sealSecret(h.emailKEK, existingResend, req.GetResendApiKey())
+	resendCT, err := sealSecret(h.emailKEK, existingResend, req.GetResendApiKey(), "NOTIFY_EMAIL_KEY_HEX")
 	if err != nil {
 		return nil, err
 	}
-	smtpCT, err := sealSecret(h.emailKEK, existingSMTP, req.GetSmtpPassword())
+	smtpCT, err := sealSecret(h.emailKEK, existingSMTP, req.GetSmtpPassword(), "NOTIFY_EMAIL_KEY_HEX")
 	if err != nil {
 		return nil, err
 	}
@@ -288,17 +288,18 @@ func emailConfigToProto(c *repository.EmailTransportConfig) *auditv1.EmailTransp
 	return out
 }
 
-// sealSecret encodes the "keep existing vs rotate" contract for an email
+// sealSecret encodes the "keep existing vs rotate" contract for a sealed
 // secret column. An empty plaintext keeps the stored ciphertext; a non-empty
 // plaintext is freshly encrypted under the KEK. Returns FailedPrecondition when
-// a rotation is requested but the email KEK isn't wired — so the operator gets a
-// clear "secrets key not configured" error rather than a silent no-op.
-func sealSecret(kek, existing []byte, plaintext string) ([]byte, error) {
+// a rotation is requested but the KEK isn't wired — keyEnvName names the env var
+// the operator must set (e.g. NOTIFY_EMAIL_KEY_HEX / NOTIFY_WEBHOOK_KEY_HEX) so
+// the error points at the right channel rather than a silent no-op.
+func sealSecret(kek, existing []byte, plaintext, keyEnvName string) ([]byte, error) {
 	if plaintext == "" {
 		return existing, nil // keep existing
 	}
 	if len(kek) == 0 {
-		return nil, status.Error(codes.FailedPrecondition, "email transport secrets key (NOTIFY_EMAIL_KEY_HEX) not configured")
+		return nil, status.Errorf(codes.FailedPrecondition, "secrets key (%s) not configured", keyEnvName)
 	}
 	ct, err := aes.Encrypt([]byte(plaintext), kek)
 	if err != nil {

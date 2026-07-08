@@ -79,7 +79,7 @@ func (h *GRPCHandler) PutNotificationWebhookConfig(ctx context.Context, req *aud
 	if existing != nil {
 		existingSecret = existing.SecretEnc
 	}
-	secretCT, err := sealSecret(h.webhookKEK, existingSecret, req.GetSecret())
+	secretCT, err := sealSecret(h.webhookKEK, existingSecret, req.GetSecret(), "NOTIFY_WEBHOOK_KEY_HEX")
 	if err != nil {
 		return nil, err // FailedPrecondition when KEK unset + secret supplied
 	}

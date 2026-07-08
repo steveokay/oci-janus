@@ -194,8 +194,13 @@ New 32-byte hex KEK, parallel to `NOTIFY_EMAIL_KEY_HEX`:
 - Unset → webhook channel disabled (config can't seal a secret; the sender
   idles). Audit still boots.
 - Set-but-wrong-length → **fail closed at startup** (`config.Validate`).
-- Swept by `rotate-kek` (new `webhookSpecs()`, separate from `emailSpecs()` /
-  `mfaSpecs()`).
+- The `kek_version SMALLINT` column is in place so a future `rotate-kek` sweep
+  can re-seal the secret. **Deferred follow-up:** wiring the webhook (and the
+  pre-existing email) secret into `rotate-kek`'s `specs()` is not shipped in
+  this build — the email channel (#288) has the identical omission, and the
+  rotation tooling is owned by RED-FU-015. Until that lands, rotating the KEK
+  would orphan the sealed secret, so treat the KEK as fixed for now. Tracked in
+  `futures.md`.
 
 Server wiring (`internal/server/server.go`): decode the KEK, construct the
 `Sender`, start its goroutine alongside the email sender + scheduler runner.

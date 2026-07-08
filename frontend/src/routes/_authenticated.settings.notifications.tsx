@@ -87,23 +87,27 @@ export function NotificationsSection(): React.ReactElement {
     );
   }
 
+  // toggleChannel drives only the per-user Bell + Email columns. The Webhook
+  // column is tenant-level + admin-gated and has its own handler
+  // (toggleWebhookCategory) — it never routes through here.
   async function toggleChannel(
     row: NotificationPreferenceRow,
-    channel: "bell" | "email" | "webhook",
+    channel: "bell" | "email",
     next: boolean,
   ): Promise<void> {
     if (!data) return;
     // Send the FULL matrix every time. The BFF UPSERTs each row; sending
     // only one would still work, but the full payload keeps the wire shape
     // uniform with the GET response + lets the server seed defaults for
-    // rows the user has never touched.
+    // rows the user has never touched. webhook_enabled is passed through
+    // unchanged — the BFF forces it false server-side (webhook is org-level).
     const patched = data.preferences.map((p) =>
       p.key === row.key
         ? {
             category: p.key,
             bell_enabled: channel === "bell" ? next : p.bell_enabled,
             email_enabled: channel === "email" ? next : p.email_enabled,
-            webhook_enabled: channel === "webhook" ? next : p.webhook_enabled,
+            webhook_enabled: p.webhook_enabled,
           }
         : {
             category: p.key,

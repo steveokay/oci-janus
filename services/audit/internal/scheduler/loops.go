@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -416,7 +417,7 @@ func (r *Runner) enqueueWebhook(
 	if cfg == nil || !cfg.Enabled {
 		return
 	}
-	if !containsCategory(cfg.EnabledCategories, sn.Category) {
+	if !slices.Contains(cfg.EnabledCategories, sn.Category) {
 		return
 	}
 	// Idempotent on source_scheduled_id — a dispatcher retry never double-posts.
@@ -430,16 +431,6 @@ func (r *Runner) enqueueWebhook(
 	}); err != nil {
 		slog.WarnContext(ctx, "FUT-019 webhook: enqueue failed", "err", err, "category", sn.Category)
 	}
-}
-
-// containsCategory reports whether cat is in the tenant's enabled set.
-func containsCategory(set []string, cat string) bool {
-	for _, c := range set {
-		if c == cat {
-			return true
-		}
-	}
-	return false
 }
 
 // ErrUnknownCategory is returned by dispatchOne when a row's category
