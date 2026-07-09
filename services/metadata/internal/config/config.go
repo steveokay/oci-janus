@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/steveokay/oci-janus/libs/config/loader"
@@ -33,6 +34,16 @@ type Config struct {
 	// (MTLS_CA_CERT_PATH / MTLS_CERT_PATH / MTLS_KEY_PATH).
 	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
 
+	// PRRegistryKeyHex (FUT-023 Phase 1) is the 64-char hex AES-256-GCM KEK
+	// that seals the per-tenant GitHub webhook secret used by ephemeral
+	// PR-scoped registries. Empty disables the PR-registry feature entirely
+	// (the webhook receiver, wired in a later task, refuses to seal/verify).
+	// Set-but-not-32-bytes fails closed at startup (a bad KEK would silently
+	// corrupt the sealed secret), mirroring the audit notification KEKs.
+	// The raw hex stays on the config; the hex->[]byte decode + handler
+	// wiring happens in internal/server (a separate FUT-023 task).
+	PRRegistryKeyHex string `mapstructure:"PR_REGISTRY_KEY_HEX"`
+
 	// DeploymentMode is the binary's posture, normalised by
 	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
 	// Read in Load() — not via Viper bindings — to keep the validated/typed
@@ -60,8 +71,23 @@ func Load() (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	return loader.RequireFields(map[string]string{
+	if err := loader.RequireFields(map[string]string{
 		"DB_DSN":     cfg.DBDSN,
 		"REDIS_ADDR": cfg.RedisAddr,
-	})
+	}); err != nil {
+		return err
+	}
+	// FUT-023 Phase 1 — the PR-registry KEK is optional (unset disables the
+	// feature), but a set-but-malformed key must fail closed rather than
+	// silently corrupt the sealed GitHub webhook secret. Mirrors the audit
+	// NOTIFY_EMAIL_KEY_HEX validation.
+	if cfg.PRRegistryKeyHex != "" {
+		if _, err := hex.DecodeString(cfg.PRRegistryKeyHex); err != nil {
+			return fmt.Errorf("PR_REGISTRY_KEY_HEX: not valid hex: %w", err)
+		}
+		if len(cfg.PRRegistryKeyHex) != 64 {
+			return fmt.Errorf("PR_REGISTRY_KEY_HEX: expected 64 hex chars (32 bytes), got %d", len(cfg.PRRegistryKeyHex))
+		}
+	}
+	return nil
 }
