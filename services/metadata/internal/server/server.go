@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,11 +27,13 @@ import (
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	tenantbootstrap "github.com/steveokay/oci-janus/libs/tenant/bootstrap"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/config"
 	"github.com/steveokay/oci-janus/services/metadata/internal/handler"
+	"github.com/steveokay/oci-janus/services/metadata/internal/prregistry"
 	"github.com/steveokay/oci-janus/services/metadata/internal/pullconsumer"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 	metadatamigrations "github.com/steveokay/oci-janus/services/metadata/migrations"
@@ -117,6 +120,43 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}()
 	} else {
 		slog.Warn("RABBITMQ_URL not set — pull.image consumer disabled, last_pulled_at will not be updated (FE-API-042)")
+	}
+
+	// ── 4c. FUT-023 Phase 1 — ephemeral PR-scoped registries ──────────────────
+	// The PR-registry webhook dispatch is gated behind PR_REGISTRY_KEY_HEX: the
+	// KEK unseals per-tenant webhook secrets, so with no KEK the feature is off
+	// (HandlePREvent → OUTCOME_DISABLED, a Put carrying a secret →
+	// FailedPrecondition). When the KEK is set we build a best-effort event
+	// publisher (only when RABBITMQ_URL is also set — lifecycle events are an
+	// at-most-once notification, not a transactional guarantee, so a nil
+	// publisher is a clean no-op inside prregistry.Service.publish) and wire the
+	// dispatch service onto the handler.
+	if cfg.PRRegistryKeyHex != "" {
+		// config.Validate already checked the hex length; decode defensively.
+		prKEK, err := hex.DecodeString(cfg.PRRegistryKeyHex)
+		if err != nil {
+			return fmt.Errorf("decode PR_REGISTRY_KEY_HEX: %w", err)
+		}
+		// Best-effort publisher: nil when RABBITMQ_URL is unset. prregistry
+		// guards s.pub == nil, so the dispatch still works and lifecycle events
+		// are simply not emitted.
+		var prPub prregistry.Publisher
+		if cfg.RabbitMQURL != "" {
+			p, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
+			if err != nil {
+				return fmt.Errorf("init pr-registry event publisher: %w", err)
+			}
+			defer p.Close()
+			prPub = p
+			slog.Info("FUT-023: PR-registry event publisher connected")
+		} else {
+			slog.Warn("RABBITMQ_URL not set — PR-registry lifecycle events will not be published (FUT-023)")
+		}
+		prSvc := prregistry.New(repo, prPub, prKEK)
+		h = h.WithPRRegistry(prSvc, prKEK)
+		slog.Info("FUT-023: PR-registry dispatch enabled (PR_REGISTRY_KEY_HEX set)")
+	} else {
+		slog.Warn("PR_REGISTRY_KEY_HEX not set — PR-registry feature disabled (FUT-023)")
 	}
 
 	// ── 5. gRPC server ────────────────────────────────────────────────────────

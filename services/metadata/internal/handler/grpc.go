@@ -18,6 +18,7 @@ import (
 
 	errcodes "github.com/steveokay/oci-janus/libs/errors/codes"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	"github.com/steveokay/oci-janus/services/metadata/internal/prregistry"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
 
@@ -161,6 +162,16 @@ type metadataRepo interface {
 	// ListPromotions returns recent promotions filtered by (optional) org/repo.
 	PromoteTag(ctx context.Context, in repository.PromoteTagInput) (*metadatav1.Promotion, error)
 	ListPromotions(ctx context.Context, tenantID uuid.UUID, org, repo string, limit int32) ([]*metadatav1.Promotion, error)
+
+	// FUT-023 Phase 1 — ephemeral PR-scoped registries. The config CRUD +
+	// namespace list + org teardown primitive backing the five PR-registry
+	// RPCs (grpc_pr_registry.go). GetPRRegistryConfig returns
+	// repository.ErrNotFound when the tenant has never written a config;
+	// DeleteOrganization returns it when no matching org exists.
+	GetPRRegistryConfig(ctx context.Context, tenantID uuid.UUID) (*repository.PRRegistryConfig, error)
+	UpsertPRRegistryConfig(ctx context.Context, cfg repository.PRRegistryConfig) error
+	ListPRNamespaces(ctx context.Context, tenantID uuid.UUID, status string, pageSize int, pageToken string) ([]repository.PRNamespace, string, error)
+	DeleteOrganization(ctx context.Context, tenantID, orgID uuid.UUID) error
 }
 
 // MetadataHandler implements metadatav1.MetadataServiceServer.
@@ -173,11 +184,30 @@ type MetadataHandler struct {
 	// + dev environments without Redis still work — the gate just
 	// lags by the cache TTL).
 	rdb *redis.Client
+	// FUT-023 Phase 1 — ephemeral PR-scoped registries. prSvc is the
+	// webhook-dispatch business logic (nil when PR_REGISTRY_KEY_HEX is
+	// unset ⇒ HandlePREvent returns OUTCOME_DISABLED). prKEK is the raw
+	// 32-byte AES-256-GCM key used to seal the per-tenant webhook secret
+	// on PutPRRegistryConfig (empty ⇒ a Put carrying a secret fails closed
+	// with FailedPrecondition). Wired via WithPRRegistry from server.go.
+	prSvc *prregistry.Service
+	prKEK []byte
 }
 
 // New returns a MetadataHandler backed by repo.
 func New(repo *repository.Repository) *MetadataHandler {
 	return &MetadataHandler{repo: repo}
+}
+
+// WithPRRegistry wires the FUT-023 PR-registry dispatch service + the
+// AES-256-GCM KEK used to seal per-tenant webhook secrets. Called from
+// server.go at boot only when PR_REGISTRY_KEY_HEX is configured; when unset
+// the handler's prSvc stays nil (HandlePREvent → OUTCOME_DISABLED) and prKEK
+// stays empty (PutPRRegistryConfig with a secret → FailedPrecondition).
+func (h *MetadataHandler) WithPRRegistry(svc *prregistry.Service, kek []byte) *MetadataHandler {
+	h.prSvc = svc
+	h.prKEK = kek
+	return h
 }
 
 // WithCacheBuster wires the Redis client so quarantine transitions
