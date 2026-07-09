@@ -540,6 +540,42 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
+	// FUT-023 — ephemeral PR-scoped registries. services/metadata emits
+	// pr.namespace.provisioned when a per-PR org namespace is created and
+	// pr.namespace.torn_down when it is GC'd (or promoted on merge). Both
+	// are system-actor events — the namespace lifecycle is driven by the
+	// PR-registry reconciler, not a direct operator action; the initiating
+	// PR (provider/source_repo/pr_number) is preserved in metadata.raw so
+	// the activity feed can attribute the change to a specific PR. Action
+	// mirrors the routing key so the audit vocabulary stays stable.
+	case events.RoutingPRNamespaceProvisioned:
+		var p events.PRNamespaceProvisionedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "pr.namespace.provisioned",
+			Resource:   p.OrgName,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
+	case events.RoutingPRNamespaceTornDown:
+		var p events.PRNamespaceTornDownPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		return &repository.AuditEvent{
+			TenantID:   tenantID,
+			ActorID:    "system",
+			ActorType:  "system",
+			Action:     "pr.namespace.torn_down",
+			Resource:   p.OrgName,
+			Outcome:    "success",
+			Metadata:   meta,
+			OccurredAt: now,
+		}
+
 	case events.RoutingTenantCreated:
 		return &repository.AuditEvent{
 			TenantID:   tenantID,

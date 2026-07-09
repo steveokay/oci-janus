@@ -150,6 +150,22 @@ const (
 	// Publish failure is logged but does NOT fail the response — the
 	// durable state is already updated. Same posture as image.promoted.
 	RoutingRepoCVSSPolicyChanged = "repo.cvss_policy.changed"
+
+	// FUT-023 — ephemeral PR-scoped registries.
+	//
+	// RoutingPRNamespaceProvisioned fires from services/metadata after a
+	// per-PR org namespace is created for an ephemeral registry.
+	//
+	// RoutingPRNamespaceTornDown fires from services/metadata when the
+	// namespace is torn down — either the PR closed without merge, or it
+	// merged and its images were promoted into a durable target org (the
+	// payload's Promoted + TargetOrg fields distinguish the two).
+	//
+	// Both land in audit_events via the eventconsumer (CLAUDE.md §10) so
+	// operators see the full lifecycle of every ephemeral PR registry in
+	// /activity.
+	RoutingPRNamespaceProvisioned = "pr.namespace.provisioned"
+	RoutingPRNamespaceTornDown    = "pr.namespace.torn_down"
 )
 
 // Exchange names
@@ -564,6 +580,44 @@ type RepoCVSSPolicyChangedPayload struct {
 	ActorID  string `json:"actor_id,omitempty"`
 	Before   *int32 `json:"before,omitempty"`
 	After    *int32 `json:"after,omitempty"`
+}
+
+// FUT-023 payloads ─────────────────────────────────────────────────────
+
+// PRNamespaceProvisionedPayload is the wire shape of
+// pr.namespace.provisioned (FUT-023 Phase 1).
+//
+// Emitted by services/metadata after a per-PR org namespace is created
+// for an ephemeral registry. Carries the full provisioning identity so
+// the audit consumer can render the audit row (and a future teardown
+// reconciler can match on OrgName) without a callback into
+// services/metadata. OrgName is the synthesised per-PR namespace
+// (e.g. "pr-1234-<repo>").
+type PRNamespaceProvisionedPayload struct {
+	TenantID   string `json:"tenant_id"`
+	Provider   string `json:"provider"`
+	SourceRepo string `json:"source_repo"`
+	PRNumber   int    `json:"pr_number"`
+	OrgName    string `json:"org_name"`
+}
+
+// PRNamespaceTornDownPayload is the wire shape of pr.namespace.torn_down
+// (FUT-023 Phase 1).
+//
+// Emitted by services/metadata when a per-PR org namespace is torn down —
+// either because the PR closed without merge (Promoted false) or because
+// the PR merged and its artifacts were promoted into a durable target org
+// (Promoted true, TargetOrg set). Carrying the promotion outcome lets the
+// audit feed distinguish "PR abandoned, namespace GC'd" from "PR merged,
+// images promoted to <target>".
+type PRNamespaceTornDownPayload struct {
+	TenantID   string `json:"tenant_id"`
+	Provider   string `json:"provider"`
+	SourceRepo string `json:"source_repo"`
+	PRNumber   int    `json:"pr_number"`
+	OrgName    string `json:"org_name"`
+	Promoted   bool   `json:"promoted"`             // true when merged + target promoted
+	TargetOrg  string `json:"target_org,omitempty"` // set when Promoted
 }
 
 // AccessReviewSnoozedPayload is the wire shape of auth.access_review.snoozed.
