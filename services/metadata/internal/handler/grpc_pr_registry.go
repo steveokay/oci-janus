@@ -193,7 +193,7 @@ func (h *MetadataHandler) HandlePREvent(ctx context.Context, req *metadatav1.Han
 // status defaults to "active" per the design (§6): callers typically want the
 // live namespaces. Pass "torn_down" for the history, or the handler cannot
 // express "all states" from an empty string — that's intentional, matching the
-// proto field comment ('active'(default)|'torn_down'|''(all) is documented, but
+// proto field comment ('active'(default)|'torn_down'|”(all) is documented, but
 // the default-on-empty keeps the common list scoped to live namespaces).
 func (h *MetadataHandler) ListPRNamespaces(ctx context.Context, req *metadatav1.ListPRNamespacesRequest) (*metadatav1.ListPRNamespacesResponse, error) {
 	tenantID, err := uuid.Parse(req.GetTenantId())
