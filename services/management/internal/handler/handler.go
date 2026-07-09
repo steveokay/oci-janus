@@ -123,6 +123,12 @@ type Handler struct {
 	// 500 in production with an empty value (the config layer rejects this
 	// at startup anyway).
 	platformHost string
+	// publicBaseURL is the fully-qualified, scheme-included base URL at which
+	// this BFF is reachable publicly (e.g. "https://registry.example.com").
+	// Injected via WithPublicBaseURL; used only by the FUT-023 PR-registry
+	// config route to render the GitHub-webhook receiver URL an admin pastes
+	// into GitHub. Empty renders an empty webhook_url rather than guessing.
+	publicBaseURL string
 }
 
 // New creates a Handler wired to the given gRPC clients and RabbitMQ publisher.
@@ -268,6 +274,15 @@ func (h *Handler) WithPlatformHost(host string) *Handler {
 	return h
 }
 
+// WithPublicBaseURL wires the fully-qualified public base URL (scheme + host)
+// that the FUT-023 PR-registry config route uses to render the GitHub-webhook
+// receiver URL. Empty leaves webhook_url blank in the config response. Returns
+// the handler for chained initialization, mirroring WithPlatformHost.
+func (h *Handler) WithPublicBaseURL(u string) *Handler {
+	h.publicBaseURL = u
+	return h
+}
+
 // checkServicesHealth calls the gRPC health check on each configured service and
 // returns the percentage (0–100) that are currently SERVING.
 // Uses a 2-second deadline so a slow or unreachable service never stalls the stats page.
@@ -315,6 +330,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Deployment info — unauthenticated, public. Returns the deployment mode
 	// and version so the FE can decide which chrome to render (REDESIGN-001 Phase 1.4).
 	mux.Handle("GET /api/v1/deployment-info", http.HandlerFunc(h.handleDeploymentInfo))
+
+	// FUT-023 Phase 1 — inbound GitHub PR webhook receiver. Mounted WITHOUT
+	// authMW: the HMAC signature (verified downstream in metadata over the
+	// exact raw bytes) is the sole trust boundary — a JWT would be meaningless
+	// for a machine-to-machine GitHub delivery. The handler forwards the raw
+	// body + signature to metadata.HandlePREvent and maps the outcome to an
+	// HTTP status. See pr_registry.go.
+	mux.Handle("POST /webhooks/scm/github/pr", http.HandlerFunc(h.handleGitHubPRWebhook))
 
 	// Registry info — authenticated. Returns the deployment's externally-reachable
 	// registry hostname for the FUT-002 credential-helpers surface. The hostname
@@ -493,6 +516,18 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		authMW(http.HandlerFunc(h.handlePutNotificationWebhook)))
 	mux.Handle("POST /api/v1/notifications/webhook-config/test",
 		authMW(http.HandlerFunc(h.handleTestNotificationWebhook)))
+
+	// FUT-023 Phase 1 — PR-registry admin config + namespace inventory. The
+	// config GET/PUT routes gate on the platform-admin primitive + SA deny
+	// inside each handler (requirePRRegistryAdmin), same posture as the email
+	// transport routes; the namespace-list route shares the gate. All three
+	// forward to the metadata client, which is always wired. See pr_registry.go.
+	mux.Handle("GET /api/v1/pr-registry/config",
+		authMW(http.HandlerFunc(h.handleGetPRRegistryConfig)))
+	mux.Handle("PUT /api/v1/pr-registry/config",
+		authMW(http.HandlerFunc(h.handlePutPRRegistryConfig)))
+	mux.Handle("GET /api/v1/pr-registry/namespaces",
+		authMW(http.HandlerFunc(h.handleListPRNamespaces)))
 
 	// FUT-012 Phase B — tenant-user lifecycle endpoints. Gated on
 	// tenant-admin OR platform-admin marker inside each handler.
