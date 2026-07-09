@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/steveokay/oci-janus/libs/crypto/aes"
+	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/metadata/internal/prregistry"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
@@ -145,7 +146,15 @@ func (h *MetadataHandler) PutPRRegistryConfig(ctx context.Context, req *metadata
 // non-nil error (a promote/store failure) is returned as Internal so it is NOT
 // swallowed: the namespace stays intact for GitHub to retry.
 func (h *MetadataHandler) HandlePREvent(ctx context.Context, req *metadatav1.HandlePREventRequest) (*metadatav1.HandlePREventResponse, error) {
-	tenantID, err := uuid.Parse(req.GetTenantId())
+	// The SCM webhook receiver (registry-management) is unauthenticated and
+	// carries no tenant on the request body. In single mode SingleTenantInjector
+	// has populated x-tenant-id on the context with the bootstrap tenant, so fall
+	// back to it when the caller left tenant_id empty.
+	rawTenant := req.GetTenantId()
+	if rawTenant == "" {
+		rawTenant = grpcmw.TenantIDFromIncomingContext(ctx)
+	}
+	tenantID, err := uuid.Parse(rawTenant)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
 	}

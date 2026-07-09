@@ -30,6 +30,23 @@ import (
 // matches the on-wire bytes if anyone greps for it.
 const tenantIDMetadataKey = "x-tenant-id"
 
+// TenantIDFromIncomingContext returns the x-tenant-id metadata value on the
+// inbound gRPC context, or "" if absent. In single mode SingleTenantInjector
+// has already populated it with the bootstrap tenant id, so a handler serving
+// an unauthenticated/tenant-less caller (e.g. the FUT-023 SCM webhook, which
+// carries no JWT) can recover the active tenant from the context instead of
+// the request body. Returns "" in multi mode when no caller supplied one.
+func TenantIDFromIncomingContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	if values := md.Get(tenantIDMetadataKey); len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
 // SingleTenantInjector returns a unary interceptor that enforces a single
 // canonical tenant_id when bootstrapTenantID is non-empty (single mode).
 //
