@@ -22,6 +22,7 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/audit/internal/email"
 	"github.com/steveokay/oci-janus/services/audit/internal/repository"
+	"github.com/steveokay/oci-janus/services/audit/internal/webhook"
 )
 
 // auditRepo is the subset of repository.Repository used by GRPCHandler,
@@ -86,6 +87,13 @@ type auditRepo interface {
 	UpsertEmailTransportConfig(ctx context.Context, cfg repository.EmailTransportConfig) error
 	UpdateEmailTestResult(ctx context.Context, tenantID uuid.UUID, ok bool, errMsg string) error
 	ListEmailDeliveries(ctx context.Context, tenantID, userID uuid.UUID, limit int) ([]*repository.EmailDelivery, error)
+	// FUT-019 Webhook channel — per-tenant org webhook config (see
+	// grpc_notification_webhook.go). secret_enc is sealed ciphertext; the
+	// handler owns the AES-256-GCM seal/open with the webhook KEK, exactly as
+	// the email transport keeps that concern out of the repo.
+	GetNotificationWebhookConfig(ctx context.Context, tenantID uuid.UUID) (*repository.NotificationWebhookConfig, error)
+	UpsertNotificationWebhookConfig(ctx context.Context, cfg repository.NotificationWebhookConfig) error
+	UpdateWebhookTestResult(ctx context.Context, tenantID uuid.UUID, ok bool, errMsg string) error
 }
 
 // AuditExportDLXProbe surfaces the live RabbitMQ DLX queue depth +
@@ -177,6 +185,14 @@ type GRPCHandler struct {
 	// WithEmailKEK / WithEmailTransport.
 	emailKEK          []byte
 	newEmailTransport func(email.DecryptedConfig) (email.Transport, error)
+	// FUT-019 Webhook channel. webhookKEK is the AES-256-GCM key used to seal
+	// the org webhook HMAC secret on notification_webhook_config; when empty a
+	// Put carrying a secret fails closed with FailedPrecondition, matching the
+	// email posture. webhookPoster is injected so tests can fake the HTTP POST
+	// for SendTestNotificationWebhook; when nil it defaults to webhook.NewPoster
+	// at call time. Both are wired via WithWebhookKEK / WithWebhookPoster.
+	webhookKEK    []byte
+	webhookPoster *webhook.Poster
 }
 
 // AuditExportTester decouples the gRPC handler from the exporter

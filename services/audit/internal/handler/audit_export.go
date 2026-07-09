@@ -192,7 +192,7 @@ func (h *GRPCHandler) TestAuditExportConfig(ctx context.Context, req *auditv1.Te
 		RenderedEvent: rendered,
 	}
 	if deliverErr != nil {
-		resp.Error = truncateString(deliverErr.Error(), maxLastErrorLen)
+		resp.Error = truncateString(deliverErr.Error())
 	}
 	return resp, nil
 }
@@ -273,14 +273,15 @@ func validateTargetURL(format, target string) error {
 	return nil
 }
 
-// truncateString clips a string to byteLen while staying UTF-8 safe.
-// We don't need rune-perfect truncation for log messages; just keep
-// the result short enough to fit in the column.
-func truncateString(s string, byteLen int) string {
-	if len(s) <= byteLen {
+// truncateString clips a string to maxLastErrorLen bytes so it fits in
+// the last_error column. Every caller uses the same limit, so it's baked
+// in rather than passed (unparam). The cut is on a byte boundary and may
+// split a trailing multi-byte rune — acceptable for truncated error logs.
+func truncateString(s string) string {
+	if len(s) <= maxLastErrorLen {
 		return s
 	}
-	return s[:byteLen]
+	return s[:maxLastErrorLen]
 }
 
 // DrainAuditExportDLX (futures.md Tier 1 #4 Phase 2) — admin RPC that

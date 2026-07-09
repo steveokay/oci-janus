@@ -484,6 +484,16 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/notifications/email-deliveries",
 		authMW(http.HandlerFunc(h.handleListEmailDeliveries)))
 
+	// FUT-019 webhook channel — org-level webhook config (admin). Gated on
+	// the platform-admin primitive + SA deny inside each handler
+	// (requireEmailAdmin), same posture as the email transport routes.
+	mux.Handle("GET /api/v1/notifications/webhook-config",
+		authMW(http.HandlerFunc(h.handleGetNotificationWebhook)))
+	mux.Handle("PUT /api/v1/notifications/webhook-config",
+		authMW(http.HandlerFunc(h.handlePutNotificationWebhook)))
+	mux.Handle("POST /api/v1/notifications/webhook-config/test",
+		authMW(http.HandlerFunc(h.handleTestNotificationWebhook)))
+
 	// FUT-012 Phase B — tenant-user lifecycle endpoints. Gated on
 	// tenant-admin OR platform-admin marker inside each handler.
 	mux.Handle("GET /api/v1/tenant/users",

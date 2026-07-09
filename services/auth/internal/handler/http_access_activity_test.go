@@ -105,6 +105,15 @@ func (f *fakeAuditClient) SendTestEmail(_ context.Context, _ *auditv1.SendTestEm
 func (f *fakeAuditClient) ListEmailDeliveries(_ context.Context, _ *auditv1.ListEmailDeliveriesRequest, _ ...grpc.CallOption) (*auditv1.ListEmailDeliveriesResponse, error) {
 	return nil, nil
 }
+func (f *fakeAuditClient) GetNotificationWebhookConfig(_ context.Context, _ *auditv1.GetNotificationWebhookConfigRequest, _ ...grpc.CallOption) (*auditv1.NotificationWebhookConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) PutNotificationWebhookConfig(_ context.Context, _ *auditv1.PutNotificationWebhookConfigRequest, _ ...grpc.CallOption) (*auditv1.NotificationWebhookConfig, error) {
+	return nil, nil
+}
+func (f *fakeAuditClient) SendTestNotificationWebhook(_ context.Context, _ *auditv1.SendTestNotificationWebhookRequest, _ ...grpc.CallOption) (*auditv1.SendTestNotificationWebhookResponse, error) {
+	return nil, nil
+}
 
 // ── activityTestEnv ───────────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -86,6 +87,9 @@ type schedulerRepo interface {
 	// FUT-019 Phase 3 — email fan-out surface.
 	ListEmailRecipients(ctx context.Context, tenantID uuid.UUID, category string) ([]uuid.UUID, error)
 	EnqueueEmailDelivery(ctx context.Context, d repository.EmailDelivery) error
+	// FUT-019 webhook channel fan-out surface.
+	GetNotificationWebhookConfig(ctx context.Context, tenantID uuid.UUID) (*repository.NotificationWebhookConfig, error)
+	EnqueueWebhookDelivery(ctx context.Context, d repository.WebhookDelivery) error
 }
 
 // EmailRecipientResolver resolves user ids to email addresses. Implemented by a
@@ -105,6 +109,11 @@ type Runner struct {
 	// entirely — server.go attaches it via WithEmailResolver only when
 	// AUTH_GRPC_ADDR is configured.
 	resolver EmailRecipientResolver
+	// webhookEnabled gates the FUT-019 org-webhook fan-out. False (the
+	// default) skips webhook enqueue entirely; server.go flips it on via
+	// WithWebhookEnabled only when NOTIFY_WEBHOOK_KEY_HEX is set so the send
+	// loop can actually deliver.
+	webhookEnabled bool
 }
 
 // New returns a Runner ready to Start. Pass the categories the
@@ -118,6 +127,14 @@ func New(repo *repository.Repository, categories []Category, cfg RunnerConfig) *
 // Nil (the default) disables email enqueue entirely. Returns the Runner for chaining.
 func (r *Runner) WithEmailResolver(resolver EmailRecipientResolver) *Runner {
 	r.resolver = resolver
+	return r
+}
+
+// WithWebhookEnabled turns on the FUT-019 webhook fan-out. server.go calls this
+// only when NOTIFY_WEBHOOK_KEY_HEX is set (so the send loop can actually
+// deliver); otherwise the runner skips webhook enqueue entirely.
+func (r *Runner) WithWebhookEnabled() *Runner {
+	r.webhookEnabled = true
 	return r
 }
 
@@ -319,6 +336,9 @@ func (r *Runner) dispatchOne(
 	}
 	// FUT-019 Phase 3 — best-effort email fan-out. Never fails the bell write.
 	r.enqueueEmail(ctx, sn, rendered)
+	// FUT-019 webhook channel — best-effort org-webhook enqueue. Never fails
+	// the bell write.
+	r.enqueueWebhook(ctx, sn, rendered)
 	return nil
 }
 
@@ -374,6 +394,42 @@ func (r *Runner) enqueueEmail(
 			slog.WarnContext(ctx, "FUT-019 email: enqueue failed",
 				"err", err, "user_id", uid)
 		}
+	}
+}
+
+// enqueueWebhook enqueues one org-webhook delivery for a rendered notification
+// when the tenant's webhook config is enabled and this category is in its
+// enabled set. Best-effort: every failure logs + returns so a webhook problem
+// never fails bell delivery. Disabled (webhookEnabled=false) short-circuits.
+func (r *Runner) enqueueWebhook(
+	ctx context.Context,
+	sn *repository.ScheduledNotification,
+	rendered RenderedNotification,
+) {
+	if !r.webhookEnabled {
+		return
+	}
+	cfg, err := r.repo.GetNotificationWebhookConfig(ctx, sn.TenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "FUT-019 webhook: load config failed", "err", err, "category", sn.Category)
+		return
+	}
+	if cfg == nil || !cfg.Enabled {
+		return
+	}
+	if !slices.Contains(cfg.EnabledCategories, sn.Category) {
+		return
+	}
+	// Idempotent on source_scheduled_id — a dispatcher retry never double-posts.
+	if err := r.repo.EnqueueWebhookDelivery(ctx, repository.WebhookDelivery{
+		TenantID:          sn.TenantID,
+		Category:          sn.Category,
+		Subject:           rendered.Title,
+		BodySummary:       rendered.Summary,
+		Link:              rendered.Link,
+		SourceScheduledID: sn.ID,
+	}); err != nil {
+		slog.WarnContext(ctx, "FUT-019 webhook: enqueue failed", "err", err, "category", sn.Category)
 	}
 }
 

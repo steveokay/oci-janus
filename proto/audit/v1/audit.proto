@@ -95,6 +95,11 @@ service AuditService {
   rpc PutEmailTransportConfig(PutEmailTransportConfigRequest) returns (EmailTransportConfig);
   rpc SendTestEmail(SendTestEmailRequest) returns (SendTestEmailResponse);
   rpc ListEmailDeliveries(ListEmailDeliveriesRequest) returns (ListEmailDeliveriesResponse);
+
+  // FUT-019 webhook notification channel (admin-configured org webhook).
+  rpc GetNotificationWebhookConfig(GetNotificationWebhookConfigRequest) returns (NotificationWebhookConfig);
+  rpc PutNotificationWebhookConfig(PutNotificationWebhookConfigRequest) returns (NotificationWebhookConfig);
+  rpc SendTestNotificationWebhook(SendTestNotificationWebhookRequest) returns (SendTestNotificationWebhookResponse);
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.
@@ -546,4 +551,39 @@ message EmailDelivery {
   string last_error = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp sent_at = 8;
+}
+
+// FUT-019 webhook notification channel.
+message NotificationWebhookConfig {
+  string url = 1;
+  bool enabled = 2;
+  // has_secret masks the HMAC secret — the raw value is never returned.
+  bool has_secret = 3;
+  repeated string enabled_categories = 4;
+  google.protobuf.Timestamp last_test_at = 5;
+  bool last_test_ok = 6;
+  string last_test_error = 7;
+}
+
+message GetNotificationWebhookConfigRequest {
+  string tenant_id = 1;
+}
+
+message PutNotificationWebhookConfigRequest {
+  string tenant_id = 1;
+  string updated_by = 2;
+  string url = 3;
+  bool enabled = 4;
+  // secret is write-only: empty = keep the stored ciphertext, non-empty = re-seal.
+  string secret = 5;
+  repeated string enabled_categories = 6;
+}
+
+message SendTestNotificationWebhookRequest {
+  string tenant_id = 1;
+}
+
+message SendTestNotificationWebhookResponse {
+  bool ok = 1;
+  string error = 2;
 }

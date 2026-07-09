@@ -71,12 +71,18 @@ func (h *GRPCHandler) UpdateUserNotificationPreferences(
 			return nil, status.Error(codes.InvalidArgument, "preference category must not be empty")
 		}
 		if err := h.repo.UpsertUserPreference(ctx, repository.NotificationPreference{
-			UserID:         userID,
-			TenantID:       tenantID,
-			Category:       p.GetCategory(),
-			BellEnabled:    p.GetBellEnabled(),
-			EmailEnabled:   p.GetEmailEnabled(),
-			WebhookEnabled: p.GetWebhookEnabled(),
+			UserID:       userID,
+			TenantID:     tenantID,
+			Category:     p.GetCategory(),
+			BellEnabled:  p.GetBellEnabled(),
+			EmailEnabled: p.GetEmailEnabled(),
+			// FUT-019 webhook channel — webhook enablement is tenant-level and
+			// admin-gated (org config's enabled_categories), not per-user. The
+			// per-user column is retired: force false here so a direct-gRPC
+			// write can't persist a stale/hostile flag (defence-in-depth; the
+			// BFF PATCH already forces false, and the GET overlay ignores this
+			// column entirely). Spec §7.1.
+			WebhookEnabled: false,
 		}); err != nil {
 			return nil, status.Error(codes.Internal, "failed to save preference")
 		}

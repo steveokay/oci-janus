@@ -716,6 +716,22 @@ New env vars (see `services/audit/.env.example`):
 - `AUTH_GRPC_ADDR` — mTLS target for `registry-auth.ResolveUserEmails`. Unset disables email fan-out (bell channel unaffected).
 - `PLATFORM_HOST` — optional public base URL for absolute email CTA links; empty → relative links.
 
+**Webhook notification channel (FUT-019):**
+
+`services/audit` also owns a shared per-tenant org webhook — one HMAC-signed POST per scheduled notification for the categories the tenant selected. The dispatcher, after the bell row, best-effort enqueues one `notification_webhook_deliveries` row (idempotent on `source_scheduled_id`) when the config is enabled + the category is selected; a send loop drains it with `FOR UPDATE SKIP LOCKED` + webhook backoff (`5s → 30s → 5m → 30m → 2h`, 5 attempts), HMAC-SHA256-signs a generic JSON envelope (`X-Registry-Signature`), and POSTs HTTPS-only + SSRF-blocked (patterns copied from `services/webhook`). Unlike email there is **no per-user resolution** (no new mTLS peer edge).
+
+New tables:
+- `notification_webhook_config(tenant_id PK, url, secret_enc, enabled, enabled_categories, kek_version, last_test_at/ok/error, updated_at/by)` — one row per tenant; `secret_enc` is `BYTEA`, AES-256-GCM-sealed under `NOTIFY_WEBHOOK_KEY_HEX`; `kek_version` is the `rotate-kek` (RED-FU-015) target.
+- `notification_webhook_deliveries(id, tenant_id, category, payload, source_scheduled_id, status, attempts, next_attempt_at, last_error, created_at, sent_at)` — per-send log **and** send queue; `status` ∈ `{pending, sent, failed}`. Idempotent via `UNIQUE (source_scheduled_id)`.
+
+New RPCs on `AuditService`:
+- `GetNotificationWebhookConfig(tenant_id)` — returns config with the **secret never echoed**; exposes a `has_secret` boolean instead of the value.
+- `PutNotificationWebhookConfig(config)` — upsert with a **write-only secret** (empty secret field means "keep existing"); stamps `kek_version`. Returns `FailedPrecondition` when a secret is supplied but `NOTIFY_WEBHOOK_KEY_HEX` is unset.
+- `SendTestNotificationWebhook(tenant_id)` — synchronous test POST to the configured URL, records `last_test_*`, returns `{ok, error}` (redacted).
+
+New env var (see `services/audit/.env.example`):
+- `NOTIFY_WEBHOOK_KEY_HEX` — 64-hex (32-byte) AES-256-GCM KEK sealing the org webhook HMAC secret. Unset disables the webhook channel; set-but-wrong-length fails closed at startup.
+
 ---
 
 ## 11. registry-gc
@@ -901,6 +917,11 @@ PUT    /api/v1/notifications/email-transport           # Save transport config (
 POST   /api/v1/notifications/email-transport/test      # Send a test email to the caller's own address (admin)
 GET    /api/v1/notifications/email-deliveries          # Current user's email delivery log
 
+# Webhook notification channel (FUT-019)
+GET    /api/v1/notifications/webhook-config            # Get org webhook config (admin; secret masked to has_secret)
+PUT    /api/v1/notifications/webhook-config            # Save org webhook config (admin; write-only secret)
+POST   /api/v1/notifications/webhook-config/test       # Send a test POST to the configured webhook URL (admin)
+
 GET    /api/v1/repositories/:org/:repo/analytics       # Repo-scoped time-series
 GET    /api/v1/stats/analytics                         # Tenant-wide analytics
 GET    /api/v1/stats/storage                           # Per-repo storage breakdown (FE-API-031)
@@ -951,7 +972,7 @@ POST   /api/v1/admin/gc/run
 **gRPC calls made by this service:**
 - `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`, `CountTenantUsers`
 - `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5
-- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`, `GetEmailTransportConfig`, `PutEmailTransportConfig`, `SendTestEmail`, `ListEmailDeliveries` (FUT-019 Phase 3 — the email-transport routes map `FailedPrecondition` → `409` when email isn't configured)
+- `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`, `GetEmailTransportConfig`, `PutEmailTransportConfig`, `SendTestEmail`, `ListEmailDeliveries` (FUT-019 Phase 3 — the email-transport routes map `FailedPrecondition` → `409` when email isn't configured), `GetNotificationWebhookConfig`, `PutNotificationWebhookConfig`, `SendTestNotificationWebhook` (FUT-019 webhook channel — same `FailedPrecondition` → `409` when `NOTIFY_WEBHOOK_KEY_HEX` is unset)
 - `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`, `ListTenantDomains`, `VerifyDomainNow`, `SetPrimaryDomain`, `DeleteDomain`
 - `registry-signer` (opt-in via `SIGNER_GRPC_ADDR`): `ListSignatures`, `SignManifest`, `VerifyManifest`
 - `registry-scanner` (opt-in via `SCANNER_GRPC_ADDR`): scan-policy + compliance-report RPCs

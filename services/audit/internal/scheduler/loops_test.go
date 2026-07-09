@@ -32,6 +32,10 @@ type fakeRepo struct {
 	enqueued []repository.EmailDelivery
 	// insertCount counts bell Insert calls.
 	insertCount int
+	// webhookCfg is returned verbatim by GetNotificationWebhookConfig.
+	webhookCfg *repository.NotificationWebhookConfig
+	// webhookEnqueued records every EnqueueWebhookDelivery call, in call order.
+	webhookEnqueued []repository.WebhookDelivery
 }
 
 func (f *fakeRepo) Insert(ctx context.Context, e *repository.AuditEvent) error {
@@ -48,6 +52,15 @@ func (f *fakeRepo) ListEmailRecipients(ctx context.Context, tenantID uuid.UUID, 
 
 func (f *fakeRepo) EnqueueEmailDelivery(ctx context.Context, d repository.EmailDelivery) error {
 	f.enqueued = append(f.enqueued, d)
+	return nil
+}
+
+func (f *fakeRepo) GetNotificationWebhookConfig(ctx context.Context, tenantID uuid.UUID) (*repository.NotificationWebhookConfig, error) {
+	return f.webhookCfg, nil
+}
+
+func (f *fakeRepo) EnqueueWebhookDelivery(ctx context.Context, d repository.WebhookDelivery) error {
+	f.webhookEnqueued = append(f.webhookEnqueued, d)
 	return nil
 }
 
@@ -188,5 +201,53 @@ func TestDispatchOne_EmailFanOut_ListRecipientsErrorDoesNotFailBell(t *testing.T
 	}
 	if len(repo.enqueued) != 0 {
 		t.Fatalf("expected no deliveries, got %d", len(repo.enqueued))
+	}
+}
+
+// ── FUT-019 webhook channel fan-out tests ────────────────────────────
+
+func TestDispatchOne_WebhookFanOut_EnabledCategoryEnqueues(t *testing.T) {
+	repo := &fakeRepo{}
+	r, sn, byName := newTestRunner(repo)
+	// Config enabled + this notification's category in the enabled set.
+	repo.webhookCfg = &repository.NotificationWebhookConfig{
+		Enabled:           true,
+		EnabledCategories: []string{sn.Category},
+	}
+	r.WithWebhookEnabled()
+
+	if err := r.dispatchOne(context.Background(), sn, byName); err != nil {
+		t.Fatalf("dispatchOne returned error: %v", err)
+	}
+	if len(repo.webhookEnqueued) != 1 {
+		t.Fatalf("expected 1 webhook delivery enqueued, got %d", len(repo.webhookEnqueued))
+	}
+	d := repo.webhookEnqueued[0]
+	if d.SourceScheduledID != sn.ID {
+		t.Errorf("webhook row has wrong source_scheduled_id: %s", d.SourceScheduledID)
+	}
+	if d.TenantID != sn.TenantID {
+		t.Errorf("webhook row has wrong tenant_id: %s", d.TenantID)
+	}
+	if d.Subject == "" || d.BodySummary == "" {
+		t.Errorf("webhook row missing subject/summary: %+v", d)
+	}
+}
+
+func TestDispatchOne_WebhookFanOut_CategoryNotEnabledSkips(t *testing.T) {
+	repo := &fakeRepo{}
+	r, sn, byName := newTestRunner(repo)
+	// Config enabled but this notification's category is NOT in the set.
+	repo.webhookCfg = &repository.NotificationWebhookConfig{
+		Enabled:           true,
+		EnabledCategories: []string{"some_other_category"},
+	}
+	r.WithWebhookEnabled()
+
+	if err := r.dispatchOne(context.Background(), sn, byName); err != nil {
+		t.Fatalf("dispatchOne returned error: %v", err)
+	}
+	if len(repo.webhookEnqueued) != 0 {
+		t.Fatalf("expected no webhook deliveries when category not enabled, got %d", len(repo.webhookEnqueued))
 	}
 }
