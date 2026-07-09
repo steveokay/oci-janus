@@ -297,6 +297,18 @@ func (h *Handler) handlePutPRRegistryConfig(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Validate the promote target against the org-name allowlist before
+	// forwarding (SEC-084). Empty means "no promote target" and is allowed;
+	// a non-empty value must be a valid org name (the same gate
+	// handleCreateRepository uses) so a bad target is rejected with 400 at the
+	// BFF rather than surfacing later at merge-promote time.
+	if body.PromoteTargetOrg != "" {
+		if err := validateOrgName(body.PromoteTargetOrg); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid promote_target_org")
+			return
+		}
+	}
+
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	userID := middleware.UserIDFromContext(r.Context())
 	resp, err := h.meta.PutPRRegistryConfig(r.Context(), &metadatav1.PutPRRegistryConfigRequest{

@@ -191,6 +191,11 @@ func (r *Repository) GetPRNamespace(ctx context.Context, tenantID uuid.UUID, pro
 // ephemeral org — atomically, in one transaction, so a caller never
 // observes "org deleted but namespace still active" or vice versa.
 //
+// Both writes are scoped by tenantID (CLAUDE.md §9 / SEC-085 #3) so a
+// caller can never tear down or delete another tenant's namespace/org even
+// if a mismatched (namespaceID, orgID) pair is supplied — the tenant guard
+// is kept even though the platform is single-tenant today.
+//
 // The lifecycle row is preserved (status='torn_down', torn_down_at=now(),
 // org_id=NULL) so the audit/history of the PR survives the org deletion.
 // The explicit org_id=NULL and the FK's ON DELETE SET NULL are belt-and-
@@ -201,7 +206,7 @@ func (r *Repository) GetPRNamespace(ctx context.Context, tenantID uuid.UUID, pro
 // had an org) has no org to delete, so the DELETE is skipped in that case
 // and only the status flip is applied. This keeps repeated teardowns
 // idempotent.
-func (r *Repository) TearDownPRNamespace(ctx context.Context, namespaceID, orgID uuid.UUID) error {
+func (r *Repository) TearDownPRNamespace(ctx context.Context, tenantID, namespaceID, orgID uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin teardown pr namespace tx: %w", err)
@@ -214,16 +219,16 @@ func (r *Repository) TearDownPRNamespace(ctx context.Context, namespaceID, orgID
 	const markQ = `
 		UPDATE pr_namespaces
 		SET status = 'torn_down', torn_down_at = now(), org_id = NULL
-		WHERE id = $1`
-	if _, err := tx.Exec(ctx, markQ, namespaceID); err != nil {
+		WHERE id = $1 AND tenant_id = $2`
+	if _, err := tx.Exec(ctx, markQ, namespaceID, tenantID); err != nil {
 		return fmt.Errorf("mark pr namespace torn down: %w", err)
 	}
 
 	// Skip the org delete when there is no org to remove — already torn
 	// down or never provisioned. The status flip above is still applied.
 	if orgID != uuid.Nil {
-		const delOrgQ = `DELETE FROM organizations WHERE id = $1`
-		if _, err := tx.Exec(ctx, delOrgQ, orgID); err != nil {
+		const delOrgQ = `DELETE FROM organizations WHERE id = $1 AND tenant_id = $2`
+		if _, err := tx.Exec(ctx, delOrgQ, orgID, tenantID); err != nil {
 			return fmt.Errorf("delete pr namespace org: %w", err)
 		}
 	}
@@ -270,23 +275,24 @@ func encodePRNamespaceCursor(c prNamespaceCursor) string {
 
 // decodePRNamespaceCursor parses a token previously emitted by
 // encodePRNamespaceCursor. Empty input returns the zero cursor (no filter).
-// Any malformed input returns an error so the handler can surface
-// InvalidArgument.
+// Any malformed input wraps ErrInvalidPageToken so the handler can match it
+// with errors.Is and surface InvalidArgument (a garbage token is caller
+// error, not a server fault — FUT-023 PR #293 review).
 func decodePRNamespaceCursor(s string) (prNamespaceCursor, error) {
 	if s == "" {
 		return prNamespaceCursor{}, nil
 	}
 	b, err := base64.URLEncoding.DecodeString(s)
 	if err != nil {
-		return prNamespaceCursor{}, fmt.Errorf("decode page_token: %w", err)
+		return prNamespaceCursor{}, fmt.Errorf("%w: decode: %v", ErrInvalidPageToken, err)
 	}
 	parts := strings.SplitN(string(b), "|", 2)
 	if len(parts) != 2 {
-		return prNamespaceCursor{}, errors.New("malformed page_token")
+		return prNamespaceCursor{}, fmt.Errorf("%w: malformed", ErrInvalidPageToken)
 	}
 	ts, err := time.Parse(time.RFC3339Nano, parts[0])
 	if err != nil {
-		return prNamespaceCursor{}, fmt.Errorf("parse created_at: %w", err)
+		return prNamespaceCursor{}, fmt.Errorf("%w: parse created_at: %v", ErrInvalidPageToken, err)
 	}
 	return prNamespaceCursor{CreatedAt: ts, ID: parts[1]}, nil
 }

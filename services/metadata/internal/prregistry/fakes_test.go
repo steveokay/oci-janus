@@ -98,7 +98,7 @@ func (f *fakeStore) GetPRNamespace(_ context.Context, _ uuid.UUID, provider, sou
 	return ns, nil
 }
 
-func (f *fakeStore) TearDownPRNamespace(_ context.Context, namespaceID, _ uuid.UUID) error {
+func (f *fakeStore) TearDownPRNamespace(_ context.Context, _ /*tenantID*/, namespaceID, _ uuid.UUID) error {
 	f.tearDownCalls++
 	if f.tearDownErr != nil {
 		return f.tearDownErr

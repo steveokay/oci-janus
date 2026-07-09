@@ -69,8 +69,8 @@ var (
 	prLastPutReq *metadatav1.PutPRRegistryConfigRequest
 
 	// ListPRNamespaces.
-	prListReturn *metadatav1.ListPRNamespacesResponse
-	prListErr    error
+	prListReturn  *metadatav1.ListPRNamespacesResponse
+	prListErr     error
 	prLastListReq *metadatav1.ListPRNamespacesRequest
 
 	// HandlePREvent.
@@ -409,6 +409,25 @@ func TestPRConfigPut_KEKUnset_returns409(t *testing.T) {
 	resp := env.put(t, "/api/v1/pr-registry/config", emailAdminToken, `{"enabled":true,"webhook_secret":"s3cret"}`)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("expected 409, got %d", resp.StatusCode)
+	}
+}
+
+// TestPRConfigPut_BadPromoteTargetOrg_returns400 verifies a promote_target_org
+// that fails the org-name allowlist is rejected with 400 at the BFF, before any
+// call reaches metadata (SEC-084).
+func TestPRConfigPut_BadPromoteTargetOrg_returns400(t *testing.T) {
+	env := newPREnv(t)
+	body := `{"enabled":true,"promote_target_org":"Bad Org!"}`
+	resp := env.put(t, "/api/v1/pr-registry/config", emailAdminToken, body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	// The invalid target must have short-circuited before reaching metadata.
+	prFakeMu.Lock()
+	req := prLastPutReq
+	prFakeMu.Unlock()
+	if req != nil {
+		t.Errorf("PutPRRegistryConfig should not have been called on invalid target, got %+v", req)
 	}
 }
 

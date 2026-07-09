@@ -2769,6 +2769,50 @@ func TestPutPRRegistryConfig_emptySecret_keepsExisting(t *testing.T) {
 	}
 }
 
+// TestPutPRRegistryConfig_badPromoteTargetOrg_returnsInvalidArgument verifies a
+// promote_target_org that fails the org-name allowlist is rejected before any
+// upsert (SEC-084).
+func TestPutPRRegistryConfig_badPromoteTargetOrg_returnsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId:         prTestTenant,
+		Enabled:          true,
+		PromoteTargetOrg: "Not A Valid Org!", // spaces + uppercase + '!' all illegal
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.upsertPRConfigCalls) != 0 {
+		t.Errorf("expected no upsert on invalid promote_target_org, got %d", len(f.upsertPRConfigCalls))
+	}
+}
+
+// TestPutPRRegistryConfig_validPromoteTargetOrg_persists verifies a well-formed
+// promote_target_org passes the allowlist and is forwarded to the upsert.
+func TestPutPRRegistryConfig_validPromoteTargetOrg_persists(t *testing.T) {
+	tid := uuid.MustParse(prTestTenant)
+	// getPRConfigResult is set so the handler's post-upsert reload (which
+	// re-masks the row for the response) resolves to a row rather than the
+	// fake's default ErrNotFound.
+	f := &fakeRepo{getPRConfigResult: &repository.PRRegistryConfig{
+		TenantID:         tid,
+		Enabled:          true,
+		PromoteTargetOrg: "prod-org",
+	}}
+	h := newHandler(f)
+	_, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId:         prTestTenant,
+		Enabled:          true,
+		PromoteTargetOrg: "prod-org",
+	})
+	requireNoErr(t, err)
+	if len(f.upsertPRConfigCalls) != 1 {
+		t.Fatalf("expected 1 upsert call, got %d", len(f.upsertPRConfigCalls))
+	}
+	if f.upsertPRConfigCalls[0].PromoteTargetOrg != "prod-org" {
+		t.Errorf("promote_target_org: got %q, want prod-org", f.upsertPRConfigCalls[0].PromoteTargetOrg)
+	}
+}
+
 // TestHandlePREvent_noService_returnsDisabled verifies HandlePREvent fails
 // closed with OUTCOME_DISABLED when the prregistry.Service isn't wired.
 func TestHandlePREvent_noService_returnsDisabled(t *testing.T) {
@@ -2835,6 +2879,19 @@ func TestListPRNamespaces_mapsRows(t *testing.T) {
 	if resp.GetNextPageToken() != "next-cursor" {
 		t.Errorf("next_page_token: got %q, want %q", resp.GetNextPageToken(), "next-cursor")
 	}
+}
+
+// TestListPRNamespaces_badPageToken_returnsInvalidArgument verifies a garbage
+// page_token surfaces as InvalidArgument (400) rather than Internal (500).
+// The repository decodes the cursor and returns ErrInvalidPageToken, which the
+// handler must map ahead of the generic mapErr (PR #293 review).
+func TestListPRNamespaces_badPageToken_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listPRNamespacesErr: repository.ErrInvalidPageToken})
+	_, err := h.ListPRNamespaces(context.Background(), &metadatav1.ListPRNamespacesRequest{
+		TenantId:  prTestTenant,
+		PageToken: "!!!not-base64!!!",
+	})
+	requireCode(t, err, codes.InvalidArgument)
 }
 
 // TestDeleteOrganization_badOrg_returnsInvalidArgument verifies org_id parsing.

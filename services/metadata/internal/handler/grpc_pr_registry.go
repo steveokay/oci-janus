@@ -23,6 +23,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"regexp"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -36,6 +37,13 @@ import (
 	"github.com/steveokay/oci-janus/services/metadata/internal/prregistry"
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
 )
+
+// prOrgNameRE mirrors the platform org-name allowlist (CLAUDE.md §7). The
+// metadata handler package has no existing compiled org validator (the
+// management BFF owns validateOrgName), so the regex is declared here to
+// gate promote_target_org on the PutPRRegistryConfig write path (SEC-084) —
+// a bad target org must be rejected at ingest, not discovered at merge time.
+var prOrgNameRE = regexp.MustCompile(`^[a-z0-9-]{2,64}$`)
 
 // GetPRRegistryConfig returns the tenant's PR-registry config with the webhook
 // secret masked to a has_secret boolean. A tenant that never wrote a config
@@ -74,6 +82,14 @@ func (h *MetadataHandler) PutPRRegistryConfig(ctx context.Context, req *metadata
 	tenantID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
+	}
+
+	// Validate the promote target against the org-name allowlist (SEC-084).
+	// Empty is allowed (no promote target); a non-empty value that fails the
+	// regex is rejected here so an unusable target can never be persisted —
+	// promote-on-merge would otherwise derive an invalid destination org.
+	if org := req.GetPromoteTargetOrg(); org != "" && !prOrgNameRE.MatchString(org) {
+		return nil, status.Error(codes.InvalidArgument, "promote_target_org must match ^[a-z0-9-]{2,64}$")
 	}
 
 	// Load the existing row so an empty incoming secret preserves the stored
@@ -206,6 +222,12 @@ func (h *MetadataHandler) ListPRNamespaces(ctx context.Context, req *metadatav1.
 	}
 	rows, next, err := h.repo.ListPRNamespaces(ctx, tenantID, status_, int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
+		// A malformed page_token is caller error — surface InvalidArgument
+		// (400) rather than letting it flow through mapErr → MapDBError →
+		// Internal (500). Checked BEFORE the generic mapErr (PR #293 review).
+		if errors.Is(err, repository.ErrInvalidPageToken) {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
 		return nil, mapErr(err)
 	}
 	out := &metadatav1.ListPRNamespacesResponse{

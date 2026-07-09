@@ -54,14 +54,15 @@ type Store interface {
 
 	// GetPRNamespace resolves the lifecycle row by its unique key. Returns
 	// repository.ErrNotFound when the PR was never provisioned. Required by
-	// teardown because TearDownPRNamespace is keyed only by namespace id, so
-	// we must resolve the (tenant, provider, source_repo, pr_number) tuple to
+	// teardown because TearDownPRNamespace is keyed by namespace id, so we
+	// must resolve the (tenant, provider, source_repo, pr_number) tuple to
 	// an id + org_id first.
 	GetPRNamespace(ctx context.Context, tenantID uuid.UUID, provider, sourceRepo string, prNumber int) (*repository.PRNamespace, error)
 
 	// TearDownPRNamespace marks the namespace torn_down and deletes its
-	// ephemeral org atomically. Idempotent — orgID may be uuid.Nil.
-	TearDownPRNamespace(ctx context.Context, namespaceID, orgID uuid.UUID) error
+	// ephemeral org atomically, both scoped by tenantID (SEC-085 #3).
+	// Idempotent — orgID may be uuid.Nil.
+	TearDownPRNamespace(ctx context.Context, tenantID, namespaceID, orgID uuid.UUID) error
 
 	// ListRepositories enumerates a org's repositories (artifactType "" ⇒ all)
 	// so the promote-on-merge fan-out can walk them.

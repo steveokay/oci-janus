@@ -197,7 +197,7 @@ func (s *Service) tearDown(ctx context.Context, tenantID uuid.UUID, sourceRepo, 
 	if ns.OrgID != nil {
 		orgID = *ns.OrgID
 	}
-	if err := s.store.TearDownPRNamespace(ctx, ns.ID, orgID); err != nil {
+	if err := s.store.TearDownPRNamespace(ctx, tenantID, ns.ID, orgID); err != nil {
 		return OutcomeIgnored, orgName, fmt.Errorf("tear down pr namespace: %w", err)
 	}
 
