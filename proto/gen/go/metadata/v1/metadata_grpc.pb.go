@@ -76,6 +76,11 @@ const (
 	MetadataService_PromoteTag_FullMethodName                      = "/registry.metadata.v1.MetadataService/PromoteTag"
 	MetadataService_ListPromotions_FullMethodName                  = "/registry.metadata.v1.MetadataService/ListPromotions"
 	MetadataService_LookupOrgIDByName_FullMethodName               = "/registry.metadata.v1.MetadataService/LookupOrgIDByName"
+	MetadataService_GetPRRegistryConfig_FullMethodName             = "/registry.metadata.v1.MetadataService/GetPRRegistryConfig"
+	MetadataService_PutPRRegistryConfig_FullMethodName             = "/registry.metadata.v1.MetadataService/PutPRRegistryConfig"
+	MetadataService_HandlePREvent_FullMethodName                   = "/registry.metadata.v1.MetadataService/HandlePREvent"
+	MetadataService_ListPRNamespaces_FullMethodName                = "/registry.metadata.v1.MetadataService/ListPRNamespaces"
+	MetadataService_DeleteOrganization_FullMethodName              = "/registry.metadata.v1.MetadataService/DeleteOrganization"
 )
 
 // MetadataServiceClient is the client API for MetadataService service.
@@ -298,6 +303,22 @@ type MetadataServiceClient interface {
 	// to the org_id required by the per-org retention RPCs without an
 	// unintended side-effect.
 	LookupOrgIDByName(ctx context.Context, in *LookupOrgIDByNameRequest, opts ...grpc.CallOption) (*LookupOrgIDByNameResponse, error)
+	// ─── FUT-023: ephemeral PR-scoped registries (Phase 1) ─────────────────────
+	//
+	// A GitHub PR webhook drives create/promote/delete of a per-PR org
+	// namespace. GetPRRegistryConfig / PutPRRegistryConfig manage the
+	// per-tenant enable flag + (write-only) webhook secret + promote target.
+	// HandlePREvent is the webhook-processing seam: it verifies the
+	// X-Hub-Signature-256 HMAC against the sealed secret, parses the event,
+	// and provisions / promotes / tears down the PR namespace, returning an
+	// Outcome. ListPRNamespaces surfaces the live + torn-down namespaces for
+	// the dashboard. DeleteOrganization is the teardown primitive HandlePREvent
+	// uses to drop a PR org namespace (and is exposed for manual cleanup).
+	GetPRRegistryConfig(ctx context.Context, in *GetPRRegistryConfigRequest, opts ...grpc.CallOption) (*PRRegistryConfig, error)
+	PutPRRegistryConfig(ctx context.Context, in *PutPRRegistryConfigRequest, opts ...grpc.CallOption) (*PRRegistryConfig, error)
+	HandlePREvent(ctx context.Context, in *HandlePREventRequest, opts ...grpc.CallOption) (*HandlePREventResponse, error)
+	ListPRNamespaces(ctx context.Context, in *ListPRNamespacesRequest, opts ...grpc.CallOption) (*ListPRNamespacesResponse, error)
+	DeleteOrganization(ctx context.Context, in *DeleteOrganizationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type metadataServiceClient struct {
@@ -960,6 +981,56 @@ func (c *metadataServiceClient) LookupOrgIDByName(ctx context.Context, in *Looku
 	return out, nil
 }
 
+func (c *metadataServiceClient) GetPRRegistryConfig(ctx context.Context, in *GetPRRegistryConfigRequest, opts ...grpc.CallOption) (*PRRegistryConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PRRegistryConfig)
+	err := c.cc.Invoke(ctx, MetadataService_GetPRRegistryConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) PutPRRegistryConfig(ctx context.Context, in *PutPRRegistryConfigRequest, opts ...grpc.CallOption) (*PRRegistryConfig, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PRRegistryConfig)
+	err := c.cc.Invoke(ctx, MetadataService_PutPRRegistryConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) HandlePREvent(ctx context.Context, in *HandlePREventRequest, opts ...grpc.CallOption) (*HandlePREventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HandlePREventResponse)
+	err := c.cc.Invoke(ctx, MetadataService_HandlePREvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) ListPRNamespaces(ctx context.Context, in *ListPRNamespacesRequest, opts ...grpc.CallOption) (*ListPRNamespacesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPRNamespacesResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListPRNamespaces_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) DeleteOrganization(ctx context.Context, in *DeleteOrganizationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, MetadataService_DeleteOrganization_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetadataServiceServer is the server API for MetadataService service.
 // All implementations should embed UnimplementedMetadataServiceServer
 // for forward compatibility
@@ -1180,6 +1251,22 @@ type MetadataServiceServer interface {
 	// to the org_id required by the per-org retention RPCs without an
 	// unintended side-effect.
 	LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error)
+	// ─── FUT-023: ephemeral PR-scoped registries (Phase 1) ─────────────────────
+	//
+	// A GitHub PR webhook drives create/promote/delete of a per-PR org
+	// namespace. GetPRRegistryConfig / PutPRRegistryConfig manage the
+	// per-tenant enable flag + (write-only) webhook secret + promote target.
+	// HandlePREvent is the webhook-processing seam: it verifies the
+	// X-Hub-Signature-256 HMAC against the sealed secret, parses the event,
+	// and provisions / promotes / tears down the PR namespace, returning an
+	// Outcome. ListPRNamespaces surfaces the live + torn-down namespaces for
+	// the dashboard. DeleteOrganization is the teardown primitive HandlePREvent
+	// uses to drop a PR org namespace (and is exposed for manual cleanup).
+	GetPRRegistryConfig(context.Context, *GetPRRegistryConfigRequest) (*PRRegistryConfig, error)
+	PutPRRegistryConfig(context.Context, *PutPRRegistryConfigRequest) (*PRRegistryConfig, error)
+	HandlePREvent(context.Context, *HandlePREventRequest) (*HandlePREventResponse, error)
+	ListPRNamespaces(context.Context, *ListPRNamespacesRequest) (*ListPRNamespacesResponse, error)
+	DeleteOrganization(context.Context, *DeleteOrganizationRequest) (*emptypb.Empty, error)
 }
 
 // UnimplementedMetadataServiceServer should be embedded to have forward compatible implementations.
@@ -1353,6 +1440,21 @@ func (UnimplementedMetadataServiceServer) ListPromotions(context.Context, *ListP
 }
 func (UnimplementedMetadataServiceServer) LookupOrgIDByName(context.Context, *LookupOrgIDByNameRequest) (*LookupOrgIDByNameResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LookupOrgIDByName not implemented")
+}
+func (UnimplementedMetadataServiceServer) GetPRRegistryConfig(context.Context, *GetPRRegistryConfigRequest) (*PRRegistryConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPRRegistryConfig not implemented")
+}
+func (UnimplementedMetadataServiceServer) PutPRRegistryConfig(context.Context, *PutPRRegistryConfigRequest) (*PRRegistryConfig, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutPRRegistryConfig not implemented")
+}
+func (UnimplementedMetadataServiceServer) HandlePREvent(context.Context, *HandlePREventRequest) (*HandlePREventResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HandlePREvent not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListPRNamespaces(context.Context, *ListPRNamespacesRequest) (*ListPRNamespacesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPRNamespaces not implemented")
+}
+func (UnimplementedMetadataServiceServer) DeleteOrganization(context.Context, *DeleteOrganizationRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteOrganization not implemented")
 }
 
 // UnsafeMetadataServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -2386,6 +2488,96 @@ func _MetadataService_LookupOrgIDByName_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_GetPRRegistryConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPRRegistryConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).GetPRRegistryConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_GetPRRegistryConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).GetPRRegistryConfig(ctx, req.(*GetPRRegistryConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_PutPRRegistryConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutPRRegistryConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).PutPRRegistryConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_PutPRRegistryConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).PutPRRegistryConfig(ctx, req.(*PutPRRegistryConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_HandlePREvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HandlePREventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).HandlePREvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_HandlePREvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).HandlePREvent(ctx, req.(*HandlePREventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_ListPRNamespaces_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPRNamespacesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListPRNamespaces(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListPRNamespaces_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListPRNamespaces(ctx, req.(*ListPRNamespacesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_DeleteOrganization_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteOrganizationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).DeleteOrganization(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_DeleteOrganization_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).DeleteOrganization(ctx, req.(*DeleteOrganizationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetadataService_ServiceDesc is the grpc.ServiceDesc for MetadataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2600,6 +2792,26 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LookupOrgIDByName",
 			Handler:    _MetadataService_LookupOrgIDByName_Handler,
+		},
+		{
+			MethodName: "GetPRRegistryConfig",
+			Handler:    _MetadataService_GetPRRegistryConfig_Handler,
+		},
+		{
+			MethodName: "PutPRRegistryConfig",
+			Handler:    _MetadataService_PutPRRegistryConfig_Handler,
+		},
+		{
+			MethodName: "HandlePREvent",
+			Handler:    _MetadataService_HandlePREvent_Handler,
+		},
+		{
+			MethodName: "ListPRNamespaces",
+			Handler:    _MetadataService_ListPRNamespaces_Handler,
+		},
+		{
+			MethodName: "DeleteOrganization",
+			Handler:    _MetadataService_DeleteOrganization_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
