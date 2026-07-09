@@ -1342,7 +1342,9 @@ Docker v2 manifest list shapes are well-defined.
 
 ### Tier 1 — I'd sit down and build these tomorrow
 
-#### FUT-020 — Image promotion workflow (`dev → staging → prod`)
+#### FUT-020 — Image promotion workflow (`dev → staging → prod`) — ✅ SHIPPED 2026-06-25
+- **SHIPPED** in **PR #231** (`feat: FUT-020 Image promotion workflow`) + follow-up **PR #234** (REM-030 — dst-org dropdown + `create_if_missing`). Live on `main`: metadata `PromoteTag`/`ListPromotions` RPCs + `00018_promotions.sql`, BFF `POST .../tags/{tag}/promote` + `GET .../promotions` (`promote_tag.go`), `image.promoted` event + audit mapping, MCP promotion tools, FE `PromoteTagDialog` + `PromotionsTab` + `usePromoteTag`. **Cross-org already works** — the BFF gates on writer-or-above on BOTH `srcScope` and `dstScope` independently (`promote_tag.go:145-163`), no same-org restriction, so `dev/* → prod/*` is supported today.
+- **Only unbuilt slice of this sketch:** the *optional prod approval gate* ("workspace-admin required for `→ prod/*`", two-step approve) was never built — current gate is writer-on-both-sides. Marginal under single-tenant; revisit only if a protected-repo approval flow is wanted.
 - **Why:** Every team hand-rolls this in CI today. A first-class
   registry primitive removes 40+ lines of `docker tag && docker push`
   glue per pipeline + captures provenance in the audit trail.
@@ -1356,7 +1358,8 @@ Docker v2 manifest list shapes are well-defined.
 - **Affects:** `services/core` (new endpoint), `services/metadata`
   (record promotions), `services/management` (BFF), `frontend`.
 
-#### FUT-021 — CVSS-gated admission policy (finish the scanner loop)
+#### FUT-021 — CVSS-gated admission policy (finish the scanner loop) — ✅ SHIPPED 2026-06-25
+- **SHIPPED** in **PR #233** (`feat: FUT-021 CVSS-gated admission policy`). Live on `main`: per-repo CVSS threshold column + metadata RPC, `services/core` pull-time admission gate (`cvss_admission_test.go`, `IMAGE_BLOCKED_BY_POLICY`), BFF `repo_cvss_policy` handler, FE `repo-cvss-policy-section.tsx`. Fail-open-before-first-scan / fail-closed-after posture as sketched.
 - **Why:** The scanner produces reports but nothing blocks on them.
   You paid for Trivy + SBOM generation; the value multiplies when
   the gate can act on the finding at pull time.
