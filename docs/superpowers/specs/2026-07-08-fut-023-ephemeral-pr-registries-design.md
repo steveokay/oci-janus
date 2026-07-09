@@ -8,6 +8,25 @@
 
 ---
 
+## Implementation notes / drift from design (Phase 1 PR A, 2026-07-09)
+
+Two facts diverged from this design body during implementation. The body
+below is left as-authored; these are the authoritative corrections:
+
+1. **Migration is `00020_pr_registry.sql`, not `00019`.** §4 / §14 name the
+   migration `00019_pr_registry.sql`, but `00019` was already taken by
+   FUT-021 on `main` by the time this branch landed. The shipped file is
+   `services/metadata/migrations/00020_pr_registry.sql`.
+2. **The `Outcome` enum values ship with an `OUTCOME_` prefix.** §6 sketches
+   the enum as `IGNORED`, `PROVISIONED`, `PROMOTED_AND_TORN_DOWN`,
+   `TORN_DOWN`, `DISABLED`. buf lint (`ENUM_VALUE_PREFIX`) requires each
+   value to be prefixed with the enum name, so the shipped proto uses
+   `OUTCOME_IGNORED`, `OUTCOME_PROVISIONED`, `OUTCOME_PROMOTED_AND_TORN_DOWN`,
+   `OUTCOME_TORN_DOWN`, `OUTCOME_DISABLED` (plus the existing
+   `OUTCOME_UNSPECIFIED = 0`). Behaviour and status mapping are unchanged.
+
+---
+
 ## 1. Goal
 
 Auto-provision a disposable registry namespace for each open pull request,
