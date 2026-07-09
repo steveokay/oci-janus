@@ -191,7 +191,7 @@ func (h *GRPCHandler) SendTestEmail(ctx context.Context, req *auditv1.SendTestEm
 	if err != nil {
 		// Building the transport failed (e.g. missing key for the provider).
 		// Record + surface the redacted error inline.
-		errStr := truncateString(err.Error(), maxLastErrorLen)
+		errStr := truncateString(err.Error())
 		_ = h.repo.UpdateEmailTestResult(ctx, tenantID, false, errStr)
 		return &auditv1.SendTestEmailResponse{Ok: false, Error: errStr}, nil
 	}
@@ -207,7 +207,7 @@ func (h *GRPCHandler) SendTestEmail(ctx context.Context, req *auditv1.SendTestEm
 	var errStr string
 	if sendErr != nil {
 		// The transport already redacts secrets from its error string.
-		errStr = truncateString(sendErr.Error(), maxLastErrorLen)
+		errStr = truncateString(sendErr.Error())
 	}
 	// Best-effort: recording the result must not mask the send outcome.
 	_ = h.repo.UpdateEmailTestResult(ctx, tenantID, ok, errStr)

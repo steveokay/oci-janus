@@ -1,0 +1,9 @@
+# gitleaks allowlist — false positives, one fingerprint per line.
+# Format: <commit-sha>:<file>:<rule-id>:<line>
+#
+# FUT-019 webhook channel design doc: the generic-api-key rule matches the
+# token "AES-256-GCM-sealed" following the word "key," in a schema table
+# describing the notification_webhook_config.secret_enc column. It is
+# documentation prose, not a credential — the real HMAC key is generated
+# at runtime and AES-sealed under NOTIFY_WEBHOOK_KEY_HEX.
+dfb6b2b3f4819c8a5b167d63bfbe8f9423adb484:docs/superpowers/specs/2026-07-08-fut-019-webhook-channel-design.md:generic-api-key:64

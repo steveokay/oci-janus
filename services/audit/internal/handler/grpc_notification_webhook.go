@@ -135,7 +135,7 @@ func (h *GRPCHandler) SendTestNotificationWebhook(ctx context.Context, req *audi
 	ok := sendErr == nil
 	var errStr string
 	if sendErr != nil {
-		errStr = truncateString(sendErr.Error(), maxLastErrorLen)
+		errStr = truncateString(sendErr.Error())
 	}
 	_ = h.repo.UpdateWebhookTestResult(ctx, tenantID, ok, errStr)
 	_ = code // response_status not surfaced on the test path
