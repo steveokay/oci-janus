@@ -8,6 +8,11 @@ SIEM, the pull-through cache, and outbound webhooks.
 **Sidebar → Governance → Activity** (`/activity`) is a live feed of workspace
 events — pushes, deletes, scans, and webhook deliveries.
 
+<figure markdown="span">
+  ![The Activity feed with event-type filters and colour-toned rows](../assets/screenshots/activity.png){ loading=lazy }
+  <figcaption>The Activity feed — a filterable, live view of workspace events.</figcaption>
+</figure>
+
 - **Filter by range** — Last 24h / 7d (default) / 30d / All time.
 - **Filter by event type** — toggle chips such as `push.image`, `push.failed`,
   `delete.manifest`, `delete.tag`, `scan.completed`, `scan.policy_blocked`,
@@ -75,6 +80,11 @@ tabs for **Layers/Platforms**, the raw **Manifest** JSON, **Scans**, and
 **Sidebar → Integrations → Webhooks** (`/webhooks`) delivers registry events to
 your own endpoints. Every payload is **HMAC-SHA256 signed** with a secret issued
 at creation. Payload shapes are catalogued in [Events](../EVENTS.md).
+
+<figure markdown="span">
+  ![The Webhooks screen listing endpoints with status and last delivery](../assets/screenshots/webhooks.png){ loading=lazy }
+  <figcaption>The Webhooks screen — outbound endpoints with status and delivery history.</figcaption>
+</figure>
 
 - **New webhook** — set the URL, pick event subscriptions, and (on save) copy the
   **signing secret**, which is shown once.

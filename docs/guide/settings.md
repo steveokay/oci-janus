@@ -36,6 +36,11 @@ a read-only **SSO posture** card and, in single mode, a **deployment info** card
 (mode, version, TLS/mTLS flags). It is a router, not an editor: the actual
 editing happens on the linked pages.
 
+<figure markdown="span">
+  ![The Settings Workspace tab with its hub of link cards](../assets/screenshots/settings.png){ loading=lazy }
+  <figcaption>The Settings area — the Workspace tab routes to identity and lifecycle surfaces.</figcaption>
+</figure>
+
 !!! note "SSO edits are deployment-level"
     The SSO card is read-only. To rotate a client secret or add a provider,
     update the deployment configuration and redeploy — see [SAML SSO](../SAML.md).
@@ -101,6 +106,11 @@ Configuration for external SCM/CI integrations. Today this is **ephemeral PR
 registries** (FUT-023): a GitHub pull-request webhook can auto-provision a
 short-lived `pr-<repo>-<N>` organization for each open PR, then tear it down when
 the PR closes.
+
+<figure markdown="span">
+  ![The Settings Integrations tab with the ephemeral PR registries panel](../assets/screenshots/settings-integrations.png){ loading=lazy }
+  <figcaption>The Integrations tab — configure ephemeral PR registries and view active PR namespaces.</figcaption>
+</figure>
 
 - **Ephemeral PR registries** panel — an **enable** toggle, a **copyable webhook
   receiver URL** (blank until `PUBLIC_BASE_URL` is set on the deployment), a

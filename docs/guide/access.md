@@ -10,6 +10,11 @@ use.
 the workspace as a card with its repository count. Click a card to manage that
 org's members.
 
+<figure markdown="span">
+  ![The Organizations screen with org cards and member management](../assets/screenshots/organizations.png){ loading=lazy }
+  <figcaption>Organizations and their members — the home of org/repo RBAC.</figcaption>
+</figure>
+
 ### Organization members
 
 `/orgs/{org}/members` shows the org's members in a table:
@@ -50,6 +55,11 @@ disable your own account.
 **Sidebar → Access → API keys** (`/api-keys`) is a hub with a left rail. The
 **Yours** section is visible to everyone; the **Workspace** section is
 admin-only.
+
+<figure markdown="span">
+  ![The API keys hub listing personal keys and their expiry badges](../assets/screenshots/api-keys.png){ loading=lazy }
+  <figcaption>The API keys hub — issue, inspect, and revoke machine credentials.</figcaption>
+</figure>
 
 ### Personal keys
 

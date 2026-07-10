@@ -2158,7 +2158,8 @@ untracked.
      (Repositories → tag → Trigger scan → Activity), next steps, and a
      troubleshooting block (stuck service, insecure-registry TLS,
      idempotent bootstrap, tenant-id build arg). Copy-paste blocks
-     throughout. **Follow-up:** screenshots/GIFs.
+     throughout. **Follow-up:** ✅ screenshots/GIFs SHIPPED (2026-07-10) —
+     login GIF + dashboard screenshot wired in.
   3. **UI / dashboard guide** — ✅ **SHIPPED (2026-07-10)**: a six-page
      **"Using the dashboard"** section in the docs site
      (`docs/guide/{index,repositories,security,access,settings,operations}.md`)
@@ -2168,9 +2169,11 @@ untracked.
      registries + email & webhook channels), profile/MFA/sessions, and
      operations (activity, SIEM export, pull-through cache, webhooks).
      Written from a two-agent read of the live routes so admin-gating +
-     single-vs-multi-mode surfaces are accurate. **Follow-up:**
-     screenshots/GIFs (text-first for now; the end-user layer did not
-     exist at all before).
+     single-vs-multi-mode surfaces are accurate. **Follow-up:** ✅
+     screenshots/GIFs SHIPPED (2026-07-10) — 13 dashboard screenshots + 3
+     flow GIFs (login, explore-image, security-tour) captured from the live
+     stack via a committed Playwright pipeline (`tools/screenshots/`) and
+     wired into every guide page.
   4. **Integrations catalog** — ✅ **SHIPPED (2026-07-10)**:
      `docs/integrations/index.md` — one discoverable catalogue with a
      consistent what/how/deep-link entry per pluggable surface (storage,

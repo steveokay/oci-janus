@@ -5,6 +5,16 @@ vulnerability posture. It aggregates every tag's most recent scan across all
 repositories. Per-tag detail lives on each [tag's Security
 tab](repositories.md#the-security-tab); this section is the rollup.
 
+<figure markdown="span">
+  ![The Security overview with posture summary and severity breakdown](../assets/screenshots/security.png){ loading=lazy }
+  <figcaption>The Security overview — the workspace-wide vulnerability posture.</figcaption>
+</figure>
+
+<figure markdown="span">
+  ![A tour of the Security surfaces](../assets/gifs/security-tour.gif){ .off-glb loading=lazy }
+  <figcaption>A tour across the Security tabs — Overview, Vulnerabilities, and Scans.</figcaption>
+</figure>
+
 ## Posture summary
 
 The top of every Security page shows a persistent summary that does not change
@@ -28,6 +38,11 @@ across every tag's most-recent scan. Read-only.
 
 A workspace-wide CVE browser (`/security/vulnerabilities`).
 
+<figure markdown="span">
+  ![The workspace-wide vulnerabilities table with severity filters](../assets/screenshots/security-vulnerabilities.png){ loading=lazy }
+  <figcaption>The Vulnerabilities tab — every CVE across the workspace, filterable by severity.</figcaption>
+</figure>
+
 - **Filter** by severity with the **All / CRITICAL / HIGH / MEDIUM / LOW** chips.
 - Choose a **page size** (25 / 50 / 100; remembered between visits).
 - The table lists **CVE ID, Severity, Package, Fix version, Affected count, Last
@@ -41,6 +56,11 @@ severity.
 
 The scan-run history (`/security/scans`), newest first, over a 30-day default
 window.
+
+<figure markdown="span">
+  ![The scan-run history with status, trigger, and severity bars](../assets/screenshots/security-scans.png){ loading=lazy }
+  <figcaption>The Scans tab — recent scan runs with status, trigger, and results.</figcaption>
+</figure>
 
 - Each row: the **image** (`org/repo:tag`), **status** (Pending / Running /
   Complete / Failed), **trigger** (Manual / Webhook / CI), a mini severity bar,

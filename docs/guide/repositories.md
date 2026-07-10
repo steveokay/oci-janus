@@ -9,6 +9,16 @@ they are all OCI artifacts.
 **Sidebar → Registry → Repositories** (`/repositories`) lists every repository
 in your workspace.
 
+<figure markdown="span">
+  ![The repositories list with search, visibility pills, and per-row badges](../assets/screenshots/repositories.png){ loading=lazy }
+  <figcaption>The repository list — filter, sort, and open any repo from here.</figcaption>
+</figure>
+
+<figure markdown="span">
+  ![Browsing from the repository list down into a single tag](../assets/gifs/explore-image.gif){ .off-glb loading=lazy }
+  <figcaption>Browsing from the repository list down to a tag's detail page.</figcaption>
+</figure>
+
 - **Filter** by name or org with the search box (matches across loaded
   repositories), and narrow by visibility with the **All / Public / Private**
   pills.
@@ -45,6 +55,11 @@ repo name and a **Delete** action, a **pull-command card** (the exact
 sparkline**. Below that are five tabs (the active tab is remembered in the URL,
 so you can bookmark or share a deep link):
 
+<figure markdown="span">
+  ![A repository detail page showing the pull-command card and Tags tab](../assets/screenshots/repository-detail.png){ loading=lazy }
+  <figcaption>A repository's detail page — pull command, activity sparkline, and the Tags tab.</figcaption>
+</figure>
+
 | Tab | What it does |
 |---|---|
 | **Tags** | The tag list (default). Filterable by artifact type; each tag shows status, digest, size, and creation date. Click a tag for its detail page. |
@@ -71,6 +86,11 @@ contents on wide screens):
 A tag page (`/repositories/{org}/{repo}/tags/{tag}`) is where you inspect a
 single image or artifact. The header carries the digest, size, and created time,
 plus **Rescan** and **Delete** actions. Six tabs (URL-remembered):
+
+<figure markdown="span">
+  ![A tag detail page with pull command, layers, and scan findings](../assets/screenshots/tag-detail.png){ loading=lazy }
+  <figcaption>A single tag's detail page — pull command, layers, and its Security tab.</figcaption>
+</figure>
 
 | Tab | What it shows |
 |---|---|
