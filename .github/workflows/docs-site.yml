@@ -53,8 +53,10 @@ jobs:
           path: _site
 
   deploy:
-    # Publish only on merges to main — PR builds validate but never deploy.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Publish on merges to main and manual runs (workflow_dispatch) — but never
+    # on PRs, which validate the build only. Gating on "not pull_request" (rather
+    # than "== push") is what lets a manual re-publish actually deploy.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
