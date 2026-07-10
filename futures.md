@@ -2127,6 +2127,14 @@ untracked.
   known exceptions instead of a blanket claim.
 
 #### FUT-076 — Live documentation site: getting-started, UI guide, integrations & MCP — **Tier 2 (the getting-started + publish slices are Tier 1 for OSS adoption)**
+- **Status (2026-07-10): ✅ SHIPPED & LIVE** at
+  https://steveokay.github.io/oci-janus/ — all 6 slices done, including the
+  generated OpenAPI spec + body schemas, generated Postman collection,
+  consolidated env reference, Helm/Compose deep-dive, and dashboard
+  screenshots + flow GIFs across the UI guide. **Only remaining (optional,
+  low priority):** tighten the cross-repo `../CLAUDE.md` / `../README.md` /
+  `../infra/...` links that 404 on the published site, then flip
+  `strict: true` in `mkdocs.yml`.
 - **Why:** The platform has deep, accurate **reference** docs in
   `docs/*.md` (SERVICES, AUTH, DATABASE, DEPLOYMENT, SELF-HOSTING, MCP,
   SIGNING, SCANNER, SAML, CREDENTIAL-HELPERS, WORKLOAD-IDENTITY, …) — but
@@ -2196,7 +2204,7 @@ untracked.
      label renamed to **Connect an AI agent (MCP)**. Content (stdio +
      HTTP setup for Claude Desktop / Cursor, security notes, example
      prompts, troubleshooting) was already complete — no rewrite needed.
-  6. **Reference completeness ("document everything")** — 🟡 **PARTIAL
+  6. **Reference completeness ("document everything")** — ✅ **SHIPPED
      (2026-07-10)**: shipped `docs/architecture.md` (three-plane overview +
      diagram + comm patterns + data ownership + security posture, adapted
      from the README into a first-class page) and `docs/api-reference.md`
@@ -2223,9 +2231,13 @@ untracked.
      `infra/helm/registry` v0.1.0, `global`/per-service values,
      External-Secrets + cert-manager mTLS, `helm dependency build` +
      `upgrade --install`, scaling/NetworkPolicy), health/observability, and
-     a runbooks index — written from the real chart + compose. **Only
-     remaining:** enrich request/response **body** schemas on the OpenAPI
-     spec (incremental swaggo annotations, a code task).
+     a runbooks index — written from the real chart + compose. Finally
+     shipped the **OpenAPI response body schemas** (PR #311 — `openapi-gen`
+     reflects the handlers' response structs into 19 `components.schemas`,
+     so the explorer shows real shapes) and a **generated Postman
+     collection** (`services/management/cmd/postman-gen` builds it from
+     `docs/openapi.json`, one folder per tag + a curated `identity` folder
+     for the auth routes; drift-guarded alongside the spec).
 - **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
   screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
   (Discussions) / HYG-008 (private vuln reporting) for the community
