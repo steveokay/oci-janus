@@ -68,3 +68,7 @@ docs/PRICING-TIERS.md
 .claude/settings.local.json
 .claude/reviews/
 .claude/worktrees/
+
+# MkDocs documentation site build output (FUT-076).
+/site/
+/_site/
