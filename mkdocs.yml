@@ -100,6 +100,7 @@ nav:
       - Quick start: getting-started.md
       - Self-hosting: SELF-HOSTING.md
       - Deployment (Compose + Helm): DEPLOYMENT.md
+      - Environment reference: env-reference.md
       - Migrating v1 → v2: MIGRATION-v1-to-v2.md
   - Using the dashboard:
       - Overview & sign-in: guide/index.md
