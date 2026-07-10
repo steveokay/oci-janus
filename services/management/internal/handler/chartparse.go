@@ -85,7 +85,7 @@ type ociManifest struct {
 // decides. contentDigest is empty when no Helm content layer is present.
 func parseManifestConfigAndLayer(raw []byte) (configDigest, configMediaType, contentDigest string, err error) {
 	var m ociManifest
-	if err = json.Unmarshal(raw, &m); err != nil {
+	if err := json.Unmarshal(raw, &m); err != nil {
 		return "", "", "", err
 	}
 	for _, l := range m.Layers {
@@ -99,18 +99,18 @@ func parseManifestConfigAndLayer(raw []byte) (configDigest, configMediaType, con
 
 // helmConfig mirrors the camelCase JSON of a Helm config blob (Chart.yaml).
 type helmConfig struct {
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	AppVersion  string            `json:"appVersion"`
-	Description string            `json:"description"`
-	APIVersion  string            `json:"apiVersion"`
-	Type        string            `json:"type"`
-	KubeVersion string            `json:"kubeVersion"`
-	Home        string            `json:"home"`
-	Icon        string            `json:"icon"`
-	Deprecated  bool              `json:"deprecated"`
-	Keywords    []string          `json:"keywords"`
-	Sources     []string          `json:"sources"`
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	AppVersion  string   `json:"appVersion"`
+	Description string   `json:"description"`
+	APIVersion  string   `json:"apiVersion"`
+	Type        string   `json:"type"`
+	KubeVersion string   `json:"kubeVersion"`
+	Home        string   `json:"home"`
+	Icon        string   `json:"icon"`
+	Deprecated  bool     `json:"deprecated"`
+	Keywords    []string `json:"keywords"`
+	Sources     []string `json:"sources"`
 	Maintainers []struct {
 		Name  string `json:"name"`
 		Email string `json:"email"`
@@ -124,11 +124,11 @@ type helmConfig struct {
 	Annotations map[string]string `json:"annotations"`
 }
 
-// safeExternalURL returns u only if it is an http(s) URL (or a mailto: URL when
-// allowMailto). Chart.yaml URL fields are attacker-controlled (any pusher), so
-// a javascript:/data: value must never reach the FE as an anchor href — React
-// does not strip those. Anything else becomes "" (dropped). FUT-022 review SEC#1.
-func safeExternalURL(u string, allowMailto bool) string {
+// safeExternalURL returns u only if it is an http(s) URL. Chart.yaml URL fields
+// are attacker-controlled (any pusher), so a javascript:/data: value must never
+// reach the FE as an anchor href — React does not strip those. Anything else
+// becomes "" (dropped). FUT-022 review SEC#1.
+func safeExternalURL(u string) string {
 	if u == "" {
 		return ""
 	}
@@ -139,10 +139,6 @@ func safeExternalURL(u string, allowMailto bool) string {
 	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https":
 		return u
-	case "mailto":
-		if allowMailto {
-			return u
-		}
 	}
 	return ""
 }
@@ -159,14 +155,14 @@ func parseChartMetadata(configJSON []byte) (ChartMetadata, error) {
 		Name: c.Name, Version: c.Version, AppVersion: c.AppVersion,
 		Description: c.Description, APIVersion: c.APIVersion, Type: c.Type,
 		KubeVersion: c.KubeVersion,
-		Home:        safeExternalURL(c.Home, false),
-		Icon:        safeExternalURL(c.Icon, false),
+		Home:        safeExternalURL(c.Home),
+		Icon:        safeExternalURL(c.Icon),
 		Deprecated:  c.Deprecated, Keywords: c.Keywords,
 		Annotations: c.Annotations,
 	}
 	// Drop any source URL that isn't http(s) rather than passing it through.
 	for _, src := range c.Sources {
-		if s := safeExternalURL(src, false); s != "" {
+		if s := safeExternalURL(src); s != "" {
 			m.Sources = append(m.Sources, s)
 		}
 	}
@@ -174,7 +170,7 @@ func parseChartMetadata(configJSON []byte) (ChartMetadata, error) {
 		m.Maintainers = append(m.Maintainers, ChartMaintainer{
 			Name:  mt.Name,
 			Email: mt.Email,
-			URL:   safeExternalURL(mt.URL, false),
+			URL:   safeExternalURL(mt.URL),
 		})
 	}
 	for _, d := range c.Dependencies {
@@ -195,10 +191,10 @@ var maxDecompressedBytes int64 = 64 << 20 // 64 MiB
 // extractValuesYAML gunzips + untars a chart .tgz and returns the chart-root
 // values.yaml (a path shaped "<single-segment>/values.yaml"). It ignores
 // subchart values, directory-traversal paths, and non-regular entries; caps
-// the returned string at `limit` bytes (truncated=true when it hit the cap);
+// the returned string at valuesCap bytes (truncated=true when it hit the cap);
 // and wraps the tar reader in an io.LimitReader so a lying header can't blow
-// memory. (`limit`, not `cap`, to avoid shadowing the builtin.)
-func extractValuesYAML(tgz []byte, limit int) (values string, truncated bool, err error) {
+// memory. Every caller uses the same valuesCap ceiling, so it's baked in.
+func extractValuesYAML(tgz []byte) (values string, truncated bool, err error) {
 	gr, err := gzip.NewReader(bytes.NewReader(tgz))
 	if err != nil {
 		return "", false, err
@@ -228,13 +224,13 @@ func extractValuesYAML(tgz []byte, limit int) (values string, truncated bool, er
 		if len(parts) != 2 || parts[1] != "values.yaml" {
 			continue
 		}
-		lr := io.LimitReader(tr, int64(limit)+1)
+		lr := io.LimitReader(tr, int64(valuesCap)+1)
 		buf, err := io.ReadAll(lr)
 		if err != nil {
 			return "", false, err
 		}
-		if len(buf) > limit {
-			return string(buf[:limit]), true, nil
+		if len(buf) > valuesCap {
+			return string(buf[:valuesCap]), true, nil
 		}
 		return string(buf), false, nil
 	}

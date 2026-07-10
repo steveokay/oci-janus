@@ -1,0 +1,71 @@
+name: CI — management
+
+# registry-management is the REST BFF that translates HTTP → gRPC for the
+# dashboard/CLI. It imports every service's proto package (auth, metadata,
+# tenant, audit, core, gc, proxy, scanner, signer, webhook), so the path filter
+# is deliberately broad: a change to ANY proto or to libs/ can break the BFF's
+# compile, and this job must run to catch it (the narrow per-service filters
+# elsewhere let a proto-only change slip past a dependent service once — this
+# workflow does not repeat that). Also self-triggers on edits to this file.
+on:
+  push:
+    paths:
+      - "services/management/**"
+      - "libs/**"
+      - "proto/**"
+      - ".github/workflows/ci-management.yml"
+  pull_request:
+    paths:
+      - "services/management/**"
+      - "libs/**"
+      - "proto/**"
+      - ".github/workflows/ci-management.yml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/management
+          config: ../../.golangci.yml
+          # Pin to the Go toolchain installed by setup-go: the action's bundled
+          # golangci-lint binary trails the codebase's required toolchain, so
+          # install-mode: goinstall builds it from source with that toolchain.
+          version: latest
+          install-mode: goinstall
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      # management's handler tests use in-process bufconn gRPC fakes — no
+      # testcontainers / Docker needed here (unlike the DB-owning services).
+      - run: cd services/management && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - run: cd services/management && make build
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg SERVICE=management \
+            -f services/management/Dockerfile \
+            -t ghcr.io/steveokay/oci-janus/management:${{ github.sha }} \
+            .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/management:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

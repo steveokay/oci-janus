@@ -117,7 +117,7 @@ func (h *Handler) handleGetChart(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.ValuesError = "could not read chart archive"
 		}
-	} else if vals, truncated, xerr := extractValuesYAML(tgz, valuesCap); xerr != nil {
+	} else if vals, truncated, xerr := extractValuesYAML(tgz); xerr != nil {
 		if errors.Is(xerr, errValuesNotFound) {
 			resp.ValuesError = "no values.yaml in chart"
 		} else {
