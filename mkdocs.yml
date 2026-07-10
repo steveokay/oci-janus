@@ -125,7 +125,9 @@ nav:
       - SIEM export: SIEM-EXPORT.md
       - Hardening checklist: HARDENING-CHECKLIST.md
   - Architecture & internals:
+      - Architecture overview: architecture.md
       - Services: SERVICES.md
+      - API & automation: api-reference.md
       - gRPC conventions: GRPC-CONVENTIONS.md
       - Database: DATABASE.md
       - Events: EVENTS.md

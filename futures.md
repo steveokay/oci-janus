@@ -2150,11 +2150,15 @@ untracked.
      Settings → Pages → Source = "GitHub Actions". Follow-up: tighten the
      cross-repo `../CLAUDE.md` / `../security.md` / `../README.md` links
      that 404 on the published site, then flip `strict: true`.
-  2. **Getting-started / quickstart** *(Tier 1 for adoption)* — install →
-     bootstrap first admin → `docker login` → push/pull a first image →
-     see it in the UI. Built on `SELF-HOSTING.md` +
-     `infra/runbooks/bootstrap-first-admin.md` but as a guided narrative
-     with copy-paste blocks + screenshots.
+  2. **Getting-started / quickstart** *(Tier 1 for adoption)* — ✅
+     **SHIPPED (2026-07-10)**: `docs/getting-started.md` expanded from a
+     stub into a guided narrative — prerequisites, bring-up, **verify the
+     stack is healthy** (compose ps + `/v2/` + dashboard smoke checks),
+     **first push/pull** with expected output, **see it in the dashboard**
+     (Repositories → tag → Trigger scan → Activity), next steps, and a
+     troubleshooting block (stuck service, insecure-registry TLS,
+     idempotent bootstrap, tenant-id build arg). Copy-paste blocks
+     throughout. **Follow-up:** screenshots/GIFs.
   3. **UI / dashboard guide** — ✅ **SHIPPED (2026-07-10)**: a six-page
      **"Using the dashboard"** section in the docs site
      (`docs/guide/{index,repositories,security,access,settings,operations}.md`)
@@ -2189,11 +2193,19 @@ untracked.
      label renamed to **Connect an AI agent (MCP)**. Content (stdio +
      HTTP setup for Claude Desktop / Cursor, security notes, example
      prompts, troubleshooting) was already complete — no rewrite needed.
-  6. **Reference completeness ("document everything")** — publishable
-     REST/BFF API reference (seed: `docs/postman/` collection), CLI /
-     credential-helper snippets (FUT-002), a full per-service config +
-     env-var reference, deployment (Compose + Helm), and the architecture
-     overview.
+  6. **Reference completeness ("document everything")** — 🟡 **PARTIAL
+     (2026-07-10)**: shipped `docs/architecture.md` (three-plane overview +
+     diagram + comm patterns + data ownership + security posture, adapted
+     from the README into a first-class page) and `docs/api-reference.md`
+     (API & automation: the two HTTP surfaces — management BFF `/api/v1/*`
+     + registry-auth direct routes — the JWT-vs-API-key auth model with a
+     worked `curl`, pagination/error conventions, the `docs/postman/`
+     collection seed, and a CLI/credential-helper pointer). **Remaining:**
+     a **generated OpenAPI 3.x spec** for the BFF (deliberately not
+     hand-authored — needs `swaggo`-style annotations on
+     `registry-management` so a ~110-route spec never drifts from code; a
+     code task, not docs) + a consolidated per-service env reference +
+     Helm/Compose deployment deep-dive.
 - **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
   screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
   (Discussions) / HYG-008 (private vuln reporting) for the community
