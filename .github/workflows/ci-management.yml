@@ -62,8 +62,9 @@ jobs:
         run: cd services/management && make openapi
       - name: Fail if the committed spec is stale
         run: |
-          if ! git diff --exit-status docs/openapi.json; then
-            echo "::error::docs/openapi.json is out of date — run 'cd services/management && make openapi' and commit."
+          if [ -n "$(git status --porcelain -- docs/openapi.json)" ]; then
+            echo "::error::docs/openapi.json is out of date. Run: cd services/management && make openapi, then commit."
+            git --no-pager diff -- docs/openapi.json
             exit 1
           fi
 
