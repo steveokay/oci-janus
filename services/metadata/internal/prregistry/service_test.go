@@ -151,6 +151,70 @@ func TestHandleEvent_DoubleOpenedIdempotent(t *testing.T) {
 	}
 }
 
+// SEC-085: a pre-existing org whose name collides with the derived
+// pr-<repo>-<N>, but which this feature never minted (no active namespace row
+// pointing at it), must NOT be adopted — provision refuses so a later teardown
+// can never cascade-delete an operator-owned org.
+func TestHandleEvent_ForeignOrgCollisionRefused(t *testing.T) {
+	tenantID := uuid.New()
+	cfg, kek := baseCfg(t, tenantID, "")
+	body := prBody("opened", 42, false, "backend")
+	store := newFakeStore()
+	// An operator-owned org already occupies the derived name, unrelated to us.
+	store.existingOrgs = map[string]string{"pr-backend-42": uuid.New().String()}
+	pub := &fakePublisher{}
+	s := New(store, pub, kek)
+
+	out, org, err := s.HandleEvent(context.Background(), cfg, "github", body, signGitHub(testSecret, body), "pull_request")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != OutcomeIgnored {
+		t.Fatalf("out = %v, want IGNORED (adoption refused)", out)
+	}
+	if org != "pr-backend-42" {
+		t.Fatalf("org = %q, want pr-backend-42", org)
+	}
+	// Nothing was provisioned: no namespace upsert, no event published, so the
+	// foreign org is left entirely untouched.
+	if len(store.upsertCalls) != 0 {
+		t.Fatalf("upsert calls = %d, want 0 (foreign org must be left untouched)", len(store.upsertCalls))
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("published = %+v, want none", pub.published)
+	}
+}
+
+// SEC-085: when the pre-existing org is the exact one our own active namespace
+// row already points at (a GitHub re-delivery of "opened"), provision proceeds
+// normally rather than refusing.
+func TestHandleEvent_OwnOrgReprovisionAllowed(t *testing.T) {
+	tenantID := uuid.New()
+	cfg, kek := baseCfg(t, tenantID, "")
+	body := prBody("opened", 42, false, "backend")
+	store := newFakeStore()
+	// Seed our own active namespace + register its org as pre-existing under the
+	// derived name (seedNamespace derives the org id the same way the store does).
+	ns := store.seedNamespace(tenantID, "github", "acme/backend", 42, "pr-backend-42")
+	store.existingOrgs = map[string]string{"pr-backend-42": ns.OrgID.String()}
+	pub := &fakePublisher{}
+	s := New(store, pub, kek)
+
+	out, _, err := s.HandleEvent(context.Background(), cfg, "github", body, signGitHub(testSecret, body), "pull_request")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != OutcomeProvisioned {
+		t.Fatalf("out = %v, want PROVISIONED (own re-delivery adopted)", out)
+	}
+	if len(store.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1", len(store.upsertCalls))
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published = %+v, want one provisioned event", pub.published)
+	}
+}
+
 // --- teardown (closed, unmerged) -------------------------------------------
 
 func TestHandleEvent_ClosedUnmergedTearsDown(t *testing.T) {

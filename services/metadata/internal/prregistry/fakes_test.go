@@ -46,6 +46,12 @@ type fakeStore struct {
 	// repository.ErrNotFound).
 	getNamespaceErr error
 
+	// existingOrgs (name -> id) models orgs that already exist in the DB for
+	// the SEC-085 adoption guard: LookupOrgIDByName returns a hit here, else
+	// repository.ErrNotFound. lookupOrgErr forces the error path.
+	existingOrgs map[string]string
+	lookupOrgErr error
+
 	// Call captures.
 	promoteCalls  []repository.PromoteTagInput
 	tearDownCalls int
@@ -71,6 +77,16 @@ func (f *fakeStore) GetOrCreateOrganization(_ context.Context, _ /*tenantID*/, o
 	}
 	// Deterministic org id derived from the name so repeat calls are stable.
 	return uuid.NewSHA1(uuid.Nil, []byte(orgName)).String(), nil
+}
+
+func (f *fakeStore) LookupOrgIDByName(_ context.Context, _ /*tenantID*/, orgName string) (string, error) {
+	if f.lookupOrgErr != nil {
+		return "", f.lookupOrgErr
+	}
+	if id, ok := f.existingOrgs[orgName]; ok {
+		return id, nil
+	}
+	return "", repository.ErrNotFound
 }
 
 func (f *fakeStore) UpsertPRNamespace(_ context.Context, ns repository.PRNamespace) (*repository.PRNamespace, error) {

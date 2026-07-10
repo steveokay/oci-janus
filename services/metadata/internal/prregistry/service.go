@@ -138,6 +138,29 @@ func (s *Service) HandleEvent(ctx context.Context, cfg repository.PRRegistryConf
 // its lifecycle row, then publish pr.namespace.provisioned. Re-delivery is
 // safe — both writes are upserts.
 func (s *Service) provision(ctx context.Context, tenantID uuid.UUID, sourceRepo, orgName string, prNumber int) (Outcome, string, error) {
+	// SEC-085 adoption guard: only create a brand-new org, or reuse the exact
+	// one our own active lifecycle row already points at (a GitHub re-delivery).
+	// If an org with the derived pr-<repo>-<N> name already exists but isn't
+	// ours, refuse — adopting it would let a later teardown cascade-delete an
+	// operator-owned org this feature never minted. A refusal is a logged no-op
+	// (OutcomeIgnored, no error) so it neither touches the foreign org nor
+	// triggers a GitHub redelivery storm.
+	existingOrgID, err := s.store.LookupOrgIDByName(ctx, tenantID.String(), orgName)
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		// No org by this name — safe to create below.
+	case err != nil:
+		return OutcomeIgnored, orgName, fmt.Errorf("lookup org %q: %w", orgName, err)
+	default:
+		ns, nsErr := s.store.GetPRNamespace(ctx, tenantID, providerGitHub, sourceRepo, prNumber)
+		ours := nsErr == nil && ns != nil && ns.OrgID != nil && ns.OrgID.String() == existingOrgID
+		if !ours {
+			slog.WarnContext(ctx, "pr-registry: refusing to adopt pre-existing org (SEC-085 name collision)",
+				"org_name", orgName, "source_repo", sourceRepo, "pr_number", prNumber)
+			return OutcomeIgnored, orgName, nil
+		}
+	}
+
 	orgIDStr, err := s.store.GetOrCreateOrganization(ctx, tenantID.String(), orgName)
 	if err != nil {
 		return OutcomeIgnored, orgName, fmt.Errorf("get or create org %q: %w", orgName, err)
