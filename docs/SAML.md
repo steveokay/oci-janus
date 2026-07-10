@@ -2,6 +2,16 @@
 
 # SAML Single Sign-On — Setup Guide
 
+> **Correction note (REDESIGN-001 RM-003 / ADR-0027):** SSO is now
+> **deployment-wide, not per-tenant**. The old per-tenant `auth_providers`
+> table was dropped (`20260628000003_drop_auth_providers.sql`) in favour of a
+> single `global_sso_config` table — **one SAML IdP for the whole
+> deployment**, and there is **no REST admin API**: it is configured via
+> SQL / seed. The setup and runbook content below is still valid; where it
+> references the `auth_providers` table, a per-tenant provider, or an
+> `/api/v1/admin/...` SSO CRUD endpoint, read it against the `global_sso_config`
+> model instead. SSO subject binding lives on `users.sso_subject`.
+
 > Canonical reference for configuring SAML SSO against `registry-auth`. Read
 > this when wiring a new tenant to an enterprise IdP (Okta, Azure AD / Entra
 > ID, Google Workspace, Auth0, ADFS, OneLogin, JumpCloud, …) or when
@@ -15,9 +25,10 @@
 
 ## TL;DR
 
-- **One SP keypair, many IdPs.** `registry-auth` presents a single
-  `SAML_SP_CERT_PATH` / `SAML_SP_KEY_PATH` to every configured IdP. Per-tenant
-  configuration lives in the `auth_providers` table.
+- **One SP keypair, one SAML IdP.** `registry-auth` presents a single
+  `SAML_SP_CERT_PATH` / `SAML_SP_KEY_PATH`. SAML configuration lives in the
+  deployment-wide `global_sso_config` table (`kind = 'saml'`) — one SAML IdP
+  per deployment, configured via SQL / seed (no REST admin API).
 - **Routes:**
   - `GET /auth/saml/{provider_id}/start` — kicks off SP-initiated auth.
   - `POST /auth/saml/{provider_id}/acs` — receives the IdP's signed Response.
@@ -151,51 +162,37 @@ error. The service refuses to run with only the cert or only the key set
 
 ---
 
-## 3. Creating a SAML provider
+## 3. Configuring the SAML IdP
 
-> Most operators do this via the dashboard (Admin → Authentication →
-> Add provider → SAML). The HTTP surface is documented below for CLI /
-> Terraform users.
+> There is **no REST admin API** for SSO. The deployment-wide
+> `global_sso_config` table is configured via SQL / seed — one row with
+> `kind = 'saml'`, one SAML IdP per deployment.
 
-### 3.1 Required fields
+### 3.1 `global_sso_config` columns used by SAML
 
-| Field | Notes |
+| Column | Notes |
 |---|---|
-| `tenant_id` | The tenant that owns this provider. |
-| `type` | Must be `saml`. |
-| `display_name` | Shown on the dashboard's sign-in page. Max 128 chars. |
-| `saml_idp_metadata_xml` | The full IdP metadata XML document (see §4). |
+| `provider_id` | Primary key; the identifier used in the ACS / SSO URLs (§4.2). |
+| `kind` | Must be `saml`. |
+| `saml_metadata_url` | URL the server fetches the IdP metadata from (see §4), or … |
+| `saml_metadata_xml` | … the full IdP metadata XML document inline. |
 | `enabled` | `true` to show the button on the sign-in page. |
 | `auto_provision` | `true` to create local users on first SAML login. |
-| `default_role` | `reader` / `writer` / `admin` / `owner`. Granted at `org:*` scope. |
 
-### 3.2 Optional fields
+OAuth-only columns (`oauth_client_id`, `oauth_client_secret_enc` sealed under
+`SSO_CREDENTIAL_KEY_HEX`, `oauth_issuer_url`, `oauth_scopes`) are unused for a
+SAML row. `kek_version` tracks the KEK generation for `rotate-kek`.
 
-| Field | Default | Notes |
-|---|---|---|
-| `saml_entity_id` | `{SSO_BASE_URL}/auth/saml/metadata` | SP EntityID — set this if the IdP requires a specific URI. |
-| `saml_audience` | (falls back to EntityID) | Distinct Audience restriction — most IdPs don't need this. |
+### 3.2 Seeding the row
 
-### 3.3 Admin API
+Insert (or upsert) the SAML row directly, e.g.:
 
-```bash
-# POST /api/v1/admin/auth-providers
-curl -X POST https://registry.example.com/api/v1/admin/auth-providers \
-  -H "Authorization: Bearer $JWT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "00000000-0000-0000-0000-000000000001",
-    "type": "saml",
-    "display_name": "Sign in with Acme SSO",
-    "enabled": true,
-    "saml_idp_metadata_xml": "<EntityDescriptor>…</EntityDescriptor>",
-    "auto_provision": true,
-    "default_role": "reader"
-  }'
+```sql
+INSERT INTO global_sso_config (provider_id, kind, saml_metadata_xml, enabled, auto_provision)
+VALUES ('acme-saml', 'saml', '<EntityDescriptor>…</EntityDescriptor>', true, true);
 ```
 
-The response includes the generated `id` — use that in the ACS / SSO URLs
-you give the IdP admin (§4.2).
+Use `provider_id` in the ACS / SSO URLs you give the IdP admin (§4.2).
 
 ---
 
@@ -204,7 +201,8 @@ you give the IdP admin (§4.2).
 ### 4.1 Fetch the IdP metadata
 
 Every supported IdP exposes a metadata URL. Save the document as XML and
-paste it into `saml_idp_metadata_xml` (or upload via the dashboard).
+put it in `global_sso_config.saml_metadata_xml` (or set
+`saml_metadata_url` to have the server fetch it).
 
 | IdP | Metadata URL shape |
 |---|---|
@@ -217,18 +215,19 @@ paste it into `saml_idp_metadata_xml` (or upload via the dashboard).
 
 The metadata document is the **source of truth** for the IdP's signing
 certificate, SSO endpoint, NameID format, and bindings. We re-parse it
-on every request, so an admin PATCH to update the metadata takes effect
-immediately (no cache invalidation needed — see §9 cert rotation).
+on every request, so updating the `global_sso_config` row's metadata
+takes effect immediately (no cache invalidation needed — see §9 cert
+rotation).
 
 ### 4.2 Tell the IdP about our SP
 
-Configure the IdP application with these values (substitute the provider
-ID returned by the create call):
+Configure the IdP application with these values (substitute the
+`provider_id` you seeded):
 
 | IdP field | Our value |
 |---|---|
 | **ACS / Assertion Consumer Service URL** | `{SSO_BASE_URL}/auth/saml/{provider_id}/acs` |
-| **EntityID / Audience URI** | Default: `{SSO_BASE_URL}/auth/saml/metadata`<br>Or whatever you set in `saml_entity_id`. |
+| **EntityID / Audience URI** | `{SSO_BASE_URL}/auth/saml/metadata` |
 | **Binding** | HTTP-POST for ACS, HTTP-Redirect for SSO. |
 | **NameID format** | We accept any format; emailAddress is recommended. |
 | **Signed AuthnRequest?** | Yes — we sign with RSA-SHA256. Upload our SP cert (`saml-sp.crt`) to the IdP. |
@@ -315,10 +314,10 @@ re-query so both callers end up on the same user row.
 
 | Event | Routing key | When |
 |---|---|---|
-| `auth.provider_created` | admin POST creates a SAML provider |
-| `auth.provider_updated` | admin PATCH (metadata refresh, enable/disable) |
-| `auth.provider_deleted` | admin DELETE |
 | `auth.user_sso_provisioned` | first SAML login auto-creates a local user |
+
+(There is no provider-CRUD audit trail — `global_sso_config` is edited
+out-of-band via SQL / seed, not through an admin API.)
 
 Payloads never contain SP key material, SAMLResponse XML, or the JWT —
 only IDs + the IdP-supplied subject identifier.
@@ -413,9 +412,8 @@ See `status.md` for sprint scheduling.
 | SP construction, attribute extraction | `services/auth/internal/saml/sp.go` |
 | HTTP handlers (`start` + `acs`) | `services/auth/internal/handler/saml.go` |
 | Login session helpers | `services/auth/internal/service/sso.go` (`CreateSAMLLoginSession`, `ConsumeLoginSession`) |
-| Admin CRUD | `services/auth/internal/handler/sso_admin.go` |
-| Repository | `services/auth/internal/repository/auth_providers.go`, `login_sessions.go` |
-| Migrations | `services/auth/migrations/2026062100000?_*.sql` |
+| Global SSO config repository | `services/auth/internal/repository/global_sso_config.go`, `login_sessions.go` |
+| Migrations | `services/auth/migrations/20260628000001_global_sso_config.sql`, `20260628000003_drop_auth_providers.sql` |
 | Env vars | `services/auth/.env.example` (search "SAML SP keypair") |
 | Tests | `services/auth/internal/handler/saml_test.go` |
 

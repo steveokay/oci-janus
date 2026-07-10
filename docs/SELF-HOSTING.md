@@ -6,9 +6,9 @@
 >
 > OCI-Janus is built to be self-hosted under Apache 2.0. There's no
 > proprietary "cloud" version with hidden features. Running it
-> yourself gives you the full feature set: multi-tenancy, custom
-> domains, signed-image admission, audit-log streaming, vulnerability
-> scanning, RBAC, retention, the works.
+> yourself gives you the full feature set: multi-tenancy, signed-image
+> admission, audit-log streaming, vulnerability scanning, RBAC,
+> retention, the works.
 
 ---
 
@@ -60,8 +60,14 @@ JWT_PUBLIC=$(base64 -w0 < /tmp/jwt.pub)
 
 # 2. Generate the AES-256-GCM keys (32 bytes = 64 hex chars)
 CREDENTIAL_KEY=$(openssl rand -hex 32)   # registry-proxy upstream creds
-SSO_KEY=$(openssl rand -hex 32)          # registry-auth OAuth client secrets
+SSO_KEY=$(openssl rand -hex 32)          # registry-auth OAuth client secrets (SSO_CREDENTIAL_KEY_HEX)
 AUDIT_EXPORT_KEY=$(openssl rand -hex 32) # registry-audit SIEM streaming secrets
+
+# Additional AES-256-GCM KEKs (each 64 hex chars; all swept by the rotate-kek tool):
+MFA_SECRET_KEY=$(openssl rand -hex 32)      # registry-auth  — TOTP MFA secrets (MFA_SECRET_KEY_HEX; required)
+PR_REGISTRY_KEY=$(openssl rand -hex 32)     # registry-metadata — FUT-023 PR-registry webhook secret (PR_REGISTRY_KEY_HEX)
+NOTIFY_EMAIL_KEY=$(openssl rand -hex 32)    # registry-audit — email transport creds (NOTIFY_EMAIL_KEY_HEX)
+NOTIFY_WEBHOOK_KEY=$(openssl rand -hex 32)  # registry-audit — notification webhook secret (NOTIFY_WEBHOOK_KEY_HEX)
 
 # 3. Set up the .env file
 cd infra/docker-compose
@@ -266,7 +272,6 @@ The platform is designed to run unattended. The default dev compose stack has ru
 | Symptom | Likely cause |
 |---|---|
 | `docker compose up -d` fails on cert-init | The cert-init container needs to run successfully BEFORE other services can mount the certs. Check `docker logs docker-compose-cert-init-1`. |
-| "Couldn't register, try again" on first custom domain | Dev tenant row missing in `services/tenant`'s DB. Fixed by migration `20260623120000_seed_dev_tenant.sql`; if you removed that migration in your fork, re-add or insert the dev tenant manually. |
 | Vault dev mode loses signing keys on restart | Dev Vault is in-memory by default. For production, use a real Vault with persistent storage — see [`docs/SIGNING.md`](SIGNING.md). |
 | Webhook deliveries failing in dev | The dev compose stack's webhook test endpoint is on the host network; from inside a container, use `http://host.docker.internal:<port>` (Linux requires `--add-host=host.docker.internal:host-gateway`). |
 | Cross-origin browser errors | The CORS allowlist in `services/management` only allows the configured `CORS_ALLOWED_ORIGINS`. Add your dashboard origin to that env var. |
@@ -284,5 +289,5 @@ If you've stood up a deployment and want to share what you built, please open a 
 
 ---
 
-> **Last updated:** 2026-06-23.
+> **Last updated:** 2026-07-10.
 > **Maintainer:** see `git log -- docs/SELF-HOSTING.md`.

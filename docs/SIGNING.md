@@ -9,6 +9,8 @@
 
 ## TL;DR
 
+- **Only Cosign is implemented.** Notary v2 / TUF signing is planned but
+  **deferred** (see §9) — every signing/verification path below is Cosign.
 - **Keys live in HashiCorp Vault.** They never appear in code, env vars, or
   on the filesystem. The `services/signer` Go binary only asks Vault to do
   the cryptographic operations on its behalf.

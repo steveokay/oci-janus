@@ -8,7 +8,7 @@ Self-hosted OCI registry with mTLS between every service, multi-key JWT signing,
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/steveokay)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, pluggable storage drivers (MinIO/S3/GCS/Azure/filesystem), pluggable scanner plugins (Trivy, Grype, Clair), Cosign + Notary v2 signing, a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
+OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, pluggable storage drivers (MinIO/S3/GCS/Azure/filesystem), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
 
 ---
 
@@ -25,7 +25,7 @@ make dev-bootstrap          # create the first admin (admin / Admin1234!)
 What just happened:
 
 1. `make dev-certs` writes a local CA + per-service certs to `certs/` (Kubernetes deployments use cert-manager instead).
-2. `docker compose up -d` brings up Postgres, Redis, RabbitMQ, MinIO, Vault, Jaeger, and all 13 registry services on the `registry.events` topic.
+2. `docker compose up -d` brings up Postgres, Redis, RabbitMQ, MinIO, Vault, Jaeger, and all 14 registry services on the `registry.events` topic.
 3. `make dev-bootstrap` runs `registry-auth bootstrap` inside the auth container to create the first tenant + admin user (idempotent — safe to re-run).
 4. The dashboard is at `http://localhost:5173` (Vite dev server, no TLS); the OCI `/v2/` API is at `http://localhost:8081`. For production deployment guidance, see [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 5. Full bootstrap walkthrough (production paths, password from stdin, tenant id pinning) lives in [`infra/runbooks/bootstrap-first-admin.md`](infra/runbooks/bootstrap-first-admin.md).
@@ -72,7 +72,7 @@ What just happened:
         registry-auth ──rbac.role_granted──► registry-audit
 ```
 
-The 13 services fall into three groups. The **edge** is `registry-gateway` (Traefik) — TLS termination, host-based routing, rate limiting. The **data plane** handles bytes on the OCI API: `registry-core` (the `/v2/` spec implementation), `registry-storage` (blob backends), `registry-proxy` (pull-through cache). The **control plane** owns identity, metadata, and lifecycle: `registry-auth` (JWT + API keys + SSO + RBAC), `registry-metadata` (repos/tags/manifests source of truth), `registry-tenant` (tenant CRUD + deployment metadata), `registry-scanner` (vuln scans + compliance reports), `registry-signer` (Cosign + Notary v2), `registry-webhook`, `registry-audit` (tamper-evident log), `registry-gc` (mark-sweep), and `registry-management` (REST BFF for the dashboard, CLI, and Terraform).
+The 14 services fall into three groups. The **edge** is `registry-gateway` (Traefik) — TLS termination, host-based routing, rate limiting. The **data plane** handles bytes on the OCI API: `registry-core` (the `/v2/` spec implementation), `registry-storage` (blob backends), `registry-proxy` (pull-through cache). The **control plane** owns identity, metadata, and lifecycle: `registry-auth` (JWT + API keys + SSO + RBAC), `registry-metadata` (repos/tags/manifests source of truth), `registry-tenant` (tenant CRUD + deployment metadata), `registry-scanner` (vuln scans + compliance reports), `registry-signer` (Cosign; Notary v2 planned), `registry-webhook`, `registry-audit` (tamper-evident log), `registry-gc` (mark-sweep), `registry-management` (REST BFF for the dashboard, CLI, and Terraform), and `registry-mcp` (read-only Model Context Protocol server for AI assistants).
 
 Canonical rules live in [`CLAUDE.md`](CLAUDE.md); per-decision history lives in [`docs/adr/`](docs/adr/).
 
@@ -96,6 +96,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 **Identity**
 - Multi-key JWT (RS256) signing with hot rotation via `JWT_KEY_RING_PATH` + JWKS at `/.well-known/jwks.json`
 - API keys (Argon2id hashed) with 60s Redis verify cache for high-RPS CI bots
+- TOTP MFA for local password accounts — enrolment QR + 8 single-use backup codes, admin-forceable via `token_policies.require_mfa` (SSO users exempt)
 - Global SSO: OAuth 2.0 + PKCE (Google / GitHub / Microsoft / generic OIDC) and SAML 2.0 SP
 - Service accounts as shadow users — scoped per-key, polymorphic owner lookup
 - RBAC at org / repo level (owner / admin / writer / reader) + typed `users.is_global_admin`
@@ -114,7 +115,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 **Security**
 - mTLS between every internal gRPC call, hot-reloading on cert-manager rotation
 - Per-server peer-CN allowlist (`MTLS_PEER_CN_ALLOWLIST`) for defence-in-depth
-- Cosign (Sigstore) + Notary v2 image signing against Vault-backed keys
+- Cosign (Sigstore) image signing against Vault-backed keys (Notary v2 planned)
 - Signed-image admission: repo-wide `require_signature` + per-repo trusted-key allowlist
 - CVSS-gated admission: block push/pull of images whose scan exceeds a configured severity threshold ([`docs/ADMISSION.md`](docs/ADMISSION.md))
 - Two-layer tag immutability: `repositories.immutable_tags` + per-tag `tags.immutable`
@@ -131,6 +132,8 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - Pluggable vulnerability scanner plugins (Trivy default; Grype / Clair adapters) via external-process JSON-RPC
 - Per-tenant scan policies + SPDX 2.3 SBOMs + hand-crafted PDF compliance reports
 - Image promotion: atomic dev → staging → prod tag copy without re-pushing blobs ([`docs/IMAGE-PROMOTION.md`](docs/IMAGE-PROMOTION.md))
+- Ephemeral PR registries (FUT-023): a GitHub PR-event webhook provisions a per-PR org namespace on open and tears it down (optionally promoting tags) on close/merge
+- Notification channels: scheduled email (Resend / SMTP / Gmail) + shared org webhook (HMAC-signed), on top of the in-app notification bell
 - Mark-sweep garbage collection with `pg_try_advisory_lock` per tenant
 - Retention policies (age / version-count / max-idle-days) with dry-run preview
 - Webhook delivery with retries, HMAC signing, SSRF block-list, and delivery log

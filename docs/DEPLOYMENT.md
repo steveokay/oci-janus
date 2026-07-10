@@ -17,6 +17,24 @@ docker-compose.test.yml      # Integration test environment
 - Jaeger + otel-collector + Prometheus (default OTEL backend for local dev)
 - HashiCorp Vault in dev mode (for signer key storage — see [`SIGNING.md`](SIGNING.md) for the full key-lifecycle reference)
 
+## Secrets
+
+This reference is intentionally env-var-light — each service's `.env.example`
+is the authoritative list. The AES-256-GCM KEKs (all 64 hex chars, swept by
+the per-service `rotate-kek` tool) are:
+
+- `CREDENTIAL_KEY_HEX` (registry-proxy — upstream creds)
+- `SSO_CREDENTIAL_KEY_HEX` (registry-auth — OAuth client secrets)
+- `MFA_SECRET_KEY_HEX` (registry-auth — TOTP MFA secrets)
+- `AUDIT_EXPORT_SECRETS_KEY_HEX` (registry-audit — SIEM streaming secrets)
+- `NOTIFY_EMAIL_KEY_HEX` (registry-audit — email transport creds)
+- `NOTIFY_WEBHOOK_KEY_HEX` (registry-audit — notification webhook secret)
+- `PR_REGISTRY_KEY_HEX` (registry-metadata — FUT-023 PR-registry webhook secret)
+
+In Compose these come from the `.env` file (generate with `openssl rand -hex 32`
+— see [`SELF-HOSTING.md`](SELF-HOSTING.md) §3); in Kubernetes they are supplied
+via the `SecretProviderClass` / External Secrets Operator wiring (below).
+
 ## Kubernetes (`infra/helm/`)
 
 ```
