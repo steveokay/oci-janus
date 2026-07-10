@@ -21,6 +21,7 @@
 11. [registry-gc](#11-registry-gc)
 12. [registry-tenant](#12-registry-tenant)
 13. [registry-management](#13-registry-management)
+14. [registry-mcp](#14-registry-mcp)
 
 ---
 
@@ -84,16 +85,15 @@ GET    /api/v1/users/me/sessions                 # list live sessions (current f
 DELETE /api/v1/users/me/sessions/{sid}           # revoke one owned session (404 if not owned)
 POST   /api/v1/users/me/sessions/revoke-others   # revoke all sessions except the current one
 
-# SSO — FE-API-034 (OAuth + SAML)
-GET  /api/v1/auth/sso/providers          # List enabled SSO providers for tenant
+# SSO — global (deployment-wide, OAuth + SAML)
+GET  /api/v1/auth/sso/providers          # List enabled SSO providers (deployment-wide)
 GET  /api/v1/auth/oauth/start            # Begin OAuth (PKCE S256 + single-use state)
 GET  /api/v1/auth/oauth/callback         # OAuth callback → 302 with sso_token
 GET  /api/v1/auth/saml/start             # Begin SAML AuthnRequest
 POST /api/v1/auth/saml/acs               # SAML AssertionConsumerService
-GET  /api/v1/admin/sso/providers         # Per-tenant admin CRUD (list)
-POST /api/v1/admin/sso/providers         # Create provider (client_secret AES-GCM-encrypted before persist)
-PATCH /api/v1/admin/sso/providers/:id    # Update
-DELETE /api/v1/admin/sso/providers/:id   # Delete
+# No REST admin API for SSO — the deployment-wide global_sso_config table is
+# configured via SQL / seed (one IdP per provider kind). See the SSO schema
+# note below and REDESIGN-001 RM-003 / ADR-0027.
 ```
 
 **JWT Structure:**
@@ -129,8 +129,8 @@ DELETE /api/v1/admin/sso/providers/:id   # Delete
 **Authenticating to JSON HTTP routes — three Bearer flavours:**
 
 The HTTP handler's `requireAuth` accepts three Bearer-token shapes; all
-other JSON routes (`/users/me`, `/apikeys`, `/access/activity`, the SSO
-admin surface, etc.) flow through it. Choose by use case:
+other JSON routes (`/users/me`, `/apikeys`, `/access/activity`, etc.)
+flow through it. Choose by use case:
 
 | Mode | Bearer header value | Issued by | Typical caller | Roles claim | TTL |
 |---|---|---|---|---|---|
@@ -163,7 +163,6 @@ The discriminator is the literal `key.` prefix. Anything without it (including t
 - `/api/v1/login` — accepts JSON `{tenant_id, username, password}`. Returns a session JWT with roles claim.
 - `/api/v1/users/me` — accepts ANY of the three Bearer flavours via `requireAuth`. Branches on `user.Kind == "service_account"` to return the SA principal envelope (FE-API-048 T16); human callers get `currentUserResponse`.
 - `/api/v1/apikeys` create/list/delete — accepts JWT only today (gated by `requireSAAdmin`-style helpers that read `roles` from claims).
-- `/api/v1/admin/sso/*` — JWT only (admin role required).
 - `/api/v1/access/activity` — accepts ANY Bearer flavour; the API-key path lets a bot inspect its own activity log without an exchange step.
 
 **gRPC (internal, mTLS):**
@@ -187,12 +186,18 @@ service AuthService {
 
 `ResolveUserEmails(tenant_id, user_ids[]) → [{user_id, email, email_verified}]` is tenant-scoped (`WHERE tenant_id = $1 AND id = ANY($2)`) and omits users with no email. `email_verified` is currently always `false` (the `users` table has no such column yet) — it is returned for future gating but never blocks delivery. New audit → auth mTLS peer edge; see [`docs/AUTH.md`](AUTH.md).
 
-**Auth schema additions for FE-API-034 (SSO):**
-- `auth_providers(id, tenant_id, type, display_name, enabled, oauth_client_id, oauth_client_secret_encrypted, oauth_issuer_url, oauth_scopes, saml_entity_id, saml_audience, saml_idp_metadata_xml, …)` — `type` enum: `google` | `github` | `microsoft` | `oidc` | `saml`; canonical-type providers (Google/GitHub/Microsoft) have a per-tenant unique constraint.
-- `auth_login_sessions(state PK, tenant_id, provider_id, redirect_uri, pkce_verifier, created_at, expires_at)` — 10-minute TTL; single-use via `DELETE ... RETURNING`. SAML reuses `pkce_verifier` to store the `AuthnRequest.ID` so the callback can pass it to `ParseResponse` as the only permitted `InResponseTo`.
-- `users.sso_provider_id` — points back to the provider when a user was auto-provisioned. Local-auth users have NULL.
+**Auth schema — global SSO (REDESIGN-001 RM-003 / ADR-0027):**
 
-Audit routing keys published by the SSO admin handler (not yet typed in `libs/rabbitmq/events`): `auth.provider_created`, `auth.provider_updated`, `auth.provider_deleted`, plus `auth.user_sso_provisioned` from the OAuth/SAML callback path.
+The per-tenant `auth_providers` table was **dropped** (migration
+`20260628000003_drop_auth_providers.sql`) in favour of a single
+deployment-wide `global_sso_config` table — one IdP per provider kind,
+**no REST admin API** (configured via SQL / seed).
+
+- `global_sso_config(provider_id PK, kind, oauth_client_id, oauth_client_secret_enc, oauth_issuer_url, oauth_scopes, saml_metadata_url, saml_metadata_xml, auto_provision, enabled, kek_version)` — `kind` CHECK IN (`oauth_google`, `oauth_github`, `oauth_microsoft`, `oauth_generic`, `saml`). `oauth_client_secret_enc` is `BYTEA`, AES-256-GCM-sealed under `SSO_CREDENTIAL_KEY_HEX`; `kek_version` is the `rotate-kek` target.
+- `auth_login_sessions(state PK, tenant_id, provider_id, redirect_uri, pkce_verifier, created_at, expires_at)` — 10-minute TTL; single-use via `DELETE ... RETURNING`. SAML reuses `pkce_verifier` to store the `AuthnRequest.ID` so the callback can pass it to `ParseResponse` as the only permitted `InResponseTo`.
+- `users.sso_subject` — the IdP-supplied subject binding when a user was auto-provisioned. Local-auth users have NULL.
+
+Audit routing key from the OAuth/SAML callback path: `auth.user_sso_provisioned`.
 
 **Schema additions for FE-API-048 (service accounts):**
 - `users.kind TEXT NOT NULL DEFAULT 'human' CHECK (kind IN ('human','service_account'))` — every existing row defaulted to `'human'`; rows backing a service account are `'service_account'` and called *shadow users*. All single-row lookups on the human-auth path use the new `…Human…` repository helpers (`GetHumanByEmail`, `GetHumanByID`, `ListHumans`, `CountHumans`) so the kind guard is enforced at the repository layer rather than scattered across handlers. New `FROM users WHERE` reads must go through a kind-guarded helper or carry an `-- allow-any-kind` annotation. (The former `scripts/lint-user-queries.sh` CI check was retired under REM-015 — no diagnostic signal — leaving the repository-helper contract as the guard.)
@@ -244,6 +249,12 @@ Roles are stored in a seeded `roles` table (fixed UUIDs). Assignments live in `r
 `GetUserPermissions` maps assignments to `RepositoryAccess` entries using the hierarchy above. It is called by `registry-core` on every push/pull handler to enforce access at the OCI protocol layer, and by `registry-management` to gate destructive REST operations. Fails closed on error — a gRPC failure from auth denies the request.
 
 On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / `rbac.role_revoked` to RabbitMQ so `registry-audit` can record membership changes without a direct gRPC coupling. A publish failure is logged but does not roll back the DB write.
+
+**Environment variables (in addition to the common set):**
+- `SSO_CREDENTIAL_KEY_HEX` — 64-hex (32-byte) AES-256-GCM KEK sealing the `global_sso_config.oauth_client_secret_enc` OAuth client secret. Swept by the `rotate-kek` tool.
+- `MFA_SECRET_KEY_HEX` — 64-hex (32-byte) AES-256-GCM KEK sealing stored TOTP MFA secrets. **Required.** Swept by the `rotate-kek` tool.
+- `SAML_SP_CERT_PATH` / `SAML_SP_KEY_PATH` — the process-wide SP signing keypair (unset ⇒ SAML routes return `501 NOTCONFIGURED`). See [`docs/SAML.md`](SAML.md).
+- `SSO_SAML_TRUST_EMAIL` — treat the IdP assertion as proof of email ownership during auto-provisioning.
 
 ---
 
@@ -810,49 +821,26 @@ Cron loop drains queued rows between ticks via `PersistedRunner.ClaimNextQueued`
 
 ## 12. registry-tenant
 
-**Purpose:** Tenant lifecycle management, custom domain provisioning, per-tenant configuration.
+**Purpose:** Tenant lifecycle management + per-tenant configuration. Also the source of `bootstrap_tenant_id` via `GetDeploymentMetadata` (single-mode SingleTenantInjector). Custom domain CRUD was removed (REDESIGN-001 RM-001).
 
 **Responsibilities:**
-- CRUD for tenants (super-admin API, not exposed to end users)
-- Custom domain registration and verification (DNS TXT record or HTTP challenge)
+- CRUD for tenants (super-admin API, not exposed to end users). In single mode `CreateTenant` returns `FAILED_PRECONDITION` on the second insert.
 - Per-tenant quota configuration
 - Per-tenant feature flags (proxy cache enabled, signing required, scan policy)
 - Provision tenant isolation: create org in `registry-metadata`, create S3 prefix/bucket policy
-
-**Custom domain flow:**
-1. Tenant submits domain `registry.acme.com`
-2. System generates DNS TXT verification record
-3. Tenant adds `_registry-verify.<domain>` TXT record
-4. Background worker polls DNS until verified (max 48h)
-5. On verification: trigger Let's Encrypt certificate issuance via gateway ACME
-6. Store cert in Redis (Traefik reads it) or notify Nginx via API
-7. Update `registry-gateway` routing table (Redis-backed, TTL-less)
-
-**Notifications + backoff (REM-004):**
-- `Notified24h`, `Notified48h` flags on `DomainRecord` for idempotent notifications
-- 24h notification logged when age ≥ 24h; 48h failure notification at age ≥ 47h
-- Exponential poll backoff: <1h → 5min, 1h–12h → 10min, >12h → 20min
-- `next_poll_after` column + index; `ListUnverifiedDomains` filters `next_poll_after <= now()`
 
 **FE-API-007 / 009 / 027 / 028 / 029 additions:**
 
 Migrations:
 - `20260620000001_add_tenant_slug.sql` — `tenants.slug TEXT NOT NULL` (backfilled via `regexp_replace + trim`; unique index).
-- `20260620000002_add_domain_is_primary.sql` — `tenant_domains.is_primary BOOLEAN`; partial unique index `WHERE is_primary`; backfill picks the oldest verified per tenant.
 
-`Tenant` proto extended: `slug` (5), `host` (6), `host_is_custom` (7), `domains[]` (8) — append-only field numbers preserved. Host algorithm in `GRPCHandler.buildTenantProto`: primary verified domain wins → `host = domain`, `host_is_custom = true`; otherwise `host = <slug>.<PLATFORM_BASE_DOMAIN>`. `MarkDomainVerified` auto-promotes the first verified domain in the same tx.
+`Tenant` proto extended: `slug` (5), `host` (6) — append-only field numbers preserved. Host algorithm in `GRPCHandler.buildTenantProto`: `host = <slug>.<PLATFORM_BASE_DOMAIN>`.
 
 New gRPC RPCs:
 - `ListTenants(page_size, page_token)` — base64url(`created_at|id`) cursor for stable ordering.
 - `UpdateTenant(id, name?, plan?)` — FE-API-029; rename cascade recomputes slug **atomically inside the same tx** so no observable state has new-name with old-slug. Validation: name regex `^[a-z0-9][a-z0-9-]{1,63}$`, plan ∈ `{free, pro, enterprise}`. Per-field events `tenant.renamed` + `tenant.plan_changed` (patching both fires two events).
-- `ListTenantDomains(tenant_id)` — `verification_token` + derived `txt_record_name` surfaced on the admin-gated FE response so the dashboard can re-display the TXT challenge after the register dialog closes (DSGN-021). Same gate as `RegisterDomain`, so disclosure adds no new privilege.
-- `VerifyDomainNow(tenant_id, domain)` — synchronous re-check via swappable `txtLookup` package var.
-- `SetPrimaryDomain(tenant_id, domain)` — atomic SELECT verified → demote-all → promote-target RETURNING.
-- `DeleteDomain(tenant_id, domain)` — returns `X-Janus-Warning: primary-domain-removed` when removing the primary (warning lives on the management response).
 
-PATCH `is_primary:false` → 400 with `"is_primary must be true; delete the domain to clear primary"` — silently demoting would orphan the host onto the wildcard fallback.
-
-`PLATFORM_BASE_DOMAIN` env var (default `registry.localhost`) — wildcard-platform guard rejects any domain ending in `.<PLATFORM_BASE_DOMAIN>`.
+`PLATFORM_BASE_DOMAIN` env var (default `registry.localhost`) — used to derive the per-tenant `host`.
 
 ---
 
@@ -913,12 +901,7 @@ POST   /api/v1/webhooks/:id/test                       # Synchronous test dispat
 POST   /api/v1/webhooks/:id/rotate-secret              # New HMAC secret — returned once
 
 # Workspace (FE-API-009, 027)
-GET    /api/v1/workspace/me                            # Tenant identity (slug, host, host_is_custom, domains[])
-GET    /api/v1/workspace/me/domains                    # Custom domain list (admin-only; includes verification_token + txt_record_name per DSGN-021)
-POST   /api/v1/workspace/me/domains                    # Register — returns DNS TXT challenge
-POST   /api/v1/workspace/me/domains/:domain/verify     # Re-run DNS TXT check synchronously
-PATCH  /api/v1/workspace/me/domains/:domain            # Set is_primary=true (false → 400)
-DELETE /api/v1/workspace/me/domains/:domain            # X-Janus-Warning header if removing primary
+GET    /api/v1/workspace/me                            # Tenant identity (slug, host)
 
 # Notifications / analytics (FE-API-008, 030)
 GET    /api/v1/notifications                           # Poll-based notifications (since, event_types, unread_only)
@@ -991,7 +974,7 @@ POST   /api/v1/admin/gc/run
 - `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`, `CountTenantUsers`
 - `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5, plus the FUT-023 PR-registry RPCs (`GetPRRegistryConfig`, `PutPRRegistryConfig`, `HandlePREvent`, `ListPRNamespaces`)
 - `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`, `GetEmailTransportConfig`, `PutEmailTransportConfig`, `SendTestEmail`, `ListEmailDeliveries` (FUT-019 Phase 3 — the email-transport routes map `FailedPrecondition` → `409` when email isn't configured), `GetNotificationWebhookConfig`, `PutNotificationWebhookConfig`, `SendTestNotificationWebhook` (FUT-019 webhook channel — same `FailedPrecondition` → `409` when `NOTIFY_WEBHOOK_KEY_HEX` is unset)
-- `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`, `ListTenantDomains`, `VerifyDomainNow`, `SetPrimaryDomain`, `DeleteDomain`
+- `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`
 - `registry-signer` (opt-in via `SIGNER_GRPC_ADDR`): `ListSignatures`, `SignManifest`, `VerifyManifest`
 - `registry-scanner` (opt-in via `SCANNER_GRPC_ADDR`): scan-policy + compliance-report RPCs
 - `registry-webhook` (opt-in via `WEBHOOK_GRPC_ADDR`): endpoint CRUD + deliveries + test/rotate
@@ -1023,3 +1006,24 @@ MTLS_KEY_PATH=                   # required in production
 - `POST /api/v1/repositories/:org/:repo/tags/:tag/scan` validates the repo + tag, then publishes a `scan.queued` event to RabbitMQ.
 - `registry-scanner` binds the `scanner.scan.queued` queue (in addition to its `push.completed` queue) and routes through `worker.Pool.HandleScanQueued`, which allocates a scan_id and enqueues the job.
 - See `services/management/internal/handler/handler.go` `handleTriggerScan` and `services/scanner/internal/worker/worker.go` `ScanQueuedConsumerConfig`.
+
+---
+
+## 14. registry-mcp
+
+**Purpose:** [Model Context Protocol](https://modelcontextprotocol.io) server exposing the registry to AI coding assistants (Claude Desktop, Cursor, continue.dev) so they can query it in natural language. **Read-only in v1** — no tool mutates registry state.
+
+**Transport:** `stdio` (default) or `http`, selected via `MCP_TRANSPORT`. The HTTP transport listens on `MCP_HTTP_ADDR` (default `:8092`).
+
+**Architecture:** a pure HTTP **client** of the management BFF — it holds **no gRPC server, no database, no RabbitMQ, no mTLS**. API-key auth happens between the MCP server and the BFF (a service-account key), not between the LLM and the MCP server.
+
+**Tools (12, all read-only, each prefixed `registry_`):** `registry_list_repositories`, `registry_list_tags`, `registry_get_manifest`, `registry_list_service_accounts`, `registry_list_stale_keys`, `registry_get_scan_report`, `registry_list_signatures`, `registry_list_audit_events` (capped at 500/call), `registry_list_promotions`, `registry_ping`, `registry_version`, `registry_get_deployment_info`.
+
+**Environment variables:**
+- `MCP_MANAGEMENT_URL` — base URL of the management BFF the tools query.
+- `MCP_API_KEY` — service-account key (`key.<uuid>.<hex>` form); scrubbed from every error path before returning to the LLM.
+- `MCP_TENANT_ID` — tenant whose data the tools scope to (bootstrap tenant id in single mode).
+- `MCP_TRANSPORT` — `stdio` (default) or `http`.
+- `MCP_HTTP_ADDR` — HTTP listen address (default `:8092`); only used when `MCP_TRANSPORT=http`.
+
+**Detail:** [`docs/MCP.md`](MCP.md) — setup for Claude Desktop (stdio) and Cursor / continue.dev (HTTP), security notes, example prompts, troubleshooting.

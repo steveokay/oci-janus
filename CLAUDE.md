@@ -91,7 +91,7 @@ github.com/steveokay/oci-janus/
 ├── go.work / go.work.sum         # links all service modules + libs/ + proto/gen/go/
 ├── proto/                        # All .proto files + generated Go stubs (committed)
 ├── libs/                         # Shared Go module — see §5
-├── services/                     # 13 services — see §4 summary, docs/SERVICES.md detail
+├── services/                     # 14 services — see §4 summary, docs/SERVICES.md detail
 ├── frontend/                     # React/TypeScript dashboard
 ├── infra/                        # Compose, Helm charts, runbooks
 ├── docs/                         # Detailed references split out of CLAUDE.md
@@ -180,12 +180,13 @@ github.com/steveokay/oci-janus/
 | 5 | `registry-metadata` | Source of truth for repos/tags/manifests/scans/SBOMs | Postgres (metadata schema) | gRPC-only access; Redis cache; read-replica routing; per-tag SBOM columns; FUT-023 PR-registry config (`pr_registry_config` w/ KEK-sealed `PR_REGISTRY_KEY_HEX` webhook secret) + `pr_namespaces` per-PR org lifecycle (HMAC verify + provision/promote/teardown in `internal/prregistry`) |
 | 6 | `registry-proxy` | Pull-through cache for upstream registries | Postgres (proxy schema) | Upstream creds AES-256-GCM; `store.queued` retry |
 | 7 | `registry-scanner` | Vulnerability scan orchestration + plugin host + scan policies + compliance reports | Postgres (scanner schema — `scan_policies`, `compliance_reports`) | External-process JSON-RPC; checksum-validated binary; async report worker with `FOR UPDATE SKIP LOCKED`; SPDX JSON 2.3 + hand-crafted PDF renderer |
-| 8 | `registry-signer` | Cosign + Notary v2 signing/verification | Postgres (signatures table) | Vault dev mode locally; KMS in prod |
+| 8 | `registry-signer` | Cosign signing/verification (Notary v2 planned/deferred) | Postgres (signatures table) | Vault dev mode locally; KMS in prod |
 | 9 | `registry-webhook` | Reliable webhook delivery with retries + HMAC + delivery payload retrieval | Postgres (webhook schema) | SSRF block-list; HTTPS-only; `GetDelivery` for FE inspection |
 | 10 | `registry-audit` | Immutable audit log + analytics + notifications | Postgres (audit schema) | `FORCE ROW LEVEL SECURITY`, `registry_audit_app` role; PG14 `date_bin` time-series; email notification transport (Resend/SMTP) + per-user delivery log (FUT-019 Phase 3, KEK `NOTIFY_EMAIL_KEY_HEX`); shared org webhook notification channel (HMAC-signed POST per scheduled notification, FUT-019, KEK `NOTIFY_WEBHOOK_KEY_HEX`) |
 | 11 | `registry-gc` | Mark-sweep garbage collection + GC status visibility | Postgres (`gc_runs` table) | `pg_try_advisory_lock`; FNV-64a key per tenant; async `RunNow` queues a row + drains via `FOR UPDATE SKIP LOCKED` |
 | 12 | `registry-tenant` | Tenant CRUD (single-mode rejects 2nd insert; multi-mode allows full CRUD) + `deployment_metadata` source for `bootstrap_tenant_id` | Postgres (tenant schema — `tenants.slug`, `deployment_metadata`) | `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` in single mode; `GetDeploymentMetadata` RPC feeds every other service's SingleTenantInjector (REDESIGN-001 Phase 3.4). Custom domain CRUD removed (RM-001) |
 | 13 | `registry-management` | REST BFF for the dashboard (and CLI/Terraform) | — | No gRPC server; translates HTTP → gRPC; mounts SSO + signer + scanner + gc routes when their gRPC addrs are set; FUT-023 public SCM webhook receiver (`POST /webhooks/scm/github/pr`, unauthenticated) + PR-registry admin routes (`/api/v1/pr-registry/{config,namespaces}`) |
+| 14 | `registry-mcp` | Model Context Protocol server exposing the registry to AI agents (Claude Desktop / Cursor) | — | `stdio` (default) or `http` MCP server (`MCP_TRANSPORT`; HTTP default `:8092`); 12 read-only tools; pure HTTP client of the management BFF (no gRPC server, no DB, no RabbitMQ, no mTLS); env `MCP_MANAGEMENT_URL` / `MCP_API_KEY` / `MCP_TENANT_ID` / `MCP_TRANSPORT` / `MCP_HTTP_ADDR`; detail in [`docs/MCP.md`](docs/MCP.md) |
 
 ---
 

@@ -8,7 +8,8 @@
 > **Status:** REM-011 + REM-014 — four adapters shipped (dev-stub,
 > Trivy, Grype, Clair). All work end-to-end against `docker compose
 > --profile scanner up -d`. The admin UI for adapter selection
-> (`/admin/scanner`) ships as REM-011 Phase 2. Per-tenant scan policies
+> (`/admin/scanner`) shipped in REM-011 Phase 2 (FE-API-044..047).
+> Per-tenant scan policies
 > (FE-API-018) + compliance reports (FE-API-019) ride on top — the
 > scanner respects `block_on_severity` rules and renders SPDX SBOMs +
 > PDF reports per scan.
@@ -320,11 +321,12 @@ extending the surface:
 - **`pull.image` events aren't emitted** by the audit consumer, so
   `?metric=pulls` on the analytics endpoint is flat zero. Independent
   gap, tracked separately.
-- **No UI for adapter swap.** Today the swap is an env-var change +
-  restart. Phase 2 of REM-011 adds an `/admin/scanner` page where a
-  platform admin can pick from pre-installed adapters and trigger a
-  test scan; the binaries still must be baked into the image (we don't
-  let the UI upload executable code).
+- **Adapter-swap UI shipped** (REM-011 Phase 2, FE-API-044..047). The
+  `/admin/scanner` (Settings › Scanning) page lets a platform admin pick
+  from the pre-installed adapters (backed by `SCANNER_PLUGIN_CHOICES`, see
+  §2) and trigger a test scan without redeploying. The binaries still must
+  be baked into the image — the UI never uploads executable code. An
+  env-var change + restart remains the equivalent CLI path.
 
 ---
 

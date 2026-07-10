@@ -33,8 +33,8 @@
   recommendation without a second decision step.
 - **Snooze defers the next nudge.** The operator picks N days in `[1, 90]`;
   the worker skips that key until `review_snoozed_until` passes.
-- **"Send reminders" (email) is deferred** to FUT-019 — the panel button
-  exists but the email transport is not wired yet.
+- **"Send reminders" (email) shipped** with the FUT-019 email channel
+  (2026-07-07) — the panel button drives the live Resend / SMTP transport.
 
 ---
 
@@ -251,9 +251,9 @@ optional `days_idle` the worker computes from `last_used_at`.
 
 ## 8. Deferred & related work
 
-- **"Send reminders" email button — FUT-019.** The panel surfaces the
-  button but the email transport (Resend / SMTP) is not wired yet; see
-  the FUT-019 email-channel plan.
+- **"Send reminders" email button — FUT-019 (shipped 2026-07-07).** The
+  panel button drives the live email transport (Resend / SMTP / Gmail);
+  see the FUT-019 email-channel plan and [`docs/SERVICES.md` §10](SERVICES.md#10-registry-audit).
 - **Idle auto-revoke — FUT-003.** The auto-action counterpart. FUT-004 is
   strictly the nudge; FUT-003 owns the `idle_revoke_days` policy and the
   worker that actually revokes. See [`docs/TOKEN-POLICIES.md`](TOKEN-POLICIES.md).
