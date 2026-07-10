@@ -87,11 +87,11 @@ func TestParseChartMetadata_garbage(t *testing.T) {
 
 func TestExtractValuesYAML_root(t *testing.T) {
 	tgz := makeChartTGZ(t, map[string]string{
-		"myapp/Chart.yaml":  "name: myapp",
-		"myapp/values.yaml": "replicaCount: 1\n",
+		"myapp/Chart.yaml":             "name: myapp",
+		"myapp/values.yaml":            "replicaCount: 1\n",
 		"myapp/charts/sub/values.yaml": "subchart: true\n",
 	})
-	got, truncated, err := extractValuesYAML(tgz, valuesCap)
+	got, truncated, err := extractValuesYAML(tgz)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestExtractValuesYAML_subchartOnly_notFound(t *testing.T) {
 	tgz := makeChartTGZ(t, map[string]string{
 		"myapp/charts/sub/values.yaml": "subchart: true\n",
 	})
-	_, _, err := extractValuesYAML(tgz, valuesCap)
+	_, _, err := extractValuesYAML(tgz)
 	if err == nil {
 		t.Fatal("expected not-found when only a subchart values.yaml exists")
 	}
@@ -113,7 +113,7 @@ func TestExtractValuesYAML_subchartOnly_notFound(t *testing.T) {
 func TestExtractValuesYAML_truncated(t *testing.T) {
 	big := strings.Repeat("a: 1\n", 100000) // > valuesCap
 	tgz := makeChartTGZ(t, map[string]string{"myapp/values.yaml": big})
-	got, truncated, err := extractValuesYAML(tgz, valuesCap)
+	got, truncated, err := extractValuesYAML(tgz)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestExtractValuesYAML_truncated(t *testing.T) {
 }
 
 func TestExtractValuesYAML_badGzip(t *testing.T) {
-	if _, _, err := extractValuesYAML([]byte("not gzip"), valuesCap); err == nil {
+	if _, _, err := extractValuesYAML([]byte("not gzip")); err == nil {
 		t.Fatal("expected error on non-gzip input")
 	}
 }
@@ -164,7 +164,7 @@ func TestExtractValuesYAML_decompressionBounded(t *testing.T) {
 		"myapp/big.txt":     strings.Repeat("x", 4096),
 		"myapp/values.yaml": "replicaCount: 1\n",
 	})
-	if _, _, err := extractValuesYAML(tgz, valuesCap); err == nil {
+	if _, _, err := extractValuesYAML(tgz); err == nil {
 		t.Fatal("expected error when the decompression bound truncates the stream")
 	}
 }
@@ -176,7 +176,7 @@ func TestExtractValuesYAML_traversalIgnored(t *testing.T) {
 		"../evil/values.yaml": "pwned: true\n",
 		"myapp/values.yaml":   "replicaCount: 1\n",
 	})
-	got, _, err := extractValuesYAML(tgz, valuesCap)
+	got, _, err := extractValuesYAML(tgz)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
