@@ -2126,6 +2126,62 @@ untracked.
   TESTING.md to state *measured* per-service coverage and mark the
   known exceptions instead of a blanket claim.
 
+#### FUT-076 — Live documentation site: getting-started, UI guide, integrations & MCP — **Tier 2 (the getting-started + publish slices are Tier 1 for OSS adoption)**
+- **Why:** The platform has deep, accurate **reference** docs in
+  `docs/*.md` (SERVICES, AUTH, DATABASE, DEPLOYMENT, SELF-HOSTING, MCP,
+  SIGNING, SCANNER, SAML, CREDENTIAL-HELPERS, WORKLOAD-IDENTITY, …) — but
+  they are all **developer/operator-facing markdown living in the repo**.
+  There is no **published, browsable docs site**, no **end-user / UI
+  walkthrough**, and no single guided **"get started in 10 minutes"**
+  path. For an Apache-2.0 OSS project past launch (see the HYG-* items),
+  that is the single biggest *adoption* blocker: people can't evaluate or
+  operate the platform if the only way in is reading source + scattered
+  `.md` files. Goal: **live docs that help other people get started and
+  actually use the system — document everything, including every
+  integration and MCP connectivity.**
+- **What (ships in slices, roughly in order):**
+  1. **Docs-site scaffold + publish pipeline** *(Tier 1 for adoption)* —
+     pick a static generator (mkdocs-material / Docusaurus / Astro
+     Starlight), add a CI job that builds + publishes on merge to `main`
+     (GitHub Pages or equivalent), and fold the existing `docs/*.md` in
+     as the reference section so nothing is duplicated. Versioned to
+     releases; self-contained.
+  2. **Getting-started / quickstart** *(Tier 1 for adoption)* — install →
+     bootstrap first admin → `docker login` → push/pull a first image →
+     see it in the UI. Built on `SELF-HOSTING.md` +
+     `infra/runbooks/bootstrap-first-admin.md` but as a guided narrative
+     with copy-paste blocks + screenshots.
+  3. **UI / dashboard guide** — page-by-page walkthrough of the React
+     dashboard (repositories, tags, Chart tab, scanning, signing,
+     access/RBAC, **Settings incl. the new Settings › Integrations tab**,
+     profile/MFA/sessions, notifications). Screenshots/GIFs. This
+     end-user layer does not exist today.
+  4. **Integrations catalog** — one discoverable page per pluggable /
+     external surface: storage backends (MinIO/S3/GCS/Azure/filesystem),
+     SSO (OAuth/OIDC/SAML), scanners (external-process plugin), signing
+     (Cosign/Notary), webhooks, notification channels (email/webhook,
+     FUT-019), and **SCM PR registries** (FUT-023 GitHub PR flow). Each:
+     what it does, required config/env, a worked example. Much exists
+     piecemeal in `docs/*.md` — the work is a consistent catalog + gap
+     fill.
+  5. **MCP connectivity guide** — how to connect an MCP client to the
+     shipped **`services/mcp`** server: transport (stdio), the exposed
+     tools (access / audit / health / promotions / repositories),
+     auth/config, and example wiring for Claude / other agents.
+     `docs/MCP.md` is the seed; promote it to a first-class "connect your
+     agent to the registry" guide.
+  6. **Reference completeness ("document everything")** — publishable
+     REST/BFF API reference (seed: `docs/postman/` collection), CLI /
+     credential-helper snippets (FUT-002), a full per-service config +
+     env-var reference, deployment (Compose + Helm), and the architecture
+     overview.
+- **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
+  screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
+  (Discussions) / HYG-008 (private vuln reporting) for the community
+  surface. Ship incrementally — slices 1 + 2 unblock external evaluation;
+  3–6 fill in over time. Keep the site self-contained and versioned to
+  releases.
+
 ---
 
 ## How to use this file
