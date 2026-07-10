@@ -107,13 +107,15 @@ nav:
       - Access & identity: guide/access.md
       - Settings: guide/settings.md
       - Operations: guide/operations.md
-  - Features & integrations:
+  - Integrations:
+      - Catalog overview: integrations/index.md
+      - Storage backends: integrations/storage.md
       - Vulnerability scanning: SCANNER.md
       - Image signing: SIGNING.md
       - Admission control: ADMISSION.md
       - Image promotion: IMAGE-PROMOTION.md
       - Credential helpers: CREDENTIAL-HELPERS.md
-      - MCP (AI assistants): MCP.md
+      - Connect an AI agent (MCP): MCP.md
   - Security & identity:
       - Authentication: AUTH.md
       - SAML SSO: SAML.md

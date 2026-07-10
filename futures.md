@@ -2167,20 +2167,28 @@ untracked.
      single-vs-multi-mode surfaces are accurate. **Follow-up:**
      screenshots/GIFs (text-first for now; the end-user layer did not
      exist at all before).
-  4. **Integrations catalog** — one discoverable page per pluggable /
-     external surface: storage backends (MinIO/S3/GCS/Azure/filesystem),
-     SSO (OAuth/OIDC/SAML), scanners (external-process plugin), signing
-     (Cosign/Notary), webhooks, notification channels (email/webhook,
-     FUT-019), and **SCM PR registries** (FUT-023 GitHub PR flow). Each:
-     what it does, required config/env, a worked example. Much exists
-     piecemeal in `docs/*.md` — the work is a consistent catalog + gap
-     fill.
-  5. **MCP connectivity guide** — how to connect an MCP client to the
-     shipped **`services/mcp`** server: transport (stdio), the exposed
-     tools (access / audit / health / promotions / repositories),
-     auth/config, and example wiring for Claude / other agents.
-     `docs/MCP.md` is the seed; promote it to a first-class "connect your
-     agent to the registry" guide.
+  4. **Integrations catalog** — ✅ **SHIPPED (2026-07-10)**:
+     `docs/integrations/index.md` — one discoverable catalogue with a
+     consistent what/how/deep-link entry per pluggable surface (storage,
+     SSO, scanners, signing, webhooks, notification channels, SCM PR
+     registries, MCP), env/KEK selectors sourced from a two-agent read of
+     the code. Filled the biggest gap with a dedicated
+     `docs/integrations/storage.md` (there was no storage doc): honest
+     driver status (**minio + filesystem implemented**; s3/gcs/azure
+     recognised in config but driver pending → use the S3-compatible minio
+     driver for AWS S3 today), per-driver env tables, encryption-at-rest,
+     tenant key prefixing. Nav section renamed **Integrations** with the
+     catalog + storage pages on top.
+  5. **MCP connectivity guide** — ✅ **SHIPPED (2026-07-10)**: `docs/MCP.md`
+     was **verified accurate against `services/mcp` code** (two-agent read:
+     all 12 `registry_`-prefixed read-only tools, the `MCP_*` env vars, the
+     `:8092` HTTP default, and the `--profile mcp` compose service all
+     PASS — no drift) and promoted to a first-class connect guide: framed
+     as "connect your agent to the registry," an explicit **12 read-only
+     tools** count, and cross-linked from the Integrations catalog. Nav
+     label renamed to **Connect an AI agent (MCP)**. Content (stdio +
+     HTTP setup for Claude Desktop / Cursor, security notes, example
+     prompts, troubleshooting) was already complete — no rewrite needed.
   6. **Reference completeness ("document everything")** — publishable
      REST/BFF API reference (seed: `docs/postman/` collection), CLI /
      credential-helper snippets (FUT-002), a full per-service config +

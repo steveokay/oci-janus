@@ -49,6 +49,10 @@ Relative to a plain `distribution/distribution` deployment, OCI-Janus ships:
 - :material-shield-lock: **[Security & identity](AUTH.md)**
   Authentication, SSO, token policies, workload identity, and access reviews.
 
+- :material-puzzle: **[Integrations](integrations/index.md)**
+  Storage, SSO, scanners, signing, webhooks, notification channels, SCM PR
+  registries, and AI agents (MCP) — the catalogue of pluggable surfaces.
+
 - :material-sitemap: **[Architecture](SERVICES.md)**
   The 14 services, their responsibilities, gRPC contracts, and event flows.
 

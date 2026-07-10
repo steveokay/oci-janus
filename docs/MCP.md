@@ -8,9 +8,15 @@ Workspace) can query it in natural language.
 **Read-only tools only in v1.** Mutating tools (promote-tag, revoke-key,
 snooze-review) ship in a Wave 2 PR with explicit consent UX.
 
+This is the "connect your agent to the registry" guide. For where MCP sits among
+the other pluggable surfaces, see the [Integrations
+catalog](integrations/index.md#ai-agents-mcp).
+
 ---
 
 ## Tools
+
+The server exposes **12 read-only tools**, all prefixed `registry_`:
 
 | Tool | Args | What it returns |
 |---|---|---|
