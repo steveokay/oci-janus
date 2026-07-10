@@ -47,6 +47,13 @@ type Store interface {
 	// repository signature.
 	GetOrCreateOrganization(ctx context.Context, tenantID, orgName string) (orgID string, err error)
 
+	// LookupOrgIDByName resolves an org id by (tenant, name) without creating
+	// one, returning repository.ErrNotFound when absent. provision() uses it as
+	// the SEC-085 adoption guard: an org whose name collides with the derived
+	// pr-<repo>-<N> but which this feature never minted must never be adopted,
+	// or teardown would cascade-delete an operator-owned org.
+	LookupOrgIDByName(ctx context.Context, tenantID, orgName string) (orgID string, err error)
+
 	// UpsertPRNamespace provisions (or re-provisions, on GitHub re-delivery)
 	// the lifecycle row for a PR and returns the persisted row (with its
 	// server-assigned id + org_id).
