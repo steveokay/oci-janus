@@ -42,6 +42,8 @@ Routing keys:
   auth.provider_updated     # FE-API-034
   auth.provider_deleted     # FE-API-034
   auth.user_sso_provisioned # FE-API-034 (publisher: OAuth/SAML callback path)
+  pr.namespace.provisioned  # FUT-023 Phase 1 (publisher: registry-metadata after a per-PR org namespace is created)
+  pr.namespace.torn_down    # FUT-023 Phase 1 (publisher: registry-metadata on PR close/merge teardown; Promoted flag distinguishes merge+promote from close)
 ```
 
 > The `auth.*` routing keys above are not yet typed in
@@ -309,6 +311,34 @@ path emits this; durable persistence rides on top of the slog-only
 stand-in tracked as FUT-007 — already shipped).
 
 **Consumers:** `registry-audit`.
+
+---
+
+### `pr.namespace.provisioned` / `pr.namespace.torn_down` (FUT-023 Phase 1)
+
+Published by `registry-metadata`'s `internal/prregistry` dispatch after an HMAC-verified GitHub PR event drives the per-PR org lifecycle. `provisioned` fires on `opened`/`reopened` (namespace created); `torn_down` fires on PR close/merge teardown — `Promoted=true` (with `TargetOrg` set) when the merge promoted the namespace's tags into a durable target org before deletion, `Promoted=false` for a plain close-without-merge.
+
+```go
+type PRNamespaceProvisionedPayload struct {
+    TenantID   string `json:"tenant_id"`
+    Provider   string `json:"provider"`      // "github" (Phase 1)
+    SourceRepo string `json:"source_repo"`   // "owner/repo"
+    PRNumber   int    `json:"pr_number"`
+    OrgName    string `json:"org_name"`      // synthesised per-PR namespace, e.g. "pr-<repo>-<N>"
+}
+
+type PRNamespaceTornDownPayload struct {
+    TenantID   string `json:"tenant_id"`
+    Provider   string `json:"provider"`
+    SourceRepo string `json:"source_repo"`
+    PRNumber   int    `json:"pr_number"`
+    OrgName    string `json:"org_name"`
+    Promoted   bool   `json:"promoted"`              // true when merged + target promoted
+    TargetOrg  string `json:"target_org,omitempty"`  // set when Promoted
+}
+```
+
+**Consumers:** `registry-audit` — `mapEvent` renders each into an `audit_events` row (`action = "pr.namespace.provisioned"` / `"...torn_down"`, `resource = <org_name>`, `actor = "system"`), satisfying the spec-lint "every event maps or `// audit: skip`" invariant.
 
 ---
 

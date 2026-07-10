@@ -266,6 +266,23 @@ service MetadataService {
   // to the org_id required by the per-org retention RPCs without an
   // unintended side-effect.
   rpc LookupOrgIDByName(LookupOrgIDByNameRequest) returns (LookupOrgIDByNameResponse);
+
+  // ─── FUT-023: ephemeral PR-scoped registries (Phase 1) ─────────────────────
+  //
+  // A GitHub PR webhook drives create/promote/delete of a per-PR org
+  // namespace. GetPRRegistryConfig / PutPRRegistryConfig manage the
+  // per-tenant enable flag + (write-only) webhook secret + promote target.
+  // HandlePREvent is the webhook-processing seam: it verifies the
+  // X-Hub-Signature-256 HMAC against the sealed secret, parses the event,
+  // and provisions / promotes / tears down the PR namespace, returning an
+  // Outcome. ListPRNamespaces surfaces the live + torn-down namespaces for
+  // the dashboard. DeleteOrganization is the teardown primitive HandlePREvent
+  // uses to drop a PR org namespace (and is exposed for manual cleanup).
+  rpc GetPRRegistryConfig(GetPRRegistryConfigRequest) returns (PRRegistryConfig);
+  rpc PutPRRegistryConfig(PutPRRegistryConfigRequest) returns (PRRegistryConfig);
+  rpc HandlePREvent(HandlePREventRequest) returns (HandlePREventResponse);
+  rpc ListPRNamespaces(ListPRNamespacesRequest) returns (ListPRNamespacesResponse);
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (google.protobuf.Empty);
 }
 
 message Repository {
@@ -1156,4 +1173,96 @@ message ListPromotionsRequest {
 
 message ListPromotionsResponse {
   repeated Promotion promotions = 1;
+}
+
+// ─── FUT-023: ephemeral PR-scoped registries (Phase 1) ─────────────────────
+
+// PRRegistryConfig is the per-tenant configuration for ephemeral PR-scoped
+// registries. `has_secret` is a read-only presence flag — the webhook secret
+// itself is write-only (sealed at rest) and NEVER echoed back on reads.
+// `promote_target_org` is the org that a merged PR's images get promoted into
+// before the PR namespace is torn down.
+message PRRegistryConfig {
+  string tenant_id          = 1;
+  bool   enabled            = 2;
+  bool   has_secret         = 3;   // write-only secret; never echoed
+  string promote_target_org = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message GetPRRegistryConfigRequest { string tenant_id = 1; }
+
+// PutPRRegistryConfigRequest is the full-replace shape for the per-tenant
+// config. `webhook_secret` follows the standard write-only pattern: an empty
+// value keeps the currently sealed secret, a non-empty value re-seals with the
+// new secret. `updated_by` is the JWT-derived user_id forwarded by the BFF.
+message PutPRRegistryConfigRequest {
+  string tenant_id          = 1;
+  bool   enabled            = 2;
+  string webhook_secret     = 3;   // empty=keep existing; non-empty=re-seal
+  string promote_target_org = 4;
+  string updated_by         = 5;
+}
+
+// HandlePREventRequest carries the raw webhook delivery. `raw_body` is the
+// unmodified request body (HMAC is computed over these exact bytes, so it must
+// not be re-serialised). `signature` is the X-Hub-Signature-256 header value in
+// 'sha256=<hex>' form; `event` is the X-GitHub-Event header value.
+message HandlePREventRequest {
+  string tenant_id = 1;
+  string provider  = 2;   // 'github'
+  bytes  raw_body  = 3;
+  string signature = 4;   // X-Hub-Signature-256 value ('sha256=<hex>')
+  string event     = 5;   // X-GitHub-Event value
+}
+
+// HandlePREventResponse reports what the webhook handler did. `outcome`
+// discriminates the action taken; `org_name` is the PR namespace org that was
+// provisioned / promoted / torn down (empty for IGNORED / DISABLED).
+message HandlePREventResponse {
+  enum Outcome {
+    OUTCOME_UNSPECIFIED            = 0;
+    OUTCOME_IGNORED               = 1;
+    OUTCOME_PROVISIONED           = 2;
+    OUTCOME_PROMOTED_AND_TORN_DOWN = 3;
+    OUTCOME_TORN_DOWN             = 4;
+    OUTCOME_DISABLED              = 5;
+  }
+  Outcome outcome  = 1;
+  string  org_name = 2;
+}
+
+// DeleteOrganizationRequest is the teardown primitive for a PR org namespace.
+// tenant_id scopes the delete server-side so a foreign org_id can't be dropped.
+message DeleteOrganizationRequest {
+  string tenant_id = 1;
+  string org_id    = 2;
+}
+
+// ListPRNamespacesRequest filters the PR namespace inventory. `status` is one
+// of 'active' (default), 'torn_down', or '' (all). Standard keyset pagination.
+message ListPRNamespacesRequest {
+  string tenant_id  = 1;
+  string status     = 2;  // 'active'(default)|'torn_down'|''(all)
+  int32  page_size  = 3;
+  string page_token = 4;
+}
+
+// PRNamespace is the wire form of one PR-scoped registry namespace row.
+// `source_repo` + `pr_number` identify the upstream PR; `org_name` is the
+// provisioned per-PR org; `status` is 'active' | 'torn_down'. `torn_down_at`
+// is zero while the namespace is still active.
+message PRNamespace {
+  string provider    = 1;
+  string source_repo = 2;
+  int32  pr_number   = 3;
+  string org_name    = 4;
+  string status      = 5;
+  google.protobuf.Timestamp created_at   = 6;
+  google.protobuf.Timestamp torn_down_at = 7;
+}
+
+message ListPRNamespacesResponse {
+  repeated PRNamespace namespaces      = 1;
+  string               next_page_token = 2;
 }

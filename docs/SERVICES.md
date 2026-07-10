@@ -422,6 +422,12 @@ Notable RPCs:
   - `UpdateTagImmutable(tenant_id, repo_id, name, immutable)` — Tier 1 #2 per-tag pin; CTE-then-join SELECT so the response carries the joined manifests row fields.
   - `UpdateRepositorySignaturePolicy(tenant_id, repo_id, require_signature)` — Tier 1 #3 Phase 1; same cache-bust posture.
   - `ListRepositoryTrustedKeys` / `AddRepositoryTrustedKey` / `RemoveRepositoryTrustedKey` — Tier 1 #3 Phase 2; List is cached (30s TTL); Add idempotent on (repo_id, key_id); Remove returns `ErrNotFound` when the pair doesn't exist. Add/Remove bust the trusted-keys cache via `bustTrustedKeysCache`.
+- **PR-registry (FUT-023 Phase 1 backend):** ephemeral per-PR org namespaces. State + KEK-sealed webhook secret + HMAC verification live here (never on the wire); `services/management` is a thin forwarder. Isolated in `internal/prregistry` + `repository/pr_registry.go`.
+  - `GetPRRegistryConfig(tenant_id)` — per-tenant config; secret returned write-only as `has_secret`.
+  - `PutPRRegistryConfig(tenant_id, enabled, webhook_secret, promote_target_org, updated_by)` — upsert; empty `webhook_secret` keeps the existing seal. Returns `FailedPrecondition` when a secret is supplied but `PR_REGISTRY_KEY_HEX` is unset.
+  - `HandlePREvent(tenant_id, provider, raw_body, signature, event)` — unseals the webhook secret, verifies `X-Hub-Signature-256` HMAC over the raw body (constant-time), parses the GitHub `pull_request` payload, and drives the org lifecycle: `opened`/`reopened` → `GetOrCreateOrganization` (`OUTCOME_PROVISIONED`); `closed` unmerged → cascade `DeleteOrganization` (`OUTCOME_TORN_DOWN`); `closed` merged with `promote_target_org` set → promote tags (reuses FUT-020 `PromoteTag`) then teardown (`OUTCOME_PROMOTED_AND_TORN_DOWN`); `ping`/non-PR/other actions → `OUTCOME_IGNORED`; feature off / no config / KEK unset → `OUTCOME_DISABLED`; bad signature → `PermissionDenied`. Idempotent (tolerates GitHub re-delivery). Emits `pr.namespace.provisioned` / `pr.namespace.torn_down`.
+  - `ListPRNamespaces(tenant_id, status, page_size, page_token)` — read-only lifecycle list (`active` default / `torn_down` / all) for the FE namespaces table.
+  - `DeleteOrganization(tenant_id, org_id)` — cascade-deletes an org (FK cascade to repos/manifests/tags/blob_links); the teardown primitive for a torn-down PR namespace.
 
 **Database schema:** Canonical source is `services/metadata/migrations/`. Core tables:
 - `tenants(id, name, created_at)`
@@ -433,6 +439,8 @@ Notable RPCs:
 - `blob_links(repo_id, blob_digest)` — deduplication
 - `scan_results(id, manifest_digest, repo_id, tenant_id, scanner_name, status, severity_counts, findings, trigger, sbom_format, sbom_json, completed_at)`
 - `repository_trusted_keys(id, repo_id, tenant_id, key_id, display_name, added_by, added_at)` — futures.md Tier 1 #3 Phase 2
+- `pr_registry_config(tenant_id PK, enabled, webhook_secret_enc, kek_version, promote_target_org, updated_at, updated_by)` — FUT-023 Phase 1; one row per tenant. `webhook_secret_enc` is `BYTEA`, AES-256-GCM-sealed under `PR_REGISTRY_KEY_HEX`; `kek_version` is a future `rotate-kek` (RED-FU-015) target. `promote_target_org` NULL ⇒ a merged PR just tears down (no promote).
+- `pr_namespaces(id, tenant_id, org_id, provider, source_repo, pr_number, org_name, status, created_at, torn_down_at)` — FUT-023 Phase 1 lifecycle tracking (`status` ∈ `{active, torn_down}`; `UNIQUE (tenant_id, provider, source_repo, pr_number)`). `org_id` is `ON DELETE SET NULL` (not cascade) so the row survives teardown as an audit record when the org is deleted.
 
 Migrations of note:
 - `00004_manifest_image_size.sql` — column add only (per PENTEST-028); operator-run batched backfill in `infra/runbooks/manifest-image-size-backfill.md`.
@@ -446,6 +454,10 @@ Migrations of note:
 - `00014_tag_immutability.sql` — futures.md Tier 1 #2: `repositories.immutable_tags` + `tags.immutable`.
 - `00015_repository_require_signature.sql` — futures.md Tier 1 #3 Phase 1: `repositories.require_signature`.
 - `00016_repository_trusted_keys.sql` — futures.md Tier 1 #3 Phase 2: per-repo trusted-key allowlist (UNIQUE on (repo_id, key_id), composite index on (tenant_id, repo_id)).
+- `00020_pr_registry.sql` — FUT-023 Phase 1: `pr_registry_config` + `pr_namespaces` (paired down; grants in the same file).
+
+**Environment variables (in addition to the common set):**
+- `PR_REGISTRY_KEY_HEX` — 64 hex chars (32 bytes) AES-256-GCM KEK sealing the per-tenant SCM webhook secret (FUT-023). Unset disables the PR-registry feature (metadata still boots; `HandlePREvent` returns the `DISABLED` outcome → `404` at the edge, and `PutPRRegistryConfig` with a secret returns `FailedPrecondition`); set-but-wrong-length fails closed at startup.
 
 `PutManifest` enforces `maxManifestJSONBytes = 4 << 20` (PENTEST-029); `parseImageSize` truncates `Layers`/`Manifests` at `maxManifestEntries = 1000`.
 
@@ -922,6 +934,12 @@ GET    /api/v1/notifications/webhook-config            # Get org webhook config 
 PUT    /api/v1/notifications/webhook-config            # Save org webhook config (admin; write-only secret)
 POST   /api/v1/notifications/webhook-config/test       # Send a test POST to the configured webhook URL (admin)
 
+# PR-registry — ephemeral per-PR namespaces (FUT-023 Phase 1)
+POST /webhooks/scm/github/pr                          # Public GitHub PR-event receiver (UNAUTHENTICATED — no RequireAuth); thin forwarder to metadata.HandlePREvent (HMAC verified downstream). Outcome→status: DISABLED→404 / bad-sig→401 / IGNORED (ping, non-PR action)→204 / PROVISIONED|TORN_DOWN|PROMOTED_AND_TORN_DOWN→200 {outcome, org}
+GET  /api/v1/pr-registry/config                       # Get PR-registry config (admin; secret masked to has_secret; includes copy-able webhook_url derived from PUBLIC_BASE_URL)
+PUT  /api/v1/pr-registry/config                       # Save PR-registry config (admin; write-only secret; FailedPrecondition [KEK unset] → 409)
+GET  /api/v1/pr-registry/namespaces                   # Read-only active-namespaces list (admin; ?status=active|torn_down|all)
+
 GET    /api/v1/repositories/:org/:repo/analytics       # Repo-scoped time-series
 GET    /api/v1/stats/analytics                         # Tenant-wide analytics
 GET    /api/v1/stats/storage                           # Per-repo storage breakdown (FE-API-031)
@@ -971,7 +989,7 @@ POST   /api/v1/admin/gc/run
 
 **gRPC calls made by this service:**
 - `registry-auth`: `ValidateToken`, `GetUserPermissions`, `GrantRole`, `RevokeRole`, `ListMembers`, `CountTenantUsers`
-- `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5
+- `registry-metadata`: all of the repository / tag / scan / security-center / tenant-usage / SBOM RPCs listed in §5, plus the FUT-023 PR-registry RPCs (`GetPRRegistryConfig`, `PutPRRegistryConfig`, `HandlePREvent`, `ListPRNamespaces`)
 - `registry-audit`: `WriteEvent`, `GetBuildHistory`, `GetDailyPullCount`, `GetRepoActivity`, `GetNotifications`, `GetAnalytics`, `GetLastTenantPush`, `GetEmailTransportConfig`, `PutEmailTransportConfig`, `SendTestEmail`, `ListEmailDeliveries` (FUT-019 Phase 3 — the email-transport routes map `FailedPrecondition` → `409` when email isn't configured), `GetNotificationWebhookConfig`, `PutNotificationWebhookConfig`, `SendTestNotificationWebhook` (FUT-019 webhook channel — same `FailedPrecondition` → `409` when `NOTIFY_WEBHOOK_KEY_HEX` is unset)
 - `registry-tenant`: `GetTenant`, `ListTenants`, `UpdateTenant`, `ListTenantDomains`, `VerifyDomainNow`, `SetPrimaryDomain`, `DeleteDomain`
 - `registry-signer` (opt-in via `SIGNER_GRPC_ADDR`): `ListSignatures`, `SignManifest`, `VerifyManifest`
@@ -995,6 +1013,7 @@ WEBHOOK_GRPC_ADDR=               # optional — FE-API-021..024/035
 GC_GRPC_ADDR=                    # optional — FE-API-032
 RABBITMQ_URL=                    # required (scan.queued + image.signed publishes)
 CORS_ALLOWED_ORIGIN=             # required in production; default http://localhost:5173 in dev
+PUBLIC_BASE_URL=                 # optional — fully-qualified base URL of the public receiver; used to render the copy-able GitHub webhook_url in the PR-registry config (FUT-023)
 MTLS_CA_CERT_PATH=               # required in production
 MTLS_CERT_PATH=                  # required in production
 MTLS_KEY_PATH=                   # required in production

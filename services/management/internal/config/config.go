@@ -36,6 +36,16 @@ type Config struct {
 	// must match what their CI runner will see. Required in production.
 	PlatformHost string `mapstructure:"PLATFORM_HOST"`
 
+	// PublicBaseURL is the fully-qualified, scheme-included base URL at which
+	// the management BFF is reachable from the public internet (e.g.
+	// "https://registry.example.com"). Distinct from PlatformHost, which is a
+	// bare host:port for `docker login`. Used by the FUT-023 PR-registry config
+	// route to render the GitHub-webhook receiver URL
+	// (<PublicBaseURL>/webhooks/scm/github/pr) an admin pastes into GitHub.
+	// Optional — when empty the config route renders an empty webhook_url
+	// rather than guessing a scheme/host.
+	PublicBaseURL string `mapstructure:"PUBLIC_BASE_URL"`
+
 	// SignerGRPCAddr is optional — only required when FE-API-003
 	// `/api/v1/.../signature` is enabled. Empty leaves that route at 404
 	// "route disabled" so a deployment without registry-signer still

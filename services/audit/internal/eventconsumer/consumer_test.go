@@ -98,6 +98,83 @@ func TestMapEvent_retentionRoutingKeys(t *testing.T) {
 	}
 }
 
+// TestMapEvent_prNamespaceRoutingKeys (FUT-023) verifies both PR-registry
+// lifecycle events map to system-actor audit_events rows whose resource is
+// the synthesised per-PR org name. A regression here would silently drop
+// ephemeral-registry provisioning/teardown from the audit trail.
+func TestMapEvent_prNamespaceRoutingKeys(t *testing.T) {
+	tenantID := uuid.New()
+	occurred := time.Now().UTC()
+
+	provisionedPayload, _ := json.Marshal(events.PRNamespaceProvisionedPayload{
+		TenantID:   tenantID.String(),
+		Provider:   "github",
+		SourceRepo: "acme/widget",
+		PRNumber:   1234,
+		OrgName:    "pr-1234-widget",
+	})
+	tornDownPayload, _ := json.Marshal(events.PRNamespaceTornDownPayload{
+		TenantID:   tenantID.String(),
+		Provider:   "github",
+		SourceRepo: "acme/widget",
+		PRNumber:   1234,
+		OrgName:    "pr-1234-widget",
+		Promoted:   true,
+		TargetOrg:  "acme",
+	})
+
+	cases := []struct {
+		name         string
+		eventType    string
+		payload      json.RawMessage
+		wantAction   string
+		wantResource string
+	}{
+		{
+			name:         "pr.namespace.provisioned",
+			eventType:    events.RoutingPRNamespaceProvisioned,
+			payload:      provisionedPayload,
+			wantAction:   "pr.namespace.provisioned",
+			wantResource: "pr-1234-widget",
+		},
+		{
+			name:         "pr.namespace.torn_down",
+			eventType:    events.RoutingPRNamespaceTornDown,
+			payload:      tornDownPayload,
+			wantAction:   "pr.namespace.torn_down",
+			wantResource: "pr-1234-widget",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := events.Event{
+				ID:         uuid.NewString(),
+				Type:       tc.eventType,
+				TenantID:   tenantID.String(),
+				OccurredAt: occurred,
+				Version:    "1.0",
+				Payload:    tc.payload,
+			}
+			ae := mapEvent(tenantID, ev)
+			if ae == nil {
+				t.Fatalf("mapEvent(%q) returned nil — routing key not in allowlist", tc.eventType)
+			}
+			if ae.Action != tc.wantAction {
+				t.Errorf("action: got %q, want %q", ae.Action, tc.wantAction)
+			}
+			if ae.Resource != tc.wantResource {
+				t.Errorf("resource: got %q, want %q", ae.Resource, tc.wantResource)
+			}
+			if ae.ActorType != "system" {
+				t.Errorf("actor_type: got %q, want system", ae.ActorType)
+			}
+			if ae.Outcome != "success" {
+				t.Errorf("outcome: got %q, want success", ae.Outcome)
+			}
+		})
+	}
+}
+
 // TestMapEvent_pullImage_authenticated verifies the FE-API-042 happy path:
 // a pull with a known actor maps to a pull.image row with actor_type=user
 // and resource = "org/repo:tag" so it groups with the push.image events.

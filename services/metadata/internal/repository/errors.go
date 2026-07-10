@@ -10,6 +10,12 @@ var (
 	// FUT-020's PromoteTag maps this to gRPC FailedPrecondition; other
 	// callers (services/core.checkTagImmutable) may map it differently.
 	ErrImmutableTag = errors.New("tag immutable")
+	// ErrInvalidPageToken is returned when a caller-supplied keyset
+	// page_token cannot be decoded (bad base64, wrong shape, or an
+	// unparseable cursor field). It is caller error, not a server fault,
+	// so handlers map it to codes.InvalidArgument rather than letting it
+	// fall through MapDBError into codes.Internal (FUT-023 PR #293 review).
+	ErrInvalidPageToken = errors.New("invalid page_token")
 )
 
 func isUniqueViolation(err error) bool {

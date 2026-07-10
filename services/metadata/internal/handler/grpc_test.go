@@ -223,6 +223,34 @@ type fakeRepo struct {
 	listPromotionsResult []*metadatav1.Promotion
 	listPromotionsErr    error
 	listPromotionsCalls  []listPromotionsCallArgs
+
+	// FUT-023 Phase 1 — PR-registry config + namespace stubs. Tests set the
+	// *Result / *Err fields to drive each branch (defaults, NotFound,
+	// internal error) and assert on the captured *Calls slices.
+	getPRConfigResult    *repository.PRRegistryConfig
+	getPRConfigErr       error
+	upsertPRConfigErr    error
+	upsertPRConfigCalls  []repository.PRRegistryConfig
+	listPRNamespacesRows []repository.PRNamespace
+	listPRNamespacesNext string
+	listPRNamespacesErr  error
+	listPRNamespacesArgs []listPRNamespacesCallArgs
+	deleteOrgErr         error
+	deleteOrgCalls       []deleteOrgCallArgs
+}
+
+// listPRNamespacesCallArgs / deleteOrgCallArgs capture what the FUT-023
+// handlers forwarded so tests can assert tenant scoping + status defaulting.
+type listPRNamespacesCallArgs struct {
+	tenantID  uuid.UUID
+	status    string
+	pageSize  int
+	pageToken string
+}
+
+type deleteOrgCallArgs struct {
+	tenantID uuid.UUID
+	orgID    uuid.UUID
 }
 
 // listPromotionsCallArgs captures what ListPromotions forwarded so the
@@ -710,6 +738,33 @@ func (f *fakeRepo) ListPromotions(_ context.Context, tenantID uuid.UUID, org, re
 		tenantID: tenantID, org: org, repo: repo, limit: limit,
 	})
 	return f.listPromotionsResult, f.listPromotionsErr
+}
+
+// FUT-023 Phase 1 PR-registry stubs. GetPRRegistryConfig defaults to
+// (nil, ErrNotFound) so a test that doesn't set getPRConfigResult exercises
+// the "never configured" default-response path.
+func (f *fakeRepo) GetPRRegistryConfig(_ context.Context, _ uuid.UUID) (*repository.PRRegistryConfig, error) {
+	if f.getPRConfigResult == nil && f.getPRConfigErr == nil {
+		return nil, repository.ErrNotFound
+	}
+	return f.getPRConfigResult, f.getPRConfigErr
+}
+
+func (f *fakeRepo) UpsertPRRegistryConfig(_ context.Context, cfg repository.PRRegistryConfig) error {
+	f.upsertPRConfigCalls = append(f.upsertPRConfigCalls, cfg)
+	return f.upsertPRConfigErr
+}
+
+func (f *fakeRepo) ListPRNamespaces(_ context.Context, tenantID uuid.UUID, status string, pageSize int, pageToken string) ([]repository.PRNamespace, string, error) {
+	f.listPRNamespacesArgs = append(f.listPRNamespacesArgs, listPRNamespacesCallArgs{
+		tenantID: tenantID, status: status, pageSize: pageSize, pageToken: pageToken,
+	})
+	return f.listPRNamespacesRows, f.listPRNamespacesNext, f.listPRNamespacesErr
+}
+
+func (f *fakeRepo) DeleteOrganization(_ context.Context, tenantID, orgID uuid.UUID) error {
+	f.deleteOrgCalls = append(f.deleteOrgCalls, deleteOrgCallArgs{tenantID: tenantID, orgID: orgID})
+	return f.deleteOrgErr
 }
 
 // ── test helpers ──────────────────────────────────────────────────────────────
@@ -2631,4 +2686,247 @@ func TestUpdateRepositoryCVSSPolicy_notFound_returnsNotFound(t *testing.T) {
 		MaxCvssScore: wrapperspb.Int32(70),
 	})
 	requireCode(t, err, codes.NotFound)
+}
+
+// ── FUT-023 Phase 1: PR-registry RPCs ────────────────────────────────────────
+
+const prTestTenant = "11111111-1111-1111-1111-111111111111"
+
+// TestGetPRRegistryConfig_badTenant_returnsInvalidArgument verifies a non-UUID
+// tenant_id is rejected before any repo dispatch.
+func TestGetPRRegistryConfig_badTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.GetPRRegistryConfig(context.Background(), &metadatav1.GetPRRegistryConfigRequest{TenantId: "not-a-uuid"})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestGetPRRegistryConfig_neverConfigured_returnsDefaults verifies that a
+// tenant with no config row gets an "off" default rather than NotFound.
+func TestGetPRRegistryConfig_neverConfigured_returnsDefaults(t *testing.T) {
+	h := newHandler(&fakeRepo{}) // GetPRRegistryConfig fake defaults to ErrNotFound
+	got, err := h.GetPRRegistryConfig(context.Background(), &metadatav1.GetPRRegistryConfigRequest{TenantId: prTestTenant})
+	requireNoErr(t, err)
+	if got.GetEnabled() || got.GetHasSecret() {
+		t.Errorf("expected disabled/no-secret defaults, got enabled=%v has_secret=%v", got.GetEnabled(), got.GetHasSecret())
+	}
+}
+
+// TestGetPRRegistryConfig_masksSecret verifies the ciphertext is never on the
+// wire — only has_secret reflects its presence.
+func TestGetPRRegistryConfig_masksSecret(t *testing.T) {
+	tid := uuid.MustParse(prTestTenant)
+	h := newHandler(&fakeRepo{getPRConfigResult: &repository.PRRegistryConfig{
+		TenantID:         tid,
+		Enabled:          true,
+		WebhookSecretEnc: []byte("sealed-ciphertext"),
+		PromoteTargetOrg: "prod",
+	}})
+	got, err := h.GetPRRegistryConfig(context.Background(), &metadatav1.GetPRRegistryConfigRequest{TenantId: prTestTenant})
+	requireNoErr(t, err)
+	if !got.GetHasSecret() {
+		t.Error("expected has_secret=true when ciphertext present")
+	}
+	if got.GetPromoteTargetOrg() != "prod" {
+		t.Errorf("promote_target_org: got %q, want %q", got.GetPromoteTargetOrg(), "prod")
+	}
+}
+
+// TestPutPRRegistryConfig_secretWithoutKEK_returnsFailedPrecondition verifies a
+// Put carrying a non-empty secret fails closed when the KEK is unwired.
+func TestPutPRRegistryConfig_secretWithoutKEK_returnsFailedPrecondition(t *testing.T) {
+	h := newHandler(&fakeRepo{}) // prKEK stays nil
+	_, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId:      prTestTenant,
+		Enabled:       true,
+		WebhookSecret: "s3cr3t",
+	})
+	requireCode(t, err, codes.FailedPrecondition)
+}
+
+// TestPutPRRegistryConfig_emptySecret_keepsExisting verifies the keep-vs-replace
+// contract: an empty incoming secret preserves the stored ciphertext (and needs
+// no KEK).
+func TestPutPRRegistryConfig_emptySecret_keepsExisting(t *testing.T) {
+	tid := uuid.MustParse(prTestTenant)
+	f := &fakeRepo{getPRConfigResult: &repository.PRRegistryConfig{
+		TenantID:         tid,
+		WebhookSecretEnc: []byte("existing-ct"),
+	}}
+	h := newHandler(f) // no KEK — must still succeed because no re-seal happens
+	got, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId: prTestTenant,
+		Enabled:  true,
+	})
+	requireNoErr(t, err)
+	if len(f.upsertPRConfigCalls) != 1 {
+		t.Fatalf("expected 1 upsert call, got %d", len(f.upsertPRConfigCalls))
+	}
+	if string(f.upsertPRConfigCalls[0].WebhookSecretEnc) != "existing-ct" {
+		t.Errorf("expected existing ciphertext preserved, got %q", f.upsertPRConfigCalls[0].WebhookSecretEnc)
+	}
+	if got.GetHasSecret() != true {
+		t.Error("expected has_secret=true after keeping existing ciphertext")
+	}
+}
+
+// TestPutPRRegistryConfig_badPromoteTargetOrg_returnsInvalidArgument verifies a
+// promote_target_org that fails the org-name allowlist is rejected before any
+// upsert (SEC-084).
+func TestPutPRRegistryConfig_badPromoteTargetOrg_returnsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId:         prTestTenant,
+		Enabled:          true,
+		PromoteTargetOrg: "Not A Valid Org!", // spaces + uppercase + '!' all illegal
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.upsertPRConfigCalls) != 0 {
+		t.Errorf("expected no upsert on invalid promote_target_org, got %d", len(f.upsertPRConfigCalls))
+	}
+}
+
+// TestPutPRRegistryConfig_validPromoteTargetOrg_persists verifies a well-formed
+// promote_target_org passes the allowlist and is forwarded to the upsert.
+func TestPutPRRegistryConfig_validPromoteTargetOrg_persists(t *testing.T) {
+	tid := uuid.MustParse(prTestTenant)
+	// getPRConfigResult is set so the handler's post-upsert reload (which
+	// re-masks the row for the response) resolves to a row rather than the
+	// fake's default ErrNotFound.
+	f := &fakeRepo{getPRConfigResult: &repository.PRRegistryConfig{
+		TenantID:         tid,
+		Enabled:          true,
+		PromoteTargetOrg: "prod-org",
+	}}
+	h := newHandler(f)
+	_, err := h.PutPRRegistryConfig(context.Background(), &metadatav1.PutPRRegistryConfigRequest{
+		TenantId:         prTestTenant,
+		Enabled:          true,
+		PromoteTargetOrg: "prod-org",
+	})
+	requireNoErr(t, err)
+	if len(f.upsertPRConfigCalls) != 1 {
+		t.Fatalf("expected 1 upsert call, got %d", len(f.upsertPRConfigCalls))
+	}
+	if f.upsertPRConfigCalls[0].PromoteTargetOrg != "prod-org" {
+		t.Errorf("promote_target_org: got %q, want prod-org", f.upsertPRConfigCalls[0].PromoteTargetOrg)
+	}
+}
+
+// TestHandlePREvent_noService_returnsDisabled verifies HandlePREvent fails
+// closed with OUTCOME_DISABLED when the prregistry.Service isn't wired.
+func TestHandlePREvent_noService_returnsDisabled(t *testing.T) {
+	h := newHandler(&fakeRepo{}) // prSvc stays nil
+	resp, err := h.HandlePREvent(context.Background(), &metadatav1.HandlePREventRequest{
+		TenantId: prTestTenant,
+		Provider: "github",
+		Event:    "pull_request",
+	})
+	requireNoErr(t, err)
+	if resp.GetOutcome() != metadatav1.HandlePREventResponse_OUTCOME_DISABLED {
+		t.Errorf("outcome: got %v, want OUTCOME_DISABLED", resp.GetOutcome())
+	}
+}
+
+// TestHandlePREvent_badTenant_returnsInvalidArgument verifies tenant parsing
+// guards the RPC.
+func TestHandlePREvent_badTenant_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.HandlePREvent(context.Background(), &metadatav1.HandlePREventRequest{TenantId: "bad"})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListPRNamespaces_defaultsStatusActive verifies an empty status defaults to
+// "active" when forwarded to the repository.
+func TestListPRNamespaces_defaultsStatusActive(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.ListPRNamespaces(context.Background(), &metadatav1.ListPRNamespacesRequest{TenantId: prTestTenant})
+	requireNoErr(t, err)
+	if len(f.listPRNamespacesArgs) != 1 {
+		t.Fatalf("expected 1 list call, got %d", len(f.listPRNamespacesArgs))
+	}
+	if f.listPRNamespacesArgs[0].status != "active" {
+		t.Errorf("status: got %q, want %q", f.listPRNamespacesArgs[0].status, "active")
+	}
+}
+
+// TestListPRNamespaces_mapsRows verifies repository rows map onto the proto,
+// including nil-safe torn_down_at.
+func TestListPRNamespaces_mapsRows(t *testing.T) {
+	tid := uuid.MustParse(prTestTenant)
+	f := &fakeRepo{listPRNamespacesRows: []repository.PRNamespace{{
+		TenantID:   tid,
+		Provider:   "github",
+		SourceRepo: "acme/widget",
+		PRNumber:   42,
+		OrgName:    "pr-widget-42",
+		Status:     "active",
+	}}, listPRNamespacesNext: "next-cursor"}
+	h := newHandler(f)
+	resp, err := h.ListPRNamespaces(context.Background(), &metadatav1.ListPRNamespacesRequest{TenantId: prTestTenant})
+	requireNoErr(t, err)
+	if len(resp.GetNamespaces()) != 1 {
+		t.Fatalf("expected 1 namespace, got %d", len(resp.GetNamespaces()))
+	}
+	ns := resp.GetNamespaces()[0]
+	if ns.GetOrgName() != "pr-widget-42" || ns.GetPrNumber() != 42 {
+		t.Errorf("namespace mapping wrong: %+v", ns)
+	}
+	if ns.GetTornDownAt() != nil {
+		t.Error("expected nil torn_down_at for active namespace")
+	}
+	if resp.GetNextPageToken() != "next-cursor" {
+		t.Errorf("next_page_token: got %q, want %q", resp.GetNextPageToken(), "next-cursor")
+	}
+}
+
+// TestListPRNamespaces_badPageToken_returnsInvalidArgument verifies a garbage
+// page_token surfaces as InvalidArgument (400) rather than Internal (500).
+// The repository decodes the cursor and returns ErrInvalidPageToken, which the
+// handler must map ahead of the generic mapErr (PR #293 review).
+func TestListPRNamespaces_badPageToken_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{listPRNamespacesErr: repository.ErrInvalidPageToken})
+	_, err := h.ListPRNamespaces(context.Background(), &metadatav1.ListPRNamespacesRequest{
+		TenantId:  prTestTenant,
+		PageToken: "!!!not-base64!!!",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestDeleteOrganization_badOrg_returnsInvalidArgument verifies org_id parsing.
+func TestDeleteOrganization_badOrg_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.DeleteOrganization(context.Background(), &metadatav1.DeleteOrganizationRequest{
+		TenantId: prTestTenant,
+		OrgId:    "not-a-uuid",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestDeleteOrganization_notFound_returnsNotFound verifies ErrNotFound mapping.
+func TestDeleteOrganization_notFound_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{deleteOrgErr: repository.ErrNotFound})
+	_, err := h.DeleteOrganization(context.Background(), &metadatav1.DeleteOrganizationRequest{
+		TenantId: prTestTenant,
+		OrgId:    "22222222-2222-2222-2222-222222222222",
+	})
+	requireCode(t, err, codes.NotFound)
+}
+
+// TestDeleteOrganization_success_returnsEmpty verifies the happy path.
+func TestDeleteOrganization_success_returnsEmpty(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+	resp, err := h.DeleteOrganization(context.Background(), &metadatav1.DeleteOrganizationRequest{
+		TenantId: prTestTenant,
+		OrgId:    "22222222-2222-2222-2222-222222222222",
+	})
+	requireNoErr(t, err)
+	if resp == nil {
+		t.Error("expected non-nil empty response")
+	}
+	if len(f.deleteOrgCalls) != 1 {
+		t.Fatalf("expected 1 delete call, got %d", len(f.deleteOrgCalls))
+	}
 }
