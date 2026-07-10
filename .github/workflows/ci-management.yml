@@ -48,6 +48,25 @@ jobs:
       # testcontainers / Docker needed here (unlike the DB-owning services).
       - run: cd services/management && go test -race ./...
 
+  openapi:
+    # Drift-guard: the OpenAPI spec (docs/openapi.json) is generated from the
+    # route table, so a route added/changed/removed without regenerating the
+    # spec fails here. Fix by running `cd services/management && make openapi`
+    # and committing the result.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - name: Regenerate OpenAPI spec from the route table
+        run: cd services/management && make openapi
+      - name: Fail if the committed spec is stale
+        run: |
+          if ! git diff --exit-status docs/openapi.json; then
+            echo "::error::docs/openapi.json is out of date — run 'cd services/management && make openapi' and commit."
+            exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
     needs: [lint, test]

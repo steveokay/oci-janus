@@ -78,11 +78,19 @@ common runners.
 
 ## OpenAPI specification
 
-!!! info "Machine-readable spec — planned"
-    A generated **OpenAPI 3.x** document for the BFF is on the roadmap
-    (FUT-076 slice 6). It is intentionally **not hand-authored** — an accurate
-    ~110-route spec must be generated from the handler code (e.g. `swaggo`
-    annotations on `registry-management`) so it never drifts from the
-    implementation. Until it lands, the [Services](SERVICES.md) reference and the
-    Postman collection above are the source of truth. Track it in
-    [`futures.md`](https://github.com/steveokay/oci-janus/blob/main/futures.md).
+A machine-readable **OpenAPI 3.0** document for the BFF is **generated from the
+service route table** — see the interactive **[API explorer](api-spec.md)**, or
+grab the raw [`openapi.json`](openapi.json) for Postman / SDK generation.
+
+Generating it from code (`services/management/cmd/openapi-gen` parses the
+`mux.Handle` registrations) rather than hand-authoring it means the paths,
+methods, path parameters, and auth requirement can never drift — a CI drift-guard
+regenerates the spec on every management change and fails if the committed copy
+is stale. Regenerate locally with:
+
+```bash
+cd services/management && make openapi   # writes ../../docs/openapi.json
+```
+
+Request/query and response **body** schemas are being enriched incrementally; the
+[Services](SERVICES.md) reference remains the fullest per-route contract for now.

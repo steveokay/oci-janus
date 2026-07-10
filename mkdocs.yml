@@ -61,6 +61,7 @@ theme:
 # `search` is bundled with Material and needs no extra dependency.
 plugins:
   - search
+  - swagger-ui-tag
 
 # Planning specs and raw Postman exports are not user-facing — keep them out
 # of the published site entirely.
@@ -128,6 +129,7 @@ nav:
       - Architecture overview: architecture.md
       - Services: SERVICES.md
       - API & automation: api-reference.md
+      - API explorer (OpenAPI): api-spec.md
       - gRPC conventions: GRPC-CONVENTIONS.md
       - Database: DATABASE.md
       - Events: EVENTS.md
