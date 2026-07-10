@@ -2213,9 +2213,16 @@ untracked.
      **consolidated per-service env reference** — `libs/cmd/env-ref-gen`
      parses all 14 `services/*/.env.example` files (section headers +
      per-var comments) into `docs/env-reference.md` (**280 vars across 14
-     services**), drift-guarded by `docs-env-ref.yml`. **Remaining:**
-     enrich request/response **body** schemas (swaggo annotations,
-     incremental) + a Helm/Compose deployment deep-dive.
+     services**), drift-guarded by `docs-env-ref.yml`. Also shipped the
+     **Helm/Compose deployment deep-dive** (`docs/deployment-guide.md`) —
+     guided Compose path (infra deps, KEK `.env`, `--profile
+     scanner|clair|mcp`, bootstrap) + Kubernetes/Helm path (umbrella
+     `infra/helm/registry` v0.1.0, `global`/per-service values,
+     External-Secrets + cert-manager mTLS, `helm dependency build` +
+     `upgrade --install`, scaling/NetworkPolicy), health/observability, and
+     a runbooks index — written from the real chart + compose. **Only
+     remaining:** enrich request/response **body** schemas on the OpenAPI
+     spec (incremental swaggo annotations, a code task).
 - **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
   screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
   (Discussions) / HYG-008 (private vuln reporting) for the community
