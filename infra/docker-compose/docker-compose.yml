@@ -1163,6 +1163,36 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # ── Frontend (Beacon SPA) ─────────────────────────────────────────────────
+  # Two-stage build (frontend/Dockerfile): Node builds the Vite bundle, nginx
+  # serves it on :8080 and reverse-proxies /api + /auth to the backend services.
+  # In this compose the gateway is a health-only stub, so the container's
+  # nginx.conf splits the /api namespace itself (auth-owned subroutes →
+  # registry-auth, BFF routes → registry-management) exactly like the vite dev
+  # proxy — running the SPA here replaces `npm run dev`. Browse at
+  # http://localhost:3000.
+  registry-frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:8080"
+    depends_on:
+      registry-auth:
+        condition: service_healthy
+      registry-management:
+        condition: service_healthy
+    networks:
+      - registry
+    healthcheck:
+      # nginx image has no /healthcheck binary; probe the nginx-served /healthz.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   registry:
     name: registry
