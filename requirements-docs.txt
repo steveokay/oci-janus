@@ -9,3 +9,6 @@
 mkdocs-material>=9.5.0,<10.0.0
 mkdocs>=1.6.0,<2.0.0
 pymdown-extensions>=10.0,<11.0
+# Renders the generated OpenAPI spec (docs/openapi.json) with a self-contained
+# Swagger UI — no external CDN, so it works under the site's strict CSP.
+mkdocs-swagger-ui-tag>=0.6.0,<1.0.0

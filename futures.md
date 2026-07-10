@@ -2200,12 +2200,19 @@ untracked.
      (API & automation: the two HTTP surfaces — management BFF `/api/v1/*`
      + registry-auth direct routes — the JWT-vs-API-key auth model with a
      worked `curl`, pagination/error conventions, the `docs/postman/`
-     collection seed, and a CLI/credential-helper pointer). **Remaining:**
-     a **generated OpenAPI 3.x spec** for the BFF (deliberately not
-     hand-authored — needs `swaggo`-style annotations on
-     `registry-management` so a ~110-route spec never drifts from code; a
-     code task, not docs) + a consolidated per-service env reference +
-     Helm/Compose deployment deep-dive.
+     collection seed, and a CLI/credential-helper pointer). Shipped the
+     **generated OpenAPI 3.0 spec** — `services/management/cmd/openapi-gen`
+     parses the `mux.Handle` route table (AST) and emits
+     `docs/openapi.json` (all **142 operations / 104 paths**, with path
+     params + Bearer auth), rendered as an interactive **API explorer**
+     (`docs/api-spec.md`, self-contained Swagger UI via
+     `mkdocs-swagger-ui-tag`) and guarded by a CI drift-check
+     (`make openapi` + `git diff --exit-status` in `ci-management.yml`).
+     Chose route-table generation over `swaggo` per-handler annotations so
+     it's complete + never-drifting from day one; **remaining:** enrich
+     request/response **body** schemas (swaggo annotations, incremental),
+     a consolidated per-service env reference, and a Helm/Compose
+     deployment deep-dive.
 - **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
   screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
   (Discussions) / HYG-008 (private vuln reporting) for the community
