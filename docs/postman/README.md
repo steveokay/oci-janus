@@ -1,32 +1,33 @@
 # Postman collection — registry-management
 
-A Postman v2.1 collection exercising every public HTTP endpoint exposed by
-the registry: the full `services/management` REST API plus the auth-side
-routes the gateway exposes under the same `/api/v1` prefix.
+A Postman v2.1 collection covering the registry's HTTP API: every route the
+`services/management` REST BFF exposes, plus a curated **`identity`** folder
+with the core `registry-auth` routes you need to obtain a token.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `registry-management.postman_collection.json` | The collection — folders per resource group. |
-| `registry-management.postman_environment.json` | Environment variables (base URL, tenant id, captured token, etc.). |
+| `registry-management.postman_collection.json` | The collection — one folder per resource group. **Generated — do not hand-edit.** |
+| `registry-management.postman_environment.json` | Local-dev environment (base URL, dev tenant id, seeded creds, captured token). |
 
-## Endpoint coverage
+## This collection is generated
 
-| Folder | Endpoints |
-|---|---|
-| Health | `GET /healthz` |
-| Auth | `POST /api/v1/login`, `POST /api/v1/logout`, `POST /api/v1/token/refresh`, `POST /api/v1/users` |
-| API Keys | `GET/POST /api/v1/apikeys`, `DELETE /api/v1/apikeys/{id}` |
-| Stats | `GET /api/v1/stats` |
-| Repositories | `GET/POST /api/v1/repositories`, `GET/DELETE /api/v1/repositories/{org}/{repo}` |
-| Tags | `GET /api/v1/repositories/{org}/{repo}/tags`, `DELETE …/tags/{tag}` |
-| Scans | `GET/POST …/tags/{tag}/scan` |
-| Builds | `GET …/tags/{tag}/builds` |
-| RBAC — org members | `GET/POST /api/v1/orgs/{org}/members`, `DELETE …/members/{assignmentID}` |
-| RBAC — repo members | `GET/POST /api/v1/repositories/{org}/{repo}/members`, `DELETE …/members/{assignmentID}` |
-| Admin — tenants (platform-admin) | `GET/POST /api/v1/admin/tenants`, `GET/DELETE /api/v1/admin/tenants/{tenantID}`, `PUT /api/v1/admin/tenants/{tenantID}/quota` |
-| Webhooks (FE-API-021..024) | `GET/POST /api/v1/webhooks`, `PATCH/DELETE /api/v1/webhooks/{id}`, `GET /api/v1/webhooks/{id}/deliveries`, `POST /api/v1/webhooks/{id}/test`, `POST /api/v1/webhooks/{id}/rotate-secret` |
+The collection is generated from [`../openapi.json`](../openapi.json), which is
+itself generated from the `services/management` route table. Every BFF endpoint
+is therefore covered and the collection can never drift from the handlers.
+
+- Regenerate: `cd services/management && make openapi` (runs `openapi-gen` then
+  `postman-gen`).
+- CI enforces freshness: the `openapi` job in `.github/workflows/ci-management.yml`
+  regenerates both artifacts and fails if the committed copies are stale.
+- To change what the collection contains, edit the generator
+  (`services/management/cmd/postman-gen/main.go`) — not this JSON.
+
+The one hand-maintained piece is the `identity` folder: those routes live in
+`registry-auth`, not the BFF, so they are not in `openapi.json`. They are a
+small, stable, curated set (`curatedIdentityOps` in the generator) — above all
+so you can log in first.
 
 ## Quickstart
 
@@ -35,25 +36,19 @@ routes the gateway exposes under the same `/api/v1` prefix.
    cd infra/docker-compose && docker compose up -d
    ```
 2. **Import both JSON files into Postman.** (File → Import → drop both.)
-3. **Select the `registry-management — local dev` environment** in the top-right.
-4. **Run `Auth → POST /api/v1/login`** with the seeded creds (default body uses
-   `admin` / `Admin1234!dev` against the dev tenant). The collection's test
-   script writes the returned JWT into `{{token}}`, so every subsequent
+3. **Select the `registry-management — local dev` environment** (top-right).
+4. **Run `identity → POST /api/v1/login`.** The default body uses
+   `{{username}}` / `{{password}}` / `{{tenantID}}` from the environment. Its
+   test script captures the returned JWT into `{{token}}`, so every subsequent
    request authenticates automatically.
-5. **Run any other request** — they all inherit collection-level Bearer auth
-   from `{{token}}`.
+   - If the response is `mfa_required`, the script captures `{{challenge_token}}`
+     instead — complete `identity → POST /api/v1/login/mfa` to get the JWT.
+5. **Run any other request** — they inherit collection-level Bearer auth from
+   `{{token}}`. Public routes (e.g. login, `GET /api/v1/auth/providers`)
+   override this with no-auth.
 
-## Captured variables
+## Auth model
 
-The login script also captures `{{userId}}` and `{{tenantId}}` so the
-RBAC-grant requests work without manual edits. The webhook create script
-captures `{{webhookId}}` for the follow-up update / delete / test / rotate
-calls. The API key create script captures `{{apiKeyId}}`.
-
-## Updating the collection
-
-There is no codegen — the JSON is hand-maintained. When you add a new HTTP
-route to `services/management` (or to `services/auth`'s HTTP surface), add
-a matching request to the appropriate folder here. Keep the per-folder
-ordering of `GET → POST → PATCH → DELETE → side routes` so the file is
-easy to scan.
+`{{token}}` may be either an RS256 JWT (from login) or a
+`key.<uuid>.<secret>` API key. Issue an API key from
+`identity → POST /api/v1/apikeys` for CI/bot use.

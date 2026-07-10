@@ -25,9 +25,12 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
 
 // route is one parsed (METHOD, path, secured) registration.
@@ -35,6 +38,28 @@ type route struct {
 	Method  string
 	Path    string
 	Secured bool
+}
+
+// enrich attaches request/response body schemas to an operation. The schemas
+// are derived by reflecting over the handler package's real Go structs, so
+// field names and types can never drift from the code. Enrichment is
+// incremental — an operation without an entry still gets its path/method/params/
+// auth (just a generic Success body). Keyed by "METHOD /path".
+type enrich struct {
+	resp     any  // zero value of the JSON response struct (nil = generic)
+	respList bool // response is a JSON array of resp
+	req      any  // zero value of the JSON request-body struct (nil = none)
+}
+
+var enrichments = map[string]enrich{
+	"GET /api/v1/stats":                                          {resp: handler.StatsResponse{}},
+	"GET /api/v1/security/overview":                              {resp: handler.SecurityOverviewResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}":                      {resp: handler.RepoResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest":  {resp: handler.ManifestResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers": {resp: handler.ReferrersResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart":     {resp: handler.ChartResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature": {resp: handler.SignatureResponse{}},
+	"GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan":      {resp: handler.ScanResponse{}},
 }
 
 // routeLit matches the "METHOD /path" string literal that every mux.Handle
@@ -149,22 +174,51 @@ func buildSpec(routes []route) map[string]any {
 	paths := map[string]any{}
 	tagSet := map[string]bool{}
 
+	// schemas accumulates every component schema — the shared Error type plus
+	// any response/request structs reflected in from enrichments.
+	schemas := map[string]any{
+		"Error": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"error": map[string]any{"type": "string"}},
+		},
+	}
+
 	for _, r := range routes {
 		specPath, params := convertPath(r.Path)
 		tag := tagFor(r.Path)
 		tagSet[tag] = true
 
+		resp200 := map[string]any{"description": "Success"}
 		op := map[string]any{
 			"tags":        []string{tag},
 			"summary":     fmt.Sprintf("%s %s", r.Method, r.Path),
 			"operationId": operationID(r.Method, r.Path),
 			"responses": map[string]any{
-				"200": map[string]any{"description": "Success"},
+				"200": resp200,
 				"400": ref("#/components/responses/Error"),
 				"401": ref("#/components/responses/Error"),
 				"403": ref("#/components/responses/Error"),
 				"404": ref("#/components/responses/Error"),
 			},
+		}
+		if e, ok := enrichments[r.Method+" "+r.Path]; ok {
+			if e.resp != nil {
+				sch := schemaFor(reflect.TypeOf(e.resp), schemas)
+				if e.respList {
+					sch = map[string]any{"type": "array", "items": sch}
+				}
+				resp200["content"] = map[string]any{"application/json": map[string]any{"schema": sch}}
+			}
+			if e.req != nil {
+				op["requestBody"] = map[string]any{
+					"required": true,
+					"content": map[string]any{
+						"application/json": map[string]any{
+							"schema": schemaFor(reflect.TypeOf(e.req), schemas),
+						},
+					},
+				}
+			}
 		}
 		if len(params) > 0 {
 			op["parameters"] = params
@@ -206,12 +260,7 @@ func buildSpec(routes []route) map[string]any {
 					"description": "RS256 JWT, or an API key of the form `key.<uuid>.<64-hex-secret>`.",
 				},
 			},
-			"schemas": map[string]any{
-				"Error": map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"error": map[string]any{"type": "string"}},
-				},
-			},
+			"schemas": schemas,
 			"responses": map[string]any{
 				"Error": map[string]any{
 					"description": "Error",
@@ -262,6 +311,69 @@ func operationID(method, p string) string {
 }
 
 func ref(s string) map[string]any { return map[string]any{"$ref": s} }
+
+// schemaFor builds an OpenAPI schema for a Go type by reflection. Named structs
+// are registered in schemas (keyed by type name) and returned as a $ref, so
+// nested/shared types are emitted once and referenced; everything else is
+// inlined. time.Time maps to a date-time string; []byte to a byte string.
+func schemaFor(t reflect.Type, schemas map[string]any) map[string]any {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.PkgPath() == "time" && t.Name() == "Time" {
+		return map[string]any{"type": "string", "format": "date-time"}
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return map[string]any{"type": "string"}
+	case reflect.Bool:
+		return map[string]any{"type": "boolean"}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return map[string]any{"type": "integer"}
+	case reflect.Float32, reflect.Float64:
+		return map[string]any{"type": "number"}
+	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 { // []byte marshals to a base64 string
+			return map[string]any{"type": "string", "format": "byte"}
+		}
+		return map[string]any{"type": "array", "items": schemaFor(t.Elem(), schemas)}
+	case reflect.Map:
+		return map[string]any{"type": "object", "additionalProperties": schemaFor(t.Elem(), schemas)}
+	case reflect.Struct:
+		if t.Name() == "" { // anonymous struct — inline it
+			return structSchema(t, schemas)
+		}
+		if _, seen := schemas[t.Name()]; !seen {
+			schemas[t.Name()] = map[string]any{} // reserve to break recursion cycles
+			schemas[t.Name()] = structSchema(t, schemas)
+		}
+		return ref("#/components/schemas/" + t.Name())
+	default:
+		return map[string]any{} // interface{}/any and anything unmapped
+	}
+}
+
+// structSchema emits an object schema from a struct's exported fields, honouring
+// json tags (skipping "-" and unexported fields).
+func structSchema(t reflect.Type, schemas map[string]any) map[string]any {
+	props := map[string]any{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.PkgPath != "" { // unexported
+			continue
+		}
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		props[name] = schemaFor(f.Type, schemas)
+	}
+	return map[string]any{"type": "object", "properties": props}
+}
 
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))

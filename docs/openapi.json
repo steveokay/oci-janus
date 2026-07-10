@@ -13,10 +13,476 @@
       }
     },
     "schemas": {
+      "ChartDependency": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChartMaintainer": {
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChartMetadata": {
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "api_version": {
+            "type": "string"
+          },
+          "app_version": {
+            "type": "string"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/ChartDependency"
+            },
+            "type": "array"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kube_version": {
+            "type": "string"
+          },
+          "maintainers": {
+            "items": {
+              "$ref": "#/components/schemas/ChartMaintainer"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChartResponse": {
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/ChartMetadata"
+          },
+          "metadata_error": {
+            "type": "string"
+          },
+          "values": {
+            "type": "string"
+          },
+          "values_error": {
+            "type": "string"
+          },
+          "values_truncated": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "Error": {
         "properties": {
           "error": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ManifestResponse": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/manifestConfig"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "is_index": {
+            "type": "boolean"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/manifestLayer"
+            },
+            "type": "array"
+          },
+          "manifests": {
+            "items": {
+              "$ref": "#/components/schemas/manifestEntry"
+            },
+            "type": "array"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "quarantine_reason": {
+            "type": "string"
+          },
+          "quarantined": {
+            "type": "boolean"
+          },
+          "quarantined_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "quarantined_by": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ReferrersResponse": {
+        "properties": {
+          "filtered": {
+            "type": "boolean"
+          },
+          "referrers": {
+            "items": {
+              "$ref": "#/components/schemas/referrerRecord"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RepoResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "immutable_tags": {
+            "type": "boolean"
+          },
+          "is_public": {
+            "type": "boolean"
+          },
+          "max_cvss_score": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "repo_id": {
+            "type": "string"
+          },
+          "require_signature": {
+            "type": "boolean"
+          },
+          "storage_quota_bytes": {
+            "type": "integer"
+          },
+          "storage_used_bytes": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ScanCoverageResponse": {
+        "properties": {
+          "percent": {
+            "type": "number"
+          },
+          "tags_scanned": {
+            "type": "integer"
+          },
+          "tags_total": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ScanResponse": {
+        "properties": {
+          "completed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "findings_json": {
+            "format": "byte",
+            "type": "string"
+          },
+          "scan_id": {
+            "type": "string"
+          },
+          "scanner_name": {
+            "type": "string"
+          },
+          "scanner_version": {
+            "type": "string"
+          },
+          "severity_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SecurityOverviewResponse": {
+        "properties": {
+          "days_since_last_scan": {
+            "type": "integer"
+          },
+          "open_vulnerabilities_total": {
+            "type": "integer"
+          },
+          "recent_scans_24h": {
+            "type": "integer"
+          },
+          "scan_coverage": {
+            "$ref": "#/components/schemas/ScanCoverageResponse"
+          },
+          "severity_counts": {
+            "$ref": "#/components/schemas/SeverityCounts"
+          }
+        },
+        "type": "object"
+      },
+      "SeverityCounts": {
+        "properties": {
+          "critical": {
+            "type": "integer"
+          },
+          "high": {
+            "type": "integer"
+          },
+          "low": {
+            "type": "integer"
+          },
+          "medium": {
+            "type": "integer"
+          },
+          "negligible": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SignatureResponse": {
+        "properties": {
+          "manifest_digest": {
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/signatureRecord"
+            },
+            "type": "array"
+          },
+          "signed": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "StatsResponse": {
+        "properties": {
+          "critical_count": {
+            "type": "integer"
+          },
+          "daily_pulls": {
+            "type": "integer"
+          },
+          "high_count": {
+            "type": "integer"
+          },
+          "low_count": {
+            "type": "integer"
+          },
+          "medium_count": {
+            "type": "integer"
+          },
+          "negligible_count": {
+            "type": "integer"
+          },
+          "severity_counts": {
+            "$ref": "#/components/schemas/SeverityCounts"
+          },
+          "storage_quota_bytes": {
+            "type": "integer"
+          },
+          "storage_used_bytes": {
+            "type": "integer"
+          },
+          "system_health_pct": {
+            "type": "number"
+          },
+          "total_repos": {
+            "type": "integer"
+          },
+          "vulnerability_count": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "manifestConfig": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "manifestEntry": {
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "os_version": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "variant": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "manifestLayer": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "referrerRecord": {
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "signatureRecord": {
+        "properties": {
+          "failure_reason": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "signature_digest": {
+            "type": "string"
+          },
+          "signed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "signer_id": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -2131,6 +2597,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -3382,6 +3855,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -3496,6 +3976,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManifestResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -3779,6 +4266,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferrersResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -3893,6 +4387,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -4062,6 +4563,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -4326,6 +4834,13 @@
         "operationId": "get_api_v1_security_overview",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityOverviewResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {
@@ -4777,6 +5292,13 @@
         "operationId": "get_api_v1_stats",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            },
             "description": "Success"
           },
           "400": {

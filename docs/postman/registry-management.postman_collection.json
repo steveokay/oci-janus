@@ -1,490 +1,4401 @@
 {
+  "auth": {
+    "bearer": [
+      {
+        "key": "token",
+        "type": "string",
+        "value": "{{token}}"
+      }
+    ],
+    "type": "bearer"
+  },
   "info": {
-    "_postman_id": "8a7b3c12-9e4f-4a1d-9c81-1c2a3b4c5d6e",
+    "_postman_id": "0c1a2b3c-0000-4000-8000-000000000001",
+    "description": "REST API for the OCI-Janus management BFF. Generated from docs/openapi.json (itself generated from the service route table) — do not hand-edit; run `make openapi`. The `identity` folder adds the core registry-auth routes (log in, refresh, API keys) so you can obtain a token first. Set {{baseUrl}} and {{token}} (an RS256 JWT or a `key.\u003cuuid\u003e.\u003csecret\u003e` API key) in an environment.",
     "name": "registry-management API",
-    "description": "All public HTTP endpoints exposed by services/management (the BFF for the dashboard, CLI, and Terraform). Also covers the auth-side HTTP routes the gateway exposes under the same prefix (/api/v1/login, /logout, /token/refresh, /users, /apikeys). See docs/postman/README.md for env setup.\n\n**Auth flow:** run *Auth → Login* first. The collection's test script writes the returned JWT to {{token}} so all subsequent requests use it via the collection-level Bearer auth.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "auth": {
-    "type": "bearer",
-    "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]
-  },
-  "event": [
-    {
-      "listen": "prerequest",
-      "script": {"type": "text/javascript", "exec": [""]}
-    }
-  ],
-  "variable": [
-    {"key": "baseUrl", "value": "http://localhost:8091", "type": "string"},
-    {"key": "token", "value": "", "type": "string"},
-    {"key": "tenantId", "value": "", "type": "string"},
-    {"key": "org", "value": "dev", "type": "string"},
-    {"key": "repo", "value": "alpine", "type": "string"},
-    {"key": "tag", "value": "3.20", "type": "string"},
-    {"key": "assignmentId", "value": "", "type": "string"},
-    {"key": "userId", "value": "", "type": "string"},
-    {"key": "apiKeyId", "value": "", "type": "string"},
-    {"key": "webhookId", "value": "", "type": "string"}
-  ],
   "item": [
     {
-      "name": "Health",
+      "item": [
+        {
+          "name": "GET /api/v1/access/oidc-trust",
+          "request": {
+            "description": "GET /api/v1/access/oidc-trust",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "oidc-trust"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/oidc-trust"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/access/oidc-trust",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/access/oidc-trust",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "oidc-trust"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/oidc-trust"
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/access/oidc-trust/{id}",
+          "request": {
+            "description": "DELETE /api/v1/access/oidc-trust/{id}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "oidc-trust",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/oidc-trust/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/access/oidc-trust/{id}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/access/oidc-trust/{id}",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "oidc-trust",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/oidc-trust/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/access/review/snooze",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/access/review/snooze",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "review",
+                "snooze"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/review/snooze"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/access/review/stale",
+          "request": {
+            "description": "GET /api/v1/access/review/stale",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "review",
+                "stale"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/review/stale"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/access/token-policy",
+          "request": {
+            "description": "GET /api/v1/access/token-policy",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "token-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/token-policy"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/access/token-policy",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/access/token-policy",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "access",
+                "token-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/access/token-policy"
+            }
+          }
+        }
+      ],
+      "name": "access"
+    },
+    {
+      "item": [
+        {
+          "name": "POST /api/v1/admin/gc/run",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/admin/gc/run",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "gc",
+                "run"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/gc/run"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/gc/runs",
+          "request": {
+            "description": "GET /api/v1/admin/gc/runs",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "gc",
+                "runs"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/gc/runs"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/gc/status",
+          "request": {
+            "description": "GET /api/v1/admin/gc/status",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "gc",
+                "status"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/gc/status"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/admin/orgs/{org}/claim",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/admin/orgs/{org}/claim",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "orgs",
+                ":org",
+                "claim"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/orgs/:org/claim",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/scanners",
+          "request": {
+            "description": "GET /api/v1/admin/scanners",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "scanners"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/scanners"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/scanners/active",
+          "request": {
+            "description": "GET /api/v1/admin/scanners/active",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "scanners",
+                "active"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/scanners/active"
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/admin/scanners/active",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/admin/scanners/active",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "scanners",
+                "active"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/scanners/active"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/scanners/health",
+          "request": {
+            "description": "GET /api/v1/admin/scanners/health",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "scanners",
+                "health"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/scanners/health"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/admin/scanners/test",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/admin/scanners/test",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "scanners",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/scanners/test"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/tenants",
+          "request": {
+            "description": "GET /api/v1/admin/tenants",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/admin/tenants",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/admin/tenants",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants"
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/admin/tenants/{tenantID}",
+          "request": {
+            "description": "DELETE /api/v1/admin/tenants/{tenantID}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants",
+                ":tenantID"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants/:tenantID",
+              "variable": [
+                {
+                  "key": "tenantID",
+                  "value": "{{tenantID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/admin/tenants/{tenantID}",
+          "request": {
+            "description": "GET /api/v1/admin/tenants/{tenantID}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants",
+                ":tenantID"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants/:tenantID",
+              "variable": [
+                {
+                  "key": "tenantID",
+                  "value": "{{tenantID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/admin/tenants/{tenantID}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/admin/tenants/{tenantID}",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants",
+                ":tenantID"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants/:tenantID",
+              "variable": [
+                {
+                  "key": "tenantID",
+                  "value": "{{tenantID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/admin/tenants/{tenantID}/quota",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/admin/tenants/{tenantID}/quota",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "tenants",
+                ":tenantID",
+                "quota"
+              ],
+              "raw": "{{baseUrl}}/api/v1/admin/tenants/:tenantID/quota",
+              "variable": [
+                {
+                  "key": "tenantID",
+                  "value": "{{tenantID}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "admin"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/deployment-info",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "GET /api/v1/deployment-info",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "deployment-info"
+              ],
+              "raw": "{{baseUrl}}/api/v1/deployment-info"
+            }
+          }
+        }
+      ],
+      "name": "deployment-info"
+    },
+    {
       "item": [
         {
           "name": "GET /healthz",
           "request": {
-            "auth": {"type": "noauth"},
-            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "GET /healthz",
             "header": [],
-            "url": {"raw": "{{baseUrl}}/healthz", "host": ["{{baseUrl}}"], "path": ["healthz"]}
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ],
+              "raw": "{{baseUrl}}/healthz"
+            }
           }
         }
-      ]
+      ],
+      "name": "healthz"
     },
     {
-      "name": "Auth",
-      "description": "Endpoints served by registry-auth and routed by the gateway under the same /api/v1 prefix.",
-      "item": [
-        {
-          "name": "POST /api/v1/login",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Capture the JWT into the {{token}} env variable so subsequent requests authenticate automatically.",
-                  "if (pm.response.code === 200) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.token) pm.collectionVariables.set('token', body.token);",
-                  "  if (body.user_id) pm.collectionVariables.set('userId', body.user_id);",
-                  "  if (body.tenant_id) pm.collectionVariables.set('tenantId', body.tenant_id);",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {"type": "noauth"},
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"tenant_id\": \"{{tenantId}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "login"]}
-          }
-        },
-        {
-          "name": "POST /api/v1/logout",
-          "request": {
-            "method": "POST",
-            "url": {"raw": "{{baseUrl}}/api/v1/logout", "host": ["{{baseUrl}}"], "path": ["api", "v1", "logout"]}
-          }
-        },
-        {
-          "name": "POST /api/v1/token/refresh",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.token) pm.collectionVariables.set('token', body.token);",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "url": {"raw": "{{baseUrl}}/api/v1/token/refresh", "host": ["{{baseUrl}}"], "path": ["api", "v1", "token", "refresh"]}
-          }
-        },
-        {
-          "name": "POST /api/v1/users (admin only)",
-          "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"newuser\",\n  \"password\": \"NewUser1234!\",\n  \"email\": \"newuser@example.com\",\n  \"tenant_id\": \"{{tenantId}}\"\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/users", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users"]}
-          }
-        }
-      ]
-    },
-    {
-      "name": "API Keys",
       "item": [
         {
           "name": "GET /api/v1/apikeys",
           "request": {
+            "description": "List your API keys",
+            "header": [],
             "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/apikeys", "host": ["{{baseUrl}}"], "path": ["api", "v1", "apikeys"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys"
+              ],
+              "raw": "{{baseUrl}}/api/v1/apikeys"
+            }
           }
         },
         {
           "name": "POST /api/v1/apikeys",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 201) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.id) pm.collectionVariables.set('apiKeyId', body.id);",
-                  "}"
-                ]
-              }
-            }
-          ],
           "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"ci-runner\",\n  \"scope\": \"push\",\n  \"expires_in_days\": 90\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
             },
-            "url": {"raw": "{{baseUrl}}/api/v1/apikeys", "host": ["{{baseUrl}}"], "path": ["api", "v1", "apikeys"]}
+            "description": "Issue an API key (shown once)",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys"
+              ],
+              "raw": "{{baseUrl}}/api/v1/apikeys"
+            }
           }
         },
         {
           "name": "DELETE /api/v1/apikeys/{id}",
           "request": {
+            "description": "Revoke an API key",
+            "header": [],
             "method": "DELETE",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/apikeys/{{apiKeyId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "apikeys", "{{apiKeyId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "apikeys",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/apikeys/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/auth/providers",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "List enabled SSO providers",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "providers"
+              ],
+              "raw": "{{baseUrl}}/api/v1/auth/providers"
+            }
+          }
+        },
+        {
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.token) {",
+                  "  pm.collectionVariables.set('token', body.token);",
+                  "  console.log('captured token into {{token}}');",
+                  "} else if (body.mfa_required) {",
+                  "  pm.collectionVariables.set('challenge_token', body.challenge_token);",
+                  "  console.log('MFA required — challenge_token captured; run POST /api/v1/login/mfa');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "name": "POST /api/v1/login",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"tenant_id\": \"{{tenantID}}\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "description": "Log in with a username + password → returns a JWT (or an MFA challenge). On success the test script captures the JWT into {{token}} for every other request.",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "login"
+              ],
+              "raw": "{{baseUrl}}/api/v1/login"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/login/mfa",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "Complete a TOTP MFA challenge (challenge_token + OTP) → returns a JWT",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "login",
+                "mfa"
+              ],
+              "raw": "{{baseUrl}}/api/v1/login/mfa"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/logout",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "Revoke the current session",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "logout"
+              ],
+              "raw": "{{baseUrl}}/api/v1/logout"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/token/refresh",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "Exchange the current Bearer token for a fresh one (token sent in the Authorization header, not the body)",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "token",
+                "refresh"
+              ],
+              "raw": "{{baseUrl}}/api/v1/token/refresh"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/users/me",
+          "request": {
+            "description": "Current user profile",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ],
+              "raw": "{{baseUrl}}/api/v1/users/me"
             }
           }
         }
-      ]
+      ],
+      "name": "identity"
     },
     {
-      "name": "Stats",
       "item": [
         {
-          "name": "GET /api/v1/stats",
+          "name": "GET /api/v1/me/abilities",
           "request": {
+            "description": "GET /api/v1/me/abilities",
+            "header": [],
             "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/stats", "host": ["{{baseUrl}}"], "path": ["api", "v1", "stats"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "me",
+                "abilities"
+              ],
+              "raw": "{{baseUrl}}/api/v1/me/abilities"
+            }
           }
         }
-      ]
+      ],
+      "name": "me"
     },
     {
-      "name": "Repositories",
+      "item": [
+        {
+          "name": "GET /api/v1/notifications",
+          "request": {
+            "description": "GET /api/v1/notifications",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/notifications/email-deliveries",
+          "request": {
+            "description": "GET /api/v1/notifications/email-deliveries",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "email-deliveries"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/email-deliveries"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/notifications/email-transport",
+          "request": {
+            "description": "GET /api/v1/notifications/email-transport",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "email-transport"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/email-transport"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/notifications/email-transport",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/notifications/email-transport",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "email-transport"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/email-transport"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/notifications/email-transport/test",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/notifications/email-transport/test",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "email-transport",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/email-transport/test"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/notifications/webhook-config",
+          "request": {
+            "description": "GET /api/v1/notifications/webhook-config",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "webhook-config"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/webhook-config"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/notifications/webhook-config",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/notifications/webhook-config",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "webhook-config"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/webhook-config"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/notifications/webhook-config/test",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/notifications/webhook-config/test",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "webhook-config",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/notifications/webhook-config/test"
+            }
+          }
+        }
+      ],
+      "name": "notifications"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/orgs/{org}/members",
+          "request": {
+            "description": "GET /api/v1/orgs/{org}/members",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "members"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/members",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/orgs/{org}/members",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/orgs/{org}/members",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "members"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/members",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/orgs/{org}/members/{assignmentID}",
+          "request": {
+            "description": "DELETE /api/v1/orgs/{org}/members/{assignmentID}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "members",
+                ":assignmentID"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/members/:assignmentID",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "assignmentID",
+                  "value": "{{assignmentID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/orgs/{org}/policies/retention",
+          "request": {
+            "description": "DELETE /api/v1/orgs/{org}/policies/retention",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/orgs/{org}/policies/retention",
+          "request": {
+            "description": "GET /api/v1/orgs/{org}/policies/retention",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/orgs/{org}/policies/retention",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/orgs/{org}/policies/retention",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/orgs/{org}/policies/scan",
+          "request": {
+            "description": "DELETE /api/v1/orgs/{org}/policies/scan",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/orgs/{org}/policies/scan",
+          "request": {
+            "description": "GET /api/v1/orgs/{org}/policies/scan",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/orgs/{org}/policies/scan",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/orgs/{org}/policies/scan",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/orgs/{org}/scan",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/orgs/{org}/scan",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs",
+                ":org",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs/:org/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "orgs"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/pr-registry/config",
+          "request": {
+            "description": "GET /api/v1/pr-registry/config",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pr-registry",
+                "config"
+              ],
+              "raw": "{{baseUrl}}/api/v1/pr-registry/config"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/pr-registry/config",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/pr-registry/config",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pr-registry",
+                "config"
+              ],
+              "raw": "{{baseUrl}}/api/v1/pr-registry/config"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/pr-registry/namespaces",
+          "request": {
+            "description": "GET /api/v1/pr-registry/namespaces",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pr-registry",
+                "namespaces"
+              ],
+              "raw": "{{baseUrl}}/api/v1/pr-registry/namespaces"
+            }
+          }
+        }
+      ],
+      "name": "pr-registry"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/proxy/cache",
+          "request": {
+            "description": "GET /api/v1/proxy/cache",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/cache/scan-policies",
+          "request": {
+            "description": "GET /api/v1/proxy/cache/scan-policies",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache",
+                "scan-policies"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache/scan-policies"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/cache/sign-policies",
+          "request": {
+            "description": "GET /api/v1/proxy/cache/sign-policies",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache",
+                "sign-policies"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache/sign-policies"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/cache/stats",
+          "request": {
+            "description": "GET /api/v1/proxy/cache/stats",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache",
+                "stats"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache/stats"
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/proxy/cache/{id}",
+          "request": {
+            "description": "DELETE /api/v1/proxy/cache/{id}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/cache/{id}",
+          "request": {
+            "description": "GET /api/v1/proxy/cache/{id}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "cache",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/cache/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/upstreams/{name}/scan-policy",
+          "request": {
+            "description": "GET /api/v1/proxy/upstreams/{name}/scan-policy",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "upstreams",
+                ":name",
+                "scan-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/upstreams/:name/scan-policy",
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "{{name}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/proxy/upstreams/{name}/scan-policy",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/proxy/upstreams/{name}/scan-policy",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "upstreams",
+                ":name",
+                "scan-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/upstreams/:name/scan-policy",
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "{{name}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/proxy/upstreams/{name}/sign-policy",
+          "request": {
+            "description": "GET /api/v1/proxy/upstreams/{name}/sign-policy",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "upstreams",
+                ":name",
+                "sign-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/upstreams/:name/sign-policy",
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "{{name}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/proxy/upstreams/{name}/sign-policy",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/proxy/upstreams/{name}/sign-policy",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "proxy",
+                "upstreams",
+                ":name",
+                "sign-policy"
+              ],
+              "raw": "{{baseUrl}}/api/v1/proxy/upstreams/:name/sign-policy",
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "{{name}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "proxy"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/registry-info",
+          "request": {
+            "description": "GET /api/v1/registry-info",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "registry-info"
+              ],
+              "raw": "{{baseUrl}}/api/v1/registry-info"
+            }
+          }
+        }
+      ],
+      "name": "registry-info"
+    },
+    {
       "item": [
         {
           "name": "GET /api/v1/repositories",
           "request": {
+            "description": "GET /api/v1/repositories",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories?per_page=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories"],
-              "query": [
-                {"key": "per_page", "value": "25"},
-                {"key": "visibility", "value": "public", "disabled": true},
-                {"key": "page_token", "value": "", "disabled": true}
-              ]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories"
             }
           }
         },
         {
           "name": "POST /api/v1/repositories",
           "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"org\": \"{{org}}\",\n  \"name\": \"{{repo}}\",\n  \"is_public\": false,\n  \"storage_quota\": 0\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
             },
-            "url": {"raw": "{{baseUrl}}/api/v1/repositories", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories"]}
-          }
-        },
-        {
-          "name": "GET /api/v1/repositories/{org}/{repo}",
-          "request": {
-            "method": "GET",
+            "description": "POST /api/v1/repositories",
+            "header": [],
+            "method": "POST",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories"
             }
           }
         },
         {
           "name": "DELETE /api/v1/repositories/{org}/{repo}",
           "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}",
+            "header": [],
             "method": "DELETE",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
             }
           }
-        }
-      ]
-    },
-    {
-      "name": "Tags",
-      "item": [
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/repositories/{org}/{repo}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/repositories/{org}/{repo}",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/activity",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/activity",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "activity"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/activity",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/analytics",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/analytics",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "analytics"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/analytics",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/members",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/members",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "members"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/members",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/members",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/members",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "members"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/members",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/members/{assignmentID}",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/members/{assignmentID}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "members",
+                ":assignmentID"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/members/:assignmentID",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "assignmentID",
+                  "value": "{{assignmentID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/policies/retention",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/policies/retention",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/policies/retention",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/policies/retention",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/repositories/{org}/{repo}/policies/retention",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/repositories/{org}/{repo}/policies/retention",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/policies/retention/dry-run",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/policies/retention/dry-run",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention",
+                "dry-run"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention/dry-run",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/policies/retention/preview",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/policies/retention/preview",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention",
+                "preview"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention/preview",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/policies/retention/run",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/policies/retention/run",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention",
+                "run"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention/run",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/policies/retention/runs",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/policies/retention/runs",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention",
+                "runs"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention/runs",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/policies/retention/runs/{run_id}",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/policies/retention/runs/{run_id}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "retention",
+                "runs",
+                ":run_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/retention/runs/:run_id",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "run_id",
+                  "value": "{{run_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/policies/scan",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/policies/scan",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/policies/scan",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/policies/scan",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/repositories/{org}/{repo}/policies/scan",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/repositories/{org}/{repo}/policies/scan",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "policies",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/policies/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/promotions",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/promotions",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "promotions"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/promotions",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/recent-signers",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/recent-signers",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "recent-signers"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/recent-signers",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/scan",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/scan",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/tags",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/tags",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
         {
           "name": "GET /api/v1/repositories/{org}/{repo}/tags",
           "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
             }
           }
         },
         {
           "name": "DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}",
           "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}",
+            "header": [],
             "method": "DELETE",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
             }
           }
-        }
-      ]
-    },
-    {
-      "name": "Scans",
-      "item": [
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "builds"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/builds",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "chart"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/chart",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart/download",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/chart/download",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "chart",
+                "download"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/chart/download",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "manifest"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/manifest",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/tags/{tag}/pin",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "pin"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/pin",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/pin",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "pin"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/pin",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "promote"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/promote",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/quarantine/lift",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/quarantine/lift",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "quarantine",
+                "lift"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/quarantine/lift",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/referrers",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "referrers"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/referrers",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/sbom",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/sbom",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "sbom"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/sbom",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
         {
           "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
           "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "scan"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
             }
           }
         },
         {
           "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
           "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan",
+            "header": [],
             "method": "POST",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "scan"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "scan"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/scan",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/sign",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/tags/{tag}/sign",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "sign"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/sign",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/signature",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "tags",
+                ":tag",
+                "signature"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/tags/:tag/signature",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "tag",
+                  "value": "{{tag}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/repositories/{org}/{repo}/trusted-keys",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/trusted-keys",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "trusted-keys"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/trusted-keys",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/repositories/{org}/{repo}/trusted-keys",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/trusted-keys",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "trusted-keys"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/trusted-keys",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}",
+          "request": {
+            "description": "DELETE /api/v1/repositories/{org}/{repo}/trusted-keys/{key_id}",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "trusted-keys",
+                ":key_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/trusted-keys/:key_id",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                },
+                {
+                  "key": "key_id",
+                  "value": "{{key_id}}"
+                }
+              ]
             }
           }
         }
-      ]
+      ],
+      "name": "repositories"
     },
     {
-      "name": "Builds",
       "item": [
         {
-          "name": "GET /api/v1/repositories/{org}/{repo}/tags/{tag}/builds",
+          "name": "GET /api/v1/scan-by-digest/{digest}",
           "request": {
+            "description": "GET /api/v1/scan-by-digest/{digest}",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/builds?limit=25",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "builds"],
-              "query": [{"key": "limit", "value": "25"}]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "scan-by-digest",
+                ":digest"
+              ],
+              "raw": "{{baseUrl}}/api/v1/scan-by-digest/:digest",
+              "variable": [
+                {
+                  "key": "digest",
+                  "value": "{{digest}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/scan-by-digest/{digest}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/scan-by-digest/{digest}",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "scan-by-digest",
+                ":digest"
+              ],
+              "raw": "{{baseUrl}}/api/v1/scan-by-digest/:digest",
+              "variable": [
+                {
+                  "key": "digest",
+                  "value": "{{digest}}"
+                }
+              ]
             }
           }
         }
-      ]
+      ],
+      "name": "scan-by-digest"
     },
     {
-      "name": "RBAC — org members",
       "item": [
         {
-          "name": "GET /api/v1/orgs/{org}/members",
+          "name": "GET /api/v1/security/overview",
           "request": {
+            "description": "GET /api/v1/security/overview",
+            "header": [],
             "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "overview"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/overview"
+            }
           }
         },
         {
-          "name": "POST /api/v1/orgs/{org}/members",
+          "name": "GET /api/v1/security/policies",
           "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "description": "GET /api/v1/security/policies",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "policies"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/policies"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/security/policies",
+          "request": {
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"role\": \"writer\"\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
             },
-            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members"]}
-          }
-        },
-        {
-          "name": "DELETE /api/v1/orgs/{org}/members/{assignmentID}",
-          "request": {
-            "method": "DELETE",
-            "url": {"raw": "{{baseUrl}}/api/v1/orgs/{{org}}/members/{{assignmentId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "orgs", "{{org}}", "members", "{{assignmentId}}"]}
-          }
-        }
-      ]
-    },
-    {
-      "name": "RBAC — repo members",
-      "item": [
-        {
-          "name": "GET /api/v1/repositories/{org}/{repo}/members",
-          "request": {
-            "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members"]}
-          }
-        },
-        {
-          "name": "POST /api/v1/repositories/{org}/{repo}/members",
-          "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"role\": \"reader\"\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members"]}
-          }
-        },
-        {
-          "name": "DELETE /api/v1/repositories/{org}/{repo}/members/{assignmentID}",
-          "request": {
-            "method": "DELETE",
-            "url": {"raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/members/{{assignmentId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "members", "{{assignmentId}}"]}
-          }
-        }
-      ]
-    },
-    {
-      "name": "Admin — tenants (platform-admin)",
-      "description": "Requires the platform-admin marker grant (admin / org / *). 404 'route disabled' when TENANT_GRPC_ADDR is unset on the management service.",
-      "item": [
-        {
-          "name": "GET /api/v1/admin/tenants",
-          "request": {
-            "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants"]}
-          }
-        },
-        {
-          "name": "POST /api/v1/admin/tenants",
-          "request": {
-            "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"acme\"\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants"]}
-          }
-        },
-        {
-          "name": "GET /api/v1/admin/tenants/{tenantID}",
-          "request": {
-            "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}"]}
-          }
-        },
-        {
-          "name": "DELETE /api/v1/admin/tenants/{tenantID}",
-          "request": {
-            "method": "DELETE",
-            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}"]}
-          }
-        },
-        {
-          "name": "PUT /api/v1/admin/tenants/{tenantID}/quota",
-          "request": {
+            "description": "PUT /api/v1/security/policies",
+            "header": [],
             "method": "PUT",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "policies"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/policies"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/remediation",
+          "request": {
+            "description": "GET /api/v1/security/remediation",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "remediation"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/remediation"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/reports",
+          "request": {
+            "description": "GET /api/v1/security/reports",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "reports"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/reports"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/security/reports/generate",
+          "request": {
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"quota_bytes\": 107374182400\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
             },
-            "url": {"raw": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/quota", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "tenants", "{{tenantId}}", "quota"]}
+            "description": "POST /api/v1/security/reports/generate",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "reports",
+                "generate"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/reports/generate"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/reports/{id}",
+          "request": {
+            "description": "GET /api/v1/security/reports/{id}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "reports",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/reports/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/reports/{id}/download/pdf",
+          "request": {
+            "description": "GET /api/v1/security/reports/{id}/download/pdf",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "reports",
+                ":id",
+                "download",
+                "pdf"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/reports/:id/download/pdf",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/reports/{id}/download/sbom",
+          "request": {
+            "description": "GET /api/v1/security/reports/{id}/download/sbom",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "reports",
+                ":id",
+                "download",
+                "sbom"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/reports/:id/download/sbom",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/scans",
+          "request": {
+            "description": "GET /api/v1/security/scans",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "scans"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/scans"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/security/vulnerabilities",
+          "request": {
+            "description": "GET /api/v1/security/vulnerabilities",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "security",
+                "vulnerabilities"
+              ],
+              "raw": "{{baseUrl}}/api/v1/security/vulnerabilities"
+            }
           }
         }
-      ]
+      ],
+      "name": "security"
     },
     {
-      "name": "Webhooks",
-      "description": "FE-API-021..024. Routes return 404 'route disabled' when WEBHOOK_GRPC_ADDR is unset on the management service. Create/update/delete/rotate/test require an admin role on some org in the tenant.",
+      "item": [
+        {
+          "name": "POST /api/v1/sign-by-digest/{digest}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/sign-by-digest/{digest}",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "sign-by-digest",
+                ":digest"
+              ],
+              "raw": "{{baseUrl}}/api/v1/sign-by-digest/:digest",
+              "variable": [
+                {
+                  "key": "digest",
+                  "value": "{{digest}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "sign-by-digest"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/signatures-by-digest/{digest}",
+          "request": {
+            "description": "GET /api/v1/signatures-by-digest/{digest}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "signatures-by-digest",
+                ":digest"
+              ],
+              "raw": "{{baseUrl}}/api/v1/signatures-by-digest/:digest",
+              "variable": [
+                {
+                  "key": "digest",
+                  "value": "{{digest}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "signatures-by-digest"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/stats",
+          "request": {
+            "description": "GET /api/v1/stats",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stats"
+              ],
+              "raw": "{{baseUrl}}/api/v1/stats"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/stats/analytics",
+          "request": {
+            "description": "GET /api/v1/stats/analytics",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stats",
+                "analytics"
+              ],
+              "raw": "{{baseUrl}}/api/v1/stats/analytics"
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/stats/storage",
+          "request": {
+            "description": "GET /api/v1/stats/storage",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stats",
+                "storage"
+              ],
+              "raw": "{{baseUrl}}/api/v1/stats/storage"
+            }
+          }
+        }
+      ],
+      "name": "stats"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/tenant/users",
+          "request": {
+            "description": "GET /api/v1/tenant/users",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant",
+                "users"
+              ],
+              "raw": "{{baseUrl}}/api/v1/tenant/users"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/tenant/users/invite",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/tenant/users/invite",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant",
+                "users",
+                "invite"
+              ],
+              "raw": "{{baseUrl}}/api/v1/tenant/users/invite"
+            }
+          }
+        },
+        {
+          "name": "DELETE /api/v1/tenant/users/{user_id}/disable",
+          "request": {
+            "description": "DELETE /api/v1/tenant/users/{user_id}/disable",
+            "header": [],
+            "method": "DELETE",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant",
+                "users",
+                ":user_id",
+                "disable"
+              ],
+              "raw": "{{baseUrl}}/api/v1/tenant/users/:user_id/disable",
+              "variable": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/tenant/users/{user_id}/disable",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/tenant/users/{user_id}/disable",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant",
+                "users",
+                ":user_id",
+                "disable"
+              ],
+              "raw": "{{baseUrl}}/api/v1/tenant/users/:user_id/disable",
+              "variable": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/tenant/users/{user_id}/elevate/{org}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/tenant/users/{user_id}/elevate/{org}",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tenant",
+                "users",
+                ":user_id",
+                "elevate",
+                ":org"
+              ],
+              "raw": "{{baseUrl}}/api/v1/tenant/users/:user_id/elevate/:org",
+              "variable": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                },
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "tenant"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/users/me/notification-preferences",
+          "request": {
+            "description": "GET /api/v1/users/me/notification-preferences",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "notification-preferences"
+              ],
+              "raw": "{{baseUrl}}/api/v1/users/me/notification-preferences"
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/users/me/notification-preferences",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/users/me/notification-preferences",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "notification-preferences"
+              ],
+              "raw": "{{baseUrl}}/api/v1/users/me/notification-preferences"
+            }
+          }
+        }
+      ],
+      "name": "users"
+    },
+    {
       "item": [
         {
           "name": "GET /api/v1/webhooks",
           "request": {
+            "description": "GET /api/v1/webhooks",
+            "header": [],
             "method": "GET",
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks"
+            }
           }
         },
         {
           "name": "POST /api/v1/webhooks",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 201) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.endpoint_id) pm.collectionVariables.set('webhookId', body.endpoint_id);",
-                  "}"
-                ]
-              }
-            }
-          ],
           "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/webhooks",
+            "header": [],
             "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"url\": \"https://hooks.example.com/registry\",\n  \"events\": [\"push.completed\", \"scan.completed\"]\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks"]}
-          }
-        },
-        {
-          "name": "PATCH /api/v1/webhooks/{id}",
-          "request": {
-            "method": "PATCH",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"active\": false\n}"
-            },
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks"
+            }
           }
         },
         {
           "name": "DELETE /api/v1/webhooks/{id}",
           "request": {
+            "description": "DELETE /api/v1/webhooks/{id}",
+            "header": [],
             "method": "DELETE",
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PATCH /api/v1/webhooks/{id}",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PATCH /api/v1/webhooks/{id}",
+            "header": [],
+            "method": "PATCH",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
           }
         },
         {
           "name": "GET /api/v1/webhooks/{id}/deliveries",
           "request": {
+            "description": "GET /api/v1/webhooks/{id}/deliveries",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/deliveries?limit=50",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "webhooks", "{{webhookId}}", "deliveries"],
-              "query": [
-                {"key": "limit", "value": "50"},
-                {"key": "since", "value": "2026-06-19T00:00:00Z", "disabled": true}
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id",
+                "deliveries"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id/deliveries",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /api/v1/webhooks/{id}/deliveries/{delivery_id}",
+          "request": {
+            "description": "GET /api/v1/webhooks/{id}/deliveries/{delivery_id}",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id",
+                "deliveries",
+                ":delivery_id"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id/deliveries/:delivery_id",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                },
+                {
+                  "key": "delivery_id",
+                  "value": "{{delivery_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/webhooks/{id}/rotate-secret",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/webhooks/{id}/rotate-secret",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id",
+                "rotate-secret"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id/rotate-secret",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
               ]
             }
           }
@@ -492,254 +4403,298 @@
         {
           "name": "POST /api/v1/webhooks/{id}/test",
           "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/webhooks/{id}/test",
+            "header": [],
             "method": "POST",
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/test", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}", "test"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "webhooks",
+                ":id",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/webhooks/:id/test",
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{id}}"
+                }
+              ]
+            }
           }
         },
         {
-          "name": "POST /api/v1/webhooks/{id}/rotate-secret",
+          "name": "POST /webhooks/scm/github/pr",
           "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /webhooks/scm/github/pr",
+            "header": [],
             "method": "POST",
-            "url": {"raw": "{{baseUrl}}/api/v1/webhooks/{{webhookId}}/rotate-secret", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "{{webhookId}}", "rotate-secret"]}
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "scm",
+                "github",
+                "pr"
+              ],
+              "raw": "{{baseUrl}}/webhooks/scm/github/pr"
+            }
           }
         }
-      ]
+      ],
+      "name": "webhooks"
     },
     {
-      "name": "Retention — Per-repo (FE-API-037/038/040 + REM-013)",
-      "description": "Per-repository retention policy CRUD, dry-run, preview, executor trigger, and run history. RBAC: GET routes are reader-grade; PUT/DELETE/POST run require repo admin/owner. The run-history listing (REM-013 gap 2) is reader-grade.",
       "item": [
         {
-          "name": "GET retention policy (effective — falls back to org default)",
+          "name": "GET /api/v1/workspace/me",
           "request": {
+            "description": "GET /api/v1/workspace/me",
+            "header": [],
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me"
             }
           }
         },
         {
-          "name": "PUT retention policy (upsert per-repo override)",
+          "name": "DELETE /api/v1/workspace/me/audit-export",
           "request": {
-            "method": "PUT",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 30},\n    {\"kind\": \"max_count\", \"value\": 50}\n  ],\n  \"protected_tag_patterns\": [\"latest\", \"stable\", \"^v?\\\\d+(\\\\.\\\\d+){0,2}$\"]\n}"},
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
-            }
-          }
-        },
-        {
-          "name": "DELETE retention policy (revert to inherited)",
-          "request": {
+            "description": "DELETE /api/v1/workspace/me/audit-export",
+            "header": [],
             "method": "DELETE",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me",
+                "audit-export"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me/audit-export"
             }
           }
         },
         {
-          "name": "POST retention dry-run (preview impact without saving)",
+          "name": "GET /api/v1/workspace/me/audit-export",
           "request": {
+            "description": "GET /api/v1/workspace/me/audit-export",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me",
+                "audit-export"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me/audit-export"
+            }
+          }
+        },
+        {
+          "name": "PUT /api/v1/workspace/me/audit-export",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "PUT /api/v1/workspace/me/audit-export",
+            "header": [],
+            "method": "PUT",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me",
+                "audit-export"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me/audit-export"
+            }
+          }
+        },
+        {
+          "name": "POST /api/v1/workspace/me/audit-export/drain",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/workspace/me/audit-export/drain",
+            "header": [],
             "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 30}\n  ],\n  \"protected_tag_patterns\": [\"latest\"]\n}"},
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/dry-run",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "dry-run"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me",
+                "audit-export",
+                "drain"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me/audit-export/drain"
             }
           }
         },
         {
-          "name": "GET retention preview-window state",
+          "name": "POST /api/v1/workspace/me/audit-export/test",
           "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/preview",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "preview"]
-            }
-          }
-        },
-        {
-          "name": "POST retention/run (trigger executor — 202 + run_id)",
-          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/workspace/me/audit-export/test",
+            "header": [],
             "method": "POST",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/run",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "run"]
-            }
-          }
-        },
-        {
-          "name": "GET retention/runs/{run_id} (one run's status)",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/runs/{{runId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "runs", "{{runId}}"]
-            }
-          }
-        },
-        {
-          "name": "GET retention/runs (REM-013 gap 2 — per-repo history list)",
-          "description": "Paginated history scoped server-side to this repo + the two retention modes. limit defaults to 20, capped at 100.",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/retention/runs?limit=20",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "retention", "runs"],
-              "query": [{"key": "limit", "value": "20"}]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "workspace",
+                "me",
+                "audit-export",
+                "test"
+              ],
+              "raw": "{{baseUrl}}/api/v1/workspace/me/audit-export/test"
             }
           }
         }
-      ]
+      ],
+      "name": "workspace"
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8085"
     },
     {
-      "name": "Manifest quarantine (FE-API-050)",
-      "description": "Pull-time quarantine — the scanner stamps manifests.quarantined automatically when a scan exceeds the effective block_on_severity policy. Pulls of quarantined manifests return 451 Unavailable For Legal Reasons. This route lets a repo admin/owner dismiss the gate after operator review. There is NO 'set quarantine' route by design — automatic enforcement via scanner + manual lift is the asymmetric API surface.",
-      "item": [
-        {
-          "name": "POST lift manifest quarantine for tag",
-          "description": "Resolves tag→digest server-side then clears manifests.quarantined. Repo admin/owner only. Returns 200 with { manifest_digest, quarantined: false } on success; 403 below admin; 404 when tag or repo not found.",
-          "request": {
-            "method": "POST",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/tags/{{tag}}/quarantine/lift",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "tags", "{{tag}}", "quarantine", "lift"]
-            }
-          }
-        }
-      ]
+      "key": "token",
+      "value": ""
     },
     {
-      "name": "Scan policies — Per-org + Per-repo (FE-API-049)",
-      "description": "Org-default + per-repo scan policy CRUD. RBAC: GET routes are reader-grade; PUT/DELETE require org or repo admin/owner. The per-repo GET goes through GetEffectiveScanPolicy so the response always carries an inherited_from label (\"repo\" | \"org\" | \"tenant\" | \"default\").",
-      "item": [
-        {
-          "name": "GET org-default scan policy",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
-            }
-          }
-        },
-        {
-          "name": "PUT org-default scan policy",
-          "request": {
-            "method": "PUT",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\n  \"auto_scan_on_push\": true,\n  \"block_on_severity\": \"HIGH\",\n  \"exempt_cves\": [],\n  \"scanner_plugin\": \"trivy\",\n  \"scanner_version_pin\": \"\",\n  \"enabled\": true\n}"},
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
-            }
-          }
-        },
-        {
-          "name": "DELETE org-default scan policy",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "scan"]
-            }
-          }
-        },
-        {
-          "name": "GET effective scan policy for repo (inheritance chain)",
-          "description": "Returns whichever policy actually applies. Look at inherited_from to know the source: \"repo\" (this repo has its own override), \"org\" (inheriting from org default), \"tenant\" (inheriting from tenant policy), \"default\" (no row anywhere — synthesised default).",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
-            }
-          }
-        },
-        {
-          "name": "PUT per-repo scan policy override",
-          "request": {
-            "method": "PUT",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\n  \"auto_scan_on_push\": true,\n  \"block_on_severity\": \"CRITICAL\",\n  \"exempt_cves\": [\"CVE-2024-0001\"],\n  \"scanner_plugin\": \"trivy\",\n  \"scanner_version_pin\": \"\",\n  \"enabled\": true\n}"},
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
-            }
-          }
-        },
-        {
-          "name": "DELETE per-repo scan policy override",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/repositories/{{org}}/{{repo}}/policies/scan",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "repositories", "{{org}}", "{{repo}}", "policies", "scan"]
-            }
-          }
-        }
-      ]
+      "key": "username",
+      "value": "admin"
     },
     {
-      "name": "Retention — Per-org (FE-API-039)",
-      "description": "Org-default retention policy. GET requires org reader; PUT/DELETE require org admin/owner. Inheriting repos that have no per-repo override fall back to the org default — disabled defaults do NOT propagate.",
-      "item": [
-        {
-          "name": "GET org default retention policy",
-          "request": {
-            "method": "GET",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
-            }
-          }
-        },
-        {
-          "name": "PUT org default retention policy",
-          "request": {
-            "method": "PUT",
-            "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"rules\": [\n    {\"kind\": \"max_age_days\", \"value\": 90},\n    {\"kind\": \"dangling_grace_days\", \"value\": 7}\n  ],\n  \"protected_tag_patterns\": [\"latest\", \"stable\", \"^v?\\\\d+(\\\\.\\\\d+){0,2}$\"]\n}"},
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
-            }
-          }
-        },
-        {
-          "name": "DELETE org default retention policy",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/orgs/{{org}}/policies/retention",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "orgs", "{{org}}", "policies", "retention"]
-            }
-          }
-        }
-      ]
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "assignmentID",
+      "value": ""
+    },
+    {
+      "key": "delivery_id",
+      "value": ""
+    },
+    {
+      "key": "digest",
+      "value": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "key": "id",
+      "value": ""
+    },
+    {
+      "key": "key_id",
+      "value": ""
+    },
+    {
+      "key": "name",
+      "value": ""
+    },
+    {
+      "key": "org",
+      "value": "library"
+    },
+    {
+      "key": "repo",
+      "value": "app"
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "tag",
+      "value": "latest"
+    },
+    {
+      "key": "tenantID",
+      "value": "98dbe36b-ef28-4903-b25c-bff1b2921c9e"
+    },
+    {
+      "key": "user_id",
+      "value": ""
     }
   ]
 }
