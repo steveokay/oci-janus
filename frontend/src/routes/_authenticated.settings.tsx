@@ -46,6 +46,7 @@ type SettingsTab =
   | "scanning"
   | "housekeeping"
   | "notifications"
+  | "integrations"
   | "platform";
 
 interface TabDef {
@@ -55,6 +56,7 @@ interface TabDef {
     | "/settings/scanning"
     | "/settings/housekeeping"
     | "/settings/notifications"
+    | "/settings/integrations"
     | "/settings/platform";
   label: string;
 }
@@ -116,11 +118,21 @@ function SettingsLayout(): React.ReactElement {
       to: "/settings/notifications",
       label: "Notifications",
     });
+    // Integrations (FUT-023 ephemeral PR registries + future SCM/CI hooks) is a
+    // deployment-wide config surface — global-admin only, matching the
+    // global-admin-gated BFF routes. Shown in either deployment mode.
+    if (isGlobalAdmin) {
+      out.push({
+        key: "integrations",
+        to: "/settings/integrations",
+        label: "Integrations",
+      });
+    }
     if (showPlatformTab) {
       out.push({ key: "platform", to: "/settings/platform", label: "Platform" });
     }
     return out;
-  }, [hasAnyAdminScope, isSingleMode, showPlatformTab]);
+  }, [hasAnyAdminScope, isSingleMode, isGlobalAdmin, showPlatformTab]);
 
   // Eyebrow above the H1 tracks the active tab — it was hardcoded "Account",
   // which read wrong on /settings/workspace and /settings/platform. Derived
@@ -132,9 +144,11 @@ function SettingsLayout(): React.ReactElement {
       ? "Housekeeping"
       : location.pathname.startsWith("/settings/notifications")
         ? "Notifications"
-        : location.pathname.startsWith("/settings/platform")
-          ? "Platform"
-          : "Workspace";
+        : location.pathname.startsWith("/settings/integrations")
+          ? "Integrations"
+          : location.pathname.startsWith("/settings/platform")
+            ? "Platform"
+            : "Workspace";
 
   return (
     <div className="space-y-6 p-6">
