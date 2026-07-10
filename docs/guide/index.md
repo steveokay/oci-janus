@@ -7,9 +7,19 @@ integrations. This guide walks through it screen by screen.
 If you have not brought the platform up yet, start with the
 [Quick start](../getting-started.md).
 
+<figure markdown="span">
+  ![The OCI-Janus dashboard home screen](../assets/screenshots/dashboard.png){ loading=lazy }
+  <figcaption>The dashboard home — the landing screen for everyday registry work.</figcaption>
+</figure>
+
 ## Signing in
 
 Open the dashboard in a browser and you land on **`/login`**.
+
+<figure markdown="span">
+  ![Signing in to the dashboard from the login screen](../assets/gifs/login.gif){ .off-glb loading=lazy }
+  <figcaption>Password sign-in from the login screen.</figcaption>
+</figure>
 
 - **Password sign-in** is the primary path. Enter your username (3–64
   characters) and password, then **Sign in**. Failed logins return a

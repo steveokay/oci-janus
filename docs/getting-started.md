@@ -58,6 +58,11 @@ curl -sf -o /dev/null http://localhost:5173 && echo "dashboard OK"
 
 ## 3. Log in and push your first image
 
+<figure markdown="span">
+  ![Signing in to the OCI-Janus dashboard for the first time](assets/gifs/login.gif){ .off-glb loading=lazy }
+  <figcaption>Signing in to the dashboard with the bootstrap admin credentials.</figcaption>
+</figure>
+
 ```bash
 docker login localhost:8081 -u admin -p Admin1234!
 docker pull alpine:latest
@@ -81,6 +86,11 @@ docker pull localhost:8081/library/alpine:latest
 ## 4. See it in the dashboard
 
 Open **http://localhost:5173** and sign in with `admin` / `Admin1234!`.
+
+<figure markdown="span">
+  ![The OCI-Janus dashboard home after signing in](assets/screenshots/dashboard.png){ loading=lazy }
+  <figcaption>The dashboard home, with your first repository and recent activity.</figcaption>
+</figure>
 
 - **Repositories** lists `library/alpine`. Open it to see the tag you pushed,
   its digest, and size.

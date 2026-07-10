@@ -1,0 +1,4 @@
+node_modules/
+# Playwright writes per-flow webm here before ffmpeg converts them; the script
+# removes it, but ignore it so a mid-run abort never commits raw video.
+../../docs/assets/gifs/_video/

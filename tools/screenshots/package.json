@@ -1,0 +1,13 @@
+{
+  "name": "janus-docs-screenshots",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright capture of dashboard screenshots + flow GIFs for the docs site.",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}

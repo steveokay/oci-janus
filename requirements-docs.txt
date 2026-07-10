@@ -12,3 +12,5 @@ pymdown-extensions>=10.0,<11.0
 # Renders the generated OpenAPI spec (docs/openapi.json) with a self-contained
 # Swagger UI — no external CDN, so it works under the site's strict CSP.
 mkdocs-swagger-ui-tag>=0.6.0,<1.0.0
+# Click-to-zoom lightbox for the dashboard screenshots (docs/assets/screenshots).
+mkdocs-glightbox>=0.4.0,<1.0.0
