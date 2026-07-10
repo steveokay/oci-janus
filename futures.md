@@ -2141,11 +2141,15 @@ untracked.
   integration and MCP connectivity.**
 - **What (ships in slices, roughly in order):**
   1. **Docs-site scaffold + publish pipeline** *(Tier 1 for adoption)* —
-     pick a static generator (mkdocs-material / Docusaurus / Astro
-     Starlight), add a CI job that builds + publishes on merge to `main`
-     (GitHub Pages or equivalent), and fold the existing `docs/*.md` in
-     as the reference section so nothing is duplicated. Versioned to
-     releases; self-contained.
+     ✅ **SHIPPED (2026-07-10)**: MkDocs Material site (`mkdocs.yml`) with
+     an `index` + `getting-started` landing pair, the existing `docs/*.md`
+     folded in as curated nav sections (nothing duplicated), planning
+     (`superpowers/`) + Postman exports excluded, and a
+     `.github/workflows/docs-site.yml` that builds on every PR and
+     publishes to GitHub Pages on merge to `main`. One-time repo setting:
+     Settings → Pages → Source = "GitHub Actions". Follow-up: tighten the
+     cross-repo `../CLAUDE.md` / `../security.md` / `../README.md` links
+     that 404 on the published site, then flip `strict: true`.
   2. **Getting-started / quickstart** *(Tier 1 for adoption)* — install →
      bootstrap first admin → `docker login` → push/pull a first image →
      see it in the UI. Built on `SELF-HOSTING.md` +

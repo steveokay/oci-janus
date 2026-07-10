@@ -1,0 +1,11 @@
+# Documentation site (FUT-076) build dependencies.
+#
+#   pip install -r requirements-docs.txt
+#   mkdocs serve      # local preview at http://127.0.0.1:8000
+#   mkdocs build      # static site into ./site
+#
+# mkdocs-material pulls in a compatible mkdocs + pymdown-extensions transitively;
+# the ranges below keep CI reproducible without pinning to a single patch.
+mkdocs-material>=9.5.0,<10.0.0
+mkdocs>=1.6.0,<2.0.0
+pymdown-extensions>=10.0,<11.0
