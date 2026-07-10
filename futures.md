@@ -2209,10 +2209,13 @@ untracked.
      `mkdocs-swagger-ui-tag`) and guarded by a CI drift-check
      (`make openapi` + `git diff --exit-status` in `ci-management.yml`).
      Chose route-table generation over `swaggo` per-handler annotations so
-     it's complete + never-drifting from day one; **remaining:** enrich
-     request/response **body** schemas (swaggo annotations, incremental),
-     a consolidated per-service env reference, and a Helm/Compose
-     deployment deep-dive.
+     it's complete + never-drifting from day one. Also shipped the
+     **consolidated per-service env reference** — `libs/cmd/env-ref-gen`
+     parses all 14 `services/*/.env.example` files (section headers +
+     per-var comments) into `docs/env-reference.md` (**280 vars across 14
+     services**), drift-guarded by `docs-env-ref.yml`. **Remaining:**
+     enrich request/response **body** schemas (swaggo annotations,
+     incremental) + a Helm/Compose deployment deep-dive.
 - **Notes:** absorbs the doc-hygiene HYG items (HYG-001 README
   screenshot, HYG-006 architecture-diagram PNG) and pairs with HYG-007
   (Discussions) / HYG-008 (private vuln reporting) for the community

@@ -1,0 +1,40 @@
+# Drift-guard for the consolidated environment-variable reference
+# (docs/env-reference.md). It is generated from every service's .env.example by
+# libs/cmd/env-ref-gen, so a change to any .env.example that isn't regenerated
+# would leave the reference stale. This job regenerates and fails if the
+# committed page differs. Fix: `cd libs && go run ./cmd/env-ref-gen` and commit.
+name: docs-env-ref
+
+on:
+  push:
+    paths:
+      - "services/*/.env.example"
+      - "libs/cmd/env-ref-gen/**"
+      - "docs/env-reference.md"
+      - ".github/workflows/docs-env-ref.yml"
+  pull_request:
+    paths:
+      - "services/*/.env.example"
+      - "libs/cmd/env-ref-gen/**"
+      - "docs/env-reference.md"
+      - ".github/workflows/docs-env-ref.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - name: Regenerate the env reference from the .env.example files
+        run: cd libs && go run ./cmd/env-ref-gen
+      - name: Fail if the committed reference is stale
+        run: |
+          if [ -n "$(git status --porcelain -- docs/env-reference.md)" ]; then
+            echo "::error::docs/env-reference.md is out of date. Run: cd libs && go run ./cmd/env-ref-gen, then commit."
+            git --no-pager diff -- docs/env-reference.md
+            exit 1
+          fi

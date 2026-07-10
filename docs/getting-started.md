@@ -95,6 +95,8 @@ The full console is documented in [Using the dashboard](guide/index.md).
 
 - **[Using the dashboard](guide/index.md)** — a screen-by-screen tour.
 - **[Self-hosting](SELF-HOSTING.md)** — production env vars, secrets, and KEKs.
+- **[Environment reference](env-reference.md)** — every configuration variable
+  for every service, in one place.
 - **[Integrations catalog](integrations/index.md)** — storage, SSO, scanners,
   signing, webhooks, notifications, and more.
 - **[Connect an AI agent (MCP)](MCP.md)** — expose the registry to Claude
