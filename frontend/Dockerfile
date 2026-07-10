@@ -16,8 +16,21 @@ RUN npm ci
 # Now the source.
 COPY . .
 
+# Vite inlines `import.meta.env.VITE_*` at BUILD time, so these must be present
+# during `npm run build` — not just at container runtime. The two base URLs
+# default to the nginx-proxied `/api/v1`; VITE_DEFAULT_TENANT_ID has no default
+# (it's environment-specific — the login page hard-errors without it), so the
+# caller must pass it as a build arg (docker-compose supplies the fixed dev
+# bootstrap tenant id).
+ARG VITE_API_BASE_URL=/api/v1
+ARG VITE_AUTH_BASE_URL=/api/v1
+ARG VITE_DEFAULT_TENANT_ID
+
 # Vite build emits to /app/dist.
-RUN npm run build
+RUN VITE_API_BASE_URL="$VITE_API_BASE_URL" \
+    VITE_AUTH_BASE_URL="$VITE_AUTH_BASE_URL" \
+    VITE_DEFAULT_TENANT_ID="$VITE_DEFAULT_TENANT_ID" \
+    npm run build
 
 # -------- runtime --------
 FROM nginx:1.27-alpine

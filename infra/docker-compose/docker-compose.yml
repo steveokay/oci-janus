@@ -1175,6 +1175,11 @@ services:
     build:
       context: ../../frontend
       dockerfile: Dockerfile
+      args:
+        # Vite bakes this into the bundle at build time; the login page
+        # hard-errors without it. Defaults to the fixed dev bootstrap tenant id
+        # seeded by registry-auth-bootstrap above, overridable via the env.
+        VITE_DEFAULT_TENANT_ID: ${VITE_DEFAULT_TENANT_ID:-98dbe36b-ef28-4903-b25c-bff1b2921c9e}
     ports:
       - "3000:8080"
     depends_on:
@@ -1186,7 +1191,10 @@ services:
       - registry
     healthcheck:
       # nginx image has no /healthcheck binary; probe the nginx-served /healthz.
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/healthz"]
+      # Use 127.0.0.1, not localhost: nginx binds IPv4 (`listen 8080;`) but the
+      # container's `localhost` resolves to IPv6 `::1` first, so wget localhost
+      # gets connection-refused and the container falsely reports unhealthy.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
