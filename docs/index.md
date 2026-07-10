@@ -39,6 +39,10 @@ Relative to a plain `distribution/distribution` deployment, OCI-Janus ships:
   Clone, bring up the stack with Docker Compose, bootstrap the first admin, and
   `docker login` in under five minutes.
 
+- :material-view-dashboard: **[Using the dashboard](guide/index.md)**
+  A screen-by-screen walkthrough of the web console — repositories, security,
+  access, settings, and operations.
+
 - :material-server-network: **[Self-hosting](SELF-HOSTING.md)**
   Production deployment guidance — env vars, secrets, KEKs, TLS, and hardening.
 

@@ -2155,11 +2155,18 @@ untracked.
      see it in the UI. Built on `SELF-HOSTING.md` +
      `infra/runbooks/bootstrap-first-admin.md` but as a guided narrative
      with copy-paste blocks + screenshots.
-  3. **UI / dashboard guide** — page-by-page walkthrough of the React
-     dashboard (repositories, tags, Chart tab, scanning, signing,
-     access/RBAC, **Settings incl. the new Settings › Integrations tab**,
-     profile/MFA/sessions, notifications). Screenshots/GIFs. This
-     end-user layer does not exist today.
+  3. **UI / dashboard guide** — ✅ **SHIPPED (2026-07-10)**: a six-page
+     **"Using the dashboard"** section in the docs site
+     (`docs/guide/{index,repositories,security,access,settings,operations}.md`)
+     covering sign-in/MFA/SSO + shell, repositories & tags (incl. the
+     Chart tab), the Security section, access/RBAC + API keys/service
+     accounts, all Settings tabs (incl. Settings › Integrations / PR
+     registries + email & webhook channels), profile/MFA/sessions, and
+     operations (activity, SIEM export, pull-through cache, webhooks).
+     Written from a two-agent read of the live routes so admin-gating +
+     single-vs-multi-mode surfaces are accurate. **Follow-up:**
+     screenshots/GIFs (text-first for now; the end-user layer did not
+     exist at all before).
   4. **Integrations catalog** — one discoverable page per pluggable /
      external surface: storage backends (MinIO/S3/GCS/Azure/filesystem),
      SSO (OAuth/OIDC/SAML), scanners (external-process plugin), signing
