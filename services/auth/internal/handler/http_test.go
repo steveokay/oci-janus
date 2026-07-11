@@ -291,7 +291,15 @@ func (f *handlerFakeUserRepo) ListTenantUsers(_ context.Context, _ uuid.UUID, _ 
 func (f *handlerFakeUserRepo) CreateInvitedUser(_ context.Context, _ repository.CreateInvitedUserRequest) (*repository.User, error) {
 	return nil, nil
 }
-func (f *handlerFakeUserRepo) SetUserStatus(_ context.Context, _, _ uuid.UUID, _ string) error {
+func (f *handlerFakeUserRepo) SetUserStatus(_ context.Context, _, userID uuid.UUID, status string) error {
+	// Reflect status into the in-memory user so the SCIM active-toggle handler
+	// tests observe is_active flipping (Tier-1 #5).
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.IsActive = status == "active"
+			return nil
+		}
+	}
 	return nil
 }
 func (f *handlerFakeUserRepo) DisableAPIKeysForUser(_ context.Context, _, _ uuid.UUID) (int64, error) {
@@ -494,23 +502,95 @@ func (f *handlerFakeUserRepo) ListUnusedBackupCodes(_ context.Context, _ uuid.UU
 
 func (f *handlerFakeUserRepo) MarkBackupCodeUsed(_ context.Context, _ uuid.UUID) error { return nil }
 
-// SCIM 2.0 provisioning stubs (Tier-1 #5). Handler tests drive the SCIM surface
-// through a fake service, so these repo methods are unused zero-value stubs that
-// only exist to satisfy the service.UserRepo interface.
-func (f *handlerFakeUserRepo) CreateSCIMUser(_ context.Context, _ uuid.UUID, _, _, _, _ string) (*repository.User, error) {
+// SCIM 2.0 provisioning fakes (Tier-1 #5). Functional against the in-memory
+// users map so handler-level SCIM lifecycle tests (POST → GET → PATCH) can drive
+// a real Service without a DB. external_id is tracked on the User struct's
+// ExternalID field to mirror the SCIM read scan.
+func (f *handlerFakeUserRepo) CreateSCIMUser(_ context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*repository.User, error) {
+	if _, exists := f.users[username]; exists {
+		return nil, repository.ErrAlreadyExists
+	}
+	dn := displayName
+	u := &repository.User{
+		ID:           uuid.New(),
+		TenantID:     tenantID,
+		Username:     username,
+		Email:        email,
+		DisplayName:  &dn,
+		PasswordHash: "",
+		IsActive:     true,
+		Kind:         "human",
+		ExternalID:   externalID,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	f.users[username] = u
+	return u, nil
+}
+
+func (f *handlerFakeUserRepo) GetUserByExternalID(_ context.Context, tenantID uuid.UUID, externalID string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && externalID != "" && u.ExternalID == externalID {
+			return u, nil
+		}
+	}
 	return nil, repository.ErrNotFound
 }
 
-func (f *handlerFakeUserRepo) GetUserByExternalID(_ context.Context, _ uuid.UUID, _ string) (*repository.User, error) {
-	return nil, repository.ErrNotFound
-}
-
-func (f *handlerFakeUserRepo) SetExternalID(_ context.Context, _, _ uuid.UUID, _ string) error {
+func (f *handlerFakeUserRepo) SetExternalID(_ context.Context, _, userID uuid.UUID, externalID string) error {
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.ExternalID = externalID
+			return nil
+		}
+	}
 	return nil
 }
 
-func (f *handlerFakeUserRepo) ListSCIMUsers(_ context.Context, _ uuid.UUID, _, _ string, _ *bool, _, _ int) ([]*repository.User, int, error) {
-	return nil, 0, nil
+// GetSCIMConfig/UpsertSCIMToken/TouchSCIMLastUsed satisfy service.scimConfigRepo
+// so handler tests can call svc.SetSCIMRepo(ur, tenantID) to set the SCIM
+// bootstrap tenant. Token verification in handler tests is bypassed with a fake
+// verifier, so these can be minimal.
+func (f *handlerFakeUserRepo) GetSCIMConfig(_ context.Context) (*repository.SCIMConfig, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (f *handlerFakeUserRepo) UpsertSCIMToken(_ context.Context, _ uuid.UUID, _ string, _ bool) error {
+	return nil
+}
+
+func (f *handlerFakeUserRepo) TouchSCIMLastUsed(_ context.Context) error { return nil }
+
+func (f *handlerFakeUserRepo) ListSCIMUsers(_ context.Context, tenantID uuid.UUID, byUsername, byExternalID string, activeFilter *bool, startIndex, count int) ([]*repository.User, int, error) {
+	var matched []*repository.User
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if byUsername != "" && u.Username != byUsername {
+			continue
+		}
+		if byExternalID != "" && u.ExternalID != byExternalID {
+			continue
+		}
+		if activeFilter != nil && u.IsActive != *activeFilter {
+			continue
+		}
+		matched = append(matched, u)
+	}
+	total := len(matched)
+	off := startIndex - 1
+	if off < 0 {
+		off = 0
+	}
+	if off > len(matched) {
+		off = len(matched)
+	}
+	page := matched[off:]
+	if count >= 0 && len(page) > count {
+		page = page[:count]
+	}
+	return page, total, nil
 }
 
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
