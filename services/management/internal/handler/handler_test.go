@@ -249,7 +249,7 @@ func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.Coun
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
 	// Two repos in different orgs so the BFF's client-side ?org= filter is
 	// observable. metadata streams every repo; the BFF narrows the results.
-	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
+	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now(), ArtifactTypes: []string{"image", "helm"}})
 	_ = stream.Send(&metadatav1.Repository{RepoId: "repo-2", OrgId: "org-prod", Org: "prod", Name: "api", StorageUsed: 256, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
 	return nil
 }
@@ -1112,6 +1112,33 @@ func TestListRepositories_orgFilter_narrowsToOneOrg(t *testing.T) {
 	decodeJSON(t, resp, &body)
 	if len(body.Repositories) != 1 || body.Repositories[0].Org != "prod" {
 		t.Errorf("want 1 prod repo, got %+v", body.Repositories)
+	}
+}
+
+func TestListRepositories_exposesArtifactTypes(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Repositories []struct {
+			Org           string   `json:"org"`
+			ArtifactTypes []string `json:"artifact_types"`
+		} `json:"repositories"`
+	}
+	decodeJSON(t, resp, &body)
+	var found bool
+	for _, r := range body.Repositories {
+		if r.Org == "dev" {
+			found = true
+			if len(r.ArtifactTypes) != 2 || r.ArtifactTypes[0] != "image" || r.ArtifactTypes[1] != "helm" {
+				t.Errorf("dev artifact_types = %v, want [image helm]", r.ArtifactTypes)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("dev repo not in response")
 	}
 }
 
