@@ -180,16 +180,24 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   `frontend`, `infra/docker-compose`.
 - **Docs:** `docs/SIEM-EXPORT.md` §7 (full retry + DLX walkthrough).
 
-### 5. SCIM provisioning
+### 5. SCIM provisioning — DONE (Phases 1–2, 2026-07-11; branch `feat/scim-provisioning`)
+- **Status:** **Phases 1–2 shipped** — the SCIM Users-only v1 backend core
+  (`/scim/v2/*` on `registry-auth`: single global Argon2-hashed bearer token +
+  fail-closed `requireSCIMAuth`, `users.external_id` + `scim_config` schema,
+  discovery + Users CRUD, provision/link/`409`-takeover-guard/`reader@*`-grant/
+  disable-not-delete). See `status.md`. **Phase 3 (admin token-management UI:
+  generate/rotate/disable + BFF passthrough + Settings panel) and Groups /
+  IdP-group→role mapping remain deferred** — the items below.
 - **Why:** Manual user lifecycle doesn't scale past ~50-user customers.
   Okta / Azure AD admins expect to add a user to "engineering" and have
   the registry give them the right tenant + role automatically.
-- **What:**
-  - SCIM v2 endpoints on services/auth (`/scim/v2/Users`,
-    `/scim/v2/Groups`).
-  - Mapping: IdP group → role (e.g. `eng-admin@acme.okta` → `role=admin`).
-  - Admin UI: SCIM token issuance + mapping editor.
-- **Affects:** `services/auth`, `services/management`, `frontend`.
+- **What (remaining):**
+  - ~~SCIM v2 `/scim/v2/Users` endpoints on services/auth~~ — **DONE**.
+  - SCIM `/scim/v2/Groups` endpoints (deferred).
+  - Mapping: IdP group → role (e.g. `eng-admin@acme.okta` → `role=admin`)
+    (deferred).
+  - Admin UI: SCIM token issuance + mapping editor (Phase 3, deferred).
+- **Affects:** `services/auth` (done), `services/management`, `frontend`.
 - **Depends on:** `FUT-012` (tenant-user lifecycle management) — SCIM
   is the automated source-of-truth layered on top of the same
   invite / disable / list machinery. Build the manual surface first.
