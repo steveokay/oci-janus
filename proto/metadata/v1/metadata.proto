@@ -340,6 +340,11 @@ message Repository {
   //   - non-null, top_cvss > value → deny (ErrCVSSThresholdExceeded)
   //   - non-null, top_cvss == value→ ALLOW (`>` not `>=`)
   google.protobuf.Int32Value max_cvss_score = 13;
+
+  // Distinct artifact types present in this repo, derived per manifest
+  // (image / helm / signature / sbom / other). Empty for a repo with no
+  // manifests. Powers the per-repo type badge + the images/charts filter.
+  repeated string artifact_types = 14;
 }
 
 message Tag {
