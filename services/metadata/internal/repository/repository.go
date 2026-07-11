@@ -1530,6 +1530,51 @@ func (r *Repository) GetTenantUsage(ctx context.Context, tenantID string) (*meta
 	return &u, nil
 }
 
+// ListOrgSummaries returns one aggregate row per organization in the
+// tenant: repository count, total storage used, and the timestamp of the
+// most recent manifest push (nil when the org has no manifests). Ordered
+// by org name. Powers the /repositories environments overview.
+//
+// Storage mirrors the SUM(image_size_bytes) expression used by
+// repoSelectCols + GetTenantUsage. COUNT(DISTINCT r.id) is required
+// because the LEFT JOIN to manifests fans out one row per manifest; the
+// LEFT JOINs also keep orgs with zero repos and repos with zero manifests
+// in the result.
+func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*metadatav1.OrgSummary, error) {
+	const q = `
+		SELECT o.id,
+		       o.name,
+		       COUNT(DISTINCT r.id)                         AS repo_count,
+		       COALESCE(SUM(m.image_size_bytes), 0)::BIGINT AS storage_used,
+		       MAX(m.created_at)                            AS last_activity
+		FROM organizations o
+		LEFT JOIN repositories r ON r.org_id = o.id  AND r.tenant_id = o.tenant_id
+		LEFT JOIN manifests    m ON m.repo_id = r.id AND m.tenant_id = o.tenant_id
+		WHERE o.tenant_id = $1
+		GROUP BY o.id, o.name
+		ORDER BY o.name`
+
+	rows, err := r.reader().Query(ctx, q, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list org summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*metadatav1.OrgSummary
+	for rows.Next() {
+		var s metadatav1.OrgSummary
+		var lastActivity sql.NullTime
+		if err := rows.Scan(&s.OrgId, &s.Name, &s.RepositoryCount, &s.StorageUsedBytes, &lastActivity); err != nil {
+			return nil, fmt.Errorf("scan org summary: %w", err)
+		}
+		if lastActivity.Valid {
+			s.LastActivityAt = timestamppb.New(lastActivity.Time)
+		}
+		out = append(out, &s)
+	}
+	return out, rows.Err()
+}
+
 // UpdateTenantQuota sets the tenant-level storage_quota. Used by the management
 // API's super-admin quota route to bump quotas for large customers.
 //
