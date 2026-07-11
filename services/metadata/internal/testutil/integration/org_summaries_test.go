@@ -17,6 +17,7 @@ package integration
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/steveokay/oci-janus/services/metadata/internal/repository"
@@ -53,7 +54,7 @@ func osumSeedManifest(t *testing.T, repo *repository.Repository, tenantID, repoI
 	t.Helper()
 	// A single-arch image manifest: no layers, config.size carries the whole
 	// image size so parseImageSize returns exactly sizeBytes.
-	rawJSON := []byte(`{"schemaVersion":2,"config":{"size":` + osumItoa(sizeBytes) + `}}`)
+	rawJSON := []byte(`{"schemaVersion":2,"config":{"size":` + strconv.FormatInt(sizeBytes, 10) + `}}`)
 	digest := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	if _, err := repo.PutManifest(
 		context.Background(),
@@ -66,22 +67,6 @@ func osumSeedManifest(t *testing.T, repo *repository.Repository, tenantID, repoI
 	); err != nil {
 		t.Fatalf("osumSeedManifest(size=%d): %v", sizeBytes, err)
 	}
-}
-
-// osumItoa renders a non-negative int64 without pulling strconv into the raw-
-// JSON literal at the call site — keeps osumSeedManifest readable.
-func osumItoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }
 
 // TestListOrgSummaries verifies the per-org aggregate: repository count,
