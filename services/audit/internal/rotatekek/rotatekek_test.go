@@ -259,4 +259,19 @@ func TestRotate_NotifyEmail(t *testing.T) {
 	if err := Run(ctx, []string{"--notify-email", "--verify"}, &vout); err != nil {
 		t.Fatalf("verify --notify-email should succeed with 0 remaining: %v", err)
 	}
+
+	// Seed a stale row still on the old key → verify must now flag it. This
+	// mirrors the webhook test's dirty-path assertion so both notification
+	// domains exercise verifyTable's ErrRowsRemain branch (resendCT is still the
+	// old-key ciphertext — the Go value was not mutated by the DB rotation).
+	staleTenant := "33333333-3333-3333-3333-333333333333"
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO email_transport_config (tenant_id, resend_api_key_enc, smtp_password_enc)
+		 VALUES ($1, $2, NULL)`, staleTenant, resendCT); err != nil {
+		t.Fatalf("seed stale: %v", err)
+	}
+	var vout2 bytes.Buffer
+	if err := Run(ctx, []string{"--notify-email", "--verify"}, &vout2); !errors.Is(err, rekey.ErrRowsRemain) {
+		t.Fatalf("verify --notify-email must return ErrRowsRemain when a row is on the old key, got %v", err)
+	}
 }

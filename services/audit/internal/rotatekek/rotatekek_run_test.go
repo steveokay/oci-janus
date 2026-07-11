@@ -2,9 +2,12 @@ package rotatekek
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/steveokay/oci-janus/libs/crypto/rekey"
 )
 
 // TestRun_MutuallyExclusiveSelectors verifies the two FUT-019 channel-secret
@@ -20,5 +23,11 @@ func TestRun_MutuallyExclusiveSelectors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected a mutual-exclusion error, got: %v", err)
+	}
+	// The error must be a *rekey.ValidationError so the audit main.go dispatch
+	// maps it to exit code 2 (operator input), not the generic exit code 1.
+	var ve *rekey.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected a *rekey.ValidationError (exit-2 contract), got %T: %v", err, err)
 	}
 }

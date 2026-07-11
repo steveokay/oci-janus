@@ -25,7 +25,6 @@ package rotatekek
 
 import (
 	"context"
-	"fmt"
 	"io"
 
 	"github.com/steveokay/oci-janus/libs/crypto/rekey"
@@ -123,8 +122,11 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 			continue
 		}
 		// Repeating the same selector is harmless; mixing two is a hard error.
+		// Use a rekey.ValidationError (not a plain fmt.Errorf) so the audit
+		// main.go dispatch maps this operator-input mistake to exit code 2,
+		// matching the sibling --dry-run/--verify conflict check in RunCLI.
 		if domain != "" && domain != d {
-			return fmt.Errorf(
+			return rekey.NewValidationError(
 				"rotate-kek: %s and %s are mutually exclusive — each KEK domain uses its own key material and must rotate in a separate run",
 				domain, d)
 		}
