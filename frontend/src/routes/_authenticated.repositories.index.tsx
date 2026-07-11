@@ -26,16 +26,22 @@ function EnvironmentsPage(): React.ReactElement {
   const orgs = data?.orgs ?? [];
 
   // Single-org shortcut: a one-environment deployment skips the lonely
-  // one-card overview and lands directly in that environment.
+  // one-card overview and lands directly in that environment. Deriving a
+  // stable `soleOrg` (a string | null, not the freshly-allocated `orgs`
+  // array) keeps the effect keyed on the primitive it actually reads, so
+  // there's no every-render dependency churn to reason about.
+  const soleOrg =
+    !isLoading && !isError && orgs.length === 1 ? orgs[0].org : null;
+
   React.useEffect(() => {
-    if (!isLoading && !isError && orgs.length === 1) {
+    if (soleOrg) {
       void navigate({
         to: "/repositories/$org",
-        params: { org: orgs[0].org },
+        params: { org: soleOrg },
         replace: true,
       });
     }
-  }, [isLoading, isError, orgs, navigate]);
+  }, [soleOrg, navigate]);
 
   const filtered = React.useMemo(() => {
     if (!query.trim()) return orgs;
