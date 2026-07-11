@@ -106,6 +106,35 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	svc.SetSessionRepo(sessionRepo)
 	svc.SetSessionActiveUpdater(service.NewSessionActiveUpdater(rdb, sessionRepo, slog.Default()))
 
+	// Resolve the authoritative bootstrap tenant id once, up-front. In single
+	// mode this comes from services/tenant.deployment_metadata (the same source
+	// the Phase 3.4 SingleTenantInjector uses below); we thread it into both the
+	// SCIM wiring and the injector so neither drifts onto the dev-default id.
+	// Fail-loud in single mode — the single-tenant defence-in-depth layers must
+	// not silently fall back to DEV_DEFAULT_TENANT_ID.
+	var bootstrapTenantID string
+	if cfg.DeploymentMode == loader.DeploymentModeSingle {
+		bootstrapTenantID, err = fetchBootstrapTenantID(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+		}
+	}
+
+	// SCIM 2.0 provisioning (Tier-1 #5) — wire the DB-backed scim_config repo so
+	// VerifySCIMToken can gate the /scim/v2/* surface, and so provisioned users
+	// (Phase 2) land under the deployment's authoritative bootstrap tenant. In
+	// single mode that is the deployment_metadata bootstrap tenant resolved
+	// above; in multi mode we fall back to DEV_DEFAULT_TENANT_ID (SCIM is a
+	// single-mode enterprise feature — the fallback keeps legacy/dev boots
+	// working). Token verification (Phase 1) ignores the tenant, so this is safe
+	// even before the Phase 3 generate endpoint lands.
+	scimTenantIDStr := bootstrapTenantID
+	if scimTenantIDStr == "" {
+		scimTenantIDStr = cfg.DevDefaultTenantID
+	}
+	scimTenantID, _ := uuid.Parse(scimTenantIDStr)
+	svc.SetSCIMRepo(users, scimTenantID)
+
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
 	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC
 	// events are skipped silently. In production the URL must be set.
@@ -132,10 +161,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// dial entirely (the injector is a no-op for empty bootstrap id anyway).
 	var singleTenantInterceptor grpc.UnaryServerInterceptor
 	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		}
+		// bootstrapTenantID was resolved up-front (above the SCIM wiring) so the
+		// SCIM tenant and this injector share one authoritative lookup.
 		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
 		slog.Info("single-mode tenant injector wired",
 			"bootstrap_tenant_id", bootstrapTenantID,

@@ -60,6 +60,12 @@ type User struct {
 	// (REDESIGN-001 Phase 5.5). Combined with SSOProviderID it forms the
 	// composite identity key that defends against email-recycle takeover.
 	SSOSubject string
+	// ExternalID reflects users.external_id — the IdP-assigned correlation key
+	// set by SCIM provisioning (Tier-1 #5, migration 20260711120000). NULL
+	// surfaces as the empty string. Populated ONLY by the SCIM read paths
+	// (GetUserByExternalID / ListSCIMUsers / CreateSCIMUser); the shared scanOne
+	// helper does not select it, so non-SCIM reads leave it empty.
+	ExternalID string
 }
 
 // CreateUserRequest carries the validated inputs for creating a new user.

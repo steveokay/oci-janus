@@ -65,6 +65,14 @@ type fakeUserRepo struct {
 	// the Task 6 single-use consumption path (ListUnusedBackupCodes /
 	// MarkBackupCodeUsed) has real behaviour to exercise.
 	backupCodes map[uuid.UUID][]repository.BackupCode
+	// externalIDs maps userID → external_id for the SCIM provisioning fakes
+	// (Tier-1 #5). Lazily initialised so non-SCIM tests pay nothing.
+	externalIDs map[uuid.UUID]string
+	// grantedRoles records every GrantRole call so SCIM provision tests can
+	// assert the reader@* baseline grant. grantErr, when set, makes GrantRole
+	// fail.
+	grantedRoles []repository.RoleAssignment
+	grantErr     error
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -231,8 +239,16 @@ func (f *fakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUI
 	}
 	return out, nil
 }
-func (f *fakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error { return nil }
-func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }
+func (f *fakeUserRepo) GrantRole(_ context.Context, a repository.RoleAssignment) error {
+	// Record the grant so SCIM provision tests can assert the reader@* baseline
+	// (Tier-1 #5, spec D5). grantErr, when set, simulates a failed grant.
+	if f.grantErr != nil {
+		return f.grantErr
+	}
+	f.grantedRoles = append(f.grantedRoles, a)
+	return nil
+}
+func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }
@@ -254,7 +270,16 @@ func (f *fakeUserRepo) ListTenantUsers(_ context.Context, _ uuid.UUID, _ reposit
 func (f *fakeUserRepo) CreateInvitedUser(_ context.Context, _ repository.CreateInvitedUserRequest) (*repository.User, error) {
 	return nil, nil
 }
-func (f *fakeUserRepo) SetUserStatus(_ context.Context, _, _ uuid.UUID, _ string) error {
+func (f *fakeUserRepo) SetUserStatus(_ context.Context, _, userID uuid.UUID, status string) error {
+	// Reflect the status change into the in-memory user so the SCIM
+	// active-toggle tests (Tier-1 #5) can observe is_active flipping. "active"
+	// → IsActive=true, anything else (e.g. "disabled") → false.
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.IsActive = status == "active"
+			return nil
+		}
+	}
 	return nil
 }
 func (f *fakeUserRepo) DisableAPIKeysForUser(_ context.Context, _, _ uuid.UUID) (int64, error) {
@@ -635,6 +660,100 @@ func (f *fakeUserRepo) MarkBackupCodeUsed(_ context.Context, id uuid.UUID) error
 		}
 	}
 	return repository.ErrNotFound
+}
+
+// --- SCIM 2.0 provisioning fakes (Tier-1 #5) ---
+//
+// These back the SCIM provision/list/link paths against the same in-memory
+// users map so the service-layer SCIM tests exercise real fake behaviour. Keyed
+// by username like the rest of the fake; external_id is tracked via a parallel
+// map so GetUserByExternalID / ListSCIMUsers can filter on it.
+
+func (f *fakeUserRepo) CreateSCIMUser(_ context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*repository.User, error) {
+	if _, exists := f.users[username]; exists {
+		return nil, repository.ErrAlreadyExists
+	}
+	dn := displayName
+	u := &repository.User{
+		ID:           uuid.New(),
+		TenantID:     tenantID,
+		Username:     username,
+		Email:        email,
+		DisplayName:  &dn,
+		PasswordHash: "", // passwordless — IdP-provisioned
+		IsActive:     true,
+		Kind:         "human",
+	}
+	f.users[username] = u
+	if f.externalIDs == nil {
+		f.externalIDs = make(map[uuid.UUID]string)
+	}
+	f.externalIDs[u.ID] = externalID
+	return u, nil
+}
+
+func (f *fakeUserRepo) GetUserByExternalID(_ context.Context, tenantID uuid.UUID, externalID string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && f.externalIDs[u.ID] == externalID && externalID != "" {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+// GetSCIMUserByIDForTenant mirrors the real SCIM by-id read: it scopes by
+// tenant and echoes the tracked external_id onto the returned User (the real
+// scimUserColumns read selects external_id; the fake keeps it in externalIDs).
+func (f *fakeUserRepo) GetSCIMUserByIDForTenant(_ context.Context, tenantID, userID uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == userID && u.TenantID == tenantID {
+			uu := *u
+			uu.ExternalID = f.externalIDs[u.ID]
+			return &uu, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeUserRepo) SetExternalID(_ context.Context, _ uuid.UUID, userID uuid.UUID, externalID string) error {
+	if f.externalIDs == nil {
+		f.externalIDs = make(map[uuid.UUID]string)
+	}
+	f.externalIDs[userID] = externalID
+	return nil
+}
+
+func (f *fakeUserRepo) ListSCIMUsers(_ context.Context, tenantID uuid.UUID, byUsername, byExternalID string, activeFilter *bool, startIndex, count int) ([]*repository.User, int, error) {
+	var matched []*repository.User
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if byUsername != "" && u.Username != byUsername {
+			continue
+		}
+		if byExternalID != "" && f.externalIDs[u.ID] != byExternalID {
+			continue
+		}
+		if activeFilter != nil && u.IsActive != *activeFilter {
+			continue
+		}
+		matched = append(matched, u)
+	}
+	total := len(matched)
+	// Apply 1-based offset + limit.
+	off := startIndex - 1
+	if off < 0 {
+		off = 0
+	}
+	if off > len(matched) {
+		off = len(matched)
+	}
+	page := matched[off:]
+	if count >= 0 && len(page) > count {
+		page = page[:count]
+	}
+	return page, total, nil
 }
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
