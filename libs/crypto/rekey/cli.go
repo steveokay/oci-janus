@@ -27,6 +27,16 @@ func validationError(format string, a ...any) *ValidationError {
 	return &ValidationError{msg: fmt.Sprintf(format, a...)}
 }
 
+// NewValidationError constructs an operator-input error that the service main.go
+// dispatch maps to exit code 2. It is the exported form of validationError, so a
+// per-service rotate-kek wrapper (e.g. registry-audit's mutually-exclusive
+// --notify-webhook/--notify-email domain selectors) can signal the same
+// "bad operator input" class as the shared RunCLI flag checks — rather than a
+// plain fmt.Errorf that would fall through to the generic exit code 1.
+func NewValidationError(format string, a ...any) *ValidationError {
+	return validationError(format, a...)
+}
+
 // ErrRowsRemain is returned by RunCLI in --verify mode when at least one row is
 // still on the old key. The dispatch maps it to exit code 3 for scripting.
 var ErrRowsRemain = errors.New("rows still on the old key")
