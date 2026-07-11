@@ -353,6 +353,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Current workspace / tenant info (FE-API-009).
 	mux.Handle("GET /api/v1/workspace/me", authMW(http.HandlerFunc(h.handleGetWorkspace)))
 
+	// Environments overview — one summary card per org (repo count, storage,
+	// last activity). Backs the /repositories overview header.
+	mux.Handle("GET /api/v1/orgs", authMW(http.HandlerFunc(h.handleListOrgs)))
+
 	// Repository management.
 	// POST and DELETE require admin role or above (enforced in handler body).
 	mux.Handle("GET /api/v1/repositories", authMW(http.HandlerFunc(h.handleListRepositories)))
@@ -843,6 +847,53 @@ type RepoResponse struct {
 	// on the plain int32 field would collapse 0 with unset — the
 	// pointer preserves the distinction.
 	MaxCVSSScore *int32 `json:"max_cvss_score"`
+}
+
+// OrgSummaryResponse is one environment card's worth of data on the
+// /repositories overview. LastActivityAt is a pointer so an org with no
+// pushed manifests omits the field (omitempty) rather than emitting a
+// zero time.
+type OrgSummaryResponse struct {
+	OrgID          string     `json:"org_id"`
+	Org            string     `json:"org"`
+	RepoCount      int64      `json:"repo_count"`
+	StorageUsed    int64      `json:"storage_used_bytes"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+}
+
+// handleListOrgs backs GET /api/v1/orgs — the environments overview cards.
+// It calls metadata.ListOrgSummaries (unary) and remaps the proto field
+// names (name → org, repository_count → repo_count) into the BFF JSON
+// contract the frontend reads.
+func (h *Handler) handleListOrgs(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromContext(r.Context())
+
+	resp, err := h.meta.ListOrgSummaries(r.Context(), &metadatav1.ListOrgSummariesRequest{
+		TenantId: tenantID,
+	})
+	if err != nil {
+		slog.Error("ListOrgSummaries", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to list organizations")
+		return
+	}
+
+	orgs := make([]OrgSummaryResponse, 0, len(resp.GetOrgs()))
+	for _, o := range resp.GetOrgs() {
+		row := OrgSummaryResponse{
+			OrgID:       o.GetOrgId(),
+			Org:         o.GetName(),
+			RepoCount:   o.GetRepositoryCount(),
+			StorageUsed: o.GetStorageUsedBytes(),
+		}
+		// Nil timestamp → org has no pushed manifests; leave LastActivityAt
+		// nil so omitempty drops the field entirely (not a zero time).
+		if ts := o.GetLastActivityAt(); ts != nil {
+			t := ts.AsTime()
+			row.LastActivityAt = &t
+		}
+		orgs = append(orgs, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orgs": orgs})
 }
 
 func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request) {

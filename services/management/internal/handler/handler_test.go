@@ -259,6 +259,13 @@ func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesReques
 	return nil
 }
 
+func (s *fakeMetaServer) ListOrgSummaries(ctx context.Context, req *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
+	return &metadatav1.ListOrgSummariesResponse{Orgs: []*metadatav1.OrgSummary{
+		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, LastActivityAt: timestamppb.Now()},
+		{OrgId: "org-prod", Name: "prod", RepositoryCount: 1, StorageUsedBytes: 0}, // no last_activity_at
+	}}, nil
+}
+
 func (s *fakeMetaServer) GetRepositoryByName(_ context.Context, req *metadatav1.GetRepositoryByNameRequest) (*metadatav1.Repository, error) {
 	if req.GetName() == "myorg/myrepo" {
 		return &metadatav1.Repository{
@@ -1092,6 +1099,35 @@ func TestListRepositories_adminToken_returnsList(t *testing.T) {
 	repos, ok := body["repositories"].([]any)
 	if !ok || len(repos) != 1 {
 		t.Errorf("expected 1 repo, got %v", body["repositories"])
+	}
+}
+
+func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/orgs", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Orgs []struct {
+			Org            string  `json:"org"`
+			RepoCount      int64   `json:"repo_count"`
+			StorageUsed    int64   `json:"storage_used_bytes"`
+			LastActivityAt *string `json:"last_activity_at"`
+		} `json:"orgs"`
+	}
+	decodeJSON(t, resp, &body)
+	if len(body.Orgs) != 2 {
+		t.Fatalf("want 2 orgs, got %d", len(body.Orgs))
+	}
+	if body.Orgs[0].Org != "dev" || body.Orgs[0].RepoCount != 3 || body.Orgs[0].StorageUsed != 2048 {
+		t.Errorf("dev row wrong: %+v", body.Orgs[0])
+	}
+	if body.Orgs[0].LastActivityAt == nil {
+		t.Errorf("dev last_activity_at should be set")
+	}
+	if body.Orgs[1].LastActivityAt != nil {
+		t.Errorf("prod last_activity_at should be omitted, got %v", *body.Orgs[1].LastActivityAt)
 	}
 }
 
