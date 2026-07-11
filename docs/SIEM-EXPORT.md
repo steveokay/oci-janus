@@ -99,12 +99,19 @@ Structured-text line per RFC 5424, framed over TCP or TLS:
 ### 3.2 cef (Common Event Format)
 
 ```
-CEF:0|oci-janus|registry|1.0|image.signed|image.signed|3|rt=Jun 23 2026 09:48:58.911 src= suser=00000000-… act=image.signed outcome=success cs1Label=tenant_id cs1=98dbe36b-… cs2Label=resource cs2={…} cs3Label=event_id cs3=f730d919-… cs4Label=metadata_b64 cs4=eyJyYXcuLi59
+CEF:0|oci-janus|registry|1.0|image.signed|image.signed|3|rt=Jun 23 2026 09:48:58.911 src= suser=00000000-… act=image.signed outcome=success cs1Label=tenant_id cs1=98dbe36b-… cs2Label=resource cs2={…} cs3Label=event_id cs3=f730d919-… cs5Label=actor_type cs5=service_account cs4Label=metadata_b64 cs4=eyJyYXcuLi59
 ```
 
 - ArcSight-style header (`Vendor|Product|Version|EventID|EventName|Severity|Extensions`).
 - Severity 7 (high) on failure, 3 (low/info) on success.
-- Custom string fields ride on `cs1`/`cs2`/`cs3`/`cs4` per CEF convention.
+- Custom string fields ride on `cs1`/`cs2`/`cs3`/`cs4`/`cs5` per CEF convention.
+- `cs5=actor_type` completes the actor dimension (`suser`=actor_id +
+  `cs5`=actor_type) so CEF has field parity with the syslog SD block.
+  `cs4=metadata_b64` is conditional (emitted only when the event carries
+  metadata); `cs5` is unconditional. (Reciprocally, `metadata` is
+  intentionally *not* rendered into the syslog SD block — its flat
+  `key="value"` shape is a poor fit for arbitrary nested JSON; the
+  webhook JSON format carries full `metadata` for consumers that need it.)
 - Transport rides on the same syslog dial path — operators point a
   syslog server (e.g. Splunk's syslog collector) at the URL and it
   parses the CEF body downstream.
