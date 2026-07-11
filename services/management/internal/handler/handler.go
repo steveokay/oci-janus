@@ -862,6 +862,8 @@ type OrgSummaryResponse struct {
 	Org            string     `json:"org"`
 	RepoCount      int64      `json:"repo_count"`
 	StorageUsed    int64      `json:"storage_used_bytes"`
+	ImageRepoCount int64      `json:"image_repo_count"`
+	HelmRepoCount  int64      `json:"helm_repo_count"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 }
 
@@ -884,10 +886,12 @@ func (h *Handler) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 	orgs := make([]OrgSummaryResponse, 0, len(resp.GetOrgs()))
 	for _, o := range resp.GetOrgs() {
 		row := OrgSummaryResponse{
-			OrgID:       o.GetOrgId(),
-			Org:         o.GetName(),
-			RepoCount:   o.GetRepositoryCount(),
-			StorageUsed: o.GetStorageUsedBytes(),
+			OrgID:          o.GetOrgId(),
+			Org:            o.GetName(),
+			RepoCount:      o.GetRepositoryCount(),
+			StorageUsed:    o.GetStorageUsedBytes(),
+			ImageRepoCount: o.GetImageRepoCount(),
+			HelmRepoCount:  o.GetHelmRepoCount(),
 		}
 		// Nil timestamp → org has no pushed manifests; leave LastActivityAt
 		// nil so omitempty drops the field entirely (not a zero time).

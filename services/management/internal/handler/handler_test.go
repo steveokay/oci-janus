@@ -256,7 +256,7 @@ func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesReques
 
 func (s *fakeMetaServer) ListOrgSummaries(_ context.Context, _ *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
 	return &metadatav1.ListOrgSummariesResponse{Orgs: []*metadatav1.OrgSummary{
-		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, LastActivityAt: timestamppb.Now()},
+		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, ImageRepoCount: 2, HelmRepoCount: 1, LastActivityAt: timestamppb.Now()},
 		{OrgId: "org-prod", Name: "prod", RepositoryCount: 1, StorageUsedBytes: 0}, // no last_activity_at
 	}}, nil
 }
@@ -1161,6 +1161,8 @@ func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
 			Org            string  `json:"org"`
 			RepoCount      int64   `json:"repo_count"`
 			StorageUsed    int64   `json:"storage_used_bytes"`
+			ImageRepoCount int64   `json:"image_repo_count"`
+			HelmRepoCount  int64   `json:"helm_repo_count"`
 			LastActivityAt *string `json:"last_activity_at"`
 		} `json:"orgs"`
 	}
@@ -1170,6 +1172,9 @@ func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
 	}
 	if body.Orgs[0].Org != "dev" || body.Orgs[0].RepoCount != 3 || body.Orgs[0].StorageUsed != 2048 {
 		t.Errorf("dev row wrong: %+v", body.Orgs[0])
+	}
+	if body.Orgs[0].ImageRepoCount != 2 || body.Orgs[0].HelmRepoCount != 1 {
+		t.Errorf("dev counts = %d/%d, want 2/1", body.Orgs[0].ImageRepoCount, body.Orgs[0].HelmRepoCount)
 	}
 	if body.Orgs[0].LastActivityAt == nil {
 		t.Errorf("dev last_activity_at should be set")

@@ -58,6 +58,30 @@ export function OrgCard({ org }: { org: OrgSummary }): React.ReactElement {
           </dd>
         </div>
       </dl>
+
+      {/* Quiet type split: "N images · M charts". Rendered only when the org
+          actually holds images and/or Helm charts. Swatch colors mirror the
+          artifact Type badges — accent (teal) for images, warning for charts. */}
+      {(org.image_repo_count ?? 0) > 0 || (org.helm_repo_count ?? 0) > 0 ? (
+        <div className="flex items-center gap-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-fg-muted)]">
+          {(org.image_repo_count ?? 0) > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-[3px] bg-[var(--color-accent)]" aria-hidden />
+              <span className="font-mono text-[var(--color-fg)]">
+                {org.image_repo_count} {org.image_repo_count === 1 ? "image" : "images"}
+              </span>
+            </span>
+          ) : null}
+          {(org.helm_repo_count ?? 0) > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-[3px] bg-[var(--color-warning)]" aria-hidden />
+              <span className="font-mono text-[var(--color-fg)]">
+                {org.helm_repo_count} {org.helm_repo_count === 1 ? "chart" : "charts"}
+              </span>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </Link>
   );
 }
