@@ -232,8 +232,8 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// verifier delegates to Service.VerifySCIMToken; it fail-closes (401) when
 	// the SCIM repo was never wired (SetSCIMRepo not called), so discovery +
 	// Users routes deny by default until a token is provisioned (Phase 3 admin API).
-	h.RegisterSCIM(mux, func(raw string) (bool, error) {
-		return h.svc.VerifySCIMToken(context.Background(), raw)
+	h.RegisterSCIM(mux, func(ctx context.Context, raw string) (bool, error) {
+		return h.svc.VerifySCIMToken(ctx, raw)
 	})
 }
 

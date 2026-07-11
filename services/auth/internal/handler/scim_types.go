@@ -45,8 +45,12 @@ type scimUser struct {
 	Name        *scimName   `json:"name,omitempty"`
 	DisplayName string      `json:"displayName,omitempty"`
 	Emails      []scimEmail `json:"emails,omitempty"`
-	Active      bool        `json:"active"`
-	Meta        *scimMeta   `json:"meta,omitempty"`
+	// Active is a pointer so a PUT/PATCH body that omits `active` decodes to
+	// nil (skip) rather than false (deactivate). A body carrying `active`
+	// explicitly still round-trips as true/false. On outbound responses
+	// toSCIMUser always sets it non-nil.
+	Active *bool     `json:"active,omitempty"`
+	Meta   *scimMeta `json:"meta,omitempty"`
 }
 
 type scimName struct {
@@ -109,13 +113,14 @@ func toSCIMUser(u *repository.User, extID string) scimUser {
 	if u.DisplayName != nil {
 		display = *u.DisplayName
 	}
+	active := u.IsActive
 	su := scimUser{
 		Schemas:     []string{scimUserSchemaURN},
 		ID:          u.ID.String(),
 		ExternalID:  extID,
 		UserName:    u.Username,
 		DisplayName: display,
-		Active:      u.IsActive,
+		Active:      &active,
 		Meta: &scimMeta{
 			ResourceType: "User",
 			Created:      u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
@@ -132,7 +137,54 @@ func toSCIMUser(u *repository.User, extID string) scimUser {
 var (
 	reEqStr  = regexp.MustCompile(`^(userName|externalId)\s+eq\s+"([^"]*)"$`)
 	reActive = regexp.MustCompile(`^active\s+eq\s+(true|false)$`)
+	// scimUsernameRE is the platform username allowlist (CLAUDE.md §7,
+	// mirrors bootstrap.usernameRE / the SSO username policy). A SCIM
+	// userName supplied by the IdP is validated against this before it can
+	// reach the DB — an untrusted value must not smuggle characters the rest
+	// of the platform assumes usernames never contain.
+	scimUsernameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,64}$`)
+	// scimEmailRE is a permissive-but-real email sanity check used to reject
+	// obviously-malformed IdP-supplied emails at the SCIM edge (CLAUDE.md §7).
+	// It parallels the net/mail check the service layer runs; the handler
+	// cannot reach service.validateEmail (unexported), so it enforces a local
+	// allowlist here before Provision is called.
+	scimEmailRE = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 )
+
+// scimMaxAttrLen bounds the byte length of the free-form SCIM text attributes
+// (externalId, displayName) that land in unbounded DB TEXT columns, so an IdP
+// (or a caller spoofing one) cannot push a multi-megabyte string through to the
+// database before provisioning.
+const scimMaxAttrLen = 255
+
+// validateSCIMCreate enforces the CLAUDE.md §7 allowlists on the IdP-supplied
+// create attributes BEFORE the user is provisioned. It returns a human-readable
+// reason string (for the SCIM error detail) and ok=false on the first failure;
+// ok=true means every supplied attribute is within policy. An empty userName is
+// allowed here because the service derives a safe username from the email; an
+// empty email is allowed because the create path requires at least one of the
+// two and the caller has already rejected the both-empty case.
+func validateSCIMCreate(userName, email, externalID, displayName string) (reason string, ok bool) {
+	if email != "" {
+		if len(email) > maxSCIMEmailLen || !scimEmailRE.MatchString(email) {
+			return "email is not a valid address", false
+		}
+	}
+	if userName != "" && !scimUsernameRE.MatchString(userName) {
+		return "userName must match ^[a-zA-Z0-9_-]{3,64}$", false
+	}
+	if len(externalID) > scimMaxAttrLen {
+		return "externalId exceeds the maximum length", false
+	}
+	if len(displayName) > scimMaxAttrLen {
+		return "displayName exceeds the maximum length", false
+	}
+	return "", true
+}
+
+// maxSCIMEmailLen caps the email length (RFC 5321 §4.5.3.1.3 max) so a
+// malicious caller can't push an oversized string through before validation.
+const maxSCIMEmailLen = 320
 
 // parseUserFilter supports exactly `userName eq "x"`, `externalId eq "y"`, and
 // `active eq true|false` (spec D6). Empty filter matches all. Anything else is

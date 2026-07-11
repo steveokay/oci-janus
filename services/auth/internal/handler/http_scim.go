@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,8 +16,10 @@ import (
 )
 
 // scimVerifier verifies a raw SCIM bearer token. Returns (true, nil) only when
-// the config is enabled and the token matches.
-type scimVerifier func(raw string) (bool, error)
+// the config is enabled and the token matches. The request context is threaded
+// through so the underlying DB reads (GetSCIMConfig / TouchSCIMLastUsed) are
+// cancellable and carry the request's deadline (CLAUDE.md §11).
+type scimVerifier func(ctx context.Context, raw string) (bool, error)
 
 // requireSCIMAuth gates a SCIM handler on the global SCIM token. It is NOT the
 // user auth path: the SCIM principal carries no RBAC roles and is valid only on
@@ -29,7 +32,7 @@ func requireSCIMAuth(verify scimVerifier, next http.HandlerFunc) http.HandlerFun
 			writeSCIMError(w, http.StatusUnauthorized, "", "missing or malformed bearer token")
 			return
 		}
-		valid, err := verify(raw)
+		valid, err := verify(r.Context(), raw)
 		if err != nil || !valid {
 			writeSCIMError(w, http.StatusUnauthorized, "", "invalid SCIM token")
 			return
@@ -143,6 +146,14 @@ func (h *HTTPHandler) scimCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, http.StatusBadRequest, "invalidValue", "userName or an email is required")
 		return
 	}
+	// CLAUDE.md §7 — validate the IdP-supplied attributes against the platform
+	// allowlists BEFORE provisioning. An IdP is a trusted-ish but external
+	// input source; a malformed userName/email or an unbounded externalId/
+	// displayName must be rejected at the edge, not persisted.
+	if reason, ok := validateSCIMCreate(body.UserName, email, body.ExternalID, body.DisplayName); !ok {
+		writeSCIMError(w, http.StatusBadRequest, "invalidValue", reason)
+		return
+	}
 	res, err := h.svc.Provision(r.Context(), service.ScimProvisionInput{
 		Email:       email,
 		UserName:    body.UserName,
@@ -216,10 +227,15 @@ func (h *HTTPHandler) scimPutUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, http.StatusBadRequest, "invalidValue", "malformed JSON body")
 		return
 	}
-	// Apply the active flag (the one replace op we support in v1).
-	if err := h.svc.SetActive(r.Context(), id, body.Active); err != nil {
-		writeSCIMNotFoundOr500(w, err)
-		return
+	// Apply the active flag (the one replace op we support in v1) — but ONLY
+	// when the body actually carried `active`. A PUT that omits `active` must
+	// not be read as active=false (which would deactivate the user); a missing
+	// field decodes to nil and we leave the current state untouched.
+	if body.Active != nil {
+		if err := h.svc.SetActive(r.Context(), id, *body.Active); err != nil {
+			writeSCIMNotFoundOr500(w, err)
+			return
+		}
 	}
 	u, err := h.svc.GetSCIMUserByID(r.Context(), id)
 	if err != nil {

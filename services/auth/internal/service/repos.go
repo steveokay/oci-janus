@@ -115,6 +115,10 @@ type userRepo interface {
 	// filtered /scim/v2/Users list.
 	CreateSCIMUser(ctx context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*repository.User, error)
 	GetUserByExternalID(ctx context.Context, tenantID uuid.UUID, externalID string) (*repository.User, error)
+	// GetSCIMUserByIDForTenant reads a user by PK scoped to the SCIM tenant,
+	// selecting external_id so by-id/PUT/PATCH/DELETE responses echo the IdP
+	// correlation key (the standard GetByID omits it).
+	GetSCIMUserByIDForTenant(ctx context.Context, tenantID, userID uuid.UUID) (*repository.User, error)
 	SetExternalID(ctx context.Context, tenantID, userID uuid.UUID, externalID string) error
 	ListSCIMUsers(ctx context.Context, tenantID uuid.UUID, byUsername, byExternalID string, activeFilter *bool, startIndex, count int) ([]*repository.User, int, error)
 }

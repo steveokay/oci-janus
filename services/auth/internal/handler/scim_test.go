@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,7 @@ func newSCIMAuthTestHandler(_ *testing.T, verify scimVerifier) http.Handler {
 }
 
 func TestRequireSCIMAuth_rejectsBadToken(t *testing.T) {
-	verify := func(raw string) (bool, error) { return raw == "scim.good", nil }
+	verify := func(_ context.Context, raw string) (bool, error) { return raw == "scim.good", nil }
 	h := newSCIMAuthTestHandler(t, verify)
 
 	// No/blank Authorization → 401.
@@ -60,7 +61,7 @@ func TestRequireSCIMAuth_rejectsBadToken(t *testing.T) {
 func newSCIMDiscoveryTestHandler(_ *testing.T) http.Handler {
 	mux := http.NewServeMux()
 	h := &HTTPHandler{}
-	verify := func(string) (bool, error) { return true, nil }
+	verify := func(context.Context, string) (bool, error) { return true, nil }
 	g := func(fn http.HandlerFunc) http.HandlerFunc { return requireSCIMAuth(verify, fn) }
 	mux.HandleFunc("GET /scim/v2/ServiceProviderConfig", g(h.scimServiceProviderConfig))
 	mux.HandleFunc("GET /scim/v2/ResourceTypes", g(h.scimResourceTypes))
@@ -139,7 +140,7 @@ func TestToSCIMUser_mapsCoreFields(t *testing.T) {
 	if su.UserName != "alice" || su.ExternalID != "ext-1" || su.DisplayName != dn {
 		t.Errorf("core fields mismatch: %+v", su)
 	}
-	if !su.Active {
+	if su.Active == nil || !*su.Active {
 		t.Error("active should be true")
 	}
 	if su.primaryEmail() != "alice@example.io" {
@@ -165,7 +166,7 @@ func newSCIMUsersTestHandler(t *testing.T) (http.Handler, *testCtx, uuid.UUID) {
 
 	h := NewHTTPHandler(tc.svc, uuid.Nil)
 	mux := http.NewServeMux()
-	h.RegisterSCIM(mux, func(string) (bool, error) { return true, nil })
+	h.RegisterSCIM(mux, func(context.Context, string) (bool, error) { return true, nil })
 	return mux, tc, tenantID
 }
 
@@ -198,7 +199,7 @@ func TestSCIMUsers_lifecycle(t *testing.T) {
 	if created.ID == "" || created.ExternalID != "ext1" || created.UserName != "alice" {
 		t.Fatalf("created resource mismatch: %+v", created)
 	}
-	if !created.Active {
+	if created.Active == nil || !*created.Active {
 		t.Error("created user should be active")
 	}
 
@@ -265,4 +266,176 @@ func TestSCIMUsers_localPasswordCollision_409(t *testing.T) {
 // urlEnc is a tiny query-escaper so the filter tests stay readable.
 func urlEnc(s string) string {
 	return strings.NewReplacer(" ", "%20", `"`, "%22").Replace(s)
+}
+
+// scimBadCreate is the helper shared by the input-validation cases: it POSTs the
+// body and asserts a 400 with scimType=invalidValue (the SCIM error envelope).
+func scimBadCreate(t *testing.T, h http.Handler, body string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPost, "/scim/v2/Users", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body)
+	}
+	var e scimError
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if e.SCIMType != "invalidValue" {
+		t.Errorf("scimType: want invalidValue, got %q", e.SCIMType)
+	}
+}
+
+// Fix 1 — POST /scim/v2/Users must reject IdP attributes that fail the §7
+// allowlists (bad userName, bad email, over-long externalId) with 400
+// invalidValue BEFORE any user is provisioned.
+func TestSCIMCreate_rejectsInvalidAttributes(t *testing.T) {
+	h, tc, _ := newSCIMUsersTestHandler(t)
+
+	// Bad userName — contains a space (fails ^[a-zA-Z0-9_-]{3,64}$).
+	scimBadCreate(t, h, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"bad name","emails":[{"value":"ok@x.io","primary":true}]}`)
+	// Too-long userName (> 64 chars).
+	scimBadCreate(t, h, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"`+strings.Repeat("a", 65)+`","emails":[{"value":"ok2@x.io","primary":true}]}`)
+	// Bad email — no domain.
+	scimBadCreate(t, h, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"gooduser","emails":[{"value":"not-an-email","primary":true}]}`)
+	// Over-long externalId (> 255 bytes).
+	scimBadCreate(t, h, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"gooduser2","externalId":"`+strings.Repeat("x", 256)+`","emails":[{"value":"ok3@x.io","primary":true}]}`)
+	// Over-long displayName (> 255 bytes).
+	scimBadCreate(t, h, `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"gooduser3","displayName":"`+strings.Repeat("d", 256)+`","emails":[{"value":"ok4@x.io","primary":true}]}`)
+
+	// None of the rejected requests should have created a user.
+	if len(tc.users.users) != 0 {
+		t.Fatalf("no invalid create should provision a user, got %d users", len(tc.users.users))
+	}
+
+	// Sanity: a fully-valid create still succeeds (guards against over-strict rules).
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPost, "/scim/v2/Users",
+		`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"valid_user","externalId":"ext-ok","emails":[{"value":"good@x.io","primary":true}]}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("valid create: want 201, got %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// Fix 2 — requireSCIMAuth must pass the request context (not context.Background)
+// into the verifier so the token-verify DB reads are request-scoped.
+func TestRequireSCIMAuth_threadsRequestContext(t *testing.T) {
+	type ctxKey string
+	const k ctxKey = "probe"
+
+	var got any
+	verify := func(ctx context.Context, _ string) (bool, error) {
+		got = ctx.Value(k)
+		return true, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /scim/v2/Users", requireSCIMAuth(verify, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Users", nil)
+	req = req.WithContext(context.WithValue(req.Context(), k, "value-123"))
+	req.Header.Set("Authorization", "Bearer scim.good")
+	mux.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "value-123" {
+		t.Fatalf("verifier did not receive the request context: got %v", got)
+	}
+}
+
+// Fix 3 — a PUT with no `active` field must NOT deactivate the user.
+func TestSCIMPut_missingActive_doesNotDisable(t *testing.T) {
+	h, tc, _ := newSCIMUsersTestHandler(t)
+
+	// Provision an active user.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPost, "/scim/v2/Users",
+		`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"puser","externalId":"ext-p","emails":[{"value":"p@x.io","primary":true}],"active":true}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST: want 201, got %d: %s", rec.Code, rec.Body)
+	}
+	var created scimUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// PUT a body WITHOUT `active`.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPut, "/scim/v2/Users/"+created.ID,
+		`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"puser","displayName":"P User"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT: want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	if u := tc.users.users["puser"]; u == nil || !u.IsActive {
+		t.Error("PUT without `active` must NOT disable the user")
+	}
+}
+
+// Fix 4 — GET /scim/v2/Users/{id} after a provision must echo the non-empty
+// externalId (Okta/Entra reconciliation key). Also covers the PUT response.
+func TestSCIMGetByID_echoesExternalID(t *testing.T) {
+	h, _, _ := newSCIMUsersTestHandler(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPost, "/scim/v2/Users",
+		`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"euser","externalId":"ext-echo","emails":[{"value":"e@x.io","primary":true}],"active":true}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST: want 201, got %d: %s", rec.Code, rec.Body)
+	}
+	var created scimUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodGet, "/scim/v2/Users/"+created.ID, ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET by id: want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	var got scimUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.ExternalID != "ext-echo" {
+		t.Fatalf("GET by id must echo externalId: want %q, got %q", "ext-echo", got.ExternalID)
+	}
+}
+
+// Fix 5 — PATCH active:true must re-enable a disabled user (the true→re-enable
+// direction; the false→disable direction is covered by TestSCIMUsers_lifecycle).
+func TestSCIMPatch_activeTrue_reEnables(t *testing.T) {
+	h, tc, _ := newSCIMUsersTestHandler(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPost, "/scim/v2/Users",
+		`{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"ruser","externalId":"ext-r","emails":[{"value":"r@x.io","primary":true}],"active":true}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST: want 201, got %d: %s", rec.Code, rec.Body)
+	}
+	var created scimUser
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// Disable first.
+	disable := `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":false}]}`
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPatch, "/scim/v2/Users/"+created.ID, disable))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH active:false: want 200, got %d", rec.Code)
+	}
+	if u := tc.users.users["ruser"]; u == nil || u.IsActive {
+		t.Fatalf("precondition: user should be disabled")
+	}
+
+	// Re-enable.
+	enable := `{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"active","value":true}]}`
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, scimReq(http.MethodPatch, "/scim/v2/Users/"+created.ID, enable))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH active:true: want 200, got %d: %s", rec.Code, rec.Body)
+	}
+	if u := tc.users.users["ruser"]; u == nil || !u.IsActive {
+		t.Error("PATCH active:true must re-enable the user")
+	}
 }

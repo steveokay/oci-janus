@@ -124,6 +124,28 @@ func (r *UserRepository) GetUserByExternalID(ctx context.Context, tenantID uuid.
 	return &u, nil
 }
 
+// GetSCIMUserByIDForTenant loads a single user by primary key, scoped to the
+// SCIM tenant, selecting the full SCIM column set (including external_id) so the
+// by-id / PUT / PATCH / DELETE responses echo the IdP correlation key. The
+// standard GetByID→scanOne path omits external_id, which left those responses
+// carrying externalId:"" and broke Okta/Entra reconciliation — this read exists
+// so the SCIM surface always round-trips external_id. Returns ErrNotFound when
+// no row with this (id, tenant_id) exists, so it can never read across tenants.
+func (r *UserRepository) GetSCIMUserByIDForTenant(ctx context.Context, tenantID, userID uuid.UUID) (*User, error) {
+	q := `SELECT ` + scimUserColumns + `
+		FROM   users
+		WHERE  id = $1 AND tenant_id = $2`
+	var u User
+	err := scanSCIMUserRow(r.pool.QueryRow(ctx, q, userID, tenantID), &u)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // SetExternalID backfills external_id + provisioned_via on an existing user
 // (the link-passwordless path, spec D3). Scoped by tenant_id + id.
 func (r *UserRepository) SetExternalID(ctx context.Context, tenantID, userID uuid.UUID, externalID string) error {

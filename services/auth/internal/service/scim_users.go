@@ -110,16 +110,12 @@ func (s *Service) ListSCIMUsers(ctx context.Context, byUsername, byExternalID st
 	return s.users.ListSCIMUsers(ctx, s.scimTenantID, byUsername, byExternalID, active, startIndex, count)
 }
 
-// GetSCIMUserByID loads a user by primary key and enforces the SCIM tenant
-// boundary — a user outside the bootstrap tenant surfaces as ErrNotFound so the
-// SCIM surface can never read across tenants.
+// GetSCIMUserByID loads a user by primary key, scoped to the SCIM tenant — a
+// user outside the bootstrap tenant surfaces as ErrNotFound so the SCIM surface
+// can never read across tenants. It routes through GetSCIMUserByIDForTenant
+// (not the standard GetByID) so the returned User carries external_id: the
+// standard read's SELECT omits that column, which left the by-id / PUT / PATCH /
+// DELETE responses echoing externalId:"" and broke Okta/Entra reconciliation.
 func (s *Service) GetSCIMUserByID(ctx context.Context, userID uuid.UUID) (*repository.User, error) {
-	u, err := s.users.GetByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if u.TenantID != s.scimTenantID {
-		return nil, repository.ErrNotFound
-	}
-	return u, nil
+	return s.users.GetSCIMUserByIDForTenant(ctx, s.scimTenantID, userID)
 }

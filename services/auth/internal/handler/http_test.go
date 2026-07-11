@@ -537,6 +537,18 @@ func (f *handlerFakeUserRepo) GetUserByExternalID(_ context.Context, tenantID uu
 	return nil, repository.ErrNotFound
 }
 
+// GetSCIMUserByIDForTenant mirrors the SCIM by-id read: it scopes the lookup to
+// the tenant and returns the User with its ExternalID intact (the fake tracks
+// external_id on the struct, as the real scimUserColumns read does).
+func (f *handlerFakeUserRepo) GetSCIMUserByIDForTenant(_ context.Context, tenantID, userID uuid.UUID) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.ID == userID && u.TenantID == tenantID {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
 func (f *handlerFakeUserRepo) SetExternalID(_ context.Context, _, userID uuid.UUID, externalID string) error {
 	for _, u := range f.users {
 		if u.ID == userID {
