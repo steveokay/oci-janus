@@ -1059,6 +1059,12 @@ func (h *MetadataHandler) GetTenantUsage(ctx context.Context, req *metadatav1.Ge
 	return usage, nil
 }
 
+// ListOrgSummaries is implemented in Task 3. Stub keeps the service
+// compiling immediately after the proto regen.
+func (h *MetadataHandler) ListOrgSummaries(ctx context.Context, req *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListOrgSummaries not yet implemented")
+}
+
 // CountRepositories returns the number of repositories owned by the tenant.
 func (h *MetadataHandler) CountRepositories(ctx context.Context, req *metadatav1.CountRepositoriesRequest) (*metadatav1.CountRepositoriesResponse, error) {
 	if req.TenantId == "" {

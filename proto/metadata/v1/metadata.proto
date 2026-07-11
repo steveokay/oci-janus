@@ -141,6 +141,12 @@ service MetadataService {
   // the response together for newly-created tenants without push activity.
   rpc GetTenantUsage(GetTenantUsageRequest) returns (TenantUsage);
 
+  // ListOrgSummaries returns one aggregate row per organization in the
+  // tenant (repo count, total storage, last push). Unpaginated — the
+  // number of orgs per tenant is small by design. Powers the frontend
+  // /repositories environments overview.
+  rpc ListOrgSummaries(ListOrgSummariesRequest) returns (ListOrgSummariesResponse);
+
   // ─── FE-API-037: per-repo retention policy CRUD ─────────────────────────
 
   // GetRepoRetentionPolicy returns the policy attached to a repository, or
@@ -866,6 +872,25 @@ message TenantUsage {
   int64 storage_quota_bytes = 2;
   int64 repository_count    = 3;
   int64 organization_count  = 4;
+}
+
+// ─── environments overview: per-org aggregate summaries ────────────────────
+
+message ListOrgSummariesRequest {
+  string tenant_id = 1;
+}
+
+message OrgSummary {
+  string org_id             = 1;
+  string name               = 2;  // organizations.name (the org/namespace)
+  int64  repository_count   = 3;
+  int64  storage_used_bytes = 4;
+  // Unset when the org has no pushed manifests yet (SQL NULL).
+  google.protobuf.Timestamp last_activity_at = 5;
+}
+
+message ListOrgSummariesResponse {
+  repeated OrgSummary orgs = 1;
 }
 
 // ─── FE-API-037: per-repo retention policy CRUD ────────────────────────────
