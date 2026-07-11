@@ -1,81 +1,53 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
-import { Boxes } from "lucide-react";
-import { useRepositories } from "@/lib/api/repositories";
-import type { RepoVisibilityFilter } from "@/lib/api/repositories";
-import { RepositoriesTable } from "@/components/repositories/repositories-table";
-import { RepositoriesToolbar } from "@/components/repositories/toolbar";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Boxes, Plus, Search } from "lucide-react";
+import { useOrgs } from "@/lib/api/orgs";
+import { OrgCard } from "@/components/orgs/org-card";
 import { CreateRepositoryDialog } from "@/components/repositories/create-repository-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/_authenticated/repositories/")({
-  component: RepositoriesPage,
+  component: EnvironmentsPage,
 });
 
-function RepositoriesPage(): React.ReactElement {
+// Environments overview. Orgs are the top-level axis (operators use them as
+// dev/stage/prod), so /repositories lands on a card per org and drills into
+// /repositories/$org. Keeps the "Repositories" label + org vocabulary —
+// "environment" is the operator's convention, not baked into the platform.
+function EnvironmentsPage(): React.ReactElement {
+  const navigate = useNavigate();
   const [query, setQuery] = React.useState("");
-  const [visibility, setVisibility] =
-    React.useState<RepoVisibilityFilter>("all");
   const [createOpen, setCreateOpen] = React.useState(false);
+  const { data, isLoading, isError, error, refetch } = useOrgs();
 
-  // F4 follow-up — /repositories is now the container-image catalogue.
-  // Helm charts, Cosign signatures, and SBOMs live on their own routes
-  // (/helm today; more dedicated landings to follow). Passing
-  // artifactType: "image" makes the BFF EXISTS-filter manifests so a
-  // shared org/repo namespace that holds both an image AND a chart only
-  // shows up on the matching listing — no double-counting.
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    refetch,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    // artifactType "all" — the /repositories catalog surfaces every repo
-    // the caller can see, including freshly-created empty ones. The prior
-    // "image" filter dropped empty repos server-side via the metadata
-    // EXISTS(manifests) clause, so operators who just clicked "Create
-    // repository" or promoted-with-create-if-missing (REM-030) saw nothing
-    // until the first push. /helm and /security keep their typed filters —
-    // they're artifact-specific catalogs, not the master list.
-  } = useRepositories({ visibility, artifactType: "all" });
+  const orgs = data?.orgs ?? [];
 
-  // Flatten infinite pages into a single list. Filtering on the client by
-  // name/org is acceptable for the page sizes we expect; server-side search
-  // is FE-API-future.
-  const flat = React.useMemo(
-    () => data?.pages.flatMap((p) => p.repositories) ?? [],
-    [data],
-  );
+  // Single-org shortcut: a one-environment deployment skips the lonely
+  // one-card overview and lands directly in that environment. Deriving a
+  // stable `soleOrg` (a string | null, not the freshly-allocated `orgs`
+  // array) keeps the effect keyed on the primitive it actually reads, so
+  // there's no every-render dependency churn to reason about.
+  const soleOrg =
+    !isLoading && !isError && orgs.length === 1 ? orgs[0].org : null;
+
+  React.useEffect(() => {
+    if (soleOrg) {
+      void navigate({
+        to: "/repositories/$org",
+        params: { org: soleOrg },
+        replace: true,
+      });
+    }
+  }, [soleOrg, navigate]);
 
   const filtered = React.useMemo(() => {
-    if (!query.trim()) return flat;
+    if (!query.trim()) return orgs;
     const q = query.toLowerCase();
-    return flat.filter(
-      (r) =>
-        r.name.toLowerCase().includes(q) || r.org.toLowerCase().includes(q),
-    );
-  }, [flat, query]);
-
-  // The name/org search only sees pages the infinite query has already
-  // loaded, so a match sitting on an unfetched page would previously
-  // produce a false "No repositories match" while hasNextPage was still
-  // true. Short-term fix (server-side search is FE-API-future): while a
-  // search is active, keep draining the remaining pages so the client-side
-  // filter eventually sees the full catalog. The effect re-fires as each
-  // page lands (isFetchingNextPage flips back to false) until exhausted.
-  const searchActive = query.trim() !== "";
-  React.useEffect(() => {
-    if (searchActive && hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [searchActive, hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  const total = data?.pages[0]?.total ?? flat.length;
+    return orgs.filter((o) => o.org.toLowerCase().includes(q));
+  }, [orgs, query]);
 
   return (
     <div className="space-y-6">
@@ -84,104 +56,81 @@ function RepositoriesPage(): React.ReactElement {
           Catalog
         </p>
         <div className="flex items-end justify-between">
-          {/* Icon matches the sidebar Boxes glyph — consistent with the */}
-          {/* /security (ShieldCheck), /activity (Activity), /helm (Ship) */}
-          {/* page-header pattern. */}
           <h1 className="font-display flex items-center gap-3 text-3xl font-medium tracking-tight">
-            <Boxes
-              className="size-7 text-[var(--color-accent)]"
-              aria-hidden
-            />
+            <Boxes className="size-7 text-[var(--color-accent)]" aria-hidden />
             Repositories
           </h1>
           <p className="text-sm text-[var(--color-fg-muted)]">
             {isLoading
               ? "Loading…"
-              : `${total} ${total === 1 ? "repository" : "repositories"} in this workspace`}
+              : `${orgs.length} ${orgs.length === 1 ? "environment" : "environments"}`}
           </p>
         </div>
       </header>
 
-      <RepositoriesToolbar
-        query={query}
-        onQueryChange={setQuery}
-        visibility={visibility}
-        onVisibilityChange={setVisibility}
-        onCreateClick={() => setCreateOpen(true)}
-      />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full max-w-sm">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-fg-subtle)]"
+            aria-hidden
+          />
+          <Input
+            className="pl-9"
+            type="search"
+            placeholder="Filter environments…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Filter environments"
+          />
+        </div>
+        <Button onClick={() => setCreateOpen(true)}>
+          <Plus className="size-4" />
+          New repository
+        </Button>
+      </div>
 
       {isError ? (
         <ErrorState
-          title="Couldn't load repositories"
+          title="Couldn't load environments"
           description="The management API didn't answer. Verify the BFF is reachable, then retry."
           error={error}
           onRetry={() => void refetch()}
         />
-      ) : !isLoading && filtered.length === 0 && searchActive && hasNextPage ? (
-        // Zero matches so far but more pages are still coming (the drain
-        // effect above is fetching them) — a hard "no matches" here would
-        // be a lie until the catalog is fully loaded, so show a transient
-        // searching state instead.
-        <div
-          role="status"
-          className="flex items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] py-10 text-sm text-[var(--color-fg-muted)]"
-        >
-          Searching more repositories…
+      ) : isLoading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-32 animate-pulse rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]"
+            />
+          ))}
         </div>
-      ) : !isLoading && filtered.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={<Boxes className="size-5" />}
-          title={
-            query
-              ? `No repositories match "${query}"`
-              : "No repositories yet"
-          }
+          title={query ? `No environments match "${query}"` : "No repositories yet"}
           description={
             query
-              ? "Try a different search term, or clear the filter to see everything."
+              ? "Try a different search term, or clear the filter."
               : "Create your first repository to push images into this workspace."
           }
           action={
             !query ? (
-              <Button onClick={() => setCreateOpen(true)}>
-                Create a repository
-              </Button>
+              <Button onClick={() => setCreateOpen(true)}>Create a repository</Button>
             ) : (
-              <Button variant="outline" onClick={() => setQuery("")}>
-                Clear filter
-              </Button>
+              <Button variant="outline" onClick={() => setQuery("")}>Clear filter</Button>
             )
           }
         />
       ) : (
-        <>
-          <RepositoriesTable
-            repositories={filtered}
-            loading={isLoading}
-            linkArtifactType="image"
-            // Lets the table warn that a client-side sort only covers loaded
-            // pages while more remain (server-side sort is FE-API-future).
-            hasNextPage={hasNextPage}
-          />
-          {hasNextPage ? (
-            <div className="flex justify-center pt-2">
-              <Button
-                variant="outline"
-                onClick={() => void fetchNextPage()}
-                loading={isFetchingNextPage}
-                disabled={isFetchingNextPage}
-              >
-                {isFetchingNextPage ? "Loading more" : "Load more"}
-              </Button>
-            </div>
-          ) : null}
-        </>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((o) => (
+            <OrgCard key={o.org_id} org={o} />
+          ))}
+        </div>
       )}
 
-      <CreateRepositoryDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-      />
+      <CreateRepositoryDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );
 }

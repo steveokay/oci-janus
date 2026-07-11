@@ -1186,6 +1186,25 @@
     {
       "item": [
         {
+          "name": "GET /api/v1/orgs",
+          "request": {
+            "description": "GET /api/v1/orgs",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "orgs"
+              ],
+              "raw": "{{baseUrl}}/api/v1/orgs"
+            }
+          }
+        },
+        {
           "name": "GET /api/v1/orgs/{org}/members",
           "request": {
             "description": "GET /api/v1/orgs/{org}/members",

@@ -247,16 +247,18 @@ func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.Coun
 }
 
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
-	_ = stream.Send(&metadatav1.Repository{
-		RepoId:       testRepoID,
-		OrgId:        testOrgID,
-		Name:         "myorg/myrepo",
-		IsPublic:     false,
-		StorageUsed:  512,
-		StorageQuota: 10737418240,
-		CreatedAt:    timestamppb.Now(),
-	})
+	// Two repos in different orgs so the BFF's client-side ?org= filter is
+	// observable. metadata streams every repo; the BFF narrows the results.
+	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
+	_ = stream.Send(&metadatav1.Repository{RepoId: "repo-2", OrgId: "org-prod", Org: "prod", Name: "api", StorageUsed: 256, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
 	return nil
+}
+
+func (s *fakeMetaServer) ListOrgSummaries(_ context.Context, _ *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
+	return &metadatav1.ListOrgSummariesResponse{Orgs: []*metadatav1.OrgSummary{
+		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, LastActivityAt: timestamppb.Now()},
+		{OrgId: "org-prod", Name: "prod", RepositoryCount: 1, StorageUsedBytes: 0}, // no last_activity_at
+	}}, nil
 }
 
 func (s *fakeMetaServer) GetRepositoryByName(_ context.Context, req *metadatav1.GetRepositoryByNameRequest) (*metadatav1.Repository, error) {
@@ -1090,8 +1092,63 @@ func TestListRepositories_adminToken_returnsList(t *testing.T) {
 	decodeJSON(t, resp, &body)
 
 	repos, ok := body["repositories"].([]any)
-	if !ok || len(repos) != 1 {
-		t.Errorf("expected 1 repo, got %v", body["repositories"])
+	if !ok || len(repos) != 2 {
+		t.Errorf("expected 2 repos, got %v", body["repositories"])
+	}
+}
+
+func TestListRepositories_orgFilter_narrowsToOneOrg(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories?org=prod", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Repositories []struct {
+			Org  string `json:"org"`
+			Name string `json:"name"`
+		} `json:"repositories"`
+	}
+	decodeJSON(t, resp, &body)
+	if len(body.Repositories) != 1 || body.Repositories[0].Org != "prod" {
+		t.Errorf("want 1 prod repo, got %+v", body.Repositories)
+	}
+}
+
+func TestListRepositories_invalidOrgFilter_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories?org=Bad_Org", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/orgs", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Orgs []struct {
+			Org            string  `json:"org"`
+			RepoCount      int64   `json:"repo_count"`
+			StorageUsed    int64   `json:"storage_used_bytes"`
+			LastActivityAt *string `json:"last_activity_at"`
+		} `json:"orgs"`
+	}
+	decodeJSON(t, resp, &body)
+	if len(body.Orgs) != 2 {
+		t.Fatalf("want 2 orgs, got %d", len(body.Orgs))
+	}
+	if body.Orgs[0].Org != "dev" || body.Orgs[0].RepoCount != 3 || body.Orgs[0].StorageUsed != 2048 {
+		t.Errorf("dev row wrong: %+v", body.Orgs[0])
+	}
+	if body.Orgs[0].LastActivityAt == nil {
+		t.Errorf("dev last_activity_at should be set")
+	}
+	if body.Orgs[1].LastActivityAt != nil {
+		t.Errorf("prod last_activity_at should be omitted, got %v", *body.Orgs[1].LastActivityAt)
 	}
 }
 

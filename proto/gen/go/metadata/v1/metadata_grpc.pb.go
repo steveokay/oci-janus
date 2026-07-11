@@ -62,6 +62,7 @@ const (
 	MetadataService_ListTenantRemediations_FullMethodName          = "/registry.metadata.v1.MetadataService/ListTenantRemediations"
 	MetadataService_GetTenantStorageBreakdown_FullMethodName       = "/registry.metadata.v1.MetadataService/GetTenantStorageBreakdown"
 	MetadataService_GetTenantUsage_FullMethodName                  = "/registry.metadata.v1.MetadataService/GetTenantUsage"
+	MetadataService_ListOrgSummaries_FullMethodName                = "/registry.metadata.v1.MetadataService/ListOrgSummaries"
 	MetadataService_GetRepoRetentionPolicy_FullMethodName          = "/registry.metadata.v1.MetadataService/GetRepoRetentionPolicy"
 	MetadataService_UpsertRepoRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/UpsertRepoRetentionPolicy"
 	MetadataService_DeleteRepoRetentionPolicy_FullMethodName       = "/registry.metadata.v1.MetadataService/DeleteRepoRetentionPolicy"
@@ -202,6 +203,11 @@ type MetadataServiceClient interface {
 	// quota_bytes=0 rather than NotFound, so the management layer can stitch
 	// the response together for newly-created tenants without push activity.
 	GetTenantUsage(ctx context.Context, in *GetTenantUsageRequest, opts ...grpc.CallOption) (*TenantUsage, error)
+	// ListOrgSummaries returns one aggregate row per organization in the
+	// tenant (repo count, total storage, last push). Unpaginated — the
+	// number of orgs per tenant is small by design. Powers the frontend
+	// /repositories environments overview.
+	ListOrgSummaries(ctx context.Context, in *ListOrgSummariesRequest, opts ...grpc.CallOption) (*ListOrgSummariesResponse, error)
 	// GetRepoRetentionPolicy returns the policy attached to a repository, or
 	// a typed NotFound when no policy row exists. The caller (registry-management)
 	// is responsible for falling back to the org default (FE-API-039) when
@@ -841,6 +847,16 @@ func (c *metadataServiceClient) GetTenantUsage(ctx context.Context, in *GetTenan
 	return out, nil
 }
 
+func (c *metadataServiceClient) ListOrgSummaries(ctx context.Context, in *ListOrgSummariesRequest, opts ...grpc.CallOption) (*ListOrgSummariesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListOrgSummariesResponse)
+	err := c.cc.Invoke(ctx, MetadataService_ListOrgSummaries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *metadataServiceClient) GetRepoRetentionPolicy(ctx context.Context, in *GetRepoRetentionPolicyRequest, opts ...grpc.CallOption) (*RetentionPolicy, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RetentionPolicy)
@@ -1150,6 +1166,11 @@ type MetadataServiceServer interface {
 	// quota_bytes=0 rather than NotFound, so the management layer can stitch
 	// the response together for newly-created tenants without push activity.
 	GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error)
+	// ListOrgSummaries returns one aggregate row per organization in the
+	// tenant (repo count, total storage, last push). Unpaginated — the
+	// number of orgs per tenant is small by design. Powers the frontend
+	// /repositories environments overview.
+	ListOrgSummaries(context.Context, *ListOrgSummariesRequest) (*ListOrgSummariesResponse, error)
 	// GetRepoRetentionPolicy returns the policy attached to a repository, or
 	// a typed NotFound when no policy row exists. The caller (registry-management)
 	// is responsible for falling back to the org default (FE-API-039) when
@@ -1398,6 +1419,9 @@ func (UnimplementedMetadataServiceServer) GetTenantStorageBreakdown(context.Cont
 }
 func (UnimplementedMetadataServiceServer) GetTenantUsage(context.Context, *GetTenantUsageRequest) (*TenantUsage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTenantUsage not implemented")
+}
+func (UnimplementedMetadataServiceServer) ListOrgSummaries(context.Context, *ListOrgSummariesRequest) (*ListOrgSummariesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListOrgSummaries not implemented")
 }
 func (UnimplementedMetadataServiceServer) GetRepoRetentionPolicy(context.Context, *GetRepoRetentionPolicyRequest) (*RetentionPolicy, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRepoRetentionPolicy not implemented")
@@ -2236,6 +2260,24 @@ func _MetadataService_GetTenantUsage_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetadataService_ListOrgSummaries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListOrgSummariesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).ListOrgSummaries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_ListOrgSummaries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).ListOrgSummaries(ctx, req.(*ListOrgSummariesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MetadataService_GetRepoRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetRepoRetentionPolicyRequest)
 	if err := dec(in); err != nil {
@@ -2736,6 +2778,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantUsage",
 			Handler:    _MetadataService_GetTenantUsage_Handler,
+		},
+		{
+			MethodName: "ListOrgSummaries",
+			Handler:    _MetadataService_ListOrgSummaries_Handler,
 		},
 		{
 			MethodName: "GetRepoRetentionPolicy",

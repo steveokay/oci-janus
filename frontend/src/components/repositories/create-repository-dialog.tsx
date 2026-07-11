@@ -49,11 +49,15 @@ type FormValues = z.infer<typeof schema>;
 interface CreateRepositoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // When set, pre-fills the Organization field (used by the per-environment
+  // repo list so "New repository" lands in the environment you're viewing).
+  defaultOrg?: string;
 }
 
 export function CreateRepositoryDialog({
   open,
   onOpenChange,
+  defaultOrg,
 }: CreateRepositoryDialogProps): React.ReactElement {
   const navigate = useNavigate();
   const create = useCreateRepository();
@@ -66,6 +70,17 @@ export function CreateRepositoryDialog({
   // can hit this; everyone else falls back to the existing error toast.
   const [claimableOrg, setClaimableOrg] = React.useState<string | null>(null);
 
+  // Single source of truth for the pristine form shape, seeded with
+  // `defaultOrg` (the per-environment page pre-selects its org). Used for
+  // both the initial `defaultValues` and every `reset()` so the three sites
+  // can't drift out of sync.
+  const defaultFormValues: FormValues = {
+    org: defaultOrg ?? "",
+    name: "",
+    is_public: false,
+    description: "",
+  };
+
   const {
     register,
     handleSubmit,
@@ -75,7 +90,7 @@ export function CreateRepositoryDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { org: "", name: "", is_public: false, description: "" },
+    defaultValues: defaultFormValues,
   });
 
   const isPublic = watch("is_public");
@@ -87,7 +102,7 @@ export function CreateRepositoryDialog({
     });
     toast.success(`Created ${created.org}/${created.name}.`);
     setClaimableOrg(null);
-    reset();
+    reset(defaultFormValues);
     onOpenChange(false);
     void navigate({
       to: "/repositories/$org/$repo",
@@ -154,7 +169,7 @@ export function CreateRepositoryDialog({
       open={open}
       onOpenChange={(o) => {
         if (!o) {
-          reset();
+          reset(defaultFormValues);
           setClaimableOrg(null);
         }
         onOpenChange(o);

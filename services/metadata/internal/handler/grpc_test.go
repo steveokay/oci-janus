@@ -72,6 +72,10 @@ type fakeRepo struct {
 	tenantUsageResp *metadatav1.TenantUsage
 	tenantUsageErr  error
 
+	// ListOrgSummaries (environments overview) — per-org aggregate rows.
+	orgSummariesResult []*metadatav1.OrgSummary
+	orgSummariesErr    error
+
 	// PutTag
 	putTagResult *metadatav1.Tag
 	putTagErr    error
@@ -547,6 +551,10 @@ func (f *fakeRepo) GetTenantStorageBreakdown(_ context.Context, _ string) (*meta
 
 func (f *fakeRepo) GetTenantUsage(_ context.Context, _ string) (*metadatav1.TenantUsage, error) {
 	return f.tenantUsageResp, f.tenantUsageErr
+}
+
+func (f *fakeRepo) ListOrgSummaries(_ context.Context, _ string) ([]*metadatav1.OrgSummary, error) {
+	return f.orgSummariesResult, f.orgSummariesErr
 }
 
 func (f *fakeRepo) GetTenantQuotaUsage(_ context.Context, _ string) (*metadatav1.QuotaUsage, error) {
@@ -2419,6 +2427,55 @@ func TestGetTenantUsage_lazyMissingTenant_returnsZero(t *testing.T) {
 	if got.GetStorageUsedBytes() != 0 || got.GetStorageQuotaBytes() != 0 ||
 		got.GetRepositoryCount() != 0 || got.GetOrganizationCount() != 0 {
 		t.Errorf("expected all zeros for lazy tenant, got %+v", got)
+	}
+}
+
+// ── ListOrgSummaries (environments overview) ─────────────────────────────────
+
+// TestListOrgSummaries_happyPath_forwardsRepoRows ensures the handler wraps the
+// repo's per-org rows into the response verbatim. The aggregate SQL itself is
+// covered by the repository integration test; here we only assert the wire
+// mapping.
+func TestListOrgSummaries_happyPath_forwardsRepoRows(t *testing.T) {
+	want := []*metadatav1.OrgSummary{
+		{OrgId: "org-1", Name: "acme", RepositoryCount: 3, StorageUsedBytes: 4096},
+		{OrgId: "org-2", Name: "beta", RepositoryCount: 0, StorageUsedBytes: 0},
+	}
+	h := newHandler(&fakeRepo{orgSummariesResult: want})
+	got, err := h.ListOrgSummaries(context.Background(), &metadatav1.ListOrgSummariesRequest{
+		TenantId: "00000000-0000-0000-0000-000000000001",
+	})
+	requireNoErr(t, err)
+	if len(got.GetOrgs()) != len(want) {
+		t.Fatalf("orgs len: got %d, want %d", len(got.GetOrgs()), len(want))
+	}
+	if got.GetOrgs()[0].GetName() != "acme" || got.GetOrgs()[0].GetRepositoryCount() != 3 {
+		t.Errorf("first org mismatch: got %+v", got.GetOrgs()[0])
+	}
+}
+
+// TestListOrgSummaries_emptyTenantID_returnsInvalidArgument verifies the
+// handler-level shape check fires before the repo is touched.
+func TestListOrgSummaries_emptyTenantID_returnsInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{})
+	_, err := h.ListOrgSummaries(context.Background(), &metadatav1.ListOrgSummariesRequest{TenantId: ""})
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// TestListOrgSummaries_repoError_notInvalidArgument verifies a repo failure
+// surfaces via mapErr as a non-InvalidArgument code (the exact mapping is
+// MapDBError's concern; we just guard against the shape check swallowing it).
+func TestListOrgSummaries_repoError_notInvalidArgument(t *testing.T) {
+	h := newHandler(&fakeRepo{orgSummariesErr: errors.New("db down")})
+	_, err := h.ListOrgSummaries(context.Background(), &metadatav1.ListOrgSummariesRequest{
+		TenantId: "00000000-0000-0000-0000-000000000001",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() == codes.InvalidArgument {
+		t.Errorf("repo error must not surface as InvalidArgument: %v", err)
 	}
 }
 

@@ -2021,6 +2021,26 @@ Pick alongside neighbouring FE work; none justifies its own number:
 - **"Recently viewed" repos strip** — dashboard/repo-list shortcut so
   operators stop re-searching the same handful of repos.
 
+#### FUT-077 — Cross-environment image comparison matrix — **Tier 2/3**
+Deferred sibling of the environments-overview work
+(`feat/environments-overview`, spec
+`docs/superpowers/specs/2026-07-11-environments-overview-design.md`). That
+work delivers org-as-environment **cards → per-environment repo drill-down**
+but deliberately stops at browsing *one environment at a time*.
+- **Why:** when orgs are environments (`dev`/`stage`/`prod`) the same logical
+  image lives in several of them (`dev/api`, `prod/api`). The common operator
+  question is "**is `prod/api` behind `dev/api`?**" — which a per-environment
+  drill-down can't answer on one screen.
+- **What:** an image-centric matrix view — rows = logical image names,
+  columns = environments (`dev`/`stage`/`prod`), cells = current tag/digest +
+  promotion/drift status. Ties into the existing promotion flows
+  (`PromoteTagDialog`, promotions API, PR-registry).
+- **Blocked on backend data we don't expose yet:** "image `X` exists in orgs
+  `[Y…]` at digests `[…]`" — a cross-org GROUP BY that the metadata service
+  doesn't surface today. The environments-overview `ListOrgs` aggregate is a
+  natural place to grow this.
+- **Affects:** `services/metadata`, `services/management`, `frontend`.
+
 ---
 
 ## Tier 3 — Nice-to-have polish

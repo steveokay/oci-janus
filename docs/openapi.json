@@ -1629,6 +1629,37 @@
         ]
       }
     },
+    "/api/v1/orgs": {
+      "get": {
+        "operationId": "get_api_v1_orgs",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "GET /api/v1/orgs",
+        "tags": [
+          "orgs"
+        ]
+      }
+    },
     "/api/v1/orgs/{org}/members": {
       "get": {
         "operationId": "get_api_v1_orgs_org_members",

@@ -16,8 +16,11 @@ import type {
 // after any mutation.
 export const repoKeys = {
   all: ["repositories"] as const,
-  list: (visibility: "public" | "private" | "all", artifactType: RepoArtifactFilter) =>
-    [...repoKeys.all, "list", visibility, artifactType] as const,
+  list: (
+    visibility: "public" | "private" | "all",
+    artifactType: RepoArtifactFilter,
+    org?: string,
+  ) => [...repoKeys.all, "list", visibility, artifactType, org ?? ""] as const,
   detail: (org: string, repo: string) =>
     [...repoKeys.all, "detail", org, repo] as const,
 };
@@ -40,6 +43,10 @@ export type RepoArtifactFilter =
 interface UseRepositoriesParams {
   visibility?: RepoVisibilityFilter;
   artifactType?: RepoArtifactFilter;
+  // Optional org scope — when set the BFF returns only repos in this org
+  // (the per-environment /repositories/$org list). Absent means the flat
+  // whole-catalogue view.
+  org?: string;
   perPage?: number;
 }
 
@@ -49,10 +56,11 @@ interface UseRepositoriesParams {
 export function useRepositories({
   visibility = "all",
   artifactType = "all",
+  org,
   perPage = 25,
 }: UseRepositoriesParams = {}) {
   return useInfiniteQuery({
-    queryKey: repoKeys.list(visibility, artifactType),
+    queryKey: repoKeys.list(visibility, artifactType, org),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const params: Record<string, string> = {
@@ -60,6 +68,7 @@ export function useRepositories({
       };
       if (visibility !== "all") params.visibility = visibility;
       if (artifactType !== "all") params.artifact_type = artifactType;
+      if (org) params.org = org;
       if (pageParam) params.page_token = pageParam;
       const { data } = await apiClient.get<RepositoriesListResponse>(
         "/repositories",

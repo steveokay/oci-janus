@@ -893,7 +893,8 @@ GET  /healthz                             # Health check (no auth required)
 GET  /api/v1/stats                        # Tenant-scoped aggregated stats
 
 # Repository management
-GET  /api/v1/repositories                 # List repositories for tenant
+GET  /api/v1/orgs                         # List orgs (environments overview): per-org repo_count + storage + last_activity_at → metadata.ListOrgSummaries
+GET  /api/v1/repositories                 # List repositories for tenant (optional ?org=<name> filters to one org, BFF-side)
 POST /api/v1/repositories                 # Create repository
 GET  /api/v1/repositories/:org/:repo      # Get single repository
 PATCH /api/v1/repositories/:org/:repo     # Update repository (description + immutable_tags + require_signature)
