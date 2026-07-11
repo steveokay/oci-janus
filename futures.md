@@ -228,13 +228,27 @@ quickly in real operator workflows.
   Backend: new comparison RPC on services/metadata that joins two
   manifests.
 
-### 4. Image lineage / provenance surface
+### 4. Image lineage / provenance surface — DONE (PR #317, FE-API-060, 2026-07-11)
 - **Why:** A real deploy traces back to "this manifest was built from
   this commit by this CI run." OCI annotations carry it; we don't
   surface it.
 - **What:** Parse `org.opencontainers.image.*` annotations on push (we
   already store the manifest JSON) and surface as a "Provenance" panel
   on the tag detail page: git commit, source URL, build URL, vendor.
+- **Resolution:** Shipped as a new **Provenance** tab on the tag-detail
+  page. Rode entirely on existing plumbing — the BFF already fetched +
+  parsed `manifests.raw_json`, so **no new migration, proto, gRPC call,
+  or BFF route**: `handleGetManifest` gained `rawManifest.Annotations`
+  (top-level OCI annotations, present on both image manifests and
+  indexes) + `ManifestResponse.Provenance`, built by `buildProvenance`
+  (`services/management/internal/handler/provenance.go`). Annotations are
+  attacker-controlled, so URL fields pass through `safeExternalURL`
+  (http(s)-only, drops `javascript:`/`data:`), values are capped at 1 KiB,
+  and the raw passthrough map at 64 entries; the FE re-guards every
+  constructed href with a client-side `safeHref` (defense in depth). New
+  `provenance-panel.tsx` (linkified commit when source+revision present,
+  source/docs links, base image, collapsible raw annotations, empty
+  state). 3-agent review batch (security/qa/code-review) all PASS/APPROVE.
 
 ### 5. Pull bandwidth quota + per-tag pull stats — DONE (FE-API-042)
 - **Resolution:** Closed 2026-06-21. `pull.image` event published from

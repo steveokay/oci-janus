@@ -571,6 +571,7 @@ absorbed by the Phase 4.2 rework); both should be pruned from `futures.md`.
 
 - `FE-API-002` per-tag manifest detail (layers)
 - `FE-API-003` per-tag signing verification
+- `FE-API-060` image provenance — **Provenance** tab on tag detail (`GET .../tags/{tag}/manifest` now returns a `provenance` block built from OCI `org.opencontainers.image.*` annotations; XSS-guarded via `safeExternalURL` + client `safeHref`). New `provenance-panel.tsx`. Shipped PR #317 (Tier 2 #4).
 - `FE-API-004` per-repo activity feed
 - `FE-API-006` repo description / README
 - `FE-API-007` per-tenant registry hostname
