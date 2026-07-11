@@ -231,6 +231,15 @@ type Service struct {
 	// tests can pin the TOTP time step deterministically. nil ⇒ time.Now
 	// (resolved in the now() helper).
 	nowFn func() time.Time
+	// scimConfig is the DB-backed scim_config repository backing the SCIM
+	// provisioning surface (Users-only v1). Wired via SetSCIMRepo at startup.
+	// When nil (legacy fakes / SCIM never provisioned), VerifySCIMToken
+	// fail-closes so the /scim/v2/* routes deny by default.
+	scimConfig scimConfigRepo
+	// scimTenantID is the bootstrap tenant id stamped on the scim_config
+	// singleton row when a SCIM token is generated (Phase 3). Set alongside
+	// scimConfig via SetSCIMRepo.
+	scimTenantID uuid.UUID
 }
 
 // defaultMFAIssuer is the otpauth:// issuer label used when a constructor does
