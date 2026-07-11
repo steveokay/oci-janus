@@ -164,6 +164,9 @@
           "media_type": {
             "type": "string"
           },
+          "provenance": {
+            "$ref": "#/components/schemas/provenanceInfo"
+          },
           "quarantine_reason": {
             "type": "string"
           },
@@ -436,6 +439,59 @@
           },
           "size": {
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "provenanceInfo": {
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "authors": {
+            "type": "string"
+          },
+          "base_digest": {
+            "type": "string"
+          },
+          "base_name": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "documentation": {
+            "type": "string"
+          },
+          "licenses": {
+            "type": "string"
+          },
+          "ref_name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         },
         "type": "object"

@@ -13,6 +13,7 @@ import { DeleteTagDialog } from "@/components/tags/delete-tag-dialog";
 import { LayersPanel } from "@/components/tags/layers-panel";
 import { SigningPanel } from "@/components/tags/signing-panel";
 import { ReferrersPanel } from "@/components/tags/referrers-panel";
+import { ProvenancePanel } from "@/components/tags/provenance-panel";
 import { ChartPanel } from "@/components/tags/chart-panel";
 import {
   Tabs,
@@ -27,7 +28,7 @@ import { ErrorState } from "@/components/ui/error-state";
 // — it's the most informative surface when a scan exists, and the empty
 // state for an unscanned tag offers an inline "Other views" affordance
 // (DSGN-019) so the operator can hop to a sibling tab without bouncing.
-const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers", "chart"] as const;
+const TAG_TAB_VALUES = ["security", "history", "layers", "signing", "referrers", "provenance", "chart"] as const;
 type TagDetailTab = (typeof TAG_TAB_VALUES)[number];
 const DEFAULT_TAG_TAB: TagDetailTab = "security";
 
@@ -168,6 +169,7 @@ function TagDetail(): React.ReactElement {
           <TabsTrigger value="layers">Layers</TabsTrigger>
           <TabsTrigger value="signing">Signing</TabsTrigger>
           <TabsTrigger value="referrers">Referrers</TabsTrigger>
+          <TabsTrigger value="provenance">Provenance</TabsTrigger>
           {isHelm ? <TabsTrigger value="chart">Chart</TabsTrigger> : null}
         </TabsList>
 
@@ -207,6 +209,10 @@ function TagDetail(): React.ReactElement {
 
         <TabsContent value="referrers">
           <ReferrersPanel org={org} repo={repo} tag={tag} />
+        </TabsContent>
+
+        <TabsContent value="provenance">
+          <ProvenancePanel org={org} repo={repo} tag={tag} />
         </TabsContent>
 
         {isHelm ? (

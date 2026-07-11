@@ -1834,6 +1834,12 @@ type ManifestResponse struct {
 	QuarantineReason string     `json:"quarantine_reason,omitempty"`
 	QuarantinedAt    *time.Time `json:"quarantined_at,omitempty"`
 	QuarantinedBy    string     `json:"quarantined_by,omitempty"`
+	// Provenance surfaces the well-known OCI `org.opencontainers.image.*`
+	// annotations (git commit, source repo, build URL, vendor/version, base
+	// image, …) so the tag-detail Provenance tab can render image lineage.
+	// nil (and therefore omitted on the wire) when the manifest carries no
+	// annotations at all — the common case. See buildProvenance (Tier 2 #4).
+	Provenance *provenanceInfo `json:"provenance,omitempty"`
 }
 
 // rawManifest is the subset of an OCI/Docker manifest JSON we need to parse.
@@ -1865,6 +1871,12 @@ type rawManifest struct {
 			OSVersion    string `json:"os.version"`
 		} `json:"platform"`
 	} `json:"manifests"`
+	// Annotations sits at the top level of BOTH OCI image manifests and OCI
+	// image indexes (per the OCI image-spec), so parsing it here covers
+	// single-arch images and multi-arch indexes alike. These carry the
+	// `org.opencontainers.image.*` provenance labels surfaced by the
+	// Provenance tab (Tier 2 #4).
+	Annotations map[string]string `json:"annotations"`
 }
 
 // manifestEntry surfaces a single child manifest of an OCI index — what the
@@ -1974,6 +1986,10 @@ func (h *Handler) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		resp.IsIndex = len(resp.Manifests) > 0
+		// Build the provenance block from the top-level annotations. Returns
+		// nil (dropped by omitempty) when there are no annotations at all, so
+		// the FE renders its empty state for the common no-labels case.
+		resp.Provenance = buildProvenance(raw.Annotations)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
