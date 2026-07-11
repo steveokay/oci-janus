@@ -88,6 +88,9 @@ type metadataRepo interface {
 	GetTenantStorageBreakdown(ctx context.Context, tenantID string) (*metadatav1.GetTenantStorageBreakdownResponse, error)
 	// Tenant usage aggregate (FE-API-028) — storage + repo + org counts.
 	GetTenantUsage(ctx context.Context, tenantID string) (*metadatav1.TenantUsage, error)
+	// Per-org aggregate rows — repo count, storage, last push — backing the
+	// /repositories environments overview.
+	ListOrgSummaries(ctx context.Context, tenantID string) ([]*metadatav1.OrgSummary, error)
 	// Scan results
 	UpsertScanResult(ctx context.Context, scanID, tenantID, status string, findingsJSON []byte, severityCounts map[string]int32, repoID, manifestDigest, scannerName, scannerVersion string) error
 	GetScanResult(ctx context.Context, tenantID, manifestDigest string) (*metadatav1.ScanResult, error)
@@ -1059,10 +1062,16 @@ func (h *MetadataHandler) GetTenantUsage(ctx context.Context, req *metadatav1.Ge
 	return usage, nil
 }
 
-// ListOrgSummaries is implemented in Task 3. Stub keeps the service
-// compiling immediately after the proto regen.
+// ListOrgSummaries returns per-organization aggregate rows for the tenant.
 func (h *MetadataHandler) ListOrgSummaries(ctx context.Context, req *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListOrgSummaries not yet implemented")
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	orgs, err := h.repo.ListOrgSummaries(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &metadatav1.ListOrgSummariesResponse{Orgs: orgs}, nil
 }
 
 // CountRepositories returns the number of repositories owned by the tenant.
