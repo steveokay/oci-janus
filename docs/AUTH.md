@@ -304,6 +304,52 @@ sessions): `GET /users/me/sessions`, `DELETE /users/me/sessions/{sid}`
 
 ---
 
+## SCIM provisioning (`/scim/v2/*`)
+
+SCIM 2.0 (Users-only v1, Tier-1 #5) lets an enterprise IdP (Okta / Entra)
+provision + deprovision users. It is a **superuser surface** and is deliberately
+isolated from the user-auth path.
+
+**Token model.** A single global SCIM bearer token gates every `/scim/v2/*`
+route. The raw token is `scim.<64-hex>` (256 bits from `crypto/rand`); only its
+Argon2id hash is persisted, in the `scim_config` singleton row (`id = 1`). The
+token is **not** an env var — it is generated/rotated via the Phase 3 admin API
+and stored in the DB. `requireSCIMAuth` extracts the Bearer token
+(`libs/auth/bearer`), verifies it against the stored hash, and calls the wrapped
+handler only on a match.
+
+**Isolated principal.** The SCIM principal is **not** a user: it carries no RBAC
+roles, mints no JWT, and is valid only under `/scim/v2/*`. It never touches the
+`requireAuth` JWT/API-key dispatch path.
+
+**Fail-closed.** Verification denies by default. A disabled config, an unset
+config (SCIM never provisioned — `SetSCIMRepo` wires the repo at startup; when it
+is nil `VerifySCIMToken` returns `(false, nil)`), a wrong token, or a missing/
+malformed header all return `401` with an RFC 7644 error envelope. The error is
+uniform — it never distinguishes "no token" from "wrong token" from "feature
+disabled" (no oracle).
+
+**Provisioning invariants (spec D3/D4/D5).**
+
+- **D5 — baseline grant.** A newly provisioned user is passwordless
+  (IdP-authenticated only), lands under the deployment bootstrap tenant
+  (`s.scimTenantID`, threaded from `deployment_metadata` in single mode — not the
+  dev default), and receives `reader@org:*`. A failed grant fails the whole
+  provision so no role-less orphan is left behind.
+- **D3 — takeover guard.** On an email collision, an existing **passwordless**
+  account is linked (external_id backfilled); an existing **local-password**
+  account is refused with `409 uniqueness`. The IdP can never silently adopt an
+  account that still authenticates with a password.
+- **D4 — disable, don't delete.** `active:false` (PATCH/PUT) and `DELETE` route
+  to the existing `SetUserDisabled` primitive, which flips the status **and
+  revokes the account's JTIs + API keys**. Nothing is hard-deleted, so the audit
+  trail + per-tenant hash chain stay intact. `active:true` re-enables.
+
+Cross-tenant reads are impossible: `GetSCIMUserByID`/`ListSCIMUsers` scope every
+query to the bootstrap tenant and surface an out-of-tenant id as `404`.
+
+---
+
 ## Dev fallback
 
 When cert paths are unset, services log `slog.Warn` and use

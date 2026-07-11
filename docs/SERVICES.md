@@ -256,6 +256,42 @@ On `GrantRole`/`RevokeRole` success the handler publishes `rbac.role_granted` / 
 - `SAML_SP_CERT_PATH` / `SAML_SP_KEY_PATH` — the process-wide SP signing keypair (unset ⇒ SAML routes return `501 NOTCONFIGURED`). See [`docs/SAML.md`](SAML.md).
 - `SSO_SAML_TRUST_EMAIL` — treat the IdP assertion as proof of email ownership during auto-provisioning.
 
+**SCIM 2.0 provisioning surface (Users-only v1, Tier-1 #5):**
+
+`registry-auth` exposes an RFC 7643/7644 SCIM 2.0 endpoint at `/scim/v2/*` so an
+enterprise IdP (Okta / Entra) can provision and deprovision users. The surface
+is isolated from the user-JWT auth path — every route is gated by
+`requireSCIMAuth`, which verifies a single **global SCIM bearer token** (an
+Argon2-hashed `scim.<hex>` value stored in the `scim_config` singleton row, DB
+not env). The SCIM principal carries no RBAC roles and is valid only under
+`/scim/v2/*`; verification is **fail-closed** (a disabled/unset config, wrong
+token, or missing header all return `401`, with no oracle distinguishing them).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/scim/v2/ServiceProviderConfig` | Capability advertisement (patch supported, filter maxResults 200, OAuth bearer scheme). |
+| GET | `/scim/v2/ResourceTypes` / `/scim/v2/Schemas` | Static `User` resource type + `core:2.0:User` schema. |
+| POST | `/scim/v2/Users` | Provision (or link) a user → `201`. |
+| GET | `/scim/v2/Users` | List, filtered by `userName eq`, `externalId eq`, or `active eq true|false`, paged (`startIndex`/`count`). |
+| GET/PUT/PATCH/DELETE | `/scim/v2/Users/{id}` | Read / replace / patch-active / deactivate a user. |
+
+Behaviour (spec decisions D3–D6):
+
+- **Provision (D5):** POST creates a passwordless (IdP-authenticated) user under
+  the deployment **bootstrap tenant**, stamps `external_id` + `provisioned_via='scim'`,
+  and grants a baseline `reader@org:*` role (SSO parity).
+- **Collision (D3):** if the email matches an existing **passwordless** account
+  the two are linked (external_id backfilled); if it matches a **local-password**
+  account the request is refused with `409 uniqueness` — the IdP must not adopt
+  an account that can still log in with a password (takeover guard).
+- **Deprovision (D4):** `active:false` (PATCH/PUT) and `DELETE` route to the
+  existing disable primitive — the account is **disabled, never hard-deleted**
+  (audit trail + hash chain stay intact), and its JTIs + API keys are revoked.
+  `active:true` re-enables. Non-`active` PATCH ops return `501` in v1.
+
+Token generation/rotation is the Phase 3 admin surface (forthcoming); Phases 1–2
+ship the schema, auth boundary, and Users endpoints.
+
 ---
 
 ## 3. registry-core
