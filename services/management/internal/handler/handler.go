@@ -919,6 +919,16 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Optional org filter (per-environment repo list — /repositories/{org}).
+	// metadata streams by org_id, not org NAME, so we filter the streamed
+	// results here in the BFF exactly like the visibility filter below.
+	// Validate against the platform org-name allowlist before use (CLAUDE.md §7).
+	orgFilter := r.URL.Query().Get("org")
+	if orgFilter != "" && validateOrgName(orgFilter) != nil {
+		writeError(w, http.StatusBadRequest, "invalid org")
+		return
+	}
+
 	// per_page: 1–100, default 25.
 	pageSize := int32(25)
 	if s := r.URL.Query().Get("per_page"); s != "" {
@@ -964,6 +974,10 @@ func (h *Handler) handleListRepositories(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		if visibility == "private" && repo.GetIsPublic() {
+			continue
+		}
+		// Narrow to a single org when ?org= is supplied.
+		if orgFilter != "" && repo.GetOrg() != orgFilter {
 			continue
 		}
 		repos = append(repos, repoToResponse(repo))

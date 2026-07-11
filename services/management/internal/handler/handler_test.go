@@ -247,15 +247,10 @@ func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.Coun
 }
 
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
-	_ = stream.Send(&metadatav1.Repository{
-		RepoId:       testRepoID,
-		OrgId:        testOrgID,
-		Name:         "myorg/myrepo",
-		IsPublic:     false,
-		StorageUsed:  512,
-		StorageQuota: 10737418240,
-		CreatedAt:    timestamppb.Now(),
-	})
+	// Two repos in different orgs so the BFF's client-side ?org= filter is
+	// observable. metadata streams every repo; the BFF narrows the results.
+	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
+	_ = stream.Send(&metadatav1.Repository{RepoId: "repo-2", OrgId: "org-prod", Org: "prod", Name: "api", StorageUsed: 256, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
 	return nil
 }
 
@@ -1097,8 +1092,34 @@ func TestListRepositories_adminToken_returnsList(t *testing.T) {
 	decodeJSON(t, resp, &body)
 
 	repos, ok := body["repositories"].([]any)
-	if !ok || len(repos) != 1 {
-		t.Errorf("expected 1 repo, got %v", body["repositories"])
+	if !ok || len(repos) != 2 {
+		t.Errorf("expected 2 repos, got %v", body["repositories"])
+	}
+}
+
+func TestListRepositories_orgFilter_narrowsToOneOrg(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories?org=prod", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Repositories []struct {
+			Org  string `json:"org"`
+			Name string `json:"name"`
+		} `json:"repositories"`
+	}
+	decodeJSON(t, resp, &body)
+	if len(body.Repositories) != 1 || body.Repositories[0].Org != "prod" {
+		t.Errorf("want 1 prod repo, got %+v", body.Repositories)
+	}
+}
+
+func TestListRepositories_invalidOrgFilter_returns400(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories?org=Bad_Org", adminToken)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
 
