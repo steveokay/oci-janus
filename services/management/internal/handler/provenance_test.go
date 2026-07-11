@@ -10,11 +10,15 @@
 //   - well-known OCI annotations populate the typed provenance fields;
 //   - a `javascript:` URL in org.opencontainers.image.url is dropped to "";
 //   - an over-long annotation value is truncated to maxAnnotationValueLen;
-//   - a manifest with no annotations omits the provenance block entirely.
+//   - a manifest with no annotations omits the provenance block entirely;
+//   - the raw annotations passthrough is capped at maxRawAnnotations (64);
+//   - annotations are read at the top level of an OCI image INDEX too;
+//   - an over-long `javascript:` URL is dropped (sanitise-before-truncate).
 package handler_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -183,5 +187,114 @@ func TestProvenance_noAnnotations_omitsBlock(t *testing.T) {
 	}
 	if _, present := rawBody["provenance"]; present {
 		t.Errorf("expected provenance key omitted when no annotations, got %q", rawBody["provenance"])
+	}
+}
+
+// TestProvenance_rawAnnotationsCapped seeds far more than maxRawAnnotations (64)
+// bespoke annotations and asserts the raw passthrough map is bounded to exactly
+// 64 entries — the self-imposed payload-bloat guard for an attacker-controlled
+// annotation set. Map iteration order is unspecified so which 64 survive is
+// non-deterministic, but the count is deterministic.
+func TestProvenance_rawAnnotationsCapped(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+
+	// 100 bespoke keys — well over the 64-entry cap.
+	var sb strings.Builder
+	sb.WriteString(`{"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:cfg","size":1},"layers":[],"annotations":{`)
+	for i := range 100 {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `"com.acme.k%d":"v%d"`, i, i)
+	}
+	sb.WriteString("}}")
+	setManifest(t, []byte(sb.String()), nil)
+
+	resp := env.get(t, manifestPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body manifestProvenanceWire
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Provenance == nil {
+		t.Fatal("expected a provenance block, got nil")
+	}
+	if got := len(body.Provenance.Annotations); got != 64 {
+		t.Errorf("raw annotations: expected cap of 64 entries, got %d", got)
+	}
+}
+
+// TestProvenance_indexManifestAnnotations proves annotations are read at the
+// top level of an OCI image INDEX (multi-arch), not just a single-arch image
+// manifest — the manifest list carries config-less `manifests[]` plus a
+// top-level annotations block, which rawManifest.Annotations must still parse.
+func TestProvenance_indexManifestAnnotations(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+
+	raw := []byte(`{
+		"mediaType": "application/vnd.oci.image.index.v1+json",
+		"manifests": [
+			{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:child","size":10,"platform":{"architecture":"amd64","os":"linux"}}
+		],
+		"annotations": {
+			"org.opencontainers.image.source": "https://github.com/acme/widget",
+			"org.opencontainers.image.revision": "idxrevision123"
+		}
+	}`)
+	setManifest(t, raw, nil)
+
+	resp := env.get(t, manifestPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body manifestProvenanceWire
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Provenance == nil {
+		t.Fatal("expected a provenance block for an index manifest, got nil")
+	}
+	if body.Provenance.Source != "https://github.com/acme/widget" {
+		t.Errorf("index source: got %q", body.Provenance.Source)
+	}
+	if body.Provenance.Revision != "idxrevision123" {
+		t.Errorf("index revision: got %q", body.Provenance.Revision)
+	}
+}
+
+// TestProvenance_dangerousURLTooLong_dropped locks the security-relevant
+// ordering in buildProvenance: safeExternalURL runs BEFORE truncateValue, so an
+// over-long `javascript:` URL is dropped to "" rather than surviving as a
+// truncated `javascript:aaa…` prefix that the FE might treat as a live href.
+func TestProvenance_dangerousURLTooLong_dropped(t *testing.T) {
+	env := newReferrersTestEnv(t, true)
+
+	// A javascript: URL far longer than maxAnnotationValueLen (1024).
+	danger := "javascript:" + strings.Repeat("a", 2000)
+	raw := []byte(`{
+		"config": {"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:cfg","size":1},
+		"layers": [],
+		"annotations": {"org.opencontainers.image.url": "` + danger + `"}
+	}`)
+	setManifest(t, raw, nil)
+
+	resp := env.get(t, manifestPath, adminToken)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body manifestProvenanceWire
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Provenance == nil {
+		t.Fatal("expected a provenance block, got nil")
+	}
+	if body.Provenance.URL != "" {
+		t.Errorf("over-long javascript: URL must be dropped to \"\" (sanitise before truncate), got %q", body.Provenance.URL)
 	}
 }
