@@ -202,6 +202,12 @@
       },
       "RepoResponse": {
         "properties": {
+          "artifact_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "created_at": {
             "format": "date-time",
             "type": "string"
