@@ -5,9 +5,9 @@
 > 2026-06-30 to keep the project rules file lean.
 >
 > **What this file is NOT:** the audit log. Per-CVE lifecycle (SEC-NNN
-> IDs + resolution dates) lives in [`../security.md`](../security.md).
+> IDs + resolution dates) lives in [`security.md`](https://github.com/steveokay/oci-janus/blob/main/security.md).
 > Currently-open security items are tracked in
-> [`../status-tracker.md`](../status-tracker.md).
+> [`status-tracker.md`](https://github.com/steveokay/oci-janus/blob/main/status-tracker.md).
 >
 > **Scope:** these rules apply to **every service** without exception.
 > A new service is not "done" until every box can be ticked or the
@@ -55,4 +55,4 @@
 ---
 
 > **Numbered SEC items** (SEC-001..SEC-036 and beyond) and their
-> resolution notes live in [`../security.md`](../security.md).
+> resolution notes live in [`security.md`](https://github.com/steveokay/oci-janus/blob/main/security.md).

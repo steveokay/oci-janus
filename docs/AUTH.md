@@ -267,7 +267,7 @@ credential KEK (`SSO_CREDENTIAL_KEY_HEX`). It is required at startup
 (32 bytes / 64 hex chars) and rotated independently via `registry-auth
 rotate-kek --mfa` (`users.mfa_secret_enc` /
 `users.mfa_secret_kek_version`); see
-[`../infra/runbooks/kek-rotation.md`](../infra/runbooks/kek-rotation.md).
+[`infra/runbooks/kek-rotation.md`](https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/kek-rotation.md).
 The generation stamped on newly-enrolled secrets is
 `MFA_SECRET_KEK_VERSION` (default 1) — set it to the rotated generation
 in lock-step with a `--mfa` sweep so fresh enrolments don't stamp a
@@ -315,7 +315,7 @@ config validation in `main.go` must reject empty cert paths when
 
 > **Cross-references:**
 > - Rules + non-negotiable contracts: `CLAUDE.md` §7
-> - Per-CVE audit log: [`../security.md`](../security.md)
+> - Per-CVE audit log: [`security.md`](https://github.com/steveokay/oci-janus/blob/main/security.md)
 > - Auth service implementation: `services/auth/`
 > - mTLS library: `libs/auth/mtls/`
-> - Decision rationale: [`adr/`](adr/) (ADR-0003, ADR-0024 are the main ones)
+> - Decision rationale: [`adr/`](adr/README.md) (ADR-0003, ADR-0024 are the main ones)

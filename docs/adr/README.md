@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory holds one ADR per entry in [CLAUDE.md §14 Decision Log](../../CLAUDE.md#14-decision-log). Each ADR carries a load-bearing `Verified by` pointer to a file:symbol that, if removed, would invalidate the decision — making the ADRs grep-able from the codebase.
+This directory holds one ADR per entry in [CLAUDE.md §14 Decision Log](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md#14-decision-log). Each ADR carries a load-bearing `Verified by` pointer to a file:symbol that, if removed, would invalidate the decision — making the ADRs grep-able from the codebase.
 
 Status legend:
 

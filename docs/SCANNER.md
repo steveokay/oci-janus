@@ -23,7 +23,7 @@ It is an orchestrator: it consumes RabbitMQ events (`push.completed` or
 `scan.queued`), fetches the image layers from `registry-storage`, stages
 them into a temp directory, and then invokes an **adapter binary** as a
 subprocess. The adapter is whatever satisfies the JSON-RPC contract
-defined in [§3 below](#3-the-jsonrpc-plugin-contract). One adapter is
+defined in [§3 below](#3-the-json-rpc-plugin-contract). One adapter is
 active at a time, selected via `SCANNER_PLUGIN_PATH`. Swapping scanners
 — Trivy → Grype → customer-supplied — is one env-var change plus a
 restart.
@@ -200,13 +200,13 @@ those prefixes (e.g. `TRIVY_CACHE_DIR`, `GRYPE_DB_PATH`).
 ## 4. Writing a new adapter
 
 The dev-stub is intentionally small — read
-[`infra/scanner-plugins/dev-stub/main.go`](../infra/scanner-plugins/dev-stub/main.go)
+[`infra/scanner-plugins/dev-stub/main.go`](https://github.com/steveokay/oci-janus/blob/main/infra/scanner-plugins/dev-stub/main.go)
 first; it's ~150 LOC and demonstrates the full contract with no
 external CVE engine to distract from the wire shape.
 
 The Trivy adapter is the realistic template if you're wrapping a real
 engine — read
-[`infra/scanner-plugins/trivy-adapter/main.go`](../infra/scanner-plugins/trivy-adapter/main.go).
+[`infra/scanner-plugins/trivy-adapter/main.go`](https://github.com/steveokay/oci-janus/blob/main/infra/scanner-plugins/trivy-adapter/main.go).
 
 Quick checklist when adding `infra/scanner-plugins/grype-adapter/` (or
 your own):

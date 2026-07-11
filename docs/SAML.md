@@ -132,7 +132,7 @@ expires.
 ### 2.2 Production (Kubernetes)
 
 Mint the keypair via cert-manager with an internal CA issuer (same model
-as the mTLS certs — see [CLAUDE.md §7](../CLAUDE.md#7-authentication--security)).
+as the mTLS certs — see [CLAUDE.md §7](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md#7-authentication--security)).
 Mount the resulting `Secret` as files under `/etc/registry-auth/`. The
 `SAML_SP_CERT_PATH` + `SAML_SP_KEY_PATH` env vars come from the same
 ConfigMap that drives mTLS.

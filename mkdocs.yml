@@ -24,6 +24,13 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 
+# Fail the build on broken internal links / anchors / nav references. All
+# cross-repo pointers (CLAUDE.md, README.md, security.md, infra/runbooks, …)
+# were rewritten to absolute GitHub URLs so nothing escapes the docs tree
+# (FUT-076). Keep it green: link within docs/ relatively, everything else
+# via https://github.com/steveokay/oci-janus/....
+strict: true
+
 theme:
   name: material
   language: en
