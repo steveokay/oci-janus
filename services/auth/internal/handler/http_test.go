@@ -494,6 +494,25 @@ func (f *handlerFakeUserRepo) ListUnusedBackupCodes(_ context.Context, _ uuid.UU
 
 func (f *handlerFakeUserRepo) MarkBackupCodeUsed(_ context.Context, _ uuid.UUID) error { return nil }
 
+// SCIM 2.0 provisioning stubs (Tier-1 #5). Handler tests drive the SCIM surface
+// through a fake service, so these repo methods are unused zero-value stubs that
+// only exist to satisfy the service.UserRepo interface.
+func (f *handlerFakeUserRepo) CreateSCIMUser(_ context.Context, _ uuid.UUID, _, _, _, _ string) (*repository.User, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (f *handlerFakeUserRepo) GetUserByExternalID(_ context.Context, _ uuid.UUID, _ string) (*repository.User, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (f *handlerFakeUserRepo) SetExternalID(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (f *handlerFakeUserRepo) ListSCIMUsers(_ context.Context, _ uuid.UUID, _, _ string, _ *bool, _, _ int) ([]*repository.User, int, error) {
+	return nil, 0, nil
+}
+
 // handlerFakeAPIKeyRepo implements service.APIKeyRepo for handler tests.
 type handlerFakeAPIKeyRepo struct {
 	keys map[uuid.UUID]*repository.APIKey

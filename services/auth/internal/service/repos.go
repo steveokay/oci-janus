@@ -108,6 +108,15 @@ type userRepo interface {
 	DeleteBackupCodes(ctx context.Context, userID uuid.UUID) error
 	ListUnusedBackupCodes(ctx context.Context, userID uuid.UUID) ([]repository.BackupCode, error)
 	MarkBackupCodeUsed(ctx context.Context, id uuid.UUID) error
+	// SCIM 2.0 provisioning (Tier-1 #5). CreateSCIMUser inserts a passwordless
+	// IdP-provisioned user; GetUserByExternalID resolves the (tenant_id,
+	// external_id) correlation key; SetExternalID backfills the link on an
+	// existing passwordless account (spec D3); ListSCIMUsers backs the paged +
+	// filtered /scim/v2/Users list.
+	CreateSCIMUser(ctx context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*repository.User, error)
+	GetUserByExternalID(ctx context.Context, tenantID uuid.UUID, externalID string) (*repository.User, error)
+	SetExternalID(ctx context.Context, tenantID, userID uuid.UUID, externalID string) error
+	ListSCIMUsers(ctx context.Context, tenantID uuid.UUID, byUsername, byExternalID string, activeFilter *bool, startIndex, count int) ([]*repository.User, int, error)
 }
 
 // apiKeyRepo is the subset of *repository.APIKeyRepository methods used by Service.

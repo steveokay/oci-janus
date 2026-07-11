@@ -65,6 +65,9 @@ type fakeUserRepo struct {
 	// the Task 6 single-use consumption path (ListUnusedBackupCodes /
 	// MarkBackupCodeUsed) has real behaviour to exercise.
 	backupCodes map[uuid.UUID][]repository.BackupCode
+	// externalIDs maps userID → external_id for the SCIM provisioning fakes
+	// (Tier-1 #5). Lazily initialised so non-SCIM tests pay nothing.
+	externalIDs map[uuid.UUID]string
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -635,6 +638,86 @@ func (f *fakeUserRepo) MarkBackupCodeUsed(_ context.Context, id uuid.UUID) error
 		}
 	}
 	return repository.ErrNotFound
+}
+
+// --- SCIM 2.0 provisioning fakes (Tier-1 #5) ---
+//
+// These back the SCIM provision/list/link paths against the same in-memory
+// users map so the service-layer SCIM tests exercise real fake behaviour. Keyed
+// by username like the rest of the fake; external_id is tracked via a parallel
+// map so GetUserByExternalID / ListSCIMUsers can filter on it.
+
+func (f *fakeUserRepo) CreateSCIMUser(_ context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*repository.User, error) {
+	if _, exists := f.users[username]; exists {
+		return nil, repository.ErrAlreadyExists
+	}
+	dn := displayName
+	u := &repository.User{
+		ID:           uuid.New(),
+		TenantID:     tenantID,
+		Username:     username,
+		Email:        email,
+		DisplayName:  &dn,
+		PasswordHash: "", // passwordless — IdP-provisioned
+		IsActive:     true,
+		Kind:         "human",
+	}
+	f.users[username] = u
+	if f.externalIDs == nil {
+		f.externalIDs = make(map[uuid.UUID]string)
+	}
+	f.externalIDs[u.ID] = externalID
+	return u, nil
+}
+
+func (f *fakeUserRepo) GetUserByExternalID(_ context.Context, tenantID uuid.UUID, externalID string) (*repository.User, error) {
+	for _, u := range f.users {
+		if u.TenantID == tenantID && f.externalIDs[u.ID] == externalID && externalID != "" {
+			return u, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeUserRepo) SetExternalID(_ context.Context, _ uuid.UUID, userID uuid.UUID, externalID string) error {
+	if f.externalIDs == nil {
+		f.externalIDs = make(map[uuid.UUID]string)
+	}
+	f.externalIDs[userID] = externalID
+	return nil
+}
+
+func (f *fakeUserRepo) ListSCIMUsers(_ context.Context, tenantID uuid.UUID, byUsername, byExternalID string, activeFilter *bool, startIndex, count int) ([]*repository.User, int, error) {
+	var matched []*repository.User
+	for _, u := range f.users {
+		if u.TenantID != tenantID {
+			continue
+		}
+		if byUsername != "" && u.Username != byUsername {
+			continue
+		}
+		if byExternalID != "" && f.externalIDs[u.ID] != byExternalID {
+			continue
+		}
+		if activeFilter != nil && u.IsActive != *activeFilter {
+			continue
+		}
+		matched = append(matched, u)
+	}
+	total := len(matched)
+	// Apply 1-based offset + limit.
+	off := startIndex - 1
+	if off < 0 {
+		off = 0
+	}
+	if off > len(matched) {
+		off = len(matched)
+	}
+	page := matched[off:]
+	if count >= 0 && len(page) > count {
+		page = page[:count]
+	}
+	return page, total, nil
 }
 
 // fakeAPIKeyRepo is an in-memory apiKeyRepo fake.
