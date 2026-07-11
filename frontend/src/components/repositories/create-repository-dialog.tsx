@@ -70,6 +70,17 @@ export function CreateRepositoryDialog({
   // can hit this; everyone else falls back to the existing error toast.
   const [claimableOrg, setClaimableOrg] = React.useState<string | null>(null);
 
+  // Single source of truth for the pristine form shape, seeded with
+  // `defaultOrg` (the per-environment page pre-selects its org). Used for
+  // both the initial `defaultValues` and every `reset()` so the three sites
+  // can't drift out of sync.
+  const defaultFormValues: FormValues = {
+    org: defaultOrg ?? "",
+    name: "",
+    is_public: false,
+    description: "",
+  };
+
   const {
     register,
     handleSubmit,
@@ -79,7 +90,7 @@ export function CreateRepositoryDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { org: defaultOrg ?? "", name: "", is_public: false, description: "" },
+    defaultValues: defaultFormValues,
   });
 
   const isPublic = watch("is_public");
@@ -91,7 +102,7 @@ export function CreateRepositoryDialog({
     });
     toast.success(`Created ${created.org}/${created.name}.`);
     setClaimableOrg(null);
-    reset({ org: defaultOrg ?? "", name: "", is_public: false, description: "" });
+    reset(defaultFormValues);
     onOpenChange(false);
     void navigate({
       to: "/repositories/$org/$repo",
@@ -158,7 +169,7 @@ export function CreateRepositoryDialog({
       open={open}
       onOpenChange={(o) => {
         if (!o) {
-          reset({ org: defaultOrg ?? "", name: "", is_public: false, description: "" });
+          reset(defaultFormValues);
           setClaimableOrg(null);
         }
         onOpenChange(o);
