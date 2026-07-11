@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -267,7 +268,58 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 		repo.MaxCvssScore = cvssColumnToProto(maxCVSS)
 		repos = append(repos, &repo)
 	}
-	return repos, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Second pass: attach the distinct artifact types per repo. Computed in Go
+	// via deriveArtifactType (the single source of truth) rather than an SQL
+	// re-implementation of the media-type mapping. One query keyed by the
+	// result repo IDs; skipped entirely when the page is empty.
+	if len(repos) > 0 {
+		repoIDs := make([]string, len(repos))
+		for i, rp := range repos {
+			repoIDs[i] = rp.GetRepoId()
+		}
+		typeRows, err := r.reader().Query(ctx,
+			`SELECT repo_id, COALESCE(config_media_type, ''), media_type
+			   FROM manifests WHERE repo_id = ANY($1::uuid[])`, repoIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list repo artifact types: %w", err)
+		}
+		defer typeRows.Close()
+		byRepo := make(map[string]map[string]struct{}, len(repos))
+		for typeRows.Next() {
+			var repoID, configMediaType, mediaType string
+			if err := typeRows.Scan(&repoID, &configMediaType, &mediaType); err != nil {
+				return nil, fmt.Errorf("scan repo artifact type: %w", err)
+			}
+			at := deriveArtifactType(configMediaType, mediaType)
+			if at == "" {
+				continue
+			}
+			if byRepo[repoID] == nil {
+				byRepo[repoID] = make(map[string]struct{}, 2)
+			}
+			byRepo[repoID][at] = struct{}{}
+		}
+		if err := typeRows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate repo artifact types: %w", err)
+		}
+		for _, rp := range repos {
+			set := byRepo[rp.GetRepoId()]
+			if len(set) == 0 {
+				continue
+			}
+			ats := make([]string, 0, len(set))
+			for t := range set {
+				ats = append(ats, t)
+			}
+			sort.Strings(ats)
+			rp.ArtifactTypes = ats
+		}
+	}
+	return repos, nil
 }
 
 // DeleteRepository removes a repository row (cascades to tags, manifests, blob_links).
