@@ -5,6 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/steveokay/oci-janus/services/auth/internal/repository"
 )
 
 // newSCIMAuthTestHandler wires requireSCIMAuth(verify, next) onto a mux under
@@ -81,5 +85,66 @@ func TestSCIMDiscovery_serviceProviderConfig(t *testing.T) {
 	}
 	if _, ok := body["authenticationSchemes"]; !ok {
 		t.Errorf("ServiceProviderConfig must advertise authenticationSchemes")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestParseUserFilter(t *testing.T) {
+	cases := []struct {
+		in                string
+		wantUser, wantExt string
+		wantActive        *bool
+		wantErr           bool
+	}{
+		{in: ``, wantUser: "", wantExt: ""},
+		{in: `userName eq "alice"`, wantUser: "alice"},
+		{in: `externalId eq "ext-1"`, wantExt: "ext-1"},
+		{in: `active eq true`, wantActive: boolPtr(true)},
+		{in: `active eq false`, wantActive: boolPtr(false)},
+		{in: `displayName co "x"`, wantErr: true}, // unsupported
+	}
+	for _, c := range cases {
+		u, e, a, err := parseUserFilter(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("%q: want error", c.in)
+			}
+			continue
+		}
+		if err != nil || u != c.wantUser || e != c.wantExt {
+			t.Errorf("%q: got user=%q ext=%q err=%v", c.in, u, e, err)
+		}
+		if (a == nil) != (c.wantActive == nil) || (a != nil && *a != *c.wantActive) {
+			t.Errorf("%q: active mismatch", c.in)
+		}
+	}
+}
+
+func TestToSCIMUser_mapsCoreFields(t *testing.T) {
+	id := uuid.New()
+	dn := "Alice Example"
+	u := &repository.User{
+		ID:          id,
+		Username:    "alice",
+		Email:       "alice@example.io",
+		DisplayName: &dn,
+		IsActive:    true,
+	}
+	su := toSCIMUser(u, "ext-1")
+	if su.ID != id.String() {
+		t.Errorf("id: got %q want %q", su.ID, id.String())
+	}
+	if su.UserName != "alice" || su.ExternalID != "ext-1" || su.DisplayName != dn {
+		t.Errorf("core fields mismatch: %+v", su)
+	}
+	if !su.Active {
+		t.Error("active should be true")
+	}
+	if su.primaryEmail() != "alice@example.io" {
+		t.Errorf("primaryEmail: got %q", su.primaryEmail())
+	}
+	if su.Meta == nil || su.Meta.Location != "/scim/v2/Users/"+id.String() {
+		t.Errorf("meta.location mismatch: %+v", su.Meta)
 	}
 }
