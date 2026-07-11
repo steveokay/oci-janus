@@ -1,8 +1,10 @@
 # Runbook — KEK Rotation (RED-FU-015)
 
 Rotate a per-service key-encryption key (KEK) that protects secrets at rest.
-Four services own an independent KEK; rotate each one separately. There is **no
-single master KEK**.
+Four services own independent KEKs; rotate each one separately. There is **no
+single master KEK**. Two services (registry-auth, registry-audit) own **more than
+one KEK domain** — each domain has its own key material and its own `rotate-kek`
+selector flag, and rotates in a separate run.
 
 | Service | Secrets protected | DSN env | KEK env (runtime) | `rotate-kek` flag |
 |---|---|---|---|---|
@@ -10,7 +12,9 @@ single master KEK**.
 | registry-auth | TOTP MFA secrets (`users.mfa_secret_enc`) | `AUTH_DB_DSN` | `MFA_SECRET_KEY_HEX` | `--mfa` |
 | registry-proxy | upstream registry passwords | `DB_DSN` | `CREDENTIAL_KEY_HEX` | *(none)* |
 | registry-webhook | webhook HMAC keys | `DB_DSN` | `CREDENTIAL_KEY_HEX` | *(none)* |
-| registry-audit | export HMAC secret + bearer token | `DB_DSN` | `AUDIT_EXPORT_SECRETS_KEY_HEX` | *(none)* |
+| registry-audit | export HMAC secret + bearer token (`audit_export_configs`) | `DB_DSN` | `AUDIT_EXPORT_SECRETS_KEY_HEX` | *(none)* |
+| registry-audit | webhook notification-channel secret (`notification_webhook_config.secret_enc`, FUT-019) | `DB_DSN` | `NOTIFY_WEBHOOK_KEY_HEX` | `--notify-webhook` |
+| registry-audit | email notification-channel secrets (`email_transport_config.resend_api_key_enc` / `smtp_password_enc`, FUT-019) | `DB_DSN` | `NOTIFY_EMAIL_KEY_HEX` | `--notify-email` |
 
 > `CREDENTIAL_KEY_HEX` is the *same variable name* in proxy and webhook but a
 > **different value per deployment**. Rotating one does not affect the other.
@@ -26,6 +30,20 @@ single master KEK**.
 > sweep then targets `users.mfa_secret_enc` / `users.mfa_secret_kek_version`.
 > Example: `KEK_OLD_HEX=<old-mfa> KEK_NEW_HEX=<new-mfa> registry-auth rotate-kek --mfa`.
 > Unenrolled users have a NULL `mfa_secret_enc` and are skipped automatically.
+
+> **registry-audit has THREE independent KEK domains** (FUT-019 added two). The
+> default run rotates the audit-export secrets (`audit_export_configs`) under the
+> `AUDIT_EXPORT_SECRETS_KEY_HEX` key material. Add `--notify-webhook` to rotate
+> the webhook notification-channel secret (`notification_webhook_config.secret_enc`,
+> key material `NOTIFY_WEBHOOK_KEY_HEX`) or `--notify-email` to rotate the email
+> notification-channel secrets (`email_transport_config.resend_api_key_enc` and
+> `.smtp_password_enc`, key material `NOTIFY_EMAIL_KEY_HEX`). As with `--mfa`, set
+> `KEK_OLD_HEX`/`KEK_NEW_HEX` to the **selected domain's** old/new key. The two
+> selectors are mutually exclusive — combining them is rejected. Tenants that have
+> never configured a channel (NULL secret) are skipped automatically, and an email
+> row rotates only its populated provider column (resend *or* smtp), leaving the
+> unused NULL column untouched.
+> Example: `KEK_OLD_HEX=<old-wh> KEK_NEW_HEX=<new-wh> registry-audit rotate-kek --notify-webhook`.
 
 The `rotate-kek` subcommand reads the OLD and NEW keys from `KEK_OLD_HEX` /
 `KEK_NEW_HEX` (never flags — avoids shell-history leakage). Keys are 32-byte
