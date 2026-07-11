@@ -5,8 +5,11 @@ Self-hosted OCI registry with mTLS between every service, multi-key JWT signing,
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.25.11-00ADD8?logo=go)](https://go.dev)
 [![OCI Distribution Spec](https://img.shields.io/badge/OCI_Spec-v1.1-262261)](https://github.com/opencontainers/distribution-spec)
+[![Documentation](https://img.shields.io/badge/docs-steveokay.github.io%2Foci--janus-4c1?logo=readthedocs&logoColor=white)](https://steveokay.github.io/oci-janus/)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/steveokay)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+📚 **Full documentation is published at [steveokay.github.io/oci-janus](https://steveokay.github.io/oci-janus/)** — a guided quickstart, dashboard walkthrough, integrations catalog, an interactive OpenAPI explorer, and every reference below rendered as a browsable site.
 
 OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, pluggable storage drivers (MinIO/S3/GCS/Azure/filesystem), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
 
@@ -27,8 +30,10 @@ What just happened:
 1. `make dev-certs` writes a local CA + per-service certs to `certs/` (Kubernetes deployments use cert-manager instead).
 2. `docker compose up -d` brings up Postgres, Redis, RabbitMQ, MinIO, Vault, Jaeger, and all 14 registry services on the `registry.events` topic.
 3. `make dev-bootstrap` runs `registry-auth bootstrap` inside the auth container to create the first tenant + admin user (idempotent — safe to re-run).
-4. The dashboard is at `http://localhost:5173` (Vite dev server, no TLS); the OCI `/v2/` API is at `http://localhost:8081`. For production deployment guidance, see [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
+4. The dashboard is at `http://localhost:3000` (the containerised frontend); the OCI `/v2/` API is at `http://localhost:8081`. For production deployment guidance, see [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 5. Full bootstrap walkthrough (production paths, password from stdin, tenant id pinning) lives in [`infra/runbooks/bootstrap-first-admin.md`](infra/runbooks/bootstrap-first-admin.md).
+
+For a step-by-step guided quickstart (verify-healthy smoke checks, first push/pull, dashboard tour, troubleshooting), see the published **[Getting started guide](https://steveokay.github.io/oci-janus/getting-started/)**.
 
 `docker login localhost:8081 -u admin -p Admin1234!` and you're pushing.
 
@@ -132,6 +137,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - Pluggable vulnerability scanner plugins (Trivy default; Grype / Clair adapters) via external-process JSON-RPC
 - Per-tenant scan policies + SPDX 2.3 SBOMs + hand-crafted PDF compliance reports
 - Image promotion: atomic dev → staging → prod tag copy without re-pushing blobs ([`docs/IMAGE-PROMOTION.md`](docs/IMAGE-PROMOTION.md))
+- Image provenance: surface OCI `org.opencontainers.image.*` build annotations (git commit, source repo, base image) on the tag-detail page
 - Ephemeral PR registries (FUT-023): a GitHub PR-event webhook provisions a per-PR org namespace on open and tears it down (optionally promoting tags) on close/merge
 - Notification channels: scheduled email (Resend / SMTP / Gmail) + shared org webhook (HMAC-signed), on top of the in-app notification bell
 - Mark-sweep garbage collection with `pg_try_advisory_lock` per tenant
@@ -156,10 +162,24 @@ OCI-Janus is configured entirely through environment variables; no YAML config f
 
 ## Documentation
 
+**The full docs are published as a browsable site at [steveokay.github.io/oci-janus](https://steveokay.github.io/oci-janus/)** (rebuilt from `main` on every merge). Highlights:
+
+- **[Getting started](https://steveokay.github.io/oci-janus/getting-started/)** — install → bootstrap → `docker login` → push/pull → see it in the UI
+- **[Using the dashboard](https://steveokay.github.io/oci-janus/guide/)** — end-user walkthrough of every screen
+- **[Deploying (Compose + Helm)](https://steveokay.github.io/oci-janus/deployment-guide/)** — guided production deployment
+- **[Integrations catalog](https://steveokay.github.io/oci-janus/integrations/)** — storage, SSO, scanners, signing, webhooks, notifications, MCP
+- **[API explorer](https://steveokay.github.io/oci-janus/api-spec/)** — interactive OpenAPI (142 operations) + **[environment reference](https://steveokay.github.io/oci-janus/env-reference/)** (280 vars across 14 services)
+
+The source Markdown also lives in-repo:
+
 | File | What |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Canonical platform rules + Decision Log |
 | [`docs/adr/`](docs/adr/) | Per-decision ADRs with verified-by code pointers |
+| [`docs/getting-started.md`](docs/getting-started.md) | Guided quickstart (verify-healthy, first push/pull, troubleshooting) |
+| [`docs/guide/`](docs/guide/) | Dashboard / end-user walkthrough |
+| [`docs/deployment-guide.md`](docs/deployment-guide.md) | Guided Docker Compose + Kubernetes/Helm deployment |
+| [`docs/env-reference.md`](docs/env-reference.md) | Every configuration variable across all 14 services (generated) |
 | [`docs/SERVICES.md`](docs/SERVICES.md) | Per-service detail (endpoints, gRPC, schemas, env vars) |
 | [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) | Fork → configure → deploy in your own infrastructure |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Docker Compose + Helm chart layout |
