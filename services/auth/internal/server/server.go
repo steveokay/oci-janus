@@ -106,6 +106,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	svc.SetSessionRepo(sessionRepo)
 	svc.SetSessionActiveUpdater(service.NewSessionActiveUpdater(rdb, sessionRepo, slog.Default()))
 
+	// SCIM 2.0 provisioning (Tier-1 #5) — wire the DB-backed scim_config repo so
+	// VerifySCIMToken can gate the /scim/v2/* surface. The tenant id stamped on a
+	// generated token's singleton row (Phase 3 admin path) is the deployment's
+	// bootstrap tenant; in single mode that equals DEV_DEFAULT_TENANT_ID for the
+	// self-hosted default. Token verification (Phase 1) ignores the tenant, so
+	// this wiring is safe even before the Phase 3 generate endpoint lands.
+	scimTenantID, _ := uuid.Parse(cfg.DevDefaultTenantID)
+	svc.SetSCIMRepo(users, scimTenantID)
+
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
 	// RABBITMQ_URL is optional for local dev without a broker; if absent, RBAC
 	// events are skipped silently. In production the URL must be set.

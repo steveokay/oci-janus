@@ -227,6 +227,14 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	// FE-API-048 T15 — access activity feed. Always registered; returns 501
 	// when activityService is nil (WithActivityService not called).
 	h.RegisterAccessActivity(mux)
+	// SCIM 2.0 provisioning (Tier-1 #5). The /scim/v2/* routes are gated by the
+	// dedicated SCIM bearer token (requireSCIMAuth), isolated from user JWTs. The
+	// verifier delegates to Service.VerifySCIMToken; it fail-closes (401) when
+	// the SCIM repo was never wired (SetSCIMRepo not called), so discovery +
+	// Users routes deny by default until a token is provisioned (Phase 3 admin API).
+	h.RegisterSCIM(mux, func(raw string) (bool, error) {
+		return h.svc.VerifySCIMToken(context.Background(), raw)
+	})
 }
 
 // ── Docker token endpoint ─────────────────────────────────────────────────────
