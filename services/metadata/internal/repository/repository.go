@@ -1593,12 +1593,25 @@ func (r *Repository) GetTenantUsage(ctx context.Context, tenantID string) (*meta
 // LEFT JOINs also keep orgs with zero repos and repos with zero manifests
 // in the result.
 func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*metadatav1.OrgSummary, error) {
+	// Per-type repo counts reuse the canonical config-media-type sets so the
+	// SQL never hardcodes the media-type taxonomy. A mixed repo (both an
+	// image-config and a helm-config manifest) satisfies both FILTERs and is
+	// counted once toward each — COUNT(DISTINCT r.id) dedupes the join fan-out.
+	//
+	// Caveat: multi-arch index-only repos carry a NULL config_media_type on the
+	// index row and so aren't matched by the image filter here, but a real image
+	// repo always also has per-arch image-config manifests, so this is not a
+	// practical gap.
+	imageCfg := configMediaTypesFor("image")
+	helmCfg := configMediaTypesFor("helm")
 	const q = `
 		SELECT o.id,
 		       o.name,
 		       COUNT(DISTINCT r.id)                         AS repo_count,
 		       COALESCE(SUM(m.image_size_bytes), 0)::BIGINT AS storage_used,
-		       MAX(m.created_at)                            AS last_activity
+		       MAX(m.created_at)                            AS last_activity,
+		       COUNT(DISTINCT r.id) FILTER (WHERE m.config_media_type = ANY($2)) AS image_repos,
+		       COUNT(DISTINCT r.id) FILTER (WHERE m.config_media_type = ANY($3)) AS helm_repos
 		FROM organizations o
 		LEFT JOIN repositories r ON r.org_id = o.id  AND r.tenant_id = o.tenant_id
 		LEFT JOIN manifests    m ON m.repo_id = r.id AND m.tenant_id = o.tenant_id
@@ -1606,7 +1619,7 @@ func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*
 		GROUP BY o.id, o.name
 		ORDER BY o.name`
 
-	rows, err := r.reader().Query(ctx, q, tenantID)
+	rows, err := r.reader().Query(ctx, q, tenantID, imageCfg, helmCfg)
 	if err != nil {
 		return nil, fmt.Errorf("list org summaries: %w", err)
 	}
@@ -1616,7 +1629,8 @@ func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*
 	for rows.Next() {
 		var s metadatav1.OrgSummary
 		var lastActivity sql.NullTime
-		if err := rows.Scan(&s.OrgId, &s.Name, &s.RepositoryCount, &s.StorageUsedBytes, &lastActivity); err != nil {
+		if err := rows.Scan(&s.OrgId, &s.Name, &s.RepositoryCount, &s.StorageUsedBytes,
+			&lastActivity, &s.ImageRepoCount, &s.HelmRepoCount); err != nil {
 			return nil, fmt.Errorf("scan org summary: %w", err)
 		}
 		if lastActivity.Valid {

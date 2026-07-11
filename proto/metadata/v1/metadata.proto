@@ -892,6 +892,8 @@ message OrgSummary {
   int64  storage_used_bytes = 4;
   // Unset when the org has no pushed manifests yet (SQL NULL).
   google.protobuf.Timestamp last_activity_at = 5;
+  int64 image_repo_count = 6;  // repos in the org containing >=1 image manifest
+  int64 helm_repo_count  = 7;  // repos containing >=1 helm chart (mixed counts in both)
 }
 
 message ListOrgSummariesResponse {
