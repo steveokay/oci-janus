@@ -350,17 +350,18 @@ func extractActiveOp(op scimPatchOp) (active bool, isActive bool, err error) {
 		return b, true, nil
 	}
 	if op.Path == "" {
-		// No-path replace: value is an object; look for "active".
+		// No-path replace: value is an object; look for "active". A value that
+		// is not a JSON object simply isn't an active op we recognise, so we
+		// fall through to the not-an-active-op return rather than erroring.
 		var m map[string]json.RawMessage
-		if uerr := json.Unmarshal(op.Value, &m); uerr != nil {
-			return false, false, nil // not an active op we recognise
-		}
-		if raw, present := m["active"]; present {
-			var b bool
-			if uerr := json.Unmarshal(raw, &b); uerr != nil {
-				return false, false, errInvalidActiveValue
+		if json.Unmarshal(op.Value, &m) == nil {
+			if raw, present := m["active"]; present {
+				var b bool
+				if uerr := json.Unmarshal(raw, &b); uerr != nil {
+					return false, false, errInvalidActiveValue
+				}
+				return b, true, nil
 			}
-			return b, true, nil
 		}
 	}
 	return false, false, nil

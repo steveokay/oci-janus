@@ -248,7 +248,7 @@ func (f *fakeUserRepo) GrantRole(_ context.Context, a repository.RoleAssignment)
 	f.grantedRoles = append(f.grantedRoles, a)
 	return nil
 }
-func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }
+func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }

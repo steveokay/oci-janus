@@ -81,8 +81,8 @@ func (r *UserRepository) TouchSCIMLastUsed(ctx context.Context) error {
 	return err
 }
 
-// CreateSCIMUser inserts an IdP-provisioned user: passwordless (password_hash
-// = ''), kind='human', stamped with external_id + provisioned_via='scim'.
+// CreateSCIMUser inserts an IdP-provisioned user: passwordless (empty
+// password_hash), kind='human', stamped with external_id + provisioned_via='scim'.
 // Mirrors CreateSSOUser's passwordless INSERT (user.go) with the SCIM columns
 // swapped in. Returns ErrAlreadyExists on a (tenant_id, username|email|
 // external_id) collision so the service can fall back to link-by-email (spec
