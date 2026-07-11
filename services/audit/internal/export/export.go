@@ -401,6 +401,13 @@ func escapeCEFExt(s string) string {
 // source user, act = action, outcome = outcome). The platform-
 // specific fields ride on a custom `cs1`/`cs1Label` pair per CEF
 // convention.
+//
+// Field parity with the syslog renderer: `suser` (actor_id) pairs with
+// `cs5` (actor_type) so a CEF pipeline retains the same "who + who-type"
+// dimension the syslog SD block carries in `actor_id` + `actor_type`.
+// `cs4` stays reserved for metadata (base64, conditional) — actor_type
+// takes `cs5` so the shipped `cs4=metadata_b64` mapping is unchanged and
+// downstream SIEM parsers keyed on it keep working.
 func formatCEFExtensions(evt Event) string {
 	parts := []string{
 		"rt=" + escapeCEFExt(evt.OccurredAt.UTC().Format("Jan 02 2006 15:04:05.000")),
@@ -414,6 +421,10 @@ func formatCEFExtensions(evt Event) string {
 		"cs2=" + escapeCEFExt(evt.Resource),
 		"cs3Label=event_id",
 		"cs3=" + escapeCEFExt(evt.ID),
+		// actor_type completes the actor dimension (user / service_account
+		// / api_key / system) so CEF has parity with the syslog SD block.
+		"cs5Label=actor_type",
+		"cs5=" + escapeCEFExt(evt.ActorType),
 	}
 	if len(evt.Metadata) > 0 {
 		parts = append(parts,
