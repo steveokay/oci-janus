@@ -259,7 +259,7 @@ func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesReques
 	return nil
 }
 
-func (s *fakeMetaServer) ListOrgSummaries(ctx context.Context, req *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
+func (s *fakeMetaServer) ListOrgSummaries(_ context.Context, _ *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
 	return &metadatav1.ListOrgSummariesResponse{Orgs: []*metadatav1.OrgSummary{
 		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, LastActivityAt: timestamppb.Now()},
 		{OrgId: "org-prod", Name: "prod", RepositoryCount: 1, StorageUsedBytes: 0}, // no last_activity_at
