@@ -50,6 +50,10 @@ export interface Repository {
   // 403 DENIED. Flipped via the RepoCVSSPolicySection card on the
   // repo Settings tab; sending `null` clears the gate.
   max_cvss_score?: number | null;
+  // Distinct artifact types the repo contains (image/helm/signature/sbom/other),
+  // derived per manifest by the backend. Absent/empty for a repo with no
+  // manifests. Drives the Type badge + the images/charts filter.
+  artifact_types?: ArtifactType[];
 }
 
 // Signed-image admission Phase 2 (futures.md Tier 1 #3). One entry
