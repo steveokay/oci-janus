@@ -12,15 +12,28 @@ import (
 )
 
 // scimUserColumns is the canonical SELECT column list shared by the SCIM user
-// reads. It matches scanOne's expected order verbatim (id, tenant_id, username,
+// reads. It matches the standard User scan order (id, tenant_id, username,
 // email, display_name, password_hash, is_active, failed_logins, locked_until,
 // last_login_at, created_at, updated_at, kind, is_global_admin,
-// onboarding_complete, sso_subject) so the same scan target works for every
-// SCIM read — do NOT reorder without updating scanOne.
+// onboarding_complete, sso_subject) and appends external_id as a trailing
+// column so the SCIM reads can echo the IdP correlation key. Scan every row
+// selecting these columns with scanSCIMUserRow.
 const scimUserColumns = `id, tenant_id, username, COALESCE(email, ''), display_name,
 	       password_hash, is_active, failed_logins, locked_until,
 	       last_login_at, created_at, updated_at, kind, is_global_admin, onboarding_complete,
-	       COALESCE(sso_subject, '')`
+	       COALESCE(sso_subject, ''), COALESCE(external_id, '')`
+
+// scanSCIMUserRow scans a single row selecting scimUserColumns (the standard
+// User columns + trailing external_id) into a User. row is a pgx.Row or
+// pgx.Rows.
+func scanSCIMUserRow(row pgx.Row, u *User) error {
+	return row.Scan(
+		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
+		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
+		&u.SSOSubject, &u.ExternalID,
+	)
+}
 
 // SCIMConfig is the single global SCIM provisioning config row.
 type SCIMConfig struct {
@@ -75,22 +88,14 @@ func (r *UserRepository) TouchSCIMLastUsed(ctx context.Context) error {
 // external_id) collision so the service can fall back to link-by-email (spec
 // D3). The RETURNING column list matches scanOne's scan order exactly.
 func (r *UserRepository) CreateSCIMUser(ctx context.Context, tenantID uuid.UUID, username, email, displayName, externalID string) (*User, error) {
-	const q = `
+	q := `
 		INSERT INTO users (tenant_id, username, email, password_hash, display_name,
 		                   external_id, provisioned_via, kind)
 		VALUES ($1, $2, NULLIF($3, ''), '', NULLIF($4, ''), $5, 'scim', 'human')
-		RETURNING id, tenant_id, username, COALESCE(email, ''), display_name,
-		          password_hash, is_active, failed_logins, locked_until,
-		          last_login_at, created_at, updated_at, kind, is_global_admin,
-		          onboarding_complete, COALESCE(sso_subject, '')`
+		RETURNING ` + scimUserColumns
 
 	var u User
-	err := r.pool.QueryRow(ctx, q, tenantID, username, email, displayName, externalID).Scan(
-		&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
-		&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
-		&u.SSOSubject,
-	)
+	err := scanSCIMUserRow(r.pool.QueryRow(ctx, q, tenantID, username, email, displayName, externalID), &u)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrAlreadyExists
@@ -108,7 +113,15 @@ func (r *UserRepository) GetUserByExternalID(ctx context.Context, tenantID uuid.
 	q := `SELECT ` + scimUserColumns + `
 		FROM   users
 		WHERE  tenant_id = $1 AND external_id = $2`
-	return r.scanOne(ctx, q, tenantID, externalID)
+	var u User
+	err := scanSCIMUserRow(r.pool.QueryRow(ctx, q, tenantID, externalID), &u)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // SetExternalID backfills external_id + provisioned_via on an existing user
@@ -174,12 +187,7 @@ func (r *UserRepository) ListSCIMUsers(ctx context.Context, tenantID uuid.UUID, 
 
 	for rows.Next() {
 		var u User
-		if err = rows.Scan(
-			&u.ID, &u.TenantID, &u.Username, &u.Email, &u.DisplayName,
-			&u.PasswordHash, &u.IsActive, &u.FailedLogins, &u.LockedUntil,
-			&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Kind, &u.IsGlobalAdmin, &u.OnboardingComplete,
-			&u.SSOSubject,
-		); err != nil {
+		if err = scanSCIMUserRow(rows, &u); err != nil {
 			return nil, 0, fmt.Errorf("scan scim user: %w", err)
 		}
 		uu := u

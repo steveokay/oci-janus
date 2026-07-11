@@ -68,6 +68,11 @@ type fakeUserRepo struct {
 	// externalIDs maps userID → external_id for the SCIM provisioning fakes
 	// (Tier-1 #5). Lazily initialised so non-SCIM tests pay nothing.
 	externalIDs map[uuid.UUID]string
+	// grantedRoles records every GrantRole call so SCIM provision tests can
+	// assert the reader@* baseline grant. grantErr, when set, makes GrantRole
+	// fail.
+	grantedRoles []repository.RoleAssignment
+	grantErr     error
 }
 
 func newFakeUserRepo() *fakeUserRepo {
@@ -234,7 +239,15 @@ func (f *fakeUserRepo) GetUserRoles(_ context.Context, userID, tenantID uuid.UUI
 	}
 	return out, nil
 }
-func (f *fakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssignment) error { return nil }
+func (f *fakeUserRepo) GrantRole(_ context.Context, a repository.RoleAssignment) error {
+	// Record the grant so SCIM provision tests can assert the reader@* baseline
+	// (Tier-1 #5, spec D5). grantErr, when set, simulates a failed grant.
+	if f.grantErr != nil {
+		return f.grantErr
+	}
+	f.grantedRoles = append(f.grantedRoles, a)
+	return nil
+}
 func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error             { return nil }
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
@@ -257,7 +270,16 @@ func (f *fakeUserRepo) ListTenantUsers(_ context.Context, _ uuid.UUID, _ reposit
 func (f *fakeUserRepo) CreateInvitedUser(_ context.Context, _ repository.CreateInvitedUserRequest) (*repository.User, error) {
 	return nil, nil
 }
-func (f *fakeUserRepo) SetUserStatus(_ context.Context, _, _ uuid.UUID, _ string) error {
+func (f *fakeUserRepo) SetUserStatus(_ context.Context, _, userID uuid.UUID, status string) error {
+	// Reflect the status change into the in-memory user so the SCIM
+	// active-toggle tests (Tier-1 #5) can observe is_active flipping. "active"
+	// → IsActive=true, anything else (e.g. "disabled") → false.
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.IsActive = status == "active"
+			return nil
+		}
+	}
 	return nil
 }
 func (f *fakeUserRepo) DisableAPIKeysForUser(_ context.Context, _, _ uuid.UUID) (int64, error) {
