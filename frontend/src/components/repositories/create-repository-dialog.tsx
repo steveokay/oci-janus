@@ -49,11 +49,15 @@ type FormValues = z.infer<typeof schema>;
 interface CreateRepositoryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // When set, pre-fills the Organization field (used by the per-environment
+  // repo list so "New repository" lands in the environment you're viewing).
+  defaultOrg?: string;
 }
 
 export function CreateRepositoryDialog({
   open,
   onOpenChange,
+  defaultOrg,
 }: CreateRepositoryDialogProps): React.ReactElement {
   const navigate = useNavigate();
   const create = useCreateRepository();
@@ -75,7 +79,7 @@ export function CreateRepositoryDialog({
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { org: "", name: "", is_public: false, description: "" },
+    defaultValues: { org: defaultOrg ?? "", name: "", is_public: false, description: "" },
   });
 
   const isPublic = watch("is_public");
@@ -87,7 +91,7 @@ export function CreateRepositoryDialog({
     });
     toast.success(`Created ${created.org}/${created.name}.`);
     setClaimableOrg(null);
-    reset();
+    reset({ org: defaultOrg ?? "", name: "", is_public: false, description: "" });
     onOpenChange(false);
     void navigate({
       to: "/repositories/$org/$repo",
@@ -154,7 +158,7 @@ export function CreateRepositoryDialog({
       open={open}
       onOpenChange={(o) => {
         if (!o) {
-          reset();
+          reset({ org: defaultOrg ?? "", name: "", is_public: false, description: "" });
           setClaimableOrg(null);
         }
         onOpenChange(o);
