@@ -31,6 +31,31 @@ export interface ManifestEntry {
   os_version?: string;
 }
 
+// ImageProvenance mirrors the Go provenanceInfo block — the well-known OCI
+// `org.opencontainers.image.*` annotations lifted off the manifest by the BFF.
+// Every field is optional (omitempty on the wire). The URL-bearing fields
+// (url, documentation, source) have already been sanitised server-side through
+// safeExternalURL, so they are guaranteed http(s) or absent. `annotations` is
+// a bounded raw view of ALL annotations (well-known + bespoke) for the
+// collapsible raw table. Tier 2 #4 — Provenance tab.
+export interface ImageProvenance {
+  created?: string;
+  authors?: string;
+  url?: string;
+  documentation?: string;
+  source?: string;
+  version?: string;
+  revision?: string;
+  vendor?: string;
+  licenses?: string;
+  ref_name?: string;
+  title?: string;
+  description?: string;
+  base_name?: string;
+  base_digest?: string;
+  annotations?: Record<string, string>;
+}
+
 export interface ManifestDetail {
   digest: string;
   media_type: string;
@@ -40,6 +65,10 @@ export interface ManifestDetail {
   config: ManifestConfig;
   layers: ManifestLayer[];
   manifests: ManifestEntry[];
+  // Tier 2 #4 — image lineage / provenance. Omitted on the wire (and
+  // undefined here) when the manifest carries no OCI annotations at all (the
+  // common case); the Provenance tab then renders its empty state.
+  provenance?: ImageProvenance;
   // FE-API-050 — quarantine state. Omitted on the wire (and undefined
   // here) when the manifest is not quarantined (the common case). The
   // tag-detail Security tab renders a banner + lift dialog when set.
