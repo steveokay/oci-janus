@@ -281,9 +281,14 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 		for i, rp := range repos {
 			repoIDs[i] = rp.GetRepoId()
 		}
+		// tenant_id is redundant for correctness here (every repoID already came
+		// from the tenant-scoped first-pass query, and repo_id is a globally
+		// unique UUID PK) but CLAUDE.md §9 requires every registry-metadata query
+		// to filter by tenant_id — this keeps the guarantee local rather than
+		// depending on the caller staying tenant-scoped (SEC-087).
 		typeRows, err := r.reader().Query(ctx,
 			`SELECT repo_id, COALESCE(config_media_type, ''), media_type
-			   FROM manifests WHERE repo_id = ANY($1::uuid[])`, repoIDs)
+			   FROM manifests WHERE tenant_id = $1 AND repo_id = ANY($2::uuid[])`, tenantID, repoIDs)
 		if err != nil {
 			return nil, fmt.Errorf("list repo artifact types: %w", err)
 		}

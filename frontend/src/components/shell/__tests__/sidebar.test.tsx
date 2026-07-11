@@ -128,13 +128,16 @@ describe("Sidebar — REDESIGN-001 Phase 4.2.a operator IA", () => {
 
   // ── Registry group ────────────────────────────────────────────────────────
 
-  test("Registry group contains Dashboard, Repositories, Helm charts, Pull-through cache", async () => {
+  test("Registry group contains Dashboard, Repositories, Pull-through cache", async () => {
     await renderSidebar();
     // Dashboard is the new index-route ("/") entry added at the top of the
     // Registry group.
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText("Repositories")).toBeInTheDocument();
-    expect(screen.getByText("Helm charts")).toBeInTheDocument();
+    // "Helm charts" was retired by the unified-artifact-catalog feature — Helm
+    // is now reached via the Repositories view's Charts filter, not a standalone
+    // nav item — so it must NOT render.
+    expect(screen.queryByText("Helm charts")).not.toBeInTheDocument();
     expect(screen.getByText("Pull-through cache")).toBeInTheDocument();
   });
 
@@ -284,9 +287,11 @@ describe("Sidebar — REDESIGN-001 Phase 4.2.a operator IA", () => {
     const repoLink = screen.getByText("Repositories").closest("a");
     expect(repoLink?.getAttribute("aria-current")).toBe("page");
 
-    // Non-active links must NOT carry aria-current.
-    const helmLink = screen.getByText("Helm charts").closest("a");
-    expect(helmLink?.getAttribute("aria-current")).toBeNull();
+    // Non-active links must NOT carry aria-current. (Pull-through cache is a
+    // stable non-active Registry item; "Helm charts" was retired by the
+    // unified-artifact-catalog feature.)
+    const cacheLink = screen.getByText("Pull-through cache").closest("a");
+    expect(cacheLink?.getAttribute("aria-current")).toBeNull();
   });
 
   // ── Active-match path boundary ─────────────────────────────────────────────
