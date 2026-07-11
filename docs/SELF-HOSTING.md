@@ -215,7 +215,7 @@ kubectl -n registry port-forward svc/registry-gateway 8443:8443 &
 curl https://localhost:8443/v2/ -k
 ```
 
-Full chart layout + values reference in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md). Production wiring (cert-manager, External Secrets, TLS, NetworkPolicies) is documented in [`prod-flow.md`](../prod-flow.md).
+Full chart layout + values reference in [`docs/DEPLOYMENT.md`](DEPLOYMENT.md). Production wiring (cert-manager, External Secrets, TLS, NetworkPolicies) is documented in [`prod-flow.md`](https://github.com/steveokay/oci-janus/blob/main/prod-flow.md).
 
 ---
 
@@ -229,7 +229,7 @@ You can fork OCI-Janus and modify before deploying. Common reasons:
 | Add a custom scanner adapter | `infra/scanner-plugins/<your-adapter>/` — follow the dev-stub / trivy-adapter pattern. The JSON-RPC contract is in [`docs/SCANNER.md`](SCANNER.md). |
 | Add a new wire format for audit streaming | `services/audit/internal/export/export.go` — add a renderer function + a case in `render()`. Update the format-enum CHECK constraint in `services/audit/migrations/20260623100000_audit_export_configs.sql`. |
 | Customise RBAC roles | `services/auth/migrations/20260614000001_create_rbac.sql` seeds the four canonical roles. Add new roles via a new migration; teach `services/management` to gate on the new role IDs. |
-| Add a new dashboard surface | `frontend/src/routes/_authenticated.<your-route>.tsx` — TanStack Router file-based. Backend route in the BFF. See [`CLAUDE.md`](../CLAUDE.md) §2 for the per-service layout. |
+| Add a new dashboard surface | `frontend/src/routes/_authenticated.<your-route>.tsx` — TanStack Router file-based. Backend route in the BFF. See [`CLAUDE.md`](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md) §2 for the per-service layout. |
 | Replace the gateway (e.g. use Envoy) | `registry-gateway` is a thin Traefik wrapper. Replace with whatever you want; the only contract is "look up Host header → tenant_id, inject `X-Tenant-ID`, forward to the right service." |
 | Embed in a larger product | The Go modules are import-able; you could in principle compose `services/core` into your own binary. Not the typical path — usually easier to run as a separate stack. |
 
@@ -280,7 +280,7 @@ The platform is designed to run unattended. The default dev compose stack has ru
 
 ## 8. Where to get help
 
-- **Documentation:** start with the [docs map](../README.md#documentation-map) in the README.
+- **Documentation:** start with the [docs map](https://github.com/steveokay/oci-janus/blob/main/README.md#documentation-map) in the README.
 - **Bugs:** [GitHub Issues](https://github.com/steveokay/oci-janus/issues).
 - **Questions:** [GitHub Discussions](https://github.com/steveokay/oci-janus/discussions).
 - **Security:** [private vulnerability reporting](https://github.com/steveokay/oci-janus/security/advisories/new). Don't open a public issue for security issues.

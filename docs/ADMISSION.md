@@ -52,7 +52,7 @@ sentinel errors in `services/core/internal/service/errors.go`.
 > scanner-fed mechanism: a per-tenant `scan_policies.block_on_severity`
 > rule causes the scanner to set `manifest.quarantined` after a scan,
 > and `GetManifest` refuses quarantined manifests with `451`. See
-> [`SCANNER.md` §5](./SCANNER.md#5-scan-policies--compliance-reports-fe-api-018--fe-api-019).
+> [`SCANNER.md` §5](./SCANNER.md#5-scan-policies-compliance-reports-fe-api-018-fe-api-019).
 > CVSS admission (this doc) is a *pull-time threshold check against the
 > stored scan result* driven by the repo's `max_cvss_score` column, and
 > denies with `403` — the two are orthogonal and can both be on at once.

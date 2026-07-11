@@ -15,7 +15,7 @@ Encrypted secrets at rest (OAuth client secrets, SAML SP private keys, upstream 
 ## Consequences
 
 The rotation tool ships separately and **has now shipped** as RED-FU-015 (PR
-#249; operator runbook [`infra/runbooks/kek-rotation.md`](../../infra/runbooks/kek-rotation.md)).
+#249; operator runbook [`infra/runbooks/kek-rotation.md`](https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/kek-rotation.md)).
 
 **Correction (RED-FU-015 scoping).** The original assumption that a rotation
 would "flip the version byte" to distinguish old-vs-new-key ciphertexts proved

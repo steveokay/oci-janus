@@ -22,7 +22,7 @@
 > 5–15 min, dominated by snapshot time.
 
 For operators upgrading an existing v1 deployment. New installs: start at
-[`README.md`](../README.md). v1 = any commit before REDESIGN-001 lands; v2 =
+[`README.md`](https://github.com/steveokay/oci-janus/blob/main/README.md). v1 = any commit before REDESIGN-001 lands; v2 =
 a release tagged `v2.0.0-rc1` or later.
 
 ---
@@ -68,7 +68,7 @@ a release tagged `v2.0.0-rc1` or later.
 
 ## What changed in v2
 
-Full design rationale lives in [`docs/adr/`](adr/). Operator-relevant deltas:
+Full design rationale lives in [`docs/adr/`](adr/README.md). Operator-relevant deltas:
 
 - **ADR-0025** — `DEPLOYMENT_MODE` defaults to `single`. Multi-tenant
   operators MUST set `DEPLOYMENT_MODE=multi` explicitly.
@@ -82,7 +82,7 @@ Full design rationale lives in [`docs/adr/`](adr/). Operator-relevant deltas:
 - **ADR-0028** — Dev-seed admin migration deleted. First admin is created via
   the `registry-auth bootstrap` CLI.
   ([adr/0028](adr/0028-bootstrap-cli-replaces-dev-seed.md),
-  [bootstrap runbook](../infra/runbooks/bootstrap-first-admin.md))
+  [bootstrap runbook](https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/bootstrap-first-admin.md))
 - **ADR-0029** — AES-256-GCM ciphertexts carry a `Version = 0x01` prefix; new
   writes are v1, decrypt falls back to legacy. **No re-encrypt pass required
   for v1→v2** (see Step 3).
@@ -95,9 +95,9 @@ Full design rationale lives in [`docs/adr/`](adr/). Operator-relevant deltas:
   served traffic on a custom hostname, terminate TLS for that hostname at
   your existing reverse proxy / load balancer in v2.
 
-Complete decision log: [`CLAUDE.md` §14](../CLAUDE.md#14-decision-log).
+Complete decision log: [`CLAUDE.md` §14](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md#14-decision-log).
 Phase ledger:
-[`.claude/plans/2026-06-26-single-tenant-redesign.md`](../.claude/plans/2026-06-26-single-tenant-redesign.md).
+[`.claude/plans/2026-06-26-single-tenant-redesign.md`](https://github.com/steveokay/oci-janus/blob/main/.claude/plans/2026-06-26-single-tenant-redesign.md).
 
 ---
 
@@ -161,7 +161,7 @@ as **RED-FU-015**: a per-service `rotate-kek` subcommand (auth / proxy / webhook
 one, all-or-nothing per table, idempotent/resumable. It is not required for the
 v1→v2 upgrade itself — run it only when you actually need to rotate a KEK
 (suspected compromise, scheduled rotation). Full procedure:
-[`infra/runbooks/kek-rotation.md`](../infra/runbooks/kek-rotation.md).
+[`infra/runbooks/kek-rotation.md`](https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/kek-rotation.md).
 
 ---
 
@@ -212,7 +212,7 @@ inspect logs first).
 
 Full CLI flag detail, idempotency rules, single-mode tenant-id pinning, and
 the Kubernetes `kubectl run` pattern live in
-[`infra/runbooks/bootstrap-first-admin.md`](../infra/runbooks/bootstrap-first-admin.md).
+[`infra/runbooks/bootstrap-first-admin.md`](https://github.com/steveokay/oci-janus/blob/main/infra/runbooks/bootstrap-first-admin.md).
 
 ---
 
@@ -252,7 +252,7 @@ allowlist from observed CNs; (3) set `MTLS_PEER_CN_ALLOWLIST` per server and
 roll; (4) watch `registry_grpc_peer_cn_denied_total` for unexpected denies
 and add any missed CNs back.
 
-Spec + rationale: [`CLAUDE.md` §7](../CLAUDE.md#7-authentication--security).
+Spec + rationale: [`CLAUDE.md` §7](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md#7-authentication--security).
 Implementation: `libs/middleware/grpc/peer_cn.go`.
 
 ---
@@ -337,7 +337,7 @@ docker compose -f infra/docker-compose/docker-compose.yml up -d
 (`chain_seq`, `row_hash`, `prev_row_hash`) added by Phase 6.12. v1 code
 doesn't know those columns exist, and the migration that adds them
 (`services/audit/migrations/20260630120000_audit_hash_chain.sql`) is
-reversible per [`CLAUDE.md` §11](../CLAUDE.md#11-database-conventions).
+reversible per [`CLAUDE.md` §11](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md#11-database-conventions).
 Restoring from the v1 Postgres dump in step 2 drops the v2 rows entirely,
 which is the cleanest path. If you cannot restore from a dump, manual
 rollback is "downgrade each service image to the v1 tag, then run
@@ -349,6 +349,6 @@ significantly slower + riskier than restoring a snapshot.
 ## Where to go next
 
 - [`docs/adr/README.md`](adr/README.md) — full ADR index.
-- [`infra/runbooks/`](../infra/runbooks/) — bootstrap, secret rotation,
+- [`infra/runbooks/`](https://github.com/steveokay/oci-janus/tree/main/infra/runbooks) — bootstrap, secret rotation,
   MinIO encryption, disaster recovery.
-- [`CLAUDE.md`](../CLAUDE.md) — canonical rules + service catalogue.
+- [`CLAUDE.md`](https://github.com/steveokay/oci-janus/blob/main/CLAUDE.md) — canonical rules + service catalogue.
