@@ -893,8 +893,8 @@ GET  /healthz                             # Health check (no auth required)
 GET  /api/v1/stats                        # Tenant-scoped aggregated stats
 
 # Repository management
-GET  /api/v1/orgs                         # List orgs (environments overview): per-org repo_count + storage + last_activity_at → metadata.ListOrgSummaries
-GET  /api/v1/repositories                 # List repositories for tenant (optional ?org=<name> filters to one org, BFF-side)
+GET  /api/v1/orgs                         # List orgs (environments overview): per-org repo_count + storage + last_activity_at → metadata.ListOrgSummaries. Also returns image_repo_count + helm_repo_count (repos holding ≥1 of that type; a mixed repo counts in both) for the org-card image/chart split.
+GET  /api/v1/repositories                 # List repositories for tenant (optional ?org=<name> filters to one org, BFF-side). Each repo carries artifact_types: string[] — the distinct derived artifact types it holds (image/helm/signature/sbom/other; empty for a repo with no manifests).
 POST /api/v1/repositories                 # Create repository
 GET  /api/v1/repositories/:org/:repo      # Get single repository
 PATCH /api/v1/repositories/:org/:repo     # Update repository (description + immutable_tags + require_signature)

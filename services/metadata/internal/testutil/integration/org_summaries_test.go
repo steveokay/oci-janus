@@ -50,11 +50,13 @@ func osumSeedRepo(t *testing.T, repo *repository.Repository, tenantID, orgID, na
 // timestamp. PutManifest derives image_size_bytes from the manifest's
 // config.size (via parseImageSize), NOT from the size_bytes argument — so the
 // raw JSON carries config.size = sizeBytes to make the storage assertion exact.
+// The config.mediaType is the OCI image-config type so PutManifest records a
+// non-NULL config_media_type and ListOrgSummaries counts the repo as an image.
 func osumSeedManifest(t *testing.T, repo *repository.Repository, tenantID, repoID string, sizeBytes int64) {
 	t.Helper()
 	// A single-arch image manifest: no layers, config.size carries the whole
 	// image size so parseImageSize returns exactly sizeBytes.
-	rawJSON := []byte(`{"schemaVersion":2,"config":{"size":` + strconv.FormatInt(sizeBytes, 10) + `}}`)
+	rawJSON := []byte(`{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","size":` + strconv.FormatInt(sizeBytes, 10) + `}}`)
 	digest := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	if _, err := repo.PutManifest(
 		context.Background(),
@@ -85,6 +87,17 @@ func TestListOrgSummaries(t *testing.T) {
 	osumSeedRepo(t, repo, tenantID, prodID, "api")
 	osumSeedManifest(t, repo, tenantID, devRepo1, 1024)  // gives dev storage + activity
 
+	// Give dev a chart repo too so the per-type counts differ from repo_count.
+	devChart := osumSeedRepo(t, repo, tenantID, devID, "chart")
+	{
+		raw := []byte(`{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.helm.config.v1+json","size":1}}`)
+		if _, err := repo.PutManifest(ctx, tenantID, devChart,
+			"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"application/vnd.oci.image.manifest.v1+json", raw, int64(len(raw))); err != nil {
+			t.Fatalf("seed dev chart: %v", err)
+		}
+	}
+
 	got, err := repo.ListOrgSummaries(ctx, tenantID)
 	if err != nil {
 		t.Fatalf("ListOrgSummaries: %v", err)
@@ -92,15 +105,22 @@ func TestListOrgSummaries(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 orgs, got %d", len(got))
 	}
-	// ORDER BY name → dev first.
-	if got[0].GetName() != "dev" || got[0].GetRepositoryCount() != 2 {
+	// ORDER BY name → dev first. dev now has 3 repos: api (image), web (empty), chart (helm).
+	if got[0].GetName() != "dev" || got[0].GetRepositoryCount() != 3 {
 		t.Errorf("dev: name=%q repo_count=%d", got[0].GetName(), got[0].GetRepositoryCount())
 	}
-	if got[0].GetStorageUsedBytes() != 1024 {
-		t.Errorf("dev storage: want 1024, got %d", got[0].GetStorageUsedBytes())
+	// 1024 from the api image manifest + 1 from the chart's config.size=1.
+	if got[0].GetStorageUsedBytes() != 1025 {
+		t.Errorf("dev storage: want 1025, got %d", got[0].GetStorageUsedBytes())
 	}
 	if got[0].GetLastActivityAt() == nil {
 		t.Errorf("dev last_activity_at: want set, got nil")
+	}
+	if got[0].GetImageRepoCount() != 1 {
+		t.Errorf("dev image_repo_count = %d, want 1", got[0].GetImageRepoCount())
+	}
+	if got[0].GetHelmRepoCount() != 1 {
+		t.Errorf("dev helm_repo_count = %d, want 1", got[0].GetHelmRepoCount())
 	}
 	if got[1].GetName() != "prod" || got[1].GetRepositoryCount() != 1 {
 		t.Errorf("prod: name=%q repo_count=%d", got[1].GetName(), got[1].GetRepositoryCount())

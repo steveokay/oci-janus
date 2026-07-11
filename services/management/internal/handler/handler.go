@@ -847,6 +847,10 @@ type RepoResponse struct {
 	// on the plain int32 field would collapse 0 with unset — the
 	// pointer preserves the distinction.
 	MaxCVSSScore *int32 `json:"max_cvss_score"`
+	// Distinct artifact types the repo contains (image/helm/…) — drives the
+	// per-repo type badge + the images/charts filter chips. Empty for a repo
+	// with no manifests.
+	ArtifactTypes []string `json:"artifact_types"`
 }
 
 // OrgSummaryResponse is one environment card's worth of data on the
@@ -858,6 +862,8 @@ type OrgSummaryResponse struct {
 	Org            string     `json:"org"`
 	RepoCount      int64      `json:"repo_count"`
 	StorageUsed    int64      `json:"storage_used_bytes"`
+	ImageRepoCount int64      `json:"image_repo_count"`
+	HelmRepoCount  int64      `json:"helm_repo_count"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 }
 
@@ -880,10 +886,12 @@ func (h *Handler) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 	orgs := make([]OrgSummaryResponse, 0, len(resp.GetOrgs()))
 	for _, o := range resp.GetOrgs() {
 		row := OrgSummaryResponse{
-			OrgID:       o.GetOrgId(),
-			Org:         o.GetName(),
-			RepoCount:   o.GetRepositoryCount(),
-			StorageUsed: o.GetStorageUsedBytes(),
+			OrgID:          o.GetOrgId(),
+			Org:            o.GetName(),
+			RepoCount:      o.GetRepositoryCount(),
+			StorageUsed:    o.GetStorageUsedBytes(),
+			ImageRepoCount: o.GetImageRepoCount(),
+			HelmRepoCount:  o.GetHelmRepoCount(),
 		}
 		// Nil timestamp → org has no pushed manifests; leave LastActivityAt
 		// nil so omitempty drops the field entirely (not a zero time).
@@ -1691,6 +1699,7 @@ func repoToResponse(r *metadatav1.Repository) RepoResponse {
 		Description:      r.GetDescription(),
 		ImmutableTags:    r.GetImmutableTags(),
 		RequireSignature: r.GetRequireSignature(),
+		ArtifactTypes:    r.GetArtifactTypes(),
 	}
 	// FUT-021 — surface the CVSS threshold when set; nil pointer keeps
 	// the response field as JSON `null` so the FE can render "no gate"

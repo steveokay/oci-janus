@@ -9,6 +9,8 @@ export interface OrgSummary {
   org: string;
   repo_count: number;
   storage_used_bytes: number;
+  image_repo_count?: number;
+  helm_repo_count?: number;
   last_activity_at?: string;
 }
 

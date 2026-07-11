@@ -30,7 +30,6 @@ import {
   Building,
   Activity,
   KeyRound,
-  Ship,
   Radio,
   Repeat,
   Settings as SettingsIcon,
@@ -72,10 +71,6 @@ const GROUPS: Array<{ title: string; items: NavItem[] }> = [
       // Repositories is the primary landing for operators — everything
       // they push/pull lives here.
       { to: "/repositories", label: "Repositories", icon: Boxes },
-      // S-MAINT-1 Batch 5 F4 follow-up — dedicated landing for Helm chart
-      // users (platform engineers running `helm install`). MVP renders the
-      // same repos table as /repositories with chart-focused copy.
-      { to: "/helm", label: "Helm charts", icon: Ship },
       // FUT-013: pull-through cache visibility. probeKey gates visibility on a
       // successful /proxy/cache/stats probe so deployments without the proxy
       // (403/404) don't show a dead link.

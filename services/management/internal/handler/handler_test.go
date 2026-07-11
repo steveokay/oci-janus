@@ -249,14 +249,14 @@ func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.Coun
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
 	// Two repos in different orgs so the BFF's client-side ?org= filter is
 	// observable. metadata streams every repo; the BFF narrows the results.
-	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
+	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now(), ArtifactTypes: []string{"image", "helm"}})
 	_ = stream.Send(&metadatav1.Repository{RepoId: "repo-2", OrgId: "org-prod", Org: "prod", Name: "api", StorageUsed: 256, StorageQuota: 10737418240, CreatedAt: timestamppb.Now()})
 	return nil
 }
 
 func (s *fakeMetaServer) ListOrgSummaries(_ context.Context, _ *metadatav1.ListOrgSummariesRequest) (*metadatav1.ListOrgSummariesResponse, error) {
 	return &metadatav1.ListOrgSummariesResponse{Orgs: []*metadatav1.OrgSummary{
-		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, LastActivityAt: timestamppb.Now()},
+		{OrgId: testOrgID, Name: "dev", RepositoryCount: 3, StorageUsedBytes: 2048, ImageRepoCount: 2, HelmRepoCount: 1, LastActivityAt: timestamppb.Now()},
 		{OrgId: "org-prod", Name: "prod", RepositoryCount: 1, StorageUsedBytes: 0}, // no last_activity_at
 	}}, nil
 }
@@ -1115,6 +1115,33 @@ func TestListRepositories_orgFilter_narrowsToOneOrg(t *testing.T) {
 	}
 }
 
+func TestListRepositories_exposesArtifactTypes(t *testing.T) {
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/repositories", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Repositories []struct {
+			Org           string   `json:"org"`
+			ArtifactTypes []string `json:"artifact_types"`
+		} `json:"repositories"`
+	}
+	decodeJSON(t, resp, &body)
+	var found bool
+	for _, r := range body.Repositories {
+		if r.Org == "dev" {
+			found = true
+			if len(r.ArtifactTypes) != 2 || r.ArtifactTypes[0] != "image" || r.ArtifactTypes[1] != "helm" {
+				t.Errorf("dev artifact_types = %v, want [image helm]", r.ArtifactTypes)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("dev repo not in response")
+	}
+}
+
 func TestListRepositories_invalidOrgFilter_returns400(t *testing.T) {
 	env := newTestEnv(t)
 	resp := env.get(t, "/api/v1/repositories?org=Bad_Org", adminToken)
@@ -1134,6 +1161,8 @@ func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
 			Org            string  `json:"org"`
 			RepoCount      int64   `json:"repo_count"`
 			StorageUsed    int64   `json:"storage_used_bytes"`
+			ImageRepoCount int64   `json:"image_repo_count"`
+			HelmRepoCount  int64   `json:"helm_repo_count"`
 			LastActivityAt *string `json:"last_activity_at"`
 		} `json:"orgs"`
 	}
@@ -1143,6 +1172,9 @@ func TestListOrgs_adminToken_returnsSummaries(t *testing.T) {
 	}
 	if body.Orgs[0].Org != "dev" || body.Orgs[0].RepoCount != 3 || body.Orgs[0].StorageUsed != 2048 {
 		t.Errorf("dev row wrong: %+v", body.Orgs[0])
+	}
+	if body.Orgs[0].ImageRepoCount != 2 || body.Orgs[0].HelmRepoCount != 1 {
+		t.Errorf("dev counts = %d/%d, want 2/1", body.Orgs[0].ImageRepoCount, body.Orgs[0].HelmRepoCount)
 	}
 	if body.Orgs[0].LastActivityAt == nil {
 		t.Errorf("dev last_activity_at should be set")

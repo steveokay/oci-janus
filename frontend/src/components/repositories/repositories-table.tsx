@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { formatBytes, formatRelativeDate, formatAbsoluteDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { ArtifactTypeBadges } from "@/components/repositories/artifact-type-badge";
 import type { Repository } from "@/lib/api/types";
 
 // Client-side sort support for the Storage + Created columns.
@@ -109,6 +110,7 @@ export function RepositoriesTable({
             <TableRow>
               <TableHead className="w-[40%]">Repository</TableHead>
               <TableHead>Visibility</TableHead>
+              <TableHead>Type</TableHead>
               <SortableHead
                 label="Storage"
                 sortKey="storage"
@@ -275,6 +277,9 @@ function Row({
           </Badge>
         )}
       </TableCell>
+      <TableCell>
+        <ArtifactTypeBadges types={repo.artifact_types} />
+      </TableCell>
       <TableCell className="min-w-[180px]">
         <div className="flex flex-col gap-1.5">
           <span className="font-mono text-xs text-[var(--color-fg)]">
@@ -309,6 +314,9 @@ function SkeletonRow(): React.ReactElement {
             <Skeleton className="h-2.5 w-20" />
           </div>
         </div>
+      </TableCell>
+      <TableCell>
+        <Skeleton className="h-5 w-16 rounded-full" />
       </TableCell>
       <TableCell>
         <Skeleton className="h-5 w-16 rounded-full" />

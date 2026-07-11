@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -267,7 +268,63 @@ func (r *Repository) ListRepositories(ctx context.Context, tenantID, orgID, arti
 		repo.MaxCvssScore = cvssColumnToProto(maxCVSS)
 		repos = append(repos, &repo)
 	}
-	return repos, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Second pass: attach the distinct artifact types per repo. Computed in Go
+	// via deriveArtifactType (the single source of truth) rather than an SQL
+	// re-implementation of the media-type mapping. One query keyed by the
+	// result repo IDs; skipped entirely when the page is empty.
+	if len(repos) > 0 {
+		repoIDs := make([]string, len(repos))
+		for i, rp := range repos {
+			repoIDs[i] = rp.GetRepoId()
+		}
+		// tenant_id is redundant for correctness here (every repoID already came
+		// from the tenant-scoped first-pass query, and repo_id is a globally
+		// unique UUID PK) but CLAUDE.md §9 requires every registry-metadata query
+		// to filter by tenant_id — this keeps the guarantee local rather than
+		// depending on the caller staying tenant-scoped (SEC-087).
+		typeRows, err := r.reader().Query(ctx,
+			`SELECT repo_id, COALESCE(config_media_type, ''), media_type
+			   FROM manifests WHERE tenant_id = $1 AND repo_id = ANY($2::uuid[])`, tenantID, repoIDs)
+		if err != nil {
+			return nil, fmt.Errorf("list repo artifact types: %w", err)
+		}
+		defer typeRows.Close()
+		byRepo := make(map[string]map[string]struct{}, len(repos))
+		for typeRows.Next() {
+			var repoID, configMediaType, mediaType string
+			if err := typeRows.Scan(&repoID, &configMediaType, &mediaType); err != nil {
+				return nil, fmt.Errorf("scan repo artifact type: %w", err)
+			}
+			at := deriveArtifactType(configMediaType, mediaType)
+			if at == "" {
+				continue
+			}
+			if byRepo[repoID] == nil {
+				byRepo[repoID] = make(map[string]struct{}, 2)
+			}
+			byRepo[repoID][at] = struct{}{}
+		}
+		if err := typeRows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate repo artifact types: %w", err)
+		}
+		for _, rp := range repos {
+			set := byRepo[rp.GetRepoId()]
+			if len(set) == 0 {
+				continue
+			}
+			ats := make([]string, 0, len(set))
+			for t := range set {
+				ats = append(ats, t)
+			}
+			sort.Strings(ats)
+			rp.ArtifactTypes = ats
+		}
+	}
+	return repos, nil
 }
 
 // DeleteRepository removes a repository row (cascades to tags, manifests, blob_links).
@@ -1541,12 +1598,25 @@ func (r *Repository) GetTenantUsage(ctx context.Context, tenantID string) (*meta
 // LEFT JOINs also keep orgs with zero repos and repos with zero manifests
 // in the result.
 func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*metadatav1.OrgSummary, error) {
+	// Per-type repo counts reuse the canonical config-media-type sets so the
+	// SQL never hardcodes the media-type taxonomy. A mixed repo (both an
+	// image-config and a helm-config manifest) satisfies both FILTERs and is
+	// counted once toward each — COUNT(DISTINCT r.id) dedupes the join fan-out.
+	//
+	// Caveat: multi-arch index-only repos carry a NULL config_media_type on the
+	// index row and so aren't matched by the image filter here, but a real image
+	// repo always also has per-arch image-config manifests, so this is not a
+	// practical gap.
+	imageCfg := configMediaTypesFor("image")
+	helmCfg := configMediaTypesFor("helm")
 	const q = `
 		SELECT o.id,
 		       o.name,
 		       COUNT(DISTINCT r.id)                         AS repo_count,
 		       COALESCE(SUM(m.image_size_bytes), 0)::BIGINT AS storage_used,
-		       MAX(m.created_at)                            AS last_activity
+		       MAX(m.created_at)                            AS last_activity,
+		       COUNT(DISTINCT r.id) FILTER (WHERE m.config_media_type = ANY($2)) AS image_repos,
+		       COUNT(DISTINCT r.id) FILTER (WHERE m.config_media_type = ANY($3)) AS helm_repos
 		FROM organizations o
 		LEFT JOIN repositories r ON r.org_id = o.id  AND r.tenant_id = o.tenant_id
 		LEFT JOIN manifests    m ON m.repo_id = r.id AND m.tenant_id = o.tenant_id
@@ -1554,7 +1624,7 @@ func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*
 		GROUP BY o.id, o.name
 		ORDER BY o.name`
 
-	rows, err := r.reader().Query(ctx, q, tenantID)
+	rows, err := r.reader().Query(ctx, q, tenantID, imageCfg, helmCfg)
 	if err != nil {
 		return nil, fmt.Errorf("list org summaries: %w", err)
 	}
@@ -1564,7 +1634,8 @@ func (r *Repository) ListOrgSummaries(ctx context.Context, tenantID string) ([]*
 	for rows.Next() {
 		var s metadatav1.OrgSummary
 		var lastActivity sql.NullTime
-		if err := rows.Scan(&s.OrgId, &s.Name, &s.RepositoryCount, &s.StorageUsedBytes, &lastActivity); err != nil {
+		if err := rows.Scan(&s.OrgId, &s.Name, &s.RepositoryCount, &s.StorageUsedBytes,
+			&lastActivity, &s.ImageRepoCount, &s.HelmRepoCount); err != nil {
 			return nil, fmt.Errorf("scan org summary: %w", err)
 		}
 		if lastActivity.Valid {

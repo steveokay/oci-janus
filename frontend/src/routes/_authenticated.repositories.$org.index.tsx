@@ -2,7 +2,8 @@ import * as React from "react";
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { Boxes, ChevronLeft } from "lucide-react";
 import { useRepositories } from "@/lib/api/repositories";
-import type { RepoVisibilityFilter } from "@/lib/api/repositories";
+import type { RepoVisibilityFilter, RepoArtifactFilter } from "@/lib/api/repositories";
+import { cn } from "@/lib/utils";
 import { RepositoriesTable } from "@/components/repositories/repositories-table";
 import { RepositoriesToolbar } from "@/components/repositories/toolbar";
 import { CreateRepositoryDialog } from "@/components/repositories/create-repository-dialog";
@@ -21,12 +22,16 @@ function OrgRepositoriesPage(): React.ReactElement {
   const { org } = useParams({ from: "/_authenticated/repositories/$org/" });
   const [query, setQuery] = React.useState("");
   const [visibility, setVisibility] = React.useState<RepoVisibilityFilter>("all");
+  // Unified Artifact Catalog — All / Images / Charts filter chips. Reuses the
+  // existing `artifactType` filter on useRepositories (BFF ?artifact_type=),
+  // so no new query plumbing. "all" disables the filter.
+  const [artifactType, setArtifactType] = React.useState<RepoArtifactFilter>("all");
   const [createOpen, setCreateOpen] = React.useState(false);
 
   const {
     data, isLoading, isError, error, refetch,
     fetchNextPage, hasNextPage, isFetchingNextPage,
-  } = useRepositories({ visibility, org });
+  } = useRepositories({ visibility, org, artifactType });
 
   const flat = React.useMemo(
     () => data?.pages.flatMap((p) => p.repositories) ?? [],
@@ -67,6 +72,34 @@ function OrgRepositoriesPage(): React.ReactElement {
         onVisibilityChange={setVisibility}
         onCreateClick={() => setCreateOpen(true)}
       />
+
+      {/* Unified Artifact Catalog — segmented All / Images / Charts filter.
+          Drives the shared useRepositories artifactType option above. */}
+      <div className="flex w-fit items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-1">
+        {([
+          { value: "all", label: "All" },
+          { value: "image", label: "Images" },
+          { value: "helm", label: "Charts" },
+        ] as Array<{ value: RepoArtifactFilter; label: string }>).map((c) => {
+          const active = artifactType === c.value;
+          return (
+            <button
+              key={c.value}
+              type="button"
+              onClick={() => setArtifactType(c.value)}
+              aria-pressed={active}
+              className={cn(
+                "rounded-sm px-3 py-1 text-xs font-medium transition-colors",
+                active
+                  ? "bg-[var(--color-surface-sunken)] text-[var(--color-fg)]"
+                  : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]",
+              )}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
 
       {isError ? (
         <ErrorState
