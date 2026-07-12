@@ -26,8 +26,37 @@ import {
   SIGNING_DISABLED,
   type SignatureRecord,
 } from "@/lib/api/signature";
+import { useServiceAccounts } from "@/lib/api/service-accounts";
 import { formatAbsoluteDate, formatRelativeDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+// UUID_RE matches a canonical UUID. FUT-009: a signature signed via a service
+// account records the SA's shadow user_id (a UUID) as its signer_id. We use
+// this to decide whether to resolve the raw signer_id to an SA display name
+// (UUID → managed identity) or render it verbatim (free-form historical row).
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// SignerDisplay resolves a raw signer_id for display. When it is a UUID that
+// matches a known service account's shadow_user_id, we return that SA's name;
+// otherwise the signer_id is a free-form string and is returned unchanged.
+//
+// `saByShadowId` is a lookup built once by the panel from useServiceAccounts()
+// so every SignatureCard shares a single map instead of re-scanning the list.
+function resolveSignerLabel(
+  signerId: string,
+  saByShadowId: Map<string, string>,
+): { label: string; isServiceAccount: boolean } {
+  if (UUID_RE.test(signerId)) {
+    const name = saByShadowId.get(signerId);
+    if (name) {
+      return { label: name, isServiceAccount: true };
+    }
+  }
+  // Free-form signer_id, or a UUID we can't resolve (e.g. a deleted SA) — show
+  // it verbatim so the row is never blank.
+  return { label: signerId, isServiceAccount: false };
+}
 
 interface SigningPanelProps {
   org: string;
@@ -60,6 +89,19 @@ export function SigningPanel({
     tag,
     { verify: verifyOn },
   );
+
+  // FUT-009 — build a shadow_user_id → SA name lookup so signatures signed by
+  // a service account render the managed identity's name instead of the raw
+  // UUID. include_disabled so a signature by a since-disabled SA still resolves
+  // to its name (the row is historical; we only render, never re-sign).
+  const { data: serviceAccounts } = useServiceAccounts({ includeDisabled: true });
+  const saByShadowId = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const sa of serviceAccounts ?? []) {
+      m.set(sa.shadow_user_id, sa.name);
+    }
+    return m;
+  }, [serviceAccounts]);
 
   if (isError) {
     return (
@@ -127,6 +169,7 @@ export function SigningPanel({
         digest={data.manifest_digest}
         signatures={data.signatures}
         verifyOn={verifyOn}
+        saByShadowId={saByShadowId}
       />
       <ActionRibbon
         signed
@@ -268,10 +311,12 @@ function SignedCard({
   digest,
   signatures,
   verifyOn,
+  saByShadowId,
 }: {
   digest: string;
   signatures: SignatureRecord[];
   verifyOn: boolean;
+  saByShadowId: Map<string, string>;
 }): React.ReactElement {
   // FE-API-025 — when verifyOn flips, every signature carries a `verified`
   // bool. Roll up the counts so the header reads "3 verified, 1 failed"
@@ -342,7 +387,11 @@ function SignedCard({
 
       <div className="space-y-2">
         {signatures.map((s, i) => (
-          <SignatureCard key={`${s.signature_digest}-${i}`} signature={s} />
+          <SignatureCard
+            key={`${s.signature_digest}-${i}`}
+            signature={s}
+            saByShadowId={saByShadowId}
+          />
         ))}
       </div>
     </div>
@@ -351,14 +400,22 @@ function SignedCard({
 
 function SignatureCard({
   signature,
+  saByShadowId,
 }: {
   signature: SignatureRecord;
+  saByShadowId: Map<string, string>;
 }): React.ReactElement {
   // FE-API-025 — verified is tri-state on the wire:
   //   undefined → caller didn't opt into ?verify=true
   //   true      → signer.VerifyManifest passed
   //   false     → signer.VerifyManifest failed (failure_reason should be set)
   const verifyState = signature.verified;
+  // FUT-009 — when the signer_id is an SA shadow user_id (a UUID we can
+  // resolve), render the SA display name; free-form strings render verbatim.
+  const { label: signerLabel, isServiceAccount } = resolveSignerLabel(
+    signature.signer_id,
+    saByShadowId,
+  );
   return (
     <Card
       accentBar={
@@ -376,9 +433,22 @@ function SignatureCard({
             <span className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-fg-subtle)]">
               Signer
             </span>
-            <code className="font-mono text-xs text-[var(--color-fg)]">
-              {signature.signer_id}
-            </code>
+            {/* SA-signed rows render the display name (not monospace, since
+                it's a human-readable label); free-form signer_ids stay in the
+                mono treatment. `title` keeps the raw shadow user_id inspectable
+                for SA rows. */}
+            <span
+              className={cn(
+                "text-xs text-[var(--color-fg)]",
+                isServiceAccount ? "font-medium" : "font-mono",
+              )}
+              title={isServiceAccount ? signature.signer_id : undefined}
+            >
+              {signerLabel}
+            </span>
+            {isServiceAccount ? (
+              <Badge tone="neutral">Service account</Badge>
+            ) : null}
             {verifyState === true ? (
               <Badge tone="success">
                 <ShieldCheck className="size-3" /> Verified

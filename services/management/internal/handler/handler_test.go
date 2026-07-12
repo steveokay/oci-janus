@@ -213,6 +213,18 @@ func (s *fakeAuthServer) ListMembers(_ context.Context, _ *authv1.ListMembersReq
 	}, nil
 }
 
+// listTenantUsersOverride lets FUT-009 SA-signing tests inject the tenant's
+// user set (including service-account shadow rows) that ListTenantUsers
+// returns. Set in a test and reset by that test's cleanup. When nil the
+// existing FUT-012 default (see tenant_users_test.go) is used. The single
+// ListTenantUsers fake method lives in tenant_users_test.go and consults
+// these hooks first.
+var listTenantUsersOverride *authv1.ListTenantUsersResponse
+
+// listTenantUsersErr lets a test force a transport-style failure so the
+// resolver's fail-closed (500) branch can be exercised.
+var listTenantUsersErr error
+
 // fakeMetaServer returns canned metadata responses.
 type fakeMetaServer struct {
 	metadatav1.UnimplementedMetadataServiceServer
