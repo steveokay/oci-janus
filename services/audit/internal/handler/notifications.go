@@ -172,9 +172,16 @@ func (h *GRPCHandler) GetNotifications(ctx context.Context, req *auditv1.GetNoti
 		rows = rows[:limit]
 	}
 
+	// REM-018-followup — batch-resolve the page's actor_ids to display names
+	// via registry-auth so each NotificationEvent can carry a friendly label
+	// for the dashboard's `<UserCell>`. Fail-safe: a resolver error (or an
+	// unwired resolver) leaves the map nil and every row falls back to the
+	// payload-derived actor_username / actor_id, preserving prior behaviour.
+	displayNames := h.resolveActorDisplayNames(ctx, req.GetTenantId(), rows)
+
 	notifications := make([]*auditv1.NotificationEvent, 0, len(rows))
 	for _, row := range rows {
-		notifications = append(notifications, notificationFromRow(row))
+		notifications = append(notifications, notificationFromRow(row, displayNames))
 	}
 
 	return &auditv1.GetNotificationsResponse{
@@ -260,7 +267,12 @@ type rawNotificationPayload struct {
 // notificationFromRow converts an audit row into a wire-shaped notification
 // event. The hand-crafted title/summary/link mapping lives here so a single
 // switch keeps the renderer easy to extend when new event_types land.
-func notificationFromRow(row *repository.NotificationRow) *auditv1.NotificationEvent {
+//
+// displayNames (REM-018-followup) is the actor_id → display_name map resolved
+// upstream in GetNotifications. It may be nil (resolver unwired / auth
+// unreachable) or lack this row's actor_id, in which case actor_display_name
+// is left empty and the frontend falls back to actor_username / actor_id.
+func notificationFromRow(row *repository.NotificationRow, displayNames map[string]string) *auditv1.NotificationEvent {
 	// metadata is shaped {"event_id": "...", "raw": <payload>} — same wrapper
 	// the eventconsumer writes. Errors are intentionally ignored: missing
 	// or malformed fields just render as the bare title.
@@ -286,17 +298,63 @@ func notificationFromRow(row *repository.NotificationRow) *auditv1.NotificationE
 
 	title, summary, link := renderNotification(row.Action, row.Outcome, &p, org, repo, username)
 
+	// REM-018-followup — attach the auth-resolved display name when the
+	// upstream batch lookup found one for this actor. Empty (missing key)
+	// leaves actor_display_name blank so the FE falls back to @username.
+	displayName := displayNames[row.ActorID]
+
 	return &auditv1.NotificationEvent{
-		EventId:       row.ID.String(),
-		EventType:     row.Action,
-		OccurredAt:    timestamppb.New(row.OccurredAt),
-		ActorId:       row.ActorID,
-		ActorUsername: username,
-		Title:         title,
-		Summary:       summary,
-		Link:          link,
-		Metadata:      notificationMetadataMap(&p),
+		EventId:          row.ID.String(),
+		EventType:        row.Action,
+		OccurredAt:       timestamppb.New(row.OccurredAt),
+		ActorId:          row.ActorID,
+		ActorUsername:    username,
+		ActorDisplayName: displayName,
+		Title:            title,
+		Summary:          summary,
+		Link:             link,
+		Metadata:         notificationMetadataMap(&p),
 	}
+}
+
+// resolveActorDisplayNames batch-resolves the distinct actor_ids on this page
+// of notification rows to display names via the wired ActorDisplayNameResolver
+// (registry-auth). Returns nil when the resolver is unwired, when there are no
+// resolvable actor_ids, or when the lookup fails — in every case the caller
+// renders the payload-derived actor_username / actor_id fallback so the
+// notifications feed never fails just because registry-auth is degraded
+// (REM-018-followup).
+func (h *GRPCHandler) resolveActorDisplayNames(ctx context.Context, tenantID string, rows []*repository.NotificationRow) map[string]string {
+	if h.actorResolver == nil || len(rows) == 0 {
+		return nil
+	}
+	// Dedupe non-empty actor_ids, skipping the well-known non-user sentinels
+	// so we don't waste a lookup slot on ids registry-auth will never resolve.
+	seen := make(map[string]struct{}, len(rows))
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		a := row.ActorID
+		if a == "" || a == "system" || a == "anonymous" {
+			continue
+		}
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		ids = append(ids, a)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := h.actorResolver.ResolveDisplayNames(ctx, tenantID, ids)
+	if err != nil {
+		// Fail-OPEN: log and fall back to actor_username / actor_id. The bell
+		// + /activity feed must never 500 because registry-auth hiccupped.
+		slog.WarnContext(ctx, "resolve actor display names failed; falling back to actor_username",
+			"error", err, "tenant_id", tenantID)
+		return nil
+	}
+	return names
 }
 
 // renderNotification is the hand-crafted (event_type → title, summary, link)

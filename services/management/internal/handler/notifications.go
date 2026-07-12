@@ -180,13 +180,19 @@ func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// REM-018-followup: enrich actor display_name from auth before
-	// serialising. `actorLookup` collects unique UUID-shaped actor_ids
-	// from this page, calls auth.LookupUsernames once, and merges the
-	// result. Failures fall back to the existing actor_username from the
-	// audit payload — operators should never lose the notifications feed
-	// because the auth service hiccupped.
-	usernames := h.lookupNotificationActors(r.Context(), tenantID, resp.GetNotifications())
+	// REM-018-followup: actor display_name is now resolved audit-side — the
+	// audit service batch-joins the page's actor_ids against
+	// registry-auth.LookupUsernames and ships actor_display_name on each
+	// NotificationEvent. The BFF prefers that value and only falls back to
+	// its own LookupUsernames call for rows the audit tier couldn't resolve
+	// (e.g. an older audit deploy that predates the proto field, or auth
+	// being briefly unreachable when audit built the page). That keeps the
+	// join authoritative in one place while staying robust to skew.
+	//
+	// `needLookup` collects the actor_ids that still lack a display name so
+	// the fallback lookup only fires when it can add something; when audit
+	// already resolved every row we skip the extra RPC entirely.
+	usernames := h.lookupMissingNotificationActors(r.Context(), tenantID, resp.GetNotifications())
 
 	out := NotificationsResponse{
 		Notifications: make([]NotificationResponse, 0, len(resp.GetNotifications())),
@@ -195,11 +201,17 @@ func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request
 	}
 	for _, n := range resp.GetNotifications() {
 		username := n.GetActorUsername()
-		displayName := ""
+		// Prefer the audit-resolved display name; fall back to the BFF's own
+		// lookup only when audit left it empty.
+		displayName := n.GetActorDisplayName()
 		if u, ok := usernames[n.GetActorId()]; ok {
 			// DB is authoritative — override the best-effort payload value.
-			username = u.Username
-			displayName = u.DisplayName
+			if u.Username != "" {
+				username = u.Username
+			}
+			if displayName == "" {
+				displayName = u.DisplayName
+			}
 		}
 		out.Notifications = append(out.Notifications, NotificationResponse{
 			EventID:          n.GetEventId(),
@@ -217,15 +229,20 @@ func (h *Handler) handleListNotifications(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
-// lookupNotificationActors batch-resolves the actor_id set on this page
-// against the auth users table. Returns a map keyed by actor_id; absent
-// keys mean either a non-UUID sentinel (`system`, `anonymous`, empty),
-// an out-of-tenant id, or an auth-service hiccup — the caller falls
-// back to the audit payload's best-effort actor_username in any case.
+// lookupMissingNotificationActors batch-resolves ONLY the actor_ids on this
+// page that the audit tier did not already resolve to a display name. Returns
+// a map keyed by actor_id; absent keys mean either a non-UUID sentinel
+// (`system`, `anonymous`, empty), an out-of-tenant id, an actor audit already
+// resolved, or an auth-service hiccup — the caller falls back to the audit
+// payload's best-effort actor_username in any case.
 //
-// REM-018-followup. Bounded by `lookupUsernamesMaxBatch` on the auth
-// side (200) and clipped here too as a belt-and-braces guard.
-func (h *Handler) lookupNotificationActors(
+// REM-018-followup. The audit service now owns the primary join
+// (NotificationEvent.actor_display_name); this BFF-side lookup is a fallback
+// for skew (older audit deploy / audit's own auth call briefly failing) and
+// no-ops entirely when audit resolved every row — so the common case is zero
+// extra RPCs. Bounded by `lookupUsernamesMaxBatch` on the auth side (200) and
+// clipped here too as a belt-and-braces guard.
+func (h *Handler) lookupMissingNotificationActors(
 	ctx context.Context,
 	tenantID string,
 	notifs []*auditv1.NotificationEvent,
@@ -233,12 +250,17 @@ func (h *Handler) lookupNotificationActors(
 	if len(notifs) == 0 {
 		return nil
 	}
-	// Dedupe non-empty actor_ids and skip obvious sentinels.
+	// Dedupe non-empty actor_ids, skip obvious sentinels, and skip actors
+	// audit already resolved (display_name present) so we only pay for an RPC
+	// when it can actually fill a gap.
 	seen := make(map[string]struct{}, len(notifs))
 	ids := make([]string, 0, len(notifs))
 	for _, n := range notifs {
 		a := n.GetActorId()
 		if a == "" || a == "system" || a == "anonymous" {
+			continue
+		}
+		if n.GetActorDisplayName() != "" {
 			continue
 		}
 		if _, ok := seen[a]; ok {

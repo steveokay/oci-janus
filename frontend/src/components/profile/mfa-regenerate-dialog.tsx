@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useRegenerateBackupCodes } from "@/lib/api/mfa";
@@ -140,9 +141,8 @@ export function MfaRegenerateDialog({
           >
             <div className="space-y-1.5">
               <Label htmlFor="mfa_regen_password">Password</Label>
-              <Input
+              <PasswordInput
                 id="mfa_regen_password"
-                type="password"
                 autoComplete="current-password"
                 placeholder="Your account password"
                 {...register("password")}

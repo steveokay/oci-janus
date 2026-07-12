@@ -250,6 +250,15 @@ message NotificationEvent {
   // summary string. Keys are stable; values are plain strings to keep the
   // wire shape narrow.
   map<string, string> metadata = 9;
+  // actor_display_name is the human display name resolved from the auth
+  // users table (REM-018-followup). The audit service batch-resolves the
+  // page's actor_ids via registry-auth.LookupUsernames and populates this
+  // field so the dashboard can render a friendly `<UserCell>` label instead
+  // of a raw UUID. Empty when the actor is a non-UUID sentinel ("system" /
+  // "anonymous" / ""), out of tenant, the user has no display_name set, or
+  // registry-auth was unreachable — in every fallback case the frontend
+  // falls back to actor_username / actor_id, preserving today's behaviour.
+  string actor_display_name = 10;
 }
 
 // GetNotificationsResponse carries a page of notifications plus a cursor.

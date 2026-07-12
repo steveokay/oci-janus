@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { GitPullRequest } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { CopyButton } from "@/components/ui/copy-button";
 import {
@@ -192,9 +193,8 @@ function PRRegistryPanelInner(): React.ReactElement {
         {/* Signing secret (write-only) */}
         <div>
           <Label htmlFor="pr-registry-secret">Signing secret</Label>
-          <Input
+          <PasswordInput
             id="pr-registry-secret"
-            type="password"
             autoComplete="off"
             placeholder={data?.has_secret ? "•••• configured" : ""}
             value={form.secret}
