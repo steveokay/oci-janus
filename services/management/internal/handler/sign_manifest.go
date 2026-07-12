@@ -268,7 +268,9 @@ const saResolveMaxPages = 50
 //   - Neither field set                → 400 (a signer must be named).
 //   - Both fields set                  → 400 (ambiguous intent).
 //   - signer_id only                   → validated free-form string, returned
-//     as-is (backward-compatible FE-API-026 path).
+//     as-is (backward-compatible FE-API-026 path). A UUID-shaped value is
+//     rejected 400 (SEC-330-A) so free-form identities can never be confused
+//     with a service account's shadow user_id.
 //   - service_account_id only          → resolved to the SA's shadow user_id
 //     after confirming the SA exists, is
 //     enabled, and belongs to tenantID.
@@ -291,6 +293,17 @@ func (h *Handler) resolveSignerIdentity(ctx context.Context, tenantID string, bo
 		// Legacy free-form path — validate and pass through unchanged.
 		if !validateSignerID(body.SignerID) {
 			return "", &signIdentityError{http.StatusBadRequest, "invalid signer_id"}
+		}
+		// SEC-330-A: reject a UUID-shaped free-form signer_id. The SA path
+		// records a service account's shadow user_id (a UUID) as the signer_id,
+		// and the tag-detail Signing panel badges any UUID signer_id as a
+		// validated "Service account". Allowing a bare UUID down the free-form
+		// path — which skips all SA existence/active/kind/tenant checks — would
+		// let a repo-admin forge that managed-identity provenance (and could
+		// collide with a real SA's later legitimate signature). Keep the two
+		// namespaces disjoint: free-form identities must not be UUIDs.
+		if _, err := uuid.Parse(body.SignerID); err == nil {
+			return "", &signIdentityError{http.StatusBadRequest, "signer_id must not be a UUID; use service_account_id to sign as a service account"}
 		}
 		return body.SignerID, nil
 	default:
@@ -319,6 +332,12 @@ func (h *Handler) resolveServiceAccountSigner(ctx context.Context, tenantID, saS
 	// tenant-scoped server-side, so a cross-tenant SA simply never appears in
 	// the page set and falls through to the not-found branch — the BFF can
 	// never leak another tenant's SA existence.
+	//
+	// Cost note: this is an O(tenant users) linear scan per sign because auth
+	// exposes no shadow-user_id-keyed lookup RPC (only ListTenantUsers returns
+	// SA-kind rows). Accepted at current scale (single-tenant, small SA counts)
+	// and bounded by saResolveMaxPages. If a GetServiceAccount / LookupUser RPC
+	// ever lands, switch this to a direct O(1) lookup.
 	pageToken := ""
 	for page := 0; page < saResolveMaxPages; page++ {
 		resp, err := h.auth.ListTenantUsers(ctx, &authv1.ListTenantUsersRequest{

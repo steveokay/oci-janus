@@ -169,6 +169,45 @@ func TestSignManifest_neitherField(t *testing.T) {
 	assertNoSignCall(t, env)
 }
 
+// TestSignManifest_freeFormUUIDRejected — SEC-330-A: a UUID-shaped value on the
+// legacy free-form signer_id path is rejected 400. Without this guard a
+// repo-admin could POST a real SA's shadow user_id as a free-form signer_id,
+// skipping every SA existence/active/kind/tenant check, and the tag-detail
+// Signing panel (which badges any UUID signer_id as a validated "Service
+// account") would render forged managed-identity provenance. The signer must
+// never be called.
+func TestSignManifest_freeFormUUIDRejected(t *testing.T) {
+	env := newSignerTestEnv(t)
+	// No ListTenantUsers override: the free-form path must reject on shape
+	// alone, before (and instead of) any SA resolution round-trip.
+	body := `{"signer_id":"` + saShadowID + `"}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/sign", adminToken, body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for UUID-shaped free-form signer_id, got %d", resp.StatusCode)
+	}
+	assertNoSignCall(t, env)
+}
+
+// TestSignManifest_freeFormStringAccepted — the free-form path still accepts a
+// normal (non-UUID) signer_id, confirming SEC-330-A only rejects UUID shapes
+// and doesn't break the legacy FE-API-026 contract.
+func TestSignManifest_freeFormStringAccepted(t *testing.T) {
+	env := newSignerTestEnv(t)
+	body := `{"signer_id":"alice@example.com"}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/sign", adminToken, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for free-form signer_id, got %d", resp.StatusCode)
+	}
+	env.signer.mu.Lock()
+	defer env.signer.mu.Unlock()
+	if len(env.signer.signCalls) != 1 {
+		t.Fatalf("expected 1 SignManifest call, got %d", len(env.signer.signCalls))
+	}
+	if got := env.signer.signCalls[0].GetSignerId(); got != "alice@example.com" {
+		t.Errorf("expected signer_id=alice@example.com, got %q", got)
+	}
+}
+
 // TestSignManifest_serviceAccount_authUnreachable — when ListTenantUsers
 // errors we can't confirm the SA, so the handler fails closed with 500 and
 // never signs.
