@@ -2021,6 +2021,18 @@ Pick alongside neighbouring FE work; none justifies its own number:
 - **"Recently viewed" repos strip** — dashboard/repo-list shortcut so
   operators stop re-searching the same handful of repos.
 
+#### FUT-079 — Auth/forms UX polish bundle — **Tier 3**
+Low-effort, high-polish fixes on the auth + secret-entry surfaces. None
+justifies its own number; pick alongside neighbouring FE work.
+- **"Show password" reveal toggle** — no eye-icon toggle exists on any of the
+  8 `type="password"` fields (login `routes/login.tsx`, change-password
+  `components/profile/change-password-dialog.tsx`, MFA regenerate/disable
+  `components/profile/mfa-{regenerate,disable}-dialog.tsx`, and the
+  PR-registry / notification-webhook / email-transport secret fields under
+  `components/settings/`). Add the toggle once to the base `Input` (or a small
+  `PasswordInput` wrapper) so it lands on all of them; saves users the
+  typo-then-retry loop on long passwords/secrets.
+
 #### FUT-077 — Cross-environment image comparison matrix — **Tier 2/3**
 Deferred sibling of the environments-overview work
 (`feat/environments-overview`, spec
