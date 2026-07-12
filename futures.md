@@ -2356,6 +2356,227 @@ Two slices; **only Slice 1 is committed**, Slice 2 is documented-but-deferred.
 
 ---
 
+## System gap audit batch — 2026-07-12 (5-agent full-system sweep)
+
+Output of a 5-agent gap audit (frontend UI coverage, backend
+completeness, gRPC→BFF→FE API matrix, tracker sweep, testing/CI/infra)
+run 2026-07-12. Deduped against the whole backlog — already-tracked
+overlaps stay where they are, with new audit evidence noted here:
+
+- **Proxy upstream CRUD → FUT-058** — audit confirmed it's worse than
+  "needs BFF+FE": `proxy.RegisterUpstream/DeleteUpstream/ListUpstreams`
+  have **zero callers anywhere**; upstreams are SQL-seed-only today.
+- **Tenant default policy screen → FUT-059** — `tenant.GetTenantPolicy`
+  / `UpdateTenantPolicy` implemented server-side, zero callers.
+- **Repo-level quota → FUT-062** — `metadata.UpdateRepositoryQuota` is
+  a dead RPC; only tenant quota is surfaced.
+- **Platform-admin UI → FUT-061** — worse than tracked:
+  `auth.SetGlobalAdmin` has **no invocable path at all** (not even the
+  bootstrap CLI); global admin can only be minted via direct SQL.
+- **SCIM admin surface → Tier 1 #5 residual** — `scimTokenSvc.generate`
+  has no HTTP/gRPC/CLI caller surfaced; SCIM cannot be enabled without
+  touching the DB. No BFF routes, no UI, no `provisioned_via` badge.
+- **Audit chain-verify UI → FUT-067**; **SAML trust-email fallback →
+  FUT-053** (audit confirmed: with `SSO_SAML_TRUST_EMAIL=false` both
+  provisioning AND existing-user login 403 — the Phase 5.6
+  email-verification fallback was never built, so SAML is unusable
+  without trusting IdP emails); **test-debt truth-up → FUT-075**;
+  **router error/not-found boundary → QA-019**; **webhook
+  signature/response capture → bug-class tail above**; **digest-keyed
+  signing repo-scoping → RED-FU-003**; **webhook test-dispatch throttle
+  → PENTEST-030**; **rotate-kek sslmode bypass → RED-FU-015 tail**;
+  **older mapEvent malformed-payload hardening → SEC-070 residual**;
+  **s3/gcs/azure drivers missing → known** (`docs/integrations/storage.md`
+  is honest; CLAUDE.md §8 still claims five — see FUT-089).
+- **Tracker inconsistency to verify:** security.md shows SEC-087 OPEN
+  while status.md's PR #321 row claims the tenant-scope fix shipped
+  inline — verify and flip the status line.
+
+Below is only what was genuinely untracked.
+
+#### FUT-080 — Compliance reports fabricate data: wire the report worker to real findings — **Tier 1 (correctness)**
+- **Why:** every generated SPDX/PDF compliance report shows **0
+  findings regardless of actual scan results**.
+  `services/scanner/internal/reportworker/worker.go:99-110` hardcodes
+  `SummaryCount` to all-zeros and never populates `Findings`; the
+  comment claims a metadata gRPC client "is wired in main" but the
+  worker has no metadata client field at all, and
+  `internal/report/report.go:31-34` admits the renderer "fabricates a
+  minimal set from the tenant counts so the output isn't empty." A
+  compliance artifact that is silently wrong is worse than no artifact.
+- **What:** add the metadata gRPC client to the report worker, fetch
+  per-digest scan findings + tenant summary counts, populate
+  `SummaryCount`/`Findings` for both SPDX and PDF renderers; unit test
+  asserting non-zero findings propagate end-to-end. (The separate
+  local-disk / plaintext-PDF persistence deferral stays tracked via
+  `docs/SERVICES.md` §624 `TODO(prod)` — object storage + signed URLs.)
+
+#### FUT-081 — Missing event publishers: deletions + webhook outcomes never reach the audit trail — **Tier 1 (audit completeness)**
+- **Why:** five routing keys documented as live in `docs/EVENTS.md`
+  have **no publisher anywhere**: `manifest.deleted` / `tag.deleted`
+  (core publishes only `push.completed` + `pull.image` — deletions are
+  invisible to the audit trail and deletion-subscribed webhooks never
+  fire), `webhook.queued` / `webhook.delivered` / `webhook.failed`
+  (`services/webhook/internal` contains zero Publish calls despite an
+  audit `mapEvent` case at `consumer.go:403`), and `push.failed` (a
+  subscribable notification event — `notifications.go:46,85,346` — that
+  can never fire).
+- **What:** publish `manifest.deleted`/`tag.deleted` from core's delete
+  handlers, delivery-outcome events from the webhook dispatcher, and
+  `push.failed` from core's push error paths (or descope keys we decide
+  not to emit and annotate `// audit: skip` + fix EVENTS.md). Also:
+  remove the dead `tenant.domain.verified` consumer
+  (`eventconsumer/consumer.go:851` — custom domains removed, RM-001),
+  type the `auth.provider_*` events in `libs/rabbitmq/events` (EVENTS.md
+  acknowledged follow-up), and verify the dashboard "pulls" analytics
+  series actually populates post-FE-API-042 — `analytics-card.tsx:143`
+  still says "pull events are not yet emitted by the audit consumer"
+  and the sparkline renders permanently zero.
+
+#### FUT-082 — registry-mcp repair: broken endpoints + missing CI lane — **Tier 1 (correctness)**
+- **Why:** roughly **half the 12 MCP tools fail at runtime** —
+  `services/mcp/internal/client/registry.go` calls
+  `.../manifests/{tag}` (BFF path is `.../tags/{tag}/manifest`),
+  `GET /api/v1/audit` (no such route), `.../scans/{digest}` +
+  `.../signatures/{digest}` (BFF uses `.../tags/{tag}/scan|signature`
+  and `/api/v1/scan-by-digest|signatures-by-digest/{digest}`), and
+  tenant-wide `/api/v1/promotions` (BFF only has per-repo). Plus
+  `/api/v1/service-accounts` is auth-owned, so it 404s unless
+  `MCP_MANAGEMENT_URL` points at a path-splitting gateway. This shipped
+  because **mcp is the only service with no CI workflow** (13 of 14
+  have `ci-<svc>.yml`).
+- **What:** fix the client paths; add `ci-mcp.yml`; add a contract
+  test validating every MCP client path against the generated
+  `docs/openapi.json` (exists since FUT-076 slice 6 — cheap and
+  never-drifting) or an integration smoke against a live BFF. Feeds
+  the FUT-055 positioning decision.
+
+#### FUT-083 — Helm deploy can't serve the dashboard: management chart + `/api/v1` routing contract — **Tier 1 (for Helm deployers)**
+- **Why:** two compounding deploy-blockers: (1)
+  `infra/helm/registry/charts/` has no `registry-management` subchart
+  despite `docs/DEPLOYMENT.md:59` listing it — a Helm install deploys
+  no BFF at all; (2)
+  `charts/gateway/templates/ingressroutes.yaml:47-56` routes **all**
+  `/api/v1/*` to registry-auth, so every BFF-owned FE call would 404
+  even with the chart present. The auth-vs-BFF path split (login,
+  apikeys, users, service-accounts, access → auth :8080; everything
+  else → BFF :8091, with per-path overrides) is encoded **only in
+  `frontend/vite.config.ts:48-84`** — no production artifact
+  implements it, and no compose label was found either.
+- **What:** add the `registry-management` subchart; implement the path
+  split in the gateway IngressRoutes; document the routing contract in
+  one canonical place (`docs/deployment-guide.md`) and make
+  compose/Helm both implement it; verify the compose path split.
+
+#### FUT-084 — Wire SSO login in the frontend (backend is done) — **Tier 1 (dead feature)**
+- **Why:** the complete OAuth PKCE + SAML dance exists server-side —
+  `GET /api/v1/auth/providers`, `/auth/oauth/{id}/start` + callback
+  (302 to `{next}?sso_token=<jwt>`), `/auth/saml/{id}/start` + ACS —
+  but `sso-buttons.tsx` renders all four provider buttons permanently
+  `disabled` ("coming soon"), grep for `sso_token` across
+  `frontend/src` → **0 hits**, and the login page never fetches
+  `/auth/providers`. SSO is unusable end-to-end purely because of the
+  frontend; the component comment even falsely claims the backend is
+  "not yet implemented." Biggest feature-for-effort win in the audit.
+- **What:** fetch providers on the login page, enable/render buttons
+  per configured provider, link to `/auth/oauth/{id}/start`, consume
+  `sso_token` on first paint into the auth store (FE-API-034 contract),
+  delete the stale comment; tests for the token handoff.
+
+#### FUT-085 — CI enforcement gap: integration tests, coverage gate, gosec, release pipeline — **Tier 2**
+- **Why:** `docs/TESTING.md` claims an 80% coverage gate "enforced in
+  CI", integration tests, gosec on every PR, and weekly ZAP — none
+  exist across the 22 workflow files. **53 files tagged
+  `//go:build integration` never run in CI** (DB-migration regressions
+  invisible); no workflow computes coverage; nothing fires on tags —
+  `docs/CI-CD.md` stages 7–8 (publish image on semver tag, helm
+  upgrade staging) have no workflow, so the v2.0.0 tag triggered
+  nothing. Conformance is also path-filtered, not "every PR" as
+  claimed. (govulncheck blocking sweep, gitleaks, proto `breaking`,
+  and per-service Trivy scans are all real.)
+- **What:** (a) integration-test job (testcontainers; nightly if too
+  slow for PR lanes); (b) coverage computation + threshold, or correct
+  TESTING.md to measured reality (pairs with FUT-075); (c) gosec job;
+  (d) `release.yml` on semver tags per CI-CD.md. Candidates to absorb
+  into the REM-020 reshape backlog as new numbered sub-items.
+
+#### FUT-086 — Frontend e2e suite (Playwright) — **Tier 2**
+- **Why:** 57 vitest unit/component files but **zero e2e** — no
+  playwright/cypress anywhere in `frontend/`. Login/SSO and the
+  push→scan→sign flows have no end-to-end coverage; QA-020 covers unit
+  coverage, not this. The FUT-076 screenshot pipeline
+  (`tools/screenshots/`) already drives the live stack via committed
+  Playwright — reuse it as the harness seed.
+- **What:** Playwright smoke pack against the compose stack: login
+  (incl. SSO once FUT-084 lands), repo browse → tag detail → trigger
+  scan, sign + verify badge, webhook delivery inspect. Wire into CI
+  behind a nightly or compose-gated lane.
+
+#### FUT-087 — API surface reconciliation: dead RPCs, unconsumed routes, vestigial gateway — **Tier 3**
+- **Why:** the matrix audit found implemented-but-orphaned surface
+  beyond the FUT-058/059/061/062 pointers above: `scanner.TriggerScan`
+  / `GetScanStatus` (manual scans go via RabbitMQ `scan.queued`
+  instead) and `scanner.GetRepoScanPolicy` have zero callers;
+  `metadata.DeleteOrganization` has no caller (orgs can be claimed but
+  never deleted via API); BFF `GET
+  /api/v1/repositories/{org}/{repo}/activity` has no FE consumer
+  (candidate per-repo Activity tab); the Go `services/gateway` module
+  is a hollow shell (health + metrics only — Traefik is the real
+  gateway) yet ships a Dockerfile + CI lane; `services/storage`
+  `.env.example` documents `STORAGE_S3_*`/`STORAGE_GCS_*`/
+  `STORAGE_AZURE_*` vars that no code reads.
+- **What:** per item, decide wire-or-remove: give keepers a caller
+  (org delete route, repo Activity tab, scan-trigger RPC vs queue —
+  pick one path); mark removals deprecated in proto comments (field
+  numbers stay reserved per §12); either delete the gateway Go module
+  or document it as intentional scaffold; trim the dead storage env
+  vars until drivers exist.
+
+#### FUT-088 — UI paper-cuts batch (2026-07-12 audit) — **Tier 3**
+- **API-key activity time chips are fake** —
+  `api-keys.activity.tsx:31-40` uses `limit` as a proxy for 24h/7d/30d;
+  needs real `from`/`to` params on the backend + FE swap.
+- **Access-activity pagination not wired** — `ActivityTable.tsx`
+  exposes `next_page_token` but never fetches page 2.
+- **Hardcoded retention grace window** — `tags-panel.tsx:571-574` pins
+  `GRACE_DAYS = 7` client-side; BFF should return the platform grace
+  setting so the pending-delete ETA can't drift.
+- **Onboarding replay link from Settings** — Phase 4.3 §3 leftover;
+  the first-run redirect shipped, the Settings link never did.
+- **Org-wide bulk scan trigger** — `useBulkScanOrg`
+  (`lib/api/scan.ts:171`) + the BFF route exist; no UI imports it.
+  (Repo-level bulk scan IS wired.)
+- **MCP connect card** in Settings › Integrations — zero in-app MCP
+  presence; the natural home for a connect-an-AI-agent setup snippet.
+- **Comment rot + unused hooks sweep** — `sso-buttons.tsx:7-8` stale
+  "backend not implemented" (dies with FUT-084);
+  `api-keys.service-accounts.tsx:18-20` TODO says the T26 drawer is
+  unmounted but it's mounted at lines 98-103; audit unused exports
+  (`useAbility`, `useActiveAdapter`, `useReport`, single-upstream
+  proxy-policy hooks, `useUpdateOIDCTrust`).
+
+#### FUT-089 — Doc truth-up batch: docs claim X, code does Y — **Tier 3**
+- **CLAUDE.md §8** claims 5 storage drivers; 2 exist (minio,
+  filesystem) — `docs/integrations/storage.md` is already honest.
+- **CLAUDE.md §3 diagram** shows `gc ──gc.run──► storage` via
+  RabbitMQ; storage has no RabbitMQ consumer — GC deletes via gRPC.
+- **CLAUDE.md §7** phrases peer-CN matching as "enforced"; it's opt-in
+  and an empty allowlist only warns in production (SEC-044 deliberate)
+  — align wording or flip to fail-closed.
+- **README / ADR-0006** "Cosign + Notary v2" — Notary v2 has zero code
+  (folds the existing doc-inventory P3 item).
+- **DEPLOYMENT.md** lists `docker-compose.test.yml` (doesn't exist)
+  and the `registry-management` chart (see FUT-083).
+- **TESTING.md** claims covered by FUT-075/FUT-085; also claims
+  `.mockery.yaml` config that exists nowhere.
+- **HARDENING-CHECKLIST.md** — all 25 boxes unchecked, no per-service
+  compliance record; also its "Dependabot or Renovate configured" box
+  is unmet (no config in `.github/`).
+- **security.md SEC-087** status line vs status.md PR #321 — verify +
+  flip (see preamble).
+
+---
+
 ## How to use this file
 
 **Tiering criteria:**
