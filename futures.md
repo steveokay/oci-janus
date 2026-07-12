@@ -2289,6 +2289,61 @@ untracked.
 
 ---
 
+## Artifact catalog follow-up — 2026-07-12
+
+Surfaced while reviewing the unified artifact catalog (PR #321). The
+backend already **stores** every OCI artifact class — `deriveArtifactType`
+(`services/metadata/internal/repository/repository.go:1045`) classifies
+unknown `config.mediaType`s as `other` rather than rejecting, and
+`ListRepositories` has a working `?artifact_type=other` filter. The gap is
+presentation: the UI browses only `image` + `helm`, so ML models, WASM
+modules, GitOps/policy/Terraform bundles, attestations, and arbitrary
+ORAS pushes are stored-but-invisible. The unified-catalog spec explicitly
+deferred this ("omit non-image/helm from row badges in v1"). Design:
+[`docs/superpowers/specs/2026-07-12-generic-artifacts-surface-design.md`](docs/superpowers/specs/2026-07-12-generic-artifacts-surface-design.md).
+
+#### FUT-078 — Generic Artifacts surface for non-image/helm OCI artifacts — **Tier 2**
+
+Two slices; **only Slice 1 is committed**, Slice 2 is documented-but-deferred.
+
+- **Slice 1 (committed) — generic "Artifacts" viewer.** Make everything in
+  the `other` bucket visible + identifiable with **no new taxonomy**. Reuses
+  the existing `deriveArtifactType` `other` bucket and the already-implemented
+  `?artifact_type=other` filter — zero classification changes.
+  - **Backend (verify-before-add):** confirm the raw `config_media_type`
+    (and OCI 1.1 top-level `artifactType`, if present) reaches the BFF
+    tag/manifest JSON; the proto already carries `config_media_type`, so this
+    may be nil work. No new gRPC call.
+  - **FE:** an "Other" lens on the unified catalog (leaning **fourth filter
+    chip** All / Images / Charts / Other over a new sidebar route — plan-time
+    call) that drives `?artifact_type=other` and renders each artifact's
+    **raw media-type string verbatim** (e.g.
+    `application/vnd.kitops.modelkit.config.v1+json`), size, tags, and a link
+    to the **FUT-068 manifest inspector**. Neutral badge tone, distinct from
+    cyan image / amber helm.
+  - **Value:** every ORAS/model/wasm/policy artifact becomes visible on day
+    one. Read-only surface — **no OCI conformance impact**.
+- **Slice 2 (deferred, demand-gated) — promote a specific kind to first-class.**
+  The *mechanism* is one `case` in `deriveArtifactType` + one entry in
+  `configMediaTypesFor` + a badge/chip (the code documents this as "one row +
+  one switch case"). The *cost is design*, captured as open questions, **not
+  built until someone is actually pushing that kind**:
+  1. **Scanner-policy applicability** — should a vuln scanner run against ML
+     weights / WASM / policy bundles at all? Don't silently apply the image
+     default.
+  2. **Referrer semantics** — do `signature`/`sbom` referrers make sense for a
+     non-image subject? Includes splitting `attestation` (in-toto/SLSA DSSE)
+     out of `signature`.
+  3. **Retention / GC semantics** — do tag-retention + mark-sweep GC treat a
+     large versioned model tag like an image tag?
+  - First candidate: **`model`** (biggest 2026 trend); `wasm` and the
+    `attestation`/`signature` split follow the same earn-it path — promoted
+    only when demand shows, the way `/helm` did.
+- **Depends on / relates to:** FUT-068 (manifest inspector — Slice 1 reuses it);
+  builds directly on the unified artifact catalog (PR #321).
+
+---
+
 ## How to use this file
 
 **Tiering criteria:**
