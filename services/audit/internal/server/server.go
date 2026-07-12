@@ -329,6 +329,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		// FUT-019 webhook channel — attach the org-webhook HMAC KEK so the
 		// Get/Put/SendTest handlers can seal/unseal the secret + post a test.
 		WithWebhookKEK(webhookKEK)
+	// REM-018-followup — wire the display-name resolver so GetNotifications
+	// carries actor_display_name for the dashboard `<UserCell>`. Reuses the
+	// registry-auth client dialled above (same client that resolves email
+	// recipients). When AUTH_GRPC_ADDR is unset authClient is nil and the
+	// notifications feed keeps its actor_username / actor_id fallback.
+	if authClient != nil {
+		auditHandler = auditHandler.WithActorResolver(authActorResolver{c: authClient})
+	}
 	// Phase 2 — wire the DLX probe + drain (futures.md Tier 1 #4).
 	// Nil when RABBITMQ_URL is unset (legacy / unit-test stack) so
 	// the handler falls back to Phase 1 behaviour (Drain returns
@@ -398,6 +406,35 @@ func (a authEmailResolver) ResolveEmails(ctx context.Context, tenantID uuid.UUID
 	for _, e := range resp.GetEmails() {
 		if id, perr := uuid.Parse(e.GetUserId()); perr == nil {
 			out[id] = e.GetEmail()
+		}
+	}
+	return out, nil
+}
+
+// authActorResolver adapts registry-auth's LookupUsernames RPC to the audit
+// handler's ActorDisplayNameResolver interface (REM-018-followup). It turns a
+// batch of actor ids into an actor-id→display_name map so GetNotifications can
+// populate NotificationEvent.actor_display_name. Only entries whose
+// display_name is non-empty are returned — an empty display_name means the
+// user never set one, and the FE renders the @username fallback anyway, so
+// there's no value shipping it over the wire.
+type authActorResolver struct{ c authv1.AuthServiceClient }
+
+// ResolveDisplayNames calls registry-auth.LookupUsernames for the given tenant
+// + actor ids and returns the resolved actor-id→display_name map. Errors bubble
+// up to the handler, which fails open to the actor_username fallback.
+func (a authActorResolver) ResolveDisplayNames(ctx context.Context, tenantID string, actorIDs []string) (map[string]string, error) {
+	resp, err := a.c.LookupUsernames(ctx, &authv1.LookupUsernamesRequest{
+		TenantId: tenantID,
+		UserIds:  actorIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(resp.GetUsers()))
+	for _, u := range resp.GetUsers() {
+		if dn := u.GetDisplayName(); dn != "" {
+			out[u.GetUserId()] = dn
 		}
 	}
 	return out, nil
