@@ -15,3 +15,24 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver =
     ResizeObserverPolyfill as unknown as typeof ResizeObserver;
 }
+
+// jsdom doesn't implement the Pointer Capture API or Element.scrollIntoView,
+// both of which Radix's Select primitive calls when an option is clicked
+// (select.tsx uses hasPointerCapture / scrollIntoView). Without these stubs
+// any test that opens a Radix Select throws "hasPointerCapture is not a
+// function". Polyfill with no-ops so Select-driven tests (e.g. the FUT-009
+// sign-manifest dialog) can exercise the option list.
+if (typeof Element !== "undefined") {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = (): boolean => false;
+  }
+  if (!Element.prototype.setPointerCapture) {
+    Element.prototype.setPointerCapture = (): void => {};
+  }
+  if (!Element.prototype.releasePointerCapture) {
+    Element.prototype.releasePointerCapture = (): void => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = (): void => {};
+  }
+}

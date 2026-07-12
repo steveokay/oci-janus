@@ -317,6 +317,15 @@ func TestElevateToOrgAdmin_invalidOrgName_returns400(t *testing.T) {
 // returns a deterministic token so the test can assert presence
 // without a real argon2 generation step.
 func (s *fakeAuthServer) ListTenantUsers(_ context.Context, _ *authv1.ListTenantUsersRequest) (*authv1.ListTenantUsersResponse, error) {
+	// FUT-009 SA-signing tests inject their own tenant user set (and can
+	// force an error) via the package-level hooks in handler_test.go. When
+	// unset we fall back to the FUT-012 default row set below.
+	if listTenantUsersErr != nil {
+		return nil, listTenantUsersErr
+	}
+	if listTenantUsersOverride != nil {
+		return listTenantUsersOverride, nil
+	}
 	return &authv1.ListTenantUsersResponse{
 		Users: []*authv1.TenantUser{
 			{

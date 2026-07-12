@@ -192,6 +192,64 @@ The dashboard never sees a private key. The BFF never sees a private key.
 Only Vault holds it, accessed through a tightly-scoped token that can only
 sign / verify with the one named key.
 
+### Naming the signer: free-form string vs. service account (FUT-009)
+
+`POST …/sign` accepts the signing identity one of two mutually-exclusive
+ways. **Exactly one** of the two body fields must be set — sending both is
+rejected `400`, sending neither is rejected `400`:
+
+| Field | Value | Who uses it |
+|---|---|---|
+| `signer_id` | free-form string (ASCII printable, ≤256 chars) | cosign CLI parity, CI bots, the `registry-signer` dev key |
+| `service_account_id` | a workspace service account's **shadow user_id** (a UUID) | the dashboard Sign dialog's Select |
+
+**Free-form path** (unchanged from FE-API-026):
+
+```
+POST /api/v1/repositories/acme/api/tags/v1.2.3/sign
+{ "signer_id": "ci-prod" }
+```
+
+The `signer_id` string is validated (`validateSignerID`) and recorded
+verbatim as the signature's `signer_id`.
+
+**Service-account path** (FUT-009):
+
+```
+POST /api/v1/repositories/acme/api/tags/v1.2.3/sign
+{ "service_account_id": "11111111-1111-1111-1111-111111111111" }
+```
+
+The BFF resolves the value server-side before signing (`resolveServiceAccountSigner`
+in `services/management/internal/handler/sign_manifest.go`):
+
+1. Shape-check it is a UUID (rejects free-form smuggling, `400`).
+2. Confirm it names a row returned by `auth.ListTenantUsers` — which is
+   tenant-scoped, so a cross-tenant SA never appears and is rejected as
+   "not found" (`400`); the BFF can't leak another tenant's SA existence.
+3. Confirm the row is `kind = 'service_account'` (a human user_id is
+   rejected `400` so the field can't sign as a person) **and**
+   `status = 'active'` (a disabled SA is rejected `400`).
+
+On success the BFF records the SA's **shadow user_id** as the signature's
+`signer_id`. So the `signatures` table always stores a `signer_id` — for
+SA-signed rows it's the shadow user_id UUID; for free-form rows it's the
+string the caller supplied. The Signing tab resolves an SA-shaped
+`signer_id` back to the SA display name at render time (matching the UUID
+against `useServiceAccounts()`); free-form strings render verbatim.
+
+> **Why the shadow user_id and not the `service_accounts.id` primary key?**
+> FUT-009 forbids a proto change, and `registry-auth` exposes no gRPC RPC
+> that maps an SA primary key → shadow user_id. The shadow user_id is the
+> only SA-linked identifier the BFF can both *validate* (via
+> `ListTenantUsers`, which returns SA-kind shadow users) and *record* as a
+> `signer_id` the render side can resolve. The dashboard Select therefore
+> sends the SA's `shadow_user_id` as this field's value.
+>
+> The cosign CLI path does **not** hit this BFF endpoint — it writes to the
+> shared `signatures` table directly — so it is untouched by FUT-009 and
+> keeps using its own key identity.
+
 ---
 
 ## 4. How to verify a signed image
@@ -298,7 +356,7 @@ time*. It does **not** guarantee:
 
 | Not guaranteed | What you'd actually need |
 |---|---|
-| **Who** signed it — `signer_id` is a free-form string chosen by the caller | Per-identity signing policy with attestations (Cosign keyless + Fulcio) |
+| **Who** signed it — `signer_id` is a free-form string, or (FUT-009) an SA shadow user_id validated at sign time but still not a cryptographic identity binding | Per-identity signing policy with attestations (Cosign keyless + Fulcio) |
 | **When** it was signed relative to image creation | Signed timestamps via a trusted timestamp authority |
 | **The image should be deployed** | A policy gate (`FE-API-018 scan-policies` is the future home) |
 | **The image wasn't tampered with after signing** | A scan-and-sign-as-one-step CI job that signs the same digest immediately after pushing it |
@@ -321,9 +379,9 @@ Gatekeeper, or your own webhook).
 | `services/signer/migrations/*.sql` | `signatures` table schema |
 | `proto/signer/v1/signer.proto` | `SignManifest` / `VerifyManifest` / `ListSignatures` RPC definitions |
 | `services/management/internal/handler/signature.go` | `GET .../signature` HTTP route — wraps `ListSignatures` + opt-in `verify=true` (FE-API-003 + FE-API-025) |
-| `services/management/internal/handler/sign_manifest.go` | `POST .../sign` HTTP route — calls `SignManifest` (FE-API-026) |
-| `frontend/src/components/tags/signing-panel.tsx` | Dashboard UI — the Signing tab |
-| `frontend/src/components/tags/sign-manifest-dialog.tsx` | Dashboard sign dialog |
+| `services/management/internal/handler/sign_manifest.go` | `POST .../sign` HTTP route — calls `SignManifest` (FE-API-026); FUT-009 adds `service_account_id` resolution (`resolveServiceAccountSigner`) |
+| `frontend/src/components/tags/signing-panel.tsx` | Dashboard UI — the Signing tab; FUT-009 resolves SA-shaped `signer_id`s to the SA display name |
+| `frontend/src/components/tags/sign-manifest-dialog.tsx` | Dashboard sign dialog; FUT-009 adds the service-account `<Select>` (free-form signer_id kept as a fallback mode) |
 | `frontend/src/lib/api/signature.ts` | TanStack Query hooks for the signature endpoints |
 | `infra/docker-compose/vault/init.sh` | Provisions the dev key + policy + token on stack startup |
 | `infra/docker-compose/docker-compose.yml` | Vault service definition + `SIGNER_KEY_BACKEND=vault` env vars |

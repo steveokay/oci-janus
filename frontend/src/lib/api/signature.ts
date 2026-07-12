@@ -82,20 +82,41 @@ export function useSignature(
 // FE-API-026 — POST /sign hook. Server enforces repo-admin; we surface
 // 409 / 400 separately so the UI can render "already signed by this key"
 // vs a generic failure.
+//
+// FUT-009 — the signing identity is now named one of two mutually-exclusive
+// ways. Exactly one of signer_id / service_account_id must be set:
+//   - signer_id          → the legacy free-form string (cosign CLI parity).
+//   - service_account_id → an SA chosen from the dashboard Select. Carries
+//     the SA's shadow_user_id; the BFF validates it and records it as the
+//     signature's signer_id.
+// The body only carries whichever field the caller supplied — sending an
+// empty string for the other would trip the BFF's "not both" guard.
 interface SignManifestArgs {
   org: string;
   repo: string;
   tag: string;
-  signer_id: string;
+  signer_id?: string;
+  service_account_id?: string;
 }
 
 export function useSignManifest() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ org, repo, tag, signer_id }: SignManifestArgs) => {
+    mutationFn: async ({
+      org,
+      repo,
+      tag,
+      signer_id,
+      service_account_id,
+    }: SignManifestArgs) => {
+      // Build the body with only the field that was provided so the BFF sees
+      // an unambiguous single identity.
+      const payload = service_account_id
+        ? { service_account_id }
+        : { signer_id };
       const { data } = await apiClient.post<SignatureRecord>(
         `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tag)}/sign`,
-        { signer_id },
+        payload,
       );
       return data;
     },

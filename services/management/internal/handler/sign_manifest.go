@@ -21,6 +21,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
@@ -39,13 +41,35 @@ import (
 
 // signManifestBody is the JSON body for POST …/sign.
 //
-// Only signer_id is accepted — key material lives in registry-signer's
-// Vault backend keyed by signer_id, and management never touches private
-// keys. Future extension could carry a free-form annotation; for now the
-// shape is intentionally minimal so we don't accidentally accept
-// security-sensitive overrides from the dashboard.
+// Two mutually-exclusive ways to name the signing identity (FUT-009):
+//
+//   - signer_id          — the legacy free-form string. Key material lives
+//     in registry-signer's Vault backend keyed by this
+//     value. Kept for backward compat and the cosign CLI
+//     path (CI bots that already POST a raw signer_id).
+//   - service_account_id — a workspace service account chosen from the
+//     dashboard Select. When set, the BFF resolves it
+//     to the SA's shadow user_id and records THAT as the
+//     signature's signer_id, so the signing identity is a
+//     managed principal rather than an opaque string.
+//
+// Exactly one of the two must be provided. Supplying both is rejected 400
+// so the caller's intent is unambiguous — we never silently prefer one.
+//
+// Note (FUT-009): service_account_id carries the SA's *shadow user_id*, not
+// the service_accounts.id primary key. registry-auth exposes no gRPC RPC
+// that maps an SA primary key → shadow user_id, and FUT-009 explicitly
+// forbids a proto change. The shadow user_id is the identifier the BFF can
+// both validate (via ListTenantUsers, which returns SA-kind shadow users)
+// and record as signer_id (a UUID the tag-detail render resolves back to
+// the SA display name). The dashboard Select sends the SA's shadow_user_id
+// as this field's value.
 type signManifestBody struct {
 	SignerID string `json:"signer_id"`
+	// ServiceAccountID is the SA shadow user_id chosen from the dashboard
+	// Select. Mutually exclusive with SignerID. See the type doc for why
+	// this is the shadow user_id and not the SA primary key.
+	ServiceAccountID string `json:"service_account_id"`
 }
 
 // maxSignerIDLen caps signer_id at 256 chars — long enough for a
@@ -115,8 +139,14 @@ func (h *Handler) handleSignManifest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !validateSignerID(body.SignerID) {
-		writeError(w, http.StatusBadRequest, "invalid signer_id")
+
+	// FUT-009 — resolve the signing identity. Exactly one of signer_id /
+	// service_account_id must be provided. When the SA path is used we
+	// resolve + validate the SA server-side and record its shadow user_id
+	// as the signer_id; the free-form path is unchanged from FE-API-026.
+	signerID, herr := h.resolveSignerIdentity(r.Context(), tenantID, &body)
+	if herr != nil {
+		writeError(w, herr.status, herr.msg)
 		return
 	}
 
@@ -142,7 +172,7 @@ func (h *Handler) handleSignManifest(w http.ResponseWriter, r *http.Request) {
 		TenantId:       tenantID,
 		RepositoryName: org + "/" + repoName,
 		ManifestDigest: tag.GetManifestDigest(),
-		SignerId:       body.SignerID,
+		SignerId:       signerID,
 	})
 	if err != nil {
 		// Map a small set of signer-side errors back to HTTP. The default
@@ -163,7 +193,7 @@ func (h *Handler) handleSignManifest(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		slog.Error("SignManifest", "err", err, "digest", tag.GetManifestDigest(), "signer_id", body.SignerID)
+		slog.Error("SignManifest", "err", err, "digest", tag.GetManifestDigest(), "signer_id", signerID)
 		writeError(w, http.StatusInternalServerError, "failed to sign manifest")
 		return
 	}
@@ -209,4 +239,125 @@ func (h *Handler) handleSignManifest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, record)
+}
+
+// signIdentityError bundles an HTTP status + message so resolveSignerIdentity
+// can return a typed failure the handler maps straight onto writeError. Using
+// a small struct (rather than a bare error) keeps the status code intent
+// explicit at the call site without a second lookup table.
+type signIdentityError struct {
+	status int
+	msg    string
+}
+
+// saListPageSize is the page size used when paging ListTenantUsers to resolve
+// a service account. 200 is the server-side clamp ceiling — a single page
+// covers the vast majority of tenants; we still follow next_page_token so a
+// large tenant resolves correctly.
+const saListPageSize = 200
+
+// saResolveMaxPages bounds the ListTenantUsers pagination loop so a
+// pathological tenant (or a buggy server that never clears next_page_token)
+// can't spin this resolution forever. 50 pages × 200 rows = 10k users, well
+// beyond any realistic single-tenant SA count.
+const saResolveMaxPages = 50
+
+// resolveSignerIdentity determines the signer_id to record for this sign,
+// enforcing the FUT-009 "exactly one identity" contract:
+//
+//   - Neither field set                → 400 (a signer must be named).
+//   - Both fields set                  → 400 (ambiguous intent).
+//   - signer_id only                   → validated free-form string, returned
+//     as-is (backward-compatible FE-API-026 path).
+//   - service_account_id only          → resolved to the SA's shadow user_id
+//     after confirming the SA exists, is
+//     enabled, and belongs to tenantID.
+//
+// The SA is validated against ListTenantUsers (already tenant-scoped): the
+// resolved row must be kind='service_account' and status='active'. On any
+// mismatch we return a clear 4xx per CLAUDE.md §7 (reject unknown / disabled /
+// cross-tenant) rather than forwarding an unvalidated identifier to the signer.
+func (h *Handler) resolveSignerIdentity(ctx context.Context, tenantID string, body *signManifestBody) (string, *signIdentityError) {
+	hasSignerID := body.SignerID != ""
+	hasSA := body.ServiceAccountID != ""
+
+	switch {
+	case hasSignerID && hasSA:
+		// Ambiguous — refuse rather than guessing which the caller meant.
+		return "", &signIdentityError{http.StatusBadRequest, "provide either signer_id or service_account_id, not both"}
+	case !hasSignerID && !hasSA:
+		return "", &signIdentityError{http.StatusBadRequest, "signer_id or service_account_id is required"}
+	case hasSignerID:
+		// Legacy free-form path — validate and pass through unchanged.
+		if !validateSignerID(body.SignerID) {
+			return "", &signIdentityError{http.StatusBadRequest, "invalid signer_id"}
+		}
+		return body.SignerID, nil
+	default:
+		// Service-account path — resolve + validate server-side.
+		return h.resolveServiceAccountSigner(ctx, tenantID, body.ServiceAccountID)
+	}
+}
+
+// resolveServiceAccountSigner validates that saShadowUserID names an enabled
+// service account in tenantID and returns the shadow user_id to record as the
+// signer_id. See resolveSignerIdentity for the surrounding contract.
+//
+// Validation steps (CLAUDE.md §7):
+//  1. The id must be a well-formed UUID (rejects free-form smuggling).
+//  2. ListTenantUsers (tenant-scoped) must return a row for it whose kind is
+//     'service_account' — a human user_id or an unknown id is rejected 400.
+//  3. The row's status must be 'active' — a disabled SA is rejected 400.
+func (h *Handler) resolveServiceAccountSigner(ctx context.Context, tenantID, saShadowUserID string) (string, *signIdentityError) {
+	// (1) Shape check — the shadow user_id is a UUID; anything else is a
+	// client error we surface before any RPC round-trip.
+	if _, err := uuid.Parse(saShadowUserID); err != nil {
+		return "", &signIdentityError{http.StatusBadRequest, "invalid service_account_id"}
+	}
+
+	// (2) + (3) Resolve against the caller's tenant. ListTenantUsers is
+	// tenant-scoped server-side, so a cross-tenant SA simply never appears in
+	// the page set and falls through to the not-found branch — the BFF can
+	// never leak another tenant's SA existence.
+	pageToken := ""
+	for page := 0; page < saResolveMaxPages; page++ {
+		resp, err := h.auth.ListTenantUsers(ctx, &authv1.ListTenantUsersRequest{
+			TenantId:  tenantID,
+			PageSize:  saListPageSize,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			// A transport / auth-service failure is a 500 — we can't confirm
+			// the SA is valid, so we fail closed rather than sign with an
+			// unresolved identity.
+			slog.Error("ListTenantUsers (SA sign resolution)", "err", err, "tenant_id", tenantID)
+			return "", &signIdentityError{http.StatusInternalServerError, "failed to resolve service account"}
+		}
+
+		for _, u := range resp.GetUsers() {
+			if u.GetUserId() != saShadowUserID {
+				continue
+			}
+			// Found the row. Enforce the kind + status gates.
+			if u.GetKind() != "service_account" {
+				// A valid tenant user_id that isn't an SA — treat as unknown SA
+				// so callers can't repurpose the field to sign as a human.
+				return "", &signIdentityError{http.StatusBadRequest, "service_account_id does not name a service account"}
+			}
+			if u.GetStatus() != "active" {
+				return "", &signIdentityError{http.StatusBadRequest, "service account is disabled"}
+			}
+			// Record the shadow user_id as the signer_id. The tag-detail
+			// render resolves this UUID back to the SA display name.
+			return u.GetUserId(), nil
+		}
+
+		pageToken = resp.GetNextPageToken()
+		if pageToken == "" {
+			break
+		}
+	}
+
+	// Walked every page without a match — unknown (or cross-tenant) SA.
+	return "", &signIdentityError{http.StatusBadRequest, "service account not found"}
 }
