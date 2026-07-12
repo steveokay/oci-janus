@@ -193,6 +193,41 @@ type GRPCHandler struct {
 	// at call time. Both are wired via WithWebhookKEK / WithWebhookPoster.
 	webhookKEK    []byte
 	webhookPoster *webhook.Poster
+	// REM-018-followup — actorResolver batch-resolves actor_id → display_name
+	// against registry-auth so GetNotifications can populate
+	// NotificationEvent.actor_display_name for the dashboard's `<UserCell>`.
+	// nil when registry-auth is not dialled (AUTH_GRPC_ADDR unset): the
+	// notifications feed then renders with the best-effort actor_username /
+	// actor_id fallback, exactly as it did before this field existed. Wired
+	// in server.go via WithActorResolver.
+	actorResolver ActorDisplayNameResolver
+}
+
+// ActorDisplayNameResolver batch-resolves a set of actor user-ids to their
+// display name within a tenant (REM-018-followup). The audit service has no
+// users table of its own — identity lives in registry-auth — so this
+// interface is satisfied by an adapter over registry-auth.LookupUsernames
+// (wired in server.go). Kept as an interface so notification handler tests can
+// inject a fake without a live gRPC dependency.
+//
+// Implementations MUST be fail-safe: any error resolving names is the caller's
+// signal to fall back to the payload-derived actor_username, never to fail the
+// whole notifications request. Absent map keys mean "unresolved" and the
+// caller leaves actor_display_name empty for that row.
+type ActorDisplayNameResolver interface {
+	// ResolveDisplayNames returns a map keyed by actor_id. Keys absent from
+	// the result are simply unresolved (out-of-tenant, no display_name set,
+	// or a sentinel id). A non-nil error means the whole lookup failed and
+	// the caller should fall back for every row.
+	ResolveDisplayNames(ctx context.Context, tenantID string, actorIDs []string) (map[string]string, error)
+}
+
+// WithActorResolver wires the registry-auth-backed display-name resolver used
+// by GetNotifications (REM-018-followup). nil leaves the notifications feed on
+// the pre-existing actor_username / actor_id fallback.
+func (h *GRPCHandler) WithActorResolver(r ActorDisplayNameResolver) *GRPCHandler {
+	h.actorResolver = r
+	return h
 }
 
 // AuditExportTester decouples the gRPC handler from the exporter

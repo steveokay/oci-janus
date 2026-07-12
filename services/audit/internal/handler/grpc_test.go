@@ -1078,6 +1078,156 @@ func TestGetNotifications_pagination_emitsTokenAndAcceptsIt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// REM-018-followup — actor_display_name enrichment on GetNotifications
+// ---------------------------------------------------------------------------
+
+// fakeActorResolver is a test double for ActorDisplayNameResolver. It records
+// the tenant + actor ids it was asked to resolve and returns a canned map, or
+// an error when err is set (to exercise the fail-open fallback).
+type fakeActorResolver struct {
+	names     map[string]string
+	err       error
+	gotTenant string
+	gotIDs    []string
+	calls     int
+}
+
+func (f *fakeActorResolver) ResolveDisplayNames(_ context.Context, tenantID string, actorIDs []string) (map[string]string, error) {
+	f.calls++
+	f.gotTenant = tenantID
+	f.gotIDs = append([]string(nil), actorIDs...)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.names, nil
+}
+
+// pushRowWithActor builds a push.image notification row attributed to actorID.
+func pushRowWithActor(t *testing.T, actorID string) *repository.NotificationRow {
+	t.Helper()
+	return &repository.NotificationRow{
+		ID:         uuid.New(),
+		ActorID:    actorID,
+		Action:     "push.image",
+		Outcome:    "success",
+		OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+		Metadata: notificationMetadata(t, map[string]any{
+			"repository_name": "acme/registry",
+			"tag":             "3.20",
+			"username":        "alice",
+		}),
+	}
+}
+
+// TestGetNotifications_populatesActorDisplayName covers the happy path: the
+// resolver returns a display name for the row's actor_id, so the wire event
+// carries it (the FE renders `<UserCell>` display_name + @username).
+func TestGetNotifications_populatesActorDisplayName(t *testing.T) {
+	actor := uuid.New().String()
+	fake := &fakeRepo{notifications: []*repository.NotificationRow{pushRowWithActor(t, actor)}}
+	resolver := &fakeActorResolver{names: map[string]string{actor: "Alice Anderson"}}
+	h := newHandler(fake).WithActorResolver(resolver)
+
+	tenant := uuid.New().String()
+	resp, err := h.GetNotifications(context.Background(), &auditv1.GetNotificationsRequest{TenantId: tenant})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetNotifications()) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(resp.GetNotifications()))
+	}
+	n := resp.GetNotifications()[0]
+	if n.GetActorDisplayName() != "Alice Anderson" {
+		t.Errorf("ActorDisplayName: got %q, want %q", n.GetActorDisplayName(), "Alice Anderson")
+	}
+	// The payload-derived username must still be present as the fallback layer.
+	if n.GetActorUsername() != "alice" {
+		t.Errorf("ActorUsername: got %q, want alice", n.GetActorUsername())
+	}
+	// The resolver must have been called with the tenant + the (deduped) actor id.
+	if resolver.gotTenant != tenant {
+		t.Errorf("resolver tenant: got %q, want %q", resolver.gotTenant, tenant)
+	}
+	if len(resolver.gotIDs) != 1 || resolver.gotIDs[0] != actor {
+		t.Errorf("resolver ids: got %v, want [%s]", resolver.gotIDs, actor)
+	}
+}
+
+// TestGetNotifications_resolverError_fallsBack asserts the fail-open posture:
+// when the resolver errors, the notifications still render with an empty
+// display_name (the FE falls back to @username) and the request succeeds.
+func TestGetNotifications_resolverError_fallsBack(t *testing.T) {
+	actor := uuid.New().String()
+	fake := &fakeRepo{notifications: []*repository.NotificationRow{pushRowWithActor(t, actor)}}
+	resolver := &fakeActorResolver{err: errors.New("auth unreachable")}
+	h := newHandler(fake).WithActorResolver(resolver)
+
+	resp, err := h.GetNotifications(context.Background(), &auditv1.GetNotificationsRequest{TenantId: uuid.New().String()})
+	if err != nil {
+		t.Fatalf("expected fail-open (no error), got: %v", err)
+	}
+	if len(resp.GetNotifications()) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(resp.GetNotifications()))
+	}
+	if dn := resp.GetNotifications()[0].GetActorDisplayName(); dn != "" {
+		t.Errorf("ActorDisplayName: got %q, want empty on resolver error", dn)
+	}
+	if un := resp.GetNotifications()[0].GetActorUsername(); un != "alice" {
+		t.Errorf("ActorUsername fallback: got %q, want alice", un)
+	}
+}
+
+// TestGetNotifications_noResolver_leavesDisplayNameEmpty covers the unwired
+// case (AUTH_GRPC_ADDR unset): display_name stays empty and the feed still
+// renders exactly as it did before REM-018-followup.
+func TestGetNotifications_noResolver_leavesDisplayNameEmpty(t *testing.T) {
+	fake := &fakeRepo{notifications: []*repository.NotificationRow{pushRowWithActor(t, uuid.New().String())}}
+	h := newHandler(fake) // no WithActorResolver
+
+	resp, err := h.GetNotifications(context.Background(), &auditv1.GetNotificationsRequest{TenantId: uuid.New().String()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dn := resp.GetNotifications()[0].GetActorDisplayName(); dn != "" {
+		t.Errorf("ActorDisplayName: got %q, want empty when resolver unwired", dn)
+	}
+}
+
+// TestGetNotifications_skipsSentinelActors asserts that the "system" /
+// "anonymous" / empty sentinel actor_ids are not sent to the resolver (they
+// can never resolve to a user) and their rows carry an empty display_name.
+func TestGetNotifications_skipsSentinelActors(t *testing.T) {
+	realActor := uuid.New().String()
+	fake := &fakeRepo{notifications: []*repository.NotificationRow{
+		pushRowWithActor(t, "system"),
+		pushRowWithActor(t, ""),
+		pushRowWithActor(t, "anonymous"),
+		pushRowWithActor(t, realActor),
+	}}
+	resolver := &fakeActorResolver{names: map[string]string{realActor: "Real User"}}
+	h := newHandler(fake).WithActorResolver(resolver)
+
+	resp, err := h.GetNotifications(context.Background(), &auditv1.GetNotificationsRequest{TenantId: uuid.New().String()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Only the real UUID actor should have been passed to the resolver.
+	if len(resolver.gotIDs) != 1 || resolver.gotIDs[0] != realActor {
+		t.Errorf("resolver ids: got %v, want [%s]", resolver.gotIDs, realActor)
+	}
+	// The sentinel rows carry empty display names; the real actor carries its name.
+	for _, n := range resp.GetNotifications() {
+		want := ""
+		if n.GetActorId() == realActor {
+			want = "Real User"
+		}
+		if n.GetActorDisplayName() != want {
+			t.Errorf("actor %q display_name: got %q, want %q", n.GetActorId(), n.GetActorDisplayName(), want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GetLastTenantPush (FE-API-028)
 // ---------------------------------------------------------------------------
 

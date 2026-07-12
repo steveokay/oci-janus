@@ -515,6 +515,12 @@ type notificationCall struct {
 // lastNotificationCall is set on every GetNotifications invocation.
 var lastNotificationCall *notificationCall
 
+// notificationsOverride, when non-nil, lets a single test swap the canned
+// GetNotifications response (e.g. to inject an audit-provided
+// actor_display_name for the REM-018-followup pass-through test). Reset in
+// resetNotificationCall so it never leaks across cases.
+var notificationsOverride func(*auditv1.GetNotificationsRequest) (*auditv1.GetNotificationsResponse, error)
+
 // GetNotifications returns a small canned tenant-wide notifications feed
 // plus an opaque next page token so the handler wire-mapping tests can
 // assert behaviour without the full keyset cursor dance.
@@ -529,6 +535,10 @@ func (s *fakeAuditServer) GetNotifications(_ context.Context, req *auditv1.GetNo
 		c.sinceUnix = ts.AsTime().Unix()
 	}
 	lastNotificationCall = c
+
+	if notificationsOverride != nil {
+		return notificationsOverride(req)
+	}
 
 	// Page-2 short-circuit: empty page so tests see the cursor was forwarded.
 	if req.GetPageToken() != "" {
@@ -1827,7 +1837,11 @@ func TestRepoActivity_invalidSince_returns400(t *testing.T) {
 func resetNotificationCall(t *testing.T) {
 	t.Helper()
 	lastNotificationCall = nil
-	t.Cleanup(func() { lastNotificationCall = nil })
+	notificationsOverride = nil
+	t.Cleanup(func() {
+		lastNotificationCall = nil
+		notificationsOverride = nil
+	})
 }
 
 func TestNotifications_missingToken_returns401(t *testing.T) {
@@ -1865,6 +1879,47 @@ func TestNotifications_adminToken_returnsRenderedFeed(t *testing.T) {
 	}
 	if body.UnreadCount != 1 {
 		t.Errorf("UnreadCount: got %d, want 1", body.UnreadCount)
+	}
+}
+
+// TestNotifications_prefersAuditDisplayName (REM-018-followup) asserts the BFF
+// passes through the actor_display_name the audit service now resolves, rather
+// than re-deriving it. The override sets a display name on the audit event; the
+// JSON response must echo it (and the fallback lookup path is not needed).
+func TestNotifications_prefersAuditDisplayName(t *testing.T) {
+	resetNotificationCall(t)
+	notificationsOverride = func(_ *auditv1.GetNotificationsRequest) (*auditv1.GetNotificationsResponse, error) {
+		return &auditv1.GetNotificationsResponse{
+			Notifications: []*auditv1.NotificationEvent{
+				{
+					EventId:          "notif-1",
+					EventType:        "push.image",
+					ActorId:          testUserID,
+					ActorUsername:    "alice",
+					ActorDisplayName: "Alice Anderson",
+					Title:            "Push completed",
+					OccurredAt:       timestamppb.Now(),
+				},
+			},
+			UnreadCount: 1,
+		}, nil
+	}
+	env := newTestEnv(t)
+	resp := env.get(t, "/api/v1/notifications", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.NotificationsResponse
+	decodeJSON(t, resp, &body)
+	if len(body.Notifications) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(body.Notifications))
+	}
+	n := body.Notifications[0]
+	if n.ActorDisplayName != "Alice Anderson" {
+		t.Errorf("ActorDisplayName: got %q, want %q (audit value must pass through)", n.ActorDisplayName, "Alice Anderson")
+	}
+	if n.ActorUsername != "alice" {
+		t.Errorf("ActorUsername: got %q, want alice", n.ActorUsername)
 	}
 }
 
