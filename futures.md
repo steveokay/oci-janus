@@ -579,7 +579,11 @@ now all live — the "Notification categories" surface is complete.**
   emits both `.updated` and `.disabled` on a `{disabled:true}` body —
   cosmetic over-emission, can be deduped in a small future PR.
 
-### FUT-008: Sign dialog "Recent signer_ids" dropdown — ~1h
+### FUT-008: Sign dialog "Recent signer_ids" dropdown — ⛔ SUPERSEDED by FUT-009 (shipped 2026-07-12, PR #330)
+> The Sign dialog now offers a service-account `<Select>` (FUT-009) instead of
+> free-form `signer_id` entry, which is the stronger version of this idea. The
+> free-form path also now rejects UUID-shaped values (SEC-088). Kept for history.
+
 - **Why:** Today the Sign dialog asks for `signer_id` as a free-form
   string — operators type the label from memory. Mirror PR #36's
   trusted-key picker pattern: surface the distinct `signer_id` values
@@ -590,7 +594,24 @@ now all live — the "Notification categories" surface is complete.**
   `signer_id` strings with service-account principals.
 - **Affects:** `services/management`, `frontend`.
 
-### FUT-009: Service-account-as-signing-identity — ~5h
+### FUT-009: Service-account-as-signing-identity — ✅ SHIPPED 2026-07-12 (PR #330)
+> **DONE** — BFF `service_account_id` on the sign route (tenant-scoped SA
+> resolution → shadow user_id recorded as `signer_id`), FE `<Select>` from
+> `useServiceAccounts()` + custom-signer fallback, tag-detail SA-name render,
+> `docs/SIGNING.md`. No proto change, no migration. Security review found +
+> fixed **SEC-088** inline (UUID-shaped free-form `signer_id` rejected so it
+> can't forge SA provenance). Resolution row in [`status.md`](status.md).
+>
+> **Deferred should-fixes (non-blocking follow-ups from the review batch):**
+> - a genuine two-page `ListTenantUsers` pagination test-fake (the current
+>   fake is single-page; the resolver's paging loop isn't black-box exercised);
+> - an FE test that switches the Sign dialog to "Custom signer ID" mode and
+>   asserts the `{signer_id: …}` payload (the zod allowlist is untested in-component);
+> - if a `GetServiceAccount`/`LookupUser(shadow_id)` gRPC RPC ever lands, swap
+>   the O(tenant-users) scan in `resolveServiceAccountSigner` for an O(1) lookup.
+>
+> Original spec retained below for reference.
+
 - **Why:** Today `POST /repositories/{org}/{repo}/tags/{tag}/sign`
   takes a free-form `signer_id` string. No validation, no lifecycle,
   no link to a real principal. The audit trail records the string
@@ -2024,14 +2045,10 @@ Pick alongside neighbouring FE work; none justifies its own number:
 #### FUT-079 — Auth/forms UX polish bundle — **Tier 3**
 Low-effort, high-polish fixes on the auth + secret-entry surfaces. None
 justifies its own number; pick alongside neighbouring FE work.
-- **"Show password" reveal toggle** — no eye-icon toggle exists on any of the
-  8 `type="password"` fields (login `routes/login.tsx`, change-password
-  `components/profile/change-password-dialog.tsx`, MFA regenerate/disable
-  `components/profile/mfa-{regenerate,disable}-dialog.tsx`, and the
-  PR-registry / notification-webhook / email-transport secret fields under
-  `components/settings/`). Add the toggle once to the base `Input` (or a small
-  `PasswordInput` wrapper) so it lands on all of them; saves users the
-  typo-then-retry loop on long passwords/secrets.
+- **"Show password" reveal toggle** — ✅ **SHIPPED 2026-07-12 (PR #328).**
+  Reusable `PasswordInput` wrapper (`components/ui/password-input.tsx`, Eye/EyeOff)
+  wired to all 8 `type="password"` fields; a11y-correct + TDD. Resolution row
+  in [`status.md`](status.md).
 
 #### FUT-077 — Cross-environment image comparison matrix — **Tier 2/3**
 Deferred sibling of the environments-overview work
