@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Webhook } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import {
@@ -160,9 +161,8 @@ function NotificationWebhookPanelInner(): React.ReactElement {
         {/* Signing secret (write-only) */}
         <div>
           <Label htmlFor="webhook-secret">Signing secret</Label>
-          <Input
+          <PasswordInput
             id="webhook-secret"
-            type="password"
             autoComplete="off"
             placeholder={data?.has_secret ? "•••• configured" : ""}
             value={form.secret}

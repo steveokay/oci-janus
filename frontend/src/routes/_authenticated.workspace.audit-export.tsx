@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -379,9 +380,8 @@ function AuditExportPage(): React.ReactElement {
                       ) : null}
                     </span>
                   </Label>
-                  <Input
+                  <PasswordInput
                     id="hmac_secret"
-                    type="password"
                     autoComplete="off"
                     placeholder={
                       cfg.data?.hmac_secret_set
@@ -412,9 +412,8 @@ function AuditExportPage(): React.ReactElement {
                       ) : null}
                     </span>
                   </Label>
-                  <Input
+                  <PasswordInput
                     id="bearer_token"
-                    type="password"
                     autoComplete="off"
                     placeholder={
                       cfg.data?.bearer_token_set

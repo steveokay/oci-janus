@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useChangePassword } from "@/lib/api/me";
@@ -163,18 +164,32 @@ interface FieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 const Field = React.forwardRef<HTMLInputElement, FieldProps>(function Field(
-  { id, label, error, ...props },
+  { id, label, error, type, ...props },
   ref,
 ) {
+  // FUT-079 — password fields get the reveal toggle. PasswordInput owns the
+  // `type` (it swaps between password/text), so we only route to it and strip
+  // `type` from the props; every other field type renders the plain Input.
+  const isPassword = type === "password";
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        ref={ref}
-        aria-invalid={Boolean(error) || undefined}
-        {...props}
-      />
+      {isPassword ? (
+        <PasswordInput
+          id={id}
+          ref={ref}
+          aria-invalid={Boolean(error) || undefined}
+          {...props}
+        />
+      ) : (
+        <Input
+          id={id}
+          ref={ref}
+          type={type}
+          aria-invalid={Boolean(error) || undefined}
+          {...props}
+        />
+      )}
       {error ? (
         <p className="text-xs text-[var(--color-danger)]">{error}</p>
       ) : null}

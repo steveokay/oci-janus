@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import {
@@ -210,9 +211,8 @@ function EmailTransportPanelInner(): React.ReactElement {
         {form.provider === "resend" ? (
           <div>
             <Label htmlFor="resend-api-key">Resend API key</Label>
-            <Input
+            <PasswordInput
               id="resend-api-key"
-              type="password"
               autoComplete="off"
               placeholder={data?.has_resend_key ? "•••• configured" : ""}
               value={form.resend_api_key}
@@ -273,9 +273,8 @@ function EmailTransportPanelInner(): React.ReactElement {
             </div>
             <div>
               <Label htmlFor="smtp-password">Password</Label>
-              <Input
+              <PasswordInput
                 id="smtp-password"
-                type="password"
                 autoComplete="off"
                 placeholder={data?.has_smtp_password ? "•••• configured" : ""}
                 value={form.smtp_password}

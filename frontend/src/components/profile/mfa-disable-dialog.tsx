@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useMfaDisable } from "@/lib/api/mfa";
@@ -120,9 +121,8 @@ export function MfaDisableDialog({
         >
           <div className="space-y-1.5">
             <Label htmlFor="mfa_disable_password">Password</Label>
-            <Input
+            <PasswordInput
               id="mfa_disable_password"
-              type="password"
               autoComplete="current-password"
               placeholder="Your account password"
               {...register("password")}
