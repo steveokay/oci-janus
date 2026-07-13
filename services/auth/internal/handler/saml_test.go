@@ -75,6 +75,25 @@ func (f *fakeGlobalSSORepo) List(_ context.Context, enabledOnly bool) ([]*reposi
 	return out, nil
 }
 
+func (f *fakeGlobalSSORepo) Upsert(_ context.Context, p *repository.GlobalSSOProvider) (*repository.GlobalSSOProvider, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *p
+	f.Providers[p.ProviderID] = &cp
+	out := cp
+	return &out, nil
+}
+
+func (f *fakeGlobalSSORepo) Delete(_ context.Context, providerID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.Providers[providerID]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(f.Providers, providerID)
+	return nil
+}
+
 // ── keypair + IdP helpers ───────────────────────────────────────────────────
 
 // genTestKeypair returns a fresh RSA keypair + a self-signed X.509 cert with

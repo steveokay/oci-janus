@@ -91,9 +91,14 @@ GET  /api/v1/auth/oauth/start            # Begin OAuth (PKCE S256 + single-use s
 GET  /api/v1/auth/oauth/callback         # OAuth callback → 302 with sso_token
 GET  /api/v1/auth/saml/start             # Begin SAML AuthnRequest
 POST /api/v1/auth/saml/acs               # SAML AssertionConsumerService
-# No REST admin API for SSO — the deployment-wide global_sso_config table is
-# configured via SQL / seed (one IdP per provider kind). See the SSO schema
-# note below and REDESIGN-001 RM-003 / ADR-0027.
+# SSO admin config (FE-API-034) — global-admin only (users.is_global_admin);
+# deployment-wide, OAuth kinds only in v1 (SAML editing deferred → 400).
+GET    /api/v1/auth/admin/providers               # List all providers (enabled+disabled); secret masked as has_secret
+PUT    /api/v1/auth/admin/providers/{provider_id} # Create/update; client_secret write-only (empty = keep existing)
+DELETE /api/v1/auth/admin/providers/{provider_id} # Remove a provider (404 if missing)
+# RM-003 removed the per-tenant admin surface (the §A1 gate flaw); FE-API-034
+# is the deployment-wide, global-admin-only replacement. SAML + non-editable
+# fields are still SQL/seed-configured. secret sealed under SSO_CREDENTIAL_KEY_HEX.
 ```
 
 **JWT Structure:**

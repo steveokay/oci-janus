@@ -34,8 +34,10 @@ import {
   Archive,
 } from "lucide-react";
 import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
+import { SSOConfigPanel } from "@/components/settings/sso-config-panel";
 import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
 import { useDeploymentInfo } from "@/lib/api/deployment-info";
+import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings/workspace")({
@@ -53,6 +55,9 @@ function WorkspaceTab(): React.ReactElement {
   // sees the right surface on next page load.
   const { data: deploymentInfo } = useDeploymentInfo();
   const isSingleMode = deploymentInfo?.deployment_mode === "single";
+  // Global admins get the editable SSO config panel; everyone else keeps the
+  // read-only explainer card so the SSO section still documents the posture.
+  const isGlobalAdmin = useIsGlobalAdmin();
 
   return (
     <div className="space-y-6">
@@ -90,16 +95,21 @@ function WorkspaceTab(): React.ReactElement {
           get the editable surface inside the Platform tab (4.2.d). For
           everyone else this card explains the posture without misleading them
           into thinking there's a toggle. */}
-      <SSOReadOnlyCard
-        note={
-          <>
-            Edits require a deployment restart. To rotate a client secret or add
-            a provider, update the deployment config and redeploy — the login
-            screen picks up the change on the next page load. Multi-tenant
-            deployments expose an editable surface under Settings › Platform.
-          </>
-        }
-      />
+      {isGlobalAdmin ? (
+        <SSOConfigPanel />
+      ) : (
+        <SSOReadOnlyCard
+          note={
+            <>
+              Edits require a deployment restart. To rotate a client secret or
+              add a provider, update the deployment config and redeploy — the
+              login screen picks up the change on the next page load.
+              Multi-tenant deployments expose an editable surface under Settings
+              › Platform.
+            </>
+          }
+        />
+      )}
 
       {/* Retention defaults. Per-org / per-repo today (no tenant-wide row),
           so this card routes operators to /members where each org has its

@@ -53,6 +53,9 @@ var (
 type globalSSOConfigRepo interface {
 	Get(ctx context.Context, providerID string) (*repository.GlobalSSOProvider, error)
 	List(ctx context.Context, enabledOnly bool) ([]*repository.GlobalSSOProvider, error)
+	// Upsert + Delete back the FE-API-034 admin surface.
+	Upsert(ctx context.Context, p *repository.GlobalSSOProvider) (*repository.GlobalSSOProvider, error)
+	Delete(ctx context.Context, providerID string) error
 }
 
 // loginSessionRepo is the subset of LoginSessionRepository used by the SSO
