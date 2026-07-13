@@ -288,7 +288,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Compliance-report worker: polls compliance_reports and renders PDF +
 	// SPDX output. Safe to run alongside multiple replicas via
 	// FOR UPDATE SKIP LOCKED inside ClaimPendingReport.
-	rw := reportworker.New(repo, reportworker.Config{
+	rw := reportworker.New(repo, metadatav1.NewMetadataServiceClient(metaConn), reportworker.Config{
 		OutputDir:    cfg.ReportOutputDir,
 		PollInterval: time.Duration(cfg.ReportPollIntervalSecs) * time.Second,
 	})

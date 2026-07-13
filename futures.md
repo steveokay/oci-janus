@@ -2412,8 +2412,16 @@ overlaps stay where they are, with new audit evidence noted here:
 
 Below is only what was genuinely untracked.
 
-#### FUT-080 — Compliance reports fabricate data: wire the report worker to real findings — **Tier 1 (correctness)**
-- **Why:** every generated SPDX/PDF compliance report shows **0
+#### FUT-080 — Compliance reports fabricate data: wire the report worker to real findings — ✅ SHIPPED 2026-07-13 (branch `feat/fut-080-compliance-report-findings`; status.md row)
+- **What shipped:** report worker now populates the `Document` from live
+  registry-metadata — severity totals from `GetSecurityOverview`, detailed
+  findings by paginating `ListTenantVulnerabilities` (capped at 5000) — via a
+  metadata gRPC client threaded into `reportworker.New` behind a narrow
+  `MetadataClient` interface. On any metadata RPC error the report is failed
+  rather than emitting all-zeros (the FUT-080 correctness posture). No proto,
+  no migration, no new env var. The local-disk / plaintext-PDF persistence
+  deferral stays tracked via `docs/SERVICES.md` §624 `TODO(prod)`.
+- **Why (original):** every generated SPDX/PDF compliance report showed **0
   findings regardless of actual scan results**.
   `services/scanner/internal/reportworker/worker.go:99-110` hardcodes
   `SummaryCount` to all-zeros and never populates `Findings`; the

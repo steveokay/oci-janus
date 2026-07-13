@@ -29,9 +29,11 @@ import (
 )
 
 // Finding is one CVE row aggregated from registry-metadata. The scanner DB
-// itself doesn't store findings; today the renderer fabricates a minimal set
-// from the tenant counts so the output isn't empty. When the scanner can
-// query the metadata service for findings, fill the slice here.
+// itself doesn't store findings; the report worker
+// (reportworker.buildDocument) populates Document.Findings by paginating
+// registry-metadata's ListTenantVulnerabilities RPC before calling the
+// renderers, so a rendered report reflects the tenant's real scan results
+// (FUT-080).
 type Finding struct {
 	CVEID       string
 	Severity    string
