@@ -53,6 +53,23 @@ func TestUpsertProvider_createOAuth_sealsSecret(t *testing.T) {
 	require.Equal(t, "s3cr3t", pt)
 }
 
+func TestUpsertProvider_omittedScopes_persistsNonNilArray(t *testing.T) {
+	// Regression: global_sso_config.oauth_scopes is NOT NULL, and the repo's
+	// Upsert binds the column explicitly (so the SQL DEFAULT never fires). If the
+	// service forwards a nil slice, Postgres rejects the row with 23502. The login
+	// flow falls back to per-kind default scopes when the stored array is empty,
+	// so the correct persisted value is a non-nil EMPTY array — never nil.
+	sso, f := freshAdmin(t)
+	_, err := sso.UpsertProvider(context.Background(), UpsertProviderInput{
+		ProviderID: "github", Kind: "oauth_github", DisplayName: "GitHub",
+		Enabled: true, OAuthClientID: "client-abc", ClientSecret: "s3cr3t",
+		// OAuthScopes intentionally omitted (nil).
+	})
+	require.NoError(t, err)
+	require.NotNil(t, f.globalRepo.Providers["github"].OAuthScopes,
+		"omitted scopes must persist as a non-nil empty array (NOT NULL column)")
+}
+
 func TestUpsertProvider_updateEmptySecret_keepsExisting(t *testing.T) {
 	sso, f := freshAdmin(t)
 	ctx := context.Background()

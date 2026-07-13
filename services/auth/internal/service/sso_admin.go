@@ -146,6 +146,14 @@ func (s *SSO) UpsertProvider(ctx context.Context, in UpsertProviderInput) (*Admi
 		secretEnc = existing.OAuthClientSecretEnc
 	}
 
+	// oauth_scopes is a NOT NULL column and the repo binds it explicitly, so a
+	// nil slice would violate the constraint (23502). Persist a non-nil empty
+	// array instead — the login flow falls back to per-kind default scopes when
+	// the stored array is empty, so this preserves the intended behaviour.
+	scopes := in.OAuthScopes
+	if scopes == nil {
+		scopes = []string{}
+	}
 	row := &repository.GlobalSSOProvider{
 		ProviderID:           in.ProviderID,
 		Kind:                 in.Kind,
@@ -154,7 +162,7 @@ func (s *SSO) UpsertProvider(ctx context.Context, in UpsertProviderInput) (*Admi
 		OAuthClientID:        in.OAuthClientID,
 		OAuthClientSecretEnc: secretEnc,
 		OAuthIssuerURL:       in.OAuthIssuerURL,
-		OAuthScopes:          in.OAuthScopes,
+		OAuthScopes:          scopes,
 		AutoProvision:        in.AutoProvision,
 	}
 	saved, err := s.providers.Upsert(ctx, row)
