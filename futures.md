@@ -2494,8 +2494,19 @@ Below is only what was genuinely untracked.
   one canonical place (`docs/deployment-guide.md`) and make
   compose/Helm both implement it; verify the compose path split.
 
-#### FUT-084 — Wire SSO login in the frontend (backend is done) — **Tier 1 (dead feature)**
-- **Why:** the complete OAuth PKCE + SAML dance exists server-side —
+#### FUT-084 — Wire SSO login in the frontend (backend is done) — ✅ SHIPPED 2026-07-13 (branch `feat/fut-084-sso-login-frontend`; FE-STATUS FE-API-063)
+- **What shipped:** the login page now activates SSO. `SSOButtons` fetches
+  `GET /api/v1/auth/providers` (`useAuthProviders`) and renders one live button
+  per enabled provider; clicking starts the OAuth/SAML dance via
+  `beginSSOLogin` (`/auth/{oauth,saml}/{id}/start?next=/login`). login's
+  `beforeLoad` consumes the returned `?sso_token=<jwt>` into the in-memory auth
+  store and bounces to a sessionStorage-stashed, open-redirect-guarded return
+  path (`prepareSSOLogin`/`consumeSSOReturnTo`); `replace:true` keeps the JWT
+  out of history; a malformed token falls through to the password form. No
+  providers configured → renders nothing (password-only login unchanged).
+  **Login-side only** — the editable SSO admin-config seat (FE-API-034) stays
+  deferred. TDD, 11 tests. Frontend 4 gates green.
+- **Why (original):** the complete OAuth PKCE + SAML dance exists server-side —
   `GET /api/v1/auth/providers`, `/auth/oauth/{id}/start` + callback
   (302 to `{next}?sso_token=<jwt>`), `/auth/saml/{id}/start` + ACS —
   but `sso-buttons.tsx` renders all four provider buttons permanently
