@@ -1,103 +1,89 @@
 import * as React from "react";
 import { Github, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  useAuthProviders,
+  beginSSOLogin,
+  type SSOProvider,
+} from "@/lib/api/sso";
 
-// Beacon — SSO sign-in buttons.
+// Beacon — SSO sign-in buttons (FUT-084).
 //
-// The backend OAuth/SAML flow is tracked as Sprint 1a in status.md (not yet
-// implemented). The buttons render in their final shape so the moment a
-// provider lands we only swap the click handler — no layout churn.
+// Renders one button per CONFIGURED provider returned by
+// GET /api/v1/auth/providers (enabled-only, deploy-time config). Clicking a
+// button starts the full-page OAuth/SAML redirect dance via beginSSOLogin;
+// the auth service hands the JWT back as ?sso_token= on /login, which the
+// login route's beforeLoad consumes (see routes/login.tsx).
 //
-// Each provider has its own brand icon. We render Google + Microsoft + SAML
-// inline as SVG (lucide-react doesn't ship brand glyphs) and pull GitHub
-// from lucide because it's the one brand mark they do ship.
-
-type Provider = {
-  id: "google" | "github" | "microsoft" | "saml";
-  label: string;
-  icon: React.ReactNode;
-};
-
-const PROVIDERS: Provider[] = [
-  {
-    id: "google",
-    label: "Continue with Google",
-    icon: <GoogleIcon />,
-  },
-  {
-    id: "github",
-    label: "Continue with GitHub",
-    icon: <Github className="size-4" />,
-  },
-  {
-    id: "microsoft",
-    label: "Continue with Microsoft",
-    icon: <MicrosoftIcon />,
-  },
-  {
-    id: "saml",
-    label: "SAML / SSO",
-    icon: <KeyRound className="size-4" />,
-  },
-];
+// When no providers are configured — or while the list is loading / errored —
+// this renders nothing, so the password form stands alone with no dead chrome.
+//
+// Brand glyphs: Google + Microsoft are inline SVG (lucide ships no brand
+// marks); GitHub + a generic key (SAML / OIDC) come from lucide.
 
 interface SSOButtonsProps {
   className?: string;
+  // Where to land after a successful sign-in — the same post-login target the
+  // password path honours (the ?from= the auth guard bounced the user from).
+  // Stashed across the redirect round-trip; open-redirect-guarded downstream.
+  from?: string;
 }
 
-export function SSOButtons({ className }: SSOButtonsProps): React.ReactElement {
-  // UIR-5: the login-page SSO flow isn't wired yet (the old handler only
-  // toasted "coming soon" while the buttons rendered fully active — they
-  // looked clickable but did nothing). Render them visibly disabled with a
-  // caption so the state is honest. When the client flow lands, drop
-  // `disabled`, add the click handler, and delete this note:
-  //   - Generate a state token, persist in sessionStorage
-  //   - window.location = `/auth/sso/${provider.id}?state=…`
-  //   - Callback route exchanges the code for a JWT via the auth service
+export function SSOButtons({ className, from }: SSOButtonsProps): React.ReactElement | null {
+  const { data: providers } = useAuthProviders();
+
+  // Nothing to show until we have a non-empty configured list. `undefined`
+  // covers both the loading and the errored states (retry:1 then error) — in
+  // every "not ready" case we render nothing rather than flash placeholder UI.
+  if (!providers || providers.length === 0) {
+    return null;
+  }
+
   return (
     <div className={className}>
       <div className="grid grid-cols-2 gap-2">
-        {PROVIDERS.map((p) => (
+        {providers.map((p) => (
           <button
             key={p.id}
             type="button"
-            disabled
-            title="Single sign-on launches with the next release"
+            onClick={() => beginSSOLogin(p.login_url, from)}
             className={cn(
               "group inline-flex items-center justify-center gap-2 rounded-md",
               "border border-[var(--color-border-strong)] bg-[var(--color-surface)]",
               "px-3 py-2.5 text-sm font-medium text-[var(--color-fg)]",
               "transition-colors hover:bg-[var(--color-surface-sunken)]",
-              "focus-visible:outline-none",
-              "disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-[var(--color-surface)]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]",
             )}
-            aria-label={`${p.label} (coming soon)`}
+            aria-label={`Continue with ${p.display_name}`}
           >
-            <span className="shrink-0">{p.icon}</span>
-            <span className="truncate">{shortLabel(p)}</span>
+            <span className="shrink-0">{iconForProvider(p)}</span>
+            <span className="truncate">{p.display_name}</span>
           </button>
         ))}
       </div>
-      <p className="mt-2 text-center text-[11px] text-[var(--color-fg-subtle)]">
-        Single sign-on is coming soon.
-      </p>
+
+      {/* Divider lives here so it only appears when there's at least one
+          provider — no orphaned "or" line on a password-only deployment. */}
+      <div className="relative my-5">
+        <div className="absolute inset-x-0 top-1/2 h-px bg-[var(--color-border)]" />
+        <div className="relative flex justify-center">
+          <span className="bg-[var(--color-surface)] px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
+            or sign in with credentials
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
-// "Continue with Google" is too long for the 2-col grid on narrow viewports.
-// We shorten in the button face but keep the full string as the aria-label.
-function shortLabel(p: Provider): string {
-  switch (p.id) {
-    case "google":
-      return "Google";
-    case "github":
-      return "GitHub";
-    case "microsoft":
-      return "Microsoft";
-    case "saml":
-      return "SAML";
-  }
+// iconForProvider picks a brand glyph from the provider's kind/id. Falls back
+// to a generic key for SAML and any generic-OIDC provider.
+function iconForProvider(p: SSOProvider): React.ReactNode {
+  const key = `${p.type} ${p.id}`.toLowerCase();
+  if (key.includes("google")) return <GoogleIcon />;
+  if (key.includes("github")) return <Github className="size-4" />;
+  if (key.includes("microsoft")) return <MicrosoftIcon />;
+  return <KeyRound className="size-4" />;
 }
 
 // ─── inline brand glyphs ───────────────────────────────────────────────────

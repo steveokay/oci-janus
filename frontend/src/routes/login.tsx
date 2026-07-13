@@ -13,6 +13,7 @@ import { login } from "@/lib/api/auth";
 import { authStore } from "@/lib/auth/store";
 import { lockoutMessage } from "@/lib/auth/lockout-message";
 import { SSOButtons } from "@/components/auth/sso-buttons";
+import { consumeSSOReturnTo } from "@/lib/api/sso";
 import { MfaChallenge } from "@/components/auth/mfa-challenge";
 import { MfaEnrollDialog } from "@/components/profile/mfa-enroll-dialog";
 import { useDeploymentInfo, isSingleMode } from "@/lib/api/deployment-info";
@@ -41,15 +42,33 @@ function safeInternalPath(from: string | undefined): string {
 }
 
 export const Route = createFileRoute("/login")({
-  // Validate the ?from= search param the _authenticated guard sets when it
-  // bounces an unauthenticated visitor here. Only a string survives; the
-  // open-redirect gate (safeInternalPath) is applied at navigate time.
-  validateSearch: (search: Record<string, unknown>): { from?: string } => {
-    return typeof search.from === "string" ? { from: search.from } : {};
+  // Validate the search params. `from` is set by the _authenticated guard when
+  // it bounces an unauthenticated visitor here; `sso_token` is set by the auth
+  // service when it 302s back from an SSO callback (FUT-084). Both are strings;
+  // the open-redirect gate (safeInternalPath) is applied at navigate time.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { from?: string; sso_token?: string } => {
+    const out: { from?: string; sso_token?: string } = {};
+    if (typeof search.from === "string") out.from = search.from;
+    if (typeof search.sso_token === "string") out.sso_token = search.sso_token;
+    return out;
   },
-  // If you're already signed in and hit /login, bounce home — saves a click
-  // on browser back/forward.
-  beforeLoad: () => {
+  beforeLoad: ({ search }) => {
+    // FUT-084 — SSO callback handoff. The auth service redirects back to
+    // /login?sso_token=<jwt> after a successful OAuth/SAML dance. The in-memory
+    // auth store was wiped by the full-page redirect, so consume the token here
+    // and bounce to the stashed return target. A malformed token leaves the
+    // store empty — drop it from the URL and fall through to the form.
+    if (search.sso_token) {
+      authStore.setToken(search.sso_token);
+      if (authStore.getToken()) {
+        throw redirect({ to: consumeSSOReturnTo(), replace: true });
+      }
+      throw redirect({ to: "/login", replace: true });
+    }
+    // If you're already signed in and hit /login, bounce home — saves a click
+    // on browser back/forward.
     if (authStore.getToken()) {
       throw redirect({ to: "/" });
     }
@@ -188,18 +207,10 @@ function LoginPage(): React.ReactElement {
           <MfaChallenge challengeToken={challengeToken} onDone={goPostLogin} />
         ) : (
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-elevated)]">
-          <SSOButtons />
-
-          {/* Divider — the small label sits inside the line for the
-              "either / or" cue. Pattern lifted from Stripe / Vercel logins. */}
-          <div className="relative my-5">
-            <div className="absolute inset-x-0 top-1/2 h-px bg-[var(--color-border)]" />
-            <div className="relative flex justify-center">
-              <span className="bg-[var(--color-surface)] px-3 text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-                or sign in with credentials
-              </span>
-            </div>
-          </div>
+          {/* SSO buttons + the "or sign in with credentials" divider render
+              only when providers are configured (FUT-084); otherwise this is a
+              no-op and the password form stands alone. */}
+          <SSOButtons from={from} />
 
         <form
           onSubmit={handleSubmit(onSubmit)}
