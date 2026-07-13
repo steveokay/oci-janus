@@ -77,6 +77,12 @@ export default defineConfig({
       // 404s.
       "/api/v1/access/review":  { target: "http://localhost:8091", changeOrigin: true },
       "/api/v1/access":          { target: "http://localhost:8080", changeOrigin: true },
+      // FUT-084 — the SSO surface lives on services/auth: the public provider
+      // list (`/api/v1/auth/providers`) and the SSO admin routes. Must come
+      // BEFORE the `/api/v1` catch-all or these land on the BFF (:8091) and
+      // 404 — which is exactly why the login SSO buttons never rendered until
+      // this entry was added.
+      "/api/v1/auth":            { target: "http://localhost:8080", changeOrigin: true },
       "/api/v1":                 { target: "http://localhost:8091", changeOrigin: true },
       "/healthz":               { target: "http://localhost:8091", changeOrigin: true },
       "/auth":                  { target: "http://localhost:8080", changeOrigin: true },
