@@ -51,6 +51,21 @@ func (f *fakeGlobalSSOConfigRepo) List(_ context.Context, enabledOnly bool) ([]*
 	return out, nil
 }
 
+func (f *fakeGlobalSSOConfigRepo) Upsert(_ context.Context, p *repository.GlobalSSOProvider) (*repository.GlobalSSOProvider, error) {
+	cp := *p
+	f.Providers[p.ProviderID] = &cp
+	out := cp
+	return &out, nil
+}
+
+func (f *fakeGlobalSSOConfigRepo) Delete(_ context.Context, providerID string) error {
+	if _, ok := f.Providers[providerID]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(f.Providers, providerID)
+	return nil
+}
+
 // fakeSSOSessionRepo satisfies loginSessionRepo as a no-op. SSO tests that
 // only exercise EnsureSSOUser never touch login sessions.
 type fakeSSOSessionRepo struct{}

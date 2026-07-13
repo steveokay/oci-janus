@@ -21,6 +21,7 @@ import * as React from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { ShieldAlert } from "lucide-react";
 import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
+import { SSOConfigPanel } from "@/components/settings/sso-config-panel";
 import { TenantsSection } from "@/components/admin/tenants-section";
 import { ScannerAdaptersSection } from "@/components/admin/scanner/scanner-adapters-section";
 import { GCCard } from "@/components/admin/gc-card";
@@ -30,6 +31,7 @@ import { SectionAnchorNav } from "@/components/ui/section-anchor-nav";
 import { queryClient } from "@/lib/query";
 import {
   abilitiesKeys,
+  useIsGlobalAdmin,
   type AbilitiesResponse,
 } from "@/lib/api/abilities";
 
@@ -56,6 +58,10 @@ export const Route = createFileRoute("/_authenticated/settings/platform")({
 });
 
 function PlatformTab(): React.ReactElement {
+  // The route guard already bounces non-global-admins, but we gate the SSO
+  // mount explicitly so admins get the editable panel and any other caller
+  // keeps the read-only explainer card.
+  const isGlobalAdmin = useIsGlobalAdmin();
   return (
     <div className="space-y-8">
       {/* Quiet platform-admin banner — softer than the old /admin pages
@@ -104,16 +110,20 @@ function PlatformTab(): React.ReactElement {
           is where an editable multi-tenant SSO surface will live" without
           overpromising. Per RM-003/004 SSO is configured in deployment files
           in both modes today; the editor lands in a future phase. */}
-      <SSOReadOnlyCard
-        sectionId="sso"
-        note={
-          <>
-            An editable multi-tenant SSO surface for global admins lands in a
-            follow-up phase. Until then, rotate secrets or add providers by
-            updating the deployment config and redeploying.
-          </>
-        }
-      />
+      {isGlobalAdmin ? (
+        <SSOConfigPanel />
+      ) : (
+        <SSOReadOnlyCard
+          sectionId="sso"
+          note={
+            <>
+              An editable multi-tenant SSO surface for global admins lands in a
+              follow-up phase. Until then, rotate secrets or add providers by
+              updating the deployment config and redeploying.
+            </>
+          }
+        />
+      )}
     </div>
   );
 }

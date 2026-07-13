@@ -82,9 +82,13 @@ func (h *HTTPHandler) RegisterSSO(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/saml/{provider_id}/start", h.startSAML)
 	mux.HandleFunc("POST /auth/saml/{provider_id}/acs", h.callbackSAML)
 
-	// NOTE: Per REDESIGN-001 RM-003 the admin CRUD routes
-	// (GET/POST/PATCH/DELETE /api/v1/admin/auth-providers/...) are intentionally
-	// NOT registered here. The per-tenant SSO admin surface has been removed.
+	// FE-API-034 — global-admin SSO config surface. RM-003 removed the
+	// per-tenant admin routes (the §A1 gate flaw); this is the deployment-wide,
+	// global-admin-only replacement (OAuth kinds; SAML editing deferred). Each
+	// handler gates on users.is_global_admin via requireGlobalAdmin.
+	mux.HandleFunc("GET /api/v1/auth/admin/providers", h.listProvidersAdmin)
+	mux.HandleFunc("PUT /api/v1/auth/admin/providers/{provider_id}", h.putProviderAdmin)
+	mux.HandleFunc("DELETE /api/v1/auth/admin/providers/{provider_id}", h.deleteProviderAdmin)
 }
 
 // ── GET /api/v1/auth/providers ──────────────────────────────────────────────
