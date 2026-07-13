@@ -2405,9 +2405,10 @@ overlaps stay where they are, with new audit evidence noted here:
   **older mapEvent malformed-payload hardening → SEC-070 residual**;
   **s3/gcs/azure drivers missing → known** (`docs/integrations/storage.md`
   is honest; CLAUDE.md §8 still claims five — see FUT-089).
-- **Tracker inconsistency to verify:** security.md shows SEC-087 OPEN
-  while status.md's PR #321 row claims the tenant-scope fix shipped
-  inline — verify and flip the status line.
+- **Tracker inconsistency — RESOLVED 2026-07-13:** security.md showed
+  SEC-087 OPEN while status.md's PR #321 row claimed the tenant-scope
+  fix shipped inline. Verified in-code (`repository.go:289-291` carries
+  `AND tenant_id = $1`); flipped security.md SEC-087 → RESOLVED.
 
 Below is only what was genuinely untracked.
 
@@ -2589,8 +2590,8 @@ Below is only what was genuinely untracked.
 - **HARDENING-CHECKLIST.md** — all 25 boxes unchecked, no per-service
   compliance record; also its "Dependabot or Renovate configured" box
   is unmet (no config in `.github/`).
-- **security.md SEC-087** status line vs status.md PR #321 — verify +
-  flip (see preamble).
+- ~~**security.md SEC-087** status line vs status.md PR #321 — verify +
+  flip~~ ✅ DONE 2026-07-13 (flipped RESOLVED; fix verified in-code).
 
 ---
 

@@ -11,7 +11,7 @@ Self-hosted OCI registry with mTLS between every service, multi-key JWT signing,
 
 📚 **Full documentation is published at [steveokay.github.io/oci-janus](https://steveokay.github.io/oci-janus/)** — a guided quickstart, dashboard walkthrough, integrations catalog, an interactive OpenAPI explorer, and every reference below rendered as a browsable site.
 
-OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, pluggable storage drivers (MinIO/S3/GCS/Azure/filesystem), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
+OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, a pluggable storage-driver interface (MinIO / any S3-compatible store including AWS S3, and local filesystem shipped today; native GCS/Azure drivers on the roadmap), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
 
 ---
 
@@ -113,7 +113,7 @@ In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on t
 - Access review — weekly stale-key nudge with snooze; nudge-only, never auto-revokes ([`docs/ACCESS-REVIEW.md`](docs/ACCESS-REVIEW.md))
 
 **Storage**
-- Pluggable drivers: MinIO, AWS S3, GCP Cloud Storage, Azure Blob, local filesystem
+- Pluggable driver interface — **MinIO / any S3-compatible store (incl. AWS S3)** and **local filesystem** ship today; native GCP Cloud Storage / Azure Blob drivers are [on the roadmap](docs/integrations/storage.md) (use the `minio` driver against an S3-compatible endpoint until then)
 - Per-tenant key prefixing; no presigned URLs leak to clients
 - Pull-through proxy cache for upstream registries with AES-256-GCM credential storage
 
