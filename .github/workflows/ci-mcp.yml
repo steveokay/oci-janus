@@ -1,0 +1,60 @@
+name: CI — mcp
+
+# registry-mcp is a pure HTTP client of the management BFF (no gRPC, no DB, no
+# RabbitMQ), so it does not depend on proto/**. docs/openapi.json IS a
+# dependency: the client's openapi_contract_test.go asserts every path it
+# builds is backed by a route in that spec, so a BFF route rename that
+# regenerates the spec must re-run this job.
+on:
+  push:
+    paths: ["services/mcp/**", "libs/**", "docs/openapi.json"]
+  pull_request:
+    paths: ["services/mcp/**", "libs/**", "docs/openapi.json"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: services/mcp
+          config: ../../.golangci.yml
+          # Pin to use the Go toolchain installed by setup-go: the action's
+          # bundled golangci-lint binary trails the codebase's required
+          # toolchain; install-mode: goinstall builds it from source with the
+          # toolchain setup-go just installed.
+          version: latest
+          install-mode: goinstall
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - run: cd services/mcp && go test -race ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - run: cd services/mcp && make build
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg SERVICE=mcp \
+            -f services/mcp/Dockerfile \
+            -t ghcr.io/steveokay/oci-janus/mcp:${{ github.sha }} \
+            .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/steveokay/oci-janus/mcp:${{ github.sha }}
+          exit-code: "1"
+          severity: CRITICAL

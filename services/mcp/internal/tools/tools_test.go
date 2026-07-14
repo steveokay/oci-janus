@@ -75,12 +75,12 @@ func (f *fakeClient) ListAuditEvents(ctx context.Context, filter client.AuditFil
 	f.calls = append(f.calls, "ListAuditEvents")
 	return f.auditEvents, f.auditErr
 }
-func (f *fakeClient) GetScanReport(ctx context.Context, org, repo, digest string) (*client.ScanReport, error) {
-	f.calls = append(f.calls, "GetScanReport:"+org+"/"+repo+"@"+digest)
+func (f *fakeClient) GetScanReport(ctx context.Context, digest string) (*client.ScanReport, error) {
+	f.calls = append(f.calls, "GetScanReport:@"+digest)
 	return f.scan, f.scanErr
 }
-func (f *fakeClient) ListSignatures(ctx context.Context, org, repo, digest string) ([]client.Signature, error) {
-	f.calls = append(f.calls, "ListSignatures:"+org+"/"+repo+"@"+digest)
+func (f *fakeClient) ListSignatures(ctx context.Context, digest string) ([]client.Signature, error) {
+	f.calls = append(f.calls, "ListSignatures:@"+digest)
 	return f.sigs, f.sigsErr
 }
 func (f *fakeClient) ListPromotions(ctx context.Context, org, repo string) ([]client.Promotion, error) {
@@ -340,7 +340,7 @@ func TestListSignatures_Happy(t *testing.T) {
 
 func TestListPromotions_Happy(t *testing.T) {
 	fc := &fakeClient{promos: []client.Promotion{
-		{ID: "p1", FromOrg: "dev", ToOrg: "prod", Digest: "sha256:aa"},
+		{ID: "p1", SrcOrg: "dev", DstOrg: "prod", DstDigest: "sha256:aa"},
 	}}
 	s := registerAll(fc, slog.Default())
 	res := callTool(t, s, "registry_list_promotions", map[string]any{"org": "prod", "repo": "api"})

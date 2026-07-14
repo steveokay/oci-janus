@@ -2488,7 +2488,37 @@ Below is only what was genuinely untracked.
   still says "pull events are not yet emitted by the audit consumer"
   and the sparkline renders permanently zero.
 
-#### FUT-082 — registry-mcp repair: broken endpoints + missing CI lane — **Tier 1 (correctness)**
+#### FUT-082 — registry-mcp repair: broken endpoints + missing CI lane — ✅ SHIPPED 2026-07-14 (branch `feat/fut-082-mcp-repair`)
+- **Shipped (Option B — all 12 tools work):** two-sided fix.
+  **Client paths** (`services/mcp/internal/client/registry.go`) repointed to
+  the real BFF routes: `GetManifest` → `.../tags/{tag}/manifest`;
+  `GetScanReport`/`ListSignatures` dropped the bogus org/repo path segments and
+  now hit the digest-keyed `/api/v1/scan-by-digest/{digest}` +
+  `/api/v1/signatures-by-digest/{digest}` (signatures now take `(ctx, digest)`;
+  the tools still parse org/repo as user args but no longer forward them).
+  **Three new BFF routes** (`services/management/internal/handler/mcp_bff_routes.go`,
+  registered in `handler.go`) close the genuinely-missing surfaces:
+  `GET /api/v1/service-accounts` (wraps a new auth `ListServiceAccounts` gRPC),
+  `GET /api/v1/audit` (wraps a new audit `ListAuditEvents` gRPC, tenant-wide,
+  limit capped 500), and `GET /api/v1/promotions` (wraps metadata
+  `ListPromotions` with empty org/repo → new tenant-wide query). All three are
+  authenticated + tenant-scoped, no extra role gate (matches the read-only
+  `handleListStaleKeys` posture + single-tenant deployment). Two additive proto
+  RPCs (`auth.ListServiceAccounts`, `audit.ListAuditEvents`) — `buf breaking`
+  clean; stubs regenerated. **Guard:** new
+  `services/mcp/internal/client/openapi_contract_test.go` asserts every client
+  path template is backed by a route in `docs/openapi.json` (walks up to repo
+  root) — fails CI on any future drift, which is exactly how this shipped
+  broken. **CI:** new `.github/workflows/ci-mcp.yml` (lint/test/build + trivy;
+  path filter includes `docs/openapi.json` so a BFF route rename re-runs the
+  contract test). `openapi.json` + postman regenerated (146 routes). TDD
+  throughout (RED→GREEN on the 3 BFF routes + the auth/audit/metadata RPCs).
+  All gates green: mcp/management/auth/audit/metadata tests + golangci-lint,
+  spec-lint 13/13, buf breaking. **Caveat:** verified through the HTTP surface
+  via httptest + in-process gRPC (bufconn), not against a live compose stack;
+  audit `action_prefix` maps to an EXACT action match (RPC has no prefix field
+  yet) and `since`/`resource` client filters are accepted-and-ignored — noted
+  in the handler godoc as a follow-up.
 - **Why:** roughly **half the 12 MCP tools fail at runtime** —
   `services/mcp/internal/client/registry.go` calls
   `.../manifests/{tag}` (BFF path is `.../tags/{tag}/manifest`),

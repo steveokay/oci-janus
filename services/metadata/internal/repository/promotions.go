@@ -294,6 +294,56 @@ func (r *Repository) ListPromotions(ctx context.Context, tenantID uuid.UUID, org
 	return out, rows.Err()
 }
 
+// ListPromotionsByTenant returns the most recent promotions across ALL repos
+// for a tenant (FUT-082). It backs the tenant-wide promotions view consumed
+// by registry-mcp's `list_promotions` tool and the BFF, where the caller has
+// no specific org/repo in mind and wants the whole tenant's promotion history.
+//
+// Unlike ListPromotions it applies NO org/repo predicate — it is deliberately
+// a separate method rather than an org/repo=="" overload of the per-repo query
+// so the two intents (per-repo filter vs tenant-wide) stay explicit and the
+// SQL for each stays simple. Both share the tenant_id = $1 bound (never
+// cross-tenant) and the scanPromotion row mapper so the wire shape is
+// identical to ListPromotions.
+//
+// The query is served by idx_promotions_tenant_time (tenant_id, promoted_at
+// DESC) so the newest rows come off the front of the index without a Sort.
+//
+// limit is clamped to [1, 200] with a default of 50 when zero — matching the
+// per-repo ListPromotions clamp so both entry points behave identically.
+func (r *Repository) ListPromotionsByTenant(ctx context.Context, tenantID uuid.UUID, limit int32) ([]*metadatav1.Promotion, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// Tenant-scoped, no org/repo filter. Parameterised on tenant_id + limit
+	// only — never fmt.Sprintf'd — so a tenant id can never break out of its
+	// isolation bound.
+	const q = `SELECT ` + promotionSelectCols + `
+		FROM promotions
+		WHERE tenant_id = $1
+		ORDER BY promoted_at DESC
+		LIMIT $2`
+	rows, err := r.reader().Query(ctx, q, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list promotions by tenant: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*metadatav1.Promotion
+	for rows.Next() {
+		p, err := scanPromotion(ctx, rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan promotion row: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // rowScanner is the intersection of *pgx.Row and pgx.Rows for our purposes:
 // both expose Scan(dest ...any) error. Extracting a tiny interface here lets
 // scanPromotion serve both the single-row RETURNING path and the multi-row

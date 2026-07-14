@@ -33,6 +33,10 @@ import (
 // Tests that only exercise GetBuildHistory / GetRepoActivity can leave the
 // GetNotifications method as a stub.
 type auditRepo interface {
+	// Query is the general-purpose audit-event listing used by the FUT-082
+	// ListAuditEvents RPC. The repository owns Limit clamping (default 100,
+	// cap 500) and the default time window.
+	Query(ctx context.Context, filter repository.QueryFilter) ([]*repository.AuditEvent, error)
 	GetBuildHistory(ctx context.Context, tenantID uuid.UUID, repoID, tag string, limit int) ([]*repository.BuildHistoryRow, error)
 	CountPulls(ctx context.Context, tenantID uuid.UUID, since time.Time) (int64, error)
 	GetRepoActivity(
@@ -442,6 +446,74 @@ func (h *GRPCHandler) GetRepoActivity(ctx context.Context, req *auditv1.GetRepoA
 		Events:        events,
 		NextPageToken: nextToken,
 	}, nil
+}
+
+// ListAuditEvents returns audit_events rows for a tenant, optionally filtered
+// by actor_id and/or action (FUT-082). It is a thin wrapper over the existing
+// repository.Query: the request fields map straight onto QueryFilter and the
+// repository owns the Limit clamping (default 100, cap 500) plus the default
+// 30-day time window (From/To are left zero here so those defaults apply).
+//
+// Each *AuditEvent is projected onto an AuditEventRecord. The Metadata JSON is
+// deliberately NOT carried onto the wire — it can hold internal payload fields
+// that are not safe to expose to a dashboard, matching the narrow-projection
+// posture of GetRepoActivity above.
+func (h *GRPCHandler) ListAuditEvents(ctx context.Context, req *auditv1.ListAuditEventsRequest) (*auditv1.ListAuditEventsResponse, error) {
+	// Validate tenant_id up front so garbage never reaches the repository and
+	// the logs stay readable (parameterised SQL is still the real defence).
+	tenantUUID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+
+	// Map the request straight onto the repository filter. actor_id / action
+	// are optional filters (empty string ⇒ no filter, per the Query SQL). We
+	// leave From/To zero so the repository applies its own default window and
+	// pass Limit/Offset through unclamped — Query clamps Limit itself.
+	filter := repository.QueryFilter{
+		TenantID: tenantUUID,
+		ActorID:  req.GetActorId(),
+		Action:   req.GetAction(),
+		Limit:    int(req.GetLimit()),
+		Offset:   int(req.GetOffset()),
+	}
+
+	events, err := h.repo.Query(ctx, filter)
+	if err != nil {
+		slog.ErrorContext(ctx, "ListAuditEvents query failed",
+			"tenant_id", req.GetTenantId(),
+			"actor_id", req.GetActorId(),
+			"action", req.GetAction(),
+			"error", err,
+		)
+		return nil, errcodes.MapDBError(err, "failed to list audit events")
+	}
+
+	// Project each row onto the wire record, dropping Metadata.
+	records := make([]*auditv1.AuditEventRecord, 0, len(events))
+	for _, e := range events {
+		records = append(records, auditEventRecordFromRow(e))
+	}
+
+	return &auditv1.ListAuditEventsResponse{Events: records}, nil
+}
+
+// auditEventRecordFromRow projects a repository.AuditEvent onto the read-only
+// AuditEventRecord wire type. UUIDs are stringified and the timestamp is wrapped
+// as a protobuf Timestamp. Metadata is intentionally omitted (see
+// ListAuditEvents' doc comment).
+func auditEventRecordFromRow(e *repository.AuditEvent) *auditv1.AuditEventRecord {
+	return &auditv1.AuditEventRecord{
+		Id:         e.ID.String(),
+		TenantId:   e.TenantID.String(),
+		ActorId:    e.ActorID,
+		ActorType:  e.ActorType,
+		ActorIp:    e.ActorIP,
+		Action:     e.Action,
+		Resource:   e.Resource,
+		Outcome:    e.Outcome,
+		OccurredAt: timestamppb.New(e.OccurredAt),
+	}
 }
 
 // resolveActivityEventTypes substitutes the operator-facing default when the

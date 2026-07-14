@@ -86,6 +86,14 @@ type fakeRepo struct {
 	// for the method implementations). webhookCfg is the row Get returns; Upsert
 	// stores into it so the Put→reload roundtrip reflects the write.
 	webhookCfg *repository.NotificationWebhookConfig
+
+	// FUT-082 ListAuditEvents fake state. queryEvents is the slice Query
+	// returns; queryErr forces an error path. queryCalls captures every
+	// QueryFilter passed so tests can assert that the handler maps the request
+	// fields (actor_id / action / limit / offset) straight through.
+	queryEvents []*repository.AuditEvent
+	queryErr    error
+	queryCalls  []repository.QueryFilter
 }
 
 // analyticsCall captures the parameters passed to one GetAnalytics call.
@@ -199,6 +207,14 @@ func (f *fakeRepo) GetAnalytics(
 		return f.analyticsResponder(call)
 	}
 	return f.analytics, f.analyticsErr
+}
+
+// Query is the fake for the FUT-082 ListAuditEvents read path. It records the
+// filter so tests can assert pass-through mapping, then returns the canned
+// slice / error.
+func (f *fakeRepo) Query(_ context.Context, filter repository.QueryFilter) ([]*repository.AuditEvent, error) {
+	f.queryCalls = append(f.queryCalls, filter)
+	return f.queryEvents, f.queryErr
 }
 
 func (f *fakeRepo) GetLastTenantPush(_ context.Context, tenantID uuid.UUID) (time.Time, bool, error) {

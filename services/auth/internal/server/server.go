@@ -208,11 +208,27 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// via the FUT-003 hotfix #226 pattern.
 	accessReviewSvc := service.NewAccessReviewService(apiKeys, tokenPolicyRepo, saAudit)
 
+	// FUT-082 — construct the service-account service before the gRPC server is
+	// registered so both the gRPC handler (ListServiceAccounts) and the HTTP
+	// handler (§5a below) share one instance. It shares the saAudit emitter built
+	// above so SA lifecycle events land on the same routing key regardless of the
+	// surface that triggered them. The API-key cache invalidator is wired here too
+	// so disable/delete proactively wipes cached identities (Phase 6.7).
+	saSvc := service.NewServiceAccountService(
+		repository.NewServiceAccountRepo(pool),
+		users,
+		apiKeys,
+		saAudit,
+		redisCmdableAdapter{rdb},
+	)
+	saSvc.SetAPIKeyCacheInvalidator(svc.InvalidateAPIKeyCache)
+
 	authv1.RegisterAuthServiceServer(grpcSrv,
 		handler.NewGRPCHandler(svc, pub).
 			WithOIDCTrustService(oidcSvc).
 			WithTokenPolicyService(tokenPolicySvc).
-			WithAccessReviewService(accessReviewSvc),
+			WithAccessReviewService(accessReviewSvc).
+			WithServiceAccountService(saSvc),
 	)
 	healthSrv.SetServingStatus("registry.auth.v1.AuthService", healthpb.HealthCheckResponse_SERVING)
 
@@ -286,20 +302,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// broker (dev stacks) the slog stand-in keeps the trail visible in
 	// container logs at INFO level — useful for local debugging but
 	// invisible to the activity feed and audit dashboards.
-	saSvc := service.NewServiceAccountService(
-		repository.NewServiceAccountRepo(pool),
-		users,
-		apiKeys,
-		saAudit,
-		redisCmdableAdapter{rdb},
-	)
-	// Phase 6.7: wire the API-key validation cache invalidator so SA disable
-	// / delete proactively wipes cached identities for the SA's keys. Without
-	// this, a CI bot still holding a secret could keep authenticating off the
-	// cache for up to apiKeyCacheTTL (the row-state check is the backstop,
-	// but the proactive invalidation tightens the window from "up to TTL"
-	// to "immediately").
-	saSvc.SetAPIKeyCacheInvalidator(svc.InvalidateAPIKeyCache)
+	//
+	// FUT-082: saSvc (and its Phase 6.7 API-key cache invalidator) was
+	// constructed earlier, above the gRPC registration, so the gRPC
+	// ListServiceAccounts handler and this HTTP handler share one instance.
+	// We only attach it to the HTTP handler here.
 	httpH = httpH.WithServiceAccountService(saSvc)
 
 	// ── 5a.1. Wire the FUT-001 OIDC trust service into the HTTP handler.

@@ -228,6 +228,14 @@ type fakeRepo struct {
 	listPromotionsErr    error
 	listPromotionsCalls  []listPromotionsCallArgs
 
+	// FUT-082 tenant-wide promotions. Separate result/err/call slices from
+	// the per-repo variant so a handler test can assert which repository
+	// method the handler dispatched to (per-repo vs tenant-wide) based on
+	// whether org/repo were empty.
+	listPromotionsByTenantResult []*metadatav1.Promotion
+	listPromotionsByTenantErr    error
+	listPromotionsByTenantCalls  []listPromotionsByTenantCallArgs
+
 	// FUT-023 Phase 1 — PR-registry config + namespace stubs. Tests set the
 	// *Result / *Err fields to drive each branch (defaults, NotFound,
 	// internal error) and assert on the captured *Calls slices.
@@ -264,6 +272,14 @@ type listPromotionsCallArgs struct {
 	tenantID uuid.UUID
 	org      string
 	repo     string
+	limit    int32
+}
+
+// listPromotionsByTenantCallArgs captures what ListPromotionsByTenant
+// forwarded (FUT-082) so a handler test can assert the tenant-wide branch
+// fired with the right tenant + limit and no org/repo filter.
+type listPromotionsByTenantCallArgs struct {
+	tenantID uuid.UUID
 	limit    int32
 }
 
@@ -746,6 +762,15 @@ func (f *fakeRepo) ListPromotions(_ context.Context, tenantID uuid.UUID, org, re
 		tenantID: tenantID, org: org, repo: repo, limit: limit,
 	})
 	return f.listPromotionsResult, f.listPromotionsErr
+}
+
+// ListPromotionsByTenant (FUT-082) records the tenant-wide call so a handler
+// test can assert the handler dispatched here when org+repo were both empty.
+func (f *fakeRepo) ListPromotionsByTenant(_ context.Context, tenantID uuid.UUID, limit int32) ([]*metadatav1.Promotion, error) {
+	f.listPromotionsByTenantCalls = append(f.listPromotionsByTenantCalls, listPromotionsByTenantCallArgs{
+		tenantID: tenantID, limit: limit,
+	})
+	return f.listPromotionsByTenantResult, f.listPromotionsByTenantErr
 }
 
 // FUT-023 Phase 1 PR-registry stubs. GetPRRegistryConfig defaults to
@@ -2648,6 +2673,78 @@ func TestListPromotions_InvalidTenantUUID(t *testing.T) {
 	requireCode(t, err, codes.InvalidArgument)
 	if len(f.listPromotionsCalls) != 0 {
 		t.Errorf("repo called despite bad tenant: %d calls", len(f.listPromotionsCalls))
+	}
+}
+
+// TestListPromotions_TenantWide verifies that when BOTH org and repo are
+// empty the handler dispatches to the tenant-wide ListPromotionsByTenant
+// repository method (FUT-082) and NOT the per-repo ListPromotions.
+func TestListPromotions_TenantWide(t *testing.T) {
+	tenantID := uuid.MustParse("98dbe36b-ef28-4903-b25c-bff1b2921c9e")
+	f := &fakeRepo{
+		listPromotionsByTenantResult: []*metadatav1.Promotion{
+			{Id: "aaa", DstTag: "v1"},
+			{Id: "bbb", DstTag: "v2"},
+		},
+	}
+	h := newHandler(f)
+	out, err := h.ListPromotions(context.Background(), &metadatav1.ListPromotionsRequest{
+		TenantId: tenantID.String(),
+		Limit:    30,
+	})
+	requireNoErr(t, err)
+	if len(out.GetPromotions()) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(out.GetPromotions()))
+	}
+	// The per-repo path must NOT have been taken.
+	if len(f.listPromotionsCalls) != 0 {
+		t.Fatalf("per-repo path taken for tenant-wide query: %d calls", len(f.listPromotionsCalls))
+	}
+	if len(f.listPromotionsByTenantCalls) != 1 {
+		t.Fatalf("want 1 tenant-wide repo call, got %d", len(f.listPromotionsByTenantCalls))
+	}
+	call := f.listPromotionsByTenantCalls[0]
+	if call.tenantID != tenantID {
+		t.Errorf("tenant forward failed: got %v, want %v", call.tenantID, tenantID)
+	}
+	if call.limit != 30 {
+		t.Errorf("limit forward failed: got %d, want 30", call.limit)
+	}
+}
+
+// TestListPromotions_OrgWithoutRepo_InvalidArgument verifies that supplying
+// org without repo (a half-specified per-repo query) is rejected with
+// InvalidArgument — only both-empty (tenant-wide) or both-set (per-repo)
+// are valid combinations (FUT-082).
+func TestListPromotions_OrgWithoutRepo_InvalidArgument(t *testing.T) {
+	tenantID := uuid.MustParse("98dbe36b-ef28-4903-b25c-bff1b2921c9e")
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.ListPromotions(context.Background(), &metadatav1.ListPromotionsRequest{
+		TenantId: tenantID.String(),
+		Org:      "myorg",
+		// Repo omitted on purpose.
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.listPromotionsCalls) != 0 || len(f.listPromotionsByTenantCalls) != 0 {
+		t.Errorf("repo called despite invalid org/repo combination")
+	}
+}
+
+// TestListPromotions_RepoWithoutOrg_InvalidArgument is the mirror of the
+// above — repo without org is equally invalid (FUT-082).
+func TestListPromotions_RepoWithoutOrg_InvalidArgument(t *testing.T) {
+	tenantID := uuid.MustParse("98dbe36b-ef28-4903-b25c-bff1b2921c9e")
+	f := &fakeRepo{}
+	h := newHandler(f)
+	_, err := h.ListPromotions(context.Background(), &metadatav1.ListPromotionsRequest{
+		TenantId: tenantID.String(),
+		Repo:     "dst",
+		// Org omitted on purpose.
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if len(f.listPromotionsCalls) != 0 || len(f.listPromotionsByTenantCalls) != 0 {
+		t.Errorf("repo called despite invalid org/repo combination")
 	}
 }
 

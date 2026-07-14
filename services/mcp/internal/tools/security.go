@@ -34,7 +34,7 @@ func (r *Registry) registerSecurity(s *mcp.Server) {
 		if org == "" || repo == "" || digest == "" {
 			return r.errorResult("get_scan_report", fmt.Errorf("org, repo, and digest are required")), nil
 		}
-		rep, err := r.client.GetScanReport(ctx, org, repo, digest)
+		rep, err := r.client.GetScanReport(ctx, digest)
 		if err != nil {
 			r.logger.Error("get_scan_report failed", "err", err, "org", org, "repo", repo, "digest", digest)
 			return r.errorResult("get_scan_report", err), nil
@@ -70,7 +70,7 @@ func (r *Registry) registerSecurity(s *mcp.Server) {
 		if org == "" || repo == "" || digest == "" {
 			return r.errorResult("list_signatures", fmt.Errorf("org, repo, and digest are required")), nil
 		}
-		sigs, err := r.client.ListSignatures(ctx, org, repo, digest)
+		sigs, err := r.client.ListSignatures(ctx, digest)
 		if err != nil {
 			r.logger.Error("list_signatures failed", "err", err, "org", org, "repo", repo, "digest", digest)
 			return r.errorResult("list_signatures", err), nil

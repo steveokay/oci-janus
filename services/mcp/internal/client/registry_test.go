@@ -176,8 +176,8 @@ func TestEveryMethodUsesGET(t *testing.T) {
 	_, _ = r.ListServiceAccounts(ctx)
 	_, _ = r.ListStaleKeys(ctx)
 	_, _ = r.ListAuditEvents(ctx, AuditFilter{})
-	_, _ = r.GetScanReport(ctx, "prod", "api", "sha256:aa")
-	_, _ = r.ListSignatures(ctx, "prod", "api", "sha256:aa")
+	_, _ = r.GetScanReport(ctx, "sha256:aa")
+	_, _ = r.ListSignatures(ctx, "sha256:aa")
 	_, _ = r.ListPromotions(ctx, "prod", "api")
 	_, _ = r.ListPromotions(ctx, "", "") // platform-wide branch
 

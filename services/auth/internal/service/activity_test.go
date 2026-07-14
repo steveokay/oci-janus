@@ -106,6 +106,12 @@ func (f *fakeAuditClient) GetNotifications(_ context.Context, _ *auditv1.GetNoti
 
 // ── Remaining methods return Unimplemented so tests fail loudly ──────────────
 
+// ListAuditEvents is part of the (recently extended) auditv1.AuditServiceClient
+// interface but is not used by ActivityService; the stub reports Unimplemented
+// like the other unused methods so a test that reaches it fails loudly.
+func (f *fakeAuditClient) ListAuditEvents(_ context.Context, _ *auditv1.ListAuditEventsRequest, _ ...grpc.CallOption) (*auditv1.ListAuditEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
+}
 func (f *fakeAuditClient) GetBuildHistory(_ context.Context, _ *auditv1.GetBuildHistoryRequest, _ ...grpc.CallOption) (*auditv1.GetBuildHistoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not used by ActivityService")
 }

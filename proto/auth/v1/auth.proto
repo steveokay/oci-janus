@@ -96,6 +96,11 @@ service AuthService {
   // does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
   rpc ListStaleKeys(ListStaleKeysRequest) returns (ListStaleKeysResponse);
   rpc SnoozeAPIKeyReview(SnoozeAPIKeyReviewRequest) returns (StaleKey);
+
+  // FUT-082 — service-account listing for the management BFF (and, through it,
+  // registry-mcp). Wraps the existing HTTP list surface so the BFF stays a
+  // pure gRPC client of auth rather than reverse-proxying auth's REST route.
+  rpc ListServiceAccounts(ListServiceAccountsRequest) returns (ListServiceAccountsResponse);
 }
 
 message ValidateTokenRequest {
@@ -560,6 +565,33 @@ message ListStaleKeysRequest {
 // guaranteed — the FE sorts by whichever column the operator picked.
 message ListStaleKeysResponse {
   repeated StaleKey keys = 1;
+}
+
+// FUT-082 — service-account listing.
+message ListServiceAccountsRequest {
+  string tenant_id        = 1;
+  bool   include_disabled = 2; // default: active only
+  int32  page_size        = 3; // 1..200, default 50
+  string page_token       = 4; // opaque cursor from a prior response
+}
+
+// ServiceAccountSummary is the read-only projection the BFF/MCP need — no
+// secret material, just identity + scope + live key stats.
+message ServiceAccountSummary {
+  string                    id               = 1;
+  string                    tenant_id        = 2;
+  string                    name             = 3;
+  string                    description      = 4;
+  repeated string           allowed_scopes   = 5;
+  bool                      disabled         = 6;
+  int32                     active_key_count = 7;
+  google.protobuf.Timestamp created_at       = 8;
+  google.protobuf.Timestamp last_used_at     = 9; // null if no key ever used
+}
+
+message ListServiceAccountsResponse {
+  repeated ServiceAccountSummary service_accounts = 1;
+  string                         next_page_token  = 2;
 }
 
 // SnoozeAPIKeyReviewRequest defers the next weekly review nudge for the

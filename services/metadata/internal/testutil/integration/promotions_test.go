@@ -410,6 +410,132 @@ func TestListPromotions_FilterByOrg(t *testing.T) {
 	}
 }
 
+// TestListPromotionsByTenant_AcrossRepos verifies the FUT-082 tenant-wide
+// query returns promotions from MULTIPLE destination repos in one list —
+// the per-repo ListPromotions filter is bypassed entirely.
+func TestListPromotionsByTenant_AcrossRepos(t *testing.T) {
+	repo := buildRepo(t)
+	ctx := context.Background()
+	seed := seedPromoteFixtures(t, repo, false)
+	tenantUUID := uuid.MustParse(devTenantID)
+
+	// Create a SECOND destination repo in the same org so we can promote the
+	// same source into two different repos — the tenant-wide list must span
+	// both.
+	orgID, err := repo.GetOrCreateOrganization(ctx, devTenantID, seed.dstOrg)
+	if err != nil {
+		t.Fatalf("GetOrCreateOrganization: %v", err)
+	}
+	if _, err := repo.CreateRepository(ctx, devTenantID, orgID, "dst-repo-2", "", false, 1<<30); err != nil {
+		t.Fatalf("CreateRepository dst-repo-2: %v", err)
+	}
+
+	// Promote into dst-repo and dst-repo-2.
+	for _, dstRepo := range []string{seed.dstRepo, "dst-repo-2"} {
+		if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
+			TenantID: tenantUUID,
+			SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+			DstOrg: seed.dstOrg, DstRepo: dstRepo, DstTag: "v1",
+		}); err != nil {
+			t.Fatalf("PromoteTag(%q): %v", dstRepo, err)
+		}
+	}
+
+	proms, err := repo.ListPromotionsByTenant(ctx, tenantUUID, 10)
+	if err != nil {
+		t.Fatalf("ListPromotionsByTenant: %v", err)
+	}
+	if len(proms) != 2 {
+		t.Fatalf("want 2 tenant-wide promotions across repos, got %d", len(proms))
+	}
+	// Both destination repos must be represented.
+	seen := map[string]bool{}
+	for _, p := range proms {
+		seen[p.GetDstRepo()] = true
+	}
+	if !seen[seed.dstRepo] || !seen["dst-repo-2"] {
+		t.Fatalf("tenant-wide list missing a repo: %+v", seen)
+	}
+}
+
+// TestListPromotionsByTenant_TenantScoped verifies the FUT-082 tenant-wide
+// query never leaks another tenant's promotions — the WHERE tenant_id = $1
+// bound is load-bearing for isolation.
+func TestListPromotionsByTenant_TenantScoped(t *testing.T) {
+	repo := buildRepo(t)
+	ctx := context.Background()
+	seed := seedPromoteFixtures(t, repo, false)
+	tenantUUID := uuid.MustParse(devTenantID)
+
+	// Promote once under the dev tenant.
+	if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
+		TenantID: tenantUUID,
+		SrcOrg:   seed.srcOrg, SrcRepo: seed.srcRepo, SrcTag: seed.srcTag,
+		DstOrg: seed.dstOrg, DstRepo: seed.dstRepo, DstTag: "v1",
+	}); err != nil {
+		t.Fatalf("PromoteTag: %v", err)
+	}
+
+	// A second tenant with its OWN org/repo + source tag. Fully independent
+	// fixtures so its promotion is a legitimate row that must stay invisible
+	// to the dev tenant's tenant-wide list.
+	otherTenant := uuid.New()
+	otherTenantID := otherTenant.String()
+	// organizations.tenant_id FKs to tenants(id) — create the tenant row
+	// first or the org insert fails with a foreign-key violation.
+	if err := repo.InsertTenantForTest(ctx, otherTenantID, "other-tenant"); err != nil {
+		t.Fatalf("InsertTenantForTest: %v", err)
+	}
+	otherOrgID, err := repo.GetOrCreateOrganization(ctx, otherTenantID, "other-org")
+	if err != nil {
+		t.Fatalf("GetOrCreateOrganization(other): %v", err)
+	}
+	otherSrc, err := repo.CreateRepository(ctx, otherTenantID, otherOrgID, "other-src", "", false, 1<<30)
+	if err != nil {
+		t.Fatalf("CreateRepository other-src: %v", err)
+	}
+	if _, err := repo.CreateRepository(ctx, otherTenantID, otherOrgID, "other-dst", "", false, 1<<30); err != nil {
+		t.Fatalf("CreateRepository other-dst: %v", err)
+	}
+	otherDigest := "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	rawJSON := []byte(`{"schemaVersion":2}`)
+	if _, err := repo.PutManifest(ctx, otherTenantID, otherSrc.GetRepoId(), otherDigest,
+		"application/vnd.oci.image.manifest.v1+json", rawJSON, int64(len(rawJSON))); err != nil {
+		t.Fatalf("PutManifest other: %v", err)
+	}
+	if _, err := repo.PutTag(ctx, otherTenantID, otherSrc.GetRepoId(), "v1", otherDigest); err != nil {
+		t.Fatalf("PutTag other: %v", err)
+	}
+	if _, err := repo.PromoteTag(ctx, repository.PromoteTagInput{
+		TenantID: otherTenant,
+		SrcOrg:   "other-org", SrcRepo: "other-src", SrcTag: "v1",
+		DstOrg: "other-org", DstRepo: "other-dst", DstTag: "v1",
+	}); err != nil {
+		t.Fatalf("PromoteTag(other tenant): %v", err)
+	}
+
+	// The dev tenant's tenant-wide list must contain ONLY its own promotion.
+	proms, err := repo.ListPromotionsByTenant(ctx, tenantUUID, 100)
+	if err != nil {
+		t.Fatalf("ListPromotionsByTenant(dev): %v", err)
+	}
+	if len(proms) != 1 {
+		t.Fatalf("want exactly 1 dev-tenant promotion, got %d (cross-tenant leak?)", len(proms))
+	}
+	if proms[0].GetTenantId() != devTenantID {
+		t.Fatalf("tenant-wide list returned a foreign tenant row: %s", proms[0].GetTenantId())
+	}
+
+	// And the other tenant sees exactly its own single promotion.
+	otherProms, err := repo.ListPromotionsByTenant(ctx, otherTenant, 100)
+	if err != nil {
+		t.Fatalf("ListPromotionsByTenant(other): %v", err)
+	}
+	if len(otherProms) != 1 {
+		t.Fatalf("want exactly 1 other-tenant promotion, got %d", len(otherProms))
+	}
+}
+
 // TestListPromotions_DefaultOrder verifies the newest-first ordering
 // contract that the dashboard depends on.
 func TestListPromotions_DefaultOrder(t *testing.T) {

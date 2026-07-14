@@ -40,6 +40,13 @@ type GRPCHandler struct {
 	// WithAccessReviewService at startup. May be nil in test/dev
 	// fixtures; the 2 review RPCs return codes.Unimplemented in that case.
 	accessReview *service.AccessReviewService
+	// saService is the FUT-082 service-account service. Wired via
+	// WithServiceAccountService at startup so ListServiceAccounts is served.
+	// Shares the same instance the HTTP handler uses. May be nil when the SA
+	// feature is not wired (mirrors the HTTP handler's requireSAService); the
+	// ListServiceAccounts RPC returns codes.Unimplemented in that case so
+	// callers learn the feature is off rather than seeing a nil-deref panic.
+	saService *service.ServiceAccountService
 }
 
 // NewGRPCHandler creates a GRPCHandler backed by the given service.
@@ -70,6 +77,16 @@ func (h *GRPCHandler) WithTokenPolicyService(tp *service.TokenPolicyService) *GR
 // indicate the feature is off (RPCs return Unimplemented).
 func (h *GRPCHandler) WithAccessReviewService(ar *service.AccessReviewService) *GRPCHandler {
 	h.accessReview = ar
+	return h
+}
+
+// WithServiceAccountService wires the FUT-082 service-account service so the
+// ListServiceAccounts RPC is served. Chained builder like the others — pass
+// nil to indicate the feature is off (the RPC returns Unimplemented). Server
+// wiring passes the same *service.ServiceAccountService instance the HTTP
+// handler already uses so both surfaces share one repo/audit/cache path.
+func (h *GRPCHandler) WithServiceAccountService(sa *service.ServiceAccountService) *GRPCHandler {
+	h.saService = sa
 	return h
 }
 
@@ -687,6 +704,82 @@ func (h *GRPCHandler) publishGlobalAdminChanged(ctx context.Context, userID stri
 	if err := h.pub.Publish(ctx, routingKey, evt); err != nil {
 		slog.Error("publish global_admin change", "err", err, "user_id", userID, "granted", granted)
 	}
+}
+
+// Default and maximum page sizes for ListServiceAccounts. A request with
+// page_size == 0 falls back to listServiceAccountsDefaultPageSize; anything
+// larger than listServiceAccountsMaxPageSize is capped so a caller cannot
+// force an unbounded scan.
+const (
+	listServiceAccountsDefaultPageSize = 50
+	listServiceAccountsMaxPageSize     = 200
+)
+
+// ListServiceAccounts returns a page of the tenant's service accounts as
+// ServiceAccountSummary rows (FUT-082). It is the gRPC surface over the same
+// ServiceAccountService.List the HTTP handler uses, so registry-management can
+// render the SA admin list via a single BFF→gRPC hop.
+//
+// Behaviour:
+//   - saService not wired → codes.Unimplemented (mirrors the HTTP handler's
+//     requireSAService 501 posture; the feature is simply off).
+//   - tenant_id not a UUID → codes.InvalidArgument.
+//   - page_size: 0 defaults to 50, values above 200 are capped at 200.
+//
+// The repository's ServiceAccountWithStats rows are mapped to the proto
+// summary: Disabled is derived from DisabledAt (non-nil ⇒ disabled) and
+// LastUsedAt is emitted only when a key has actually been used (nil otherwise).
+func (h *GRPCHandler) ListServiceAccounts(ctx context.Context, req *authv1.ListServiceAccountsRequest) (*authv1.ListServiceAccountsResponse, error) {
+	// The SA feature is optional: when the service is not wired the RPC is
+	// unavailable. Return Unimplemented (not a panic) so callers can degrade.
+	if h.saService == nil {
+		return nil, status.Error(codes.Unimplemented, "service accounts are not enabled")
+	}
+
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+
+	// Normalise page_size: default when unset, cap at the max to bound the scan.
+	pageSize := int(req.GetPageSize())
+	if pageSize <= 0 {
+		pageSize = listServiceAccountsDefaultPageSize
+	}
+	if pageSize > listServiceAccountsMaxPageSize {
+		pageSize = listServiceAccountsMaxPageSize
+	}
+
+	rows, nextToken, err := h.saService.List(ctx, tenantID, req.GetIncludeDisabled(), pageSize, req.GetPageToken())
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "list service accounts")
+	}
+
+	// Map each repository row to a proto summary. Disabled is a derived flag
+	// (DisabledAt non-nil); LastUsedAt is only populated when a key has been
+	// used so the FE can distinguish "never used" from "used at epoch".
+	summaries := make([]*authv1.ServiceAccountSummary, len(rows))
+	for i, r := range rows {
+		s := &authv1.ServiceAccountSummary{
+			Id:             r.ID.String(),
+			TenantId:       r.TenantID.String(),
+			Name:           r.Name,
+			Description:    r.Description,
+			AllowedScopes:  r.AllowedScopes,
+			Disabled:       r.DisabledAt != nil,
+			ActiveKeyCount: r.ActiveKeyCount,
+			CreatedAt:      timestamppb.New(r.CreatedAt),
+		}
+		if r.LastUsedAt != nil {
+			s.LastUsedAt = timestamppb.New(*r.LastUsedAt)
+		}
+		summaries[i] = s
+	}
+
+	return &authv1.ListServiceAccountsResponse{
+		ServiceAccounts: summaries,
+		NextPageToken:   nextToken,
+	}, nil
 }
 
 // scopesToProto wraps a flat scope list as a single wildcard RepositoryAccess.
