@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
@@ -127,13 +126,9 @@ func (h *Handler) effectiveGlobalAdmin(r *http.Request) bool {
 		return true
 	}
 
-	// Single-mode shortcut: any tenant-admin qualifies as platform-admin when
-	// the whole deployment is a single tenant.
-	if h.deploymentMode == loader.DeploymentModeSingle {
-		return hasScopedRole(resp.GetRoleAssignments(), "tenant", tenantID, "admin")
-	}
-
-	return false
+	// The platform is single-tenant only (ADR-0031): any tenant-admin is the
+	// effective platform-admin, because the tenant IS the deployment.
+	return hasScopedRole(resp.GetRoleAssignments(), "tenant", tenantID, "admin")
 }
 
 // getUserAssignments fetches the caller's full role-assignment list for the

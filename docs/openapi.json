@@ -1143,77 +1143,9 @@
         "tags": [
           "admin"
         ]
-      },
-      "post": {
-        "operationId": "post_api_v1_admin_tenants",
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "POST /api/v1/admin/tenants",
-        "tags": [
-          "admin"
-        ]
       }
     },
     "/api/v1/admin/tenants/{tenantID}": {
-      "delete": {
-        "operationId": "delete_api_v1_admin_tenants_tenantID",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "tenantID",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "DELETE /api/v1/admin/tenants/{tenantID}",
-        "tags": [
-          "admin"
-        ]
-      },
       "get": {
         "operationId": "get_api_v1_admin_tenants_tenantID",
         "parameters": [

@@ -24,7 +24,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
@@ -118,16 +117,15 @@ func (s *pga5FakeAuthServer) CountTenantUsers(_ context.Context, _ *authv1.Count
 
 // ── newPGA5Env ─────────────────────────────────────────────────────────────
 
-// pga5Env holds the full bufconn stack for Phase 5.1 gate tests. The
-// deploymentMode is injected via WithDeploymentInfo so tests can pick
-// single vs multi without rebuilding the whole stack.
+// pga5Env holds the full bufconn stack for Phase 5.1 gate tests.
 type pga5Env struct {
 	srv *httptest.Server
 }
 
 // newPGA5Env builds a bufconn stack with pga5FakeAuthServer and a minimal
-// tenant/meta/audit server. deploymentMode must be "single" or "multi".
-func newPGA5Env(t *testing.T, deploymentMode loader.DeploymentMode) *pga5Env {
+// tenant/meta/audit server. The platform is single-tenant only (ADR-0031), so
+// there is no deployment-mode branch.
+func newPGA5Env(t *testing.T) *pga5Env {
 	t.Helper()
 
 	authLis := bufconn.Listen(bufSize)
@@ -183,7 +181,7 @@ func newPGA5Env(t *testing.T, deploymentMode loader.DeploymentMode) *pga5Env {
 		healthpb.NewHealthClient(dial(authLis)),
 	).
 		WithTenantClient(tenantv1.NewTenantServiceClient(dial(tenantLis))).
-		WithDeploymentInfo(deploymentMode, "test")
+		WithDeploymentInfo("test")
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -208,10 +206,10 @@ func (e *pga5Env) get(t *testing.T, path, token string) *http.Response {
 // ── Scenario tests ────────────────────────────────────────────────────────────
 
 // TestRequirePlatformAdmin_GlobalAdmin_Allowed verifies that a user with
-// is_global_admin=true passes the requirePlatformAdmin gate in multi-mode.
-// This is the canonical Phase 5.1 acceptance path.
+// is_global_admin=true passes the requirePlatformAdmin gate. This is the
+// canonical Phase 5.1 acceptance path.
 func TestRequirePlatformAdmin_GlobalAdmin_Allowed(t *testing.T) {
-	env := newPGA5Env(t, loader.DeploymentModeMulti)
+	env := newPGA5Env(t)
 	resp := env.get(t, "/api/v1/admin/tenants/"+detailTenantID, pga5Token)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("global-admin user: expected 200, got %d (is_global_admin=true must pass the gate)", resp.StatusCode)
@@ -220,43 +218,30 @@ func TestRequirePlatformAdmin_GlobalAdmin_Allowed(t *testing.T) {
 
 // TestRequirePlatformAdmin_LegacyMarkerOnly_Denied verifies that a user whose
 // GetUserPermissions returns only the legacy (admin, org, '*') marker — but
-// is_global_admin=false — is denied in multi-mode.
+// is_global_admin=false and no tenant-admin role — is denied.
 //
 // This is the core security regression test for Phase 5.1: the (admin, org, '*')
 // convention could previously be minted by anyone who could call GrantRole with
-// scope_value='*'. The typed column removes that footgun, and the gate must
-// not fall back to the legacy marker in multi-mode.
+// scope_value='*'. The typed column removes that footgun; the gate must not
+// fall back to the legacy org-scoped marker. Note the single-tenant tenant-admin
+// shortcut (ADR-0031) does NOT rescue this user — an org-scoped '*' marker is
+// not a tenant-scoped admin role.
 func TestRequirePlatformAdmin_LegacyMarkerOnly_Denied(t *testing.T) {
-	env := newPGA5Env(t, loader.DeploymentModeMulti)
+	env := newPGA5Env(t)
 	resp := env.get(t, "/api/v1/admin/tenants/"+detailTenantID, legacyMarkerToken)
 	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("legacy-marker-only user: expected 403, got %d (legacy marker must be denied in multi-mode after Phase 5.1)", resp.StatusCode)
+		t.Errorf("legacy-marker-only user: expected 403, got %d (legacy org marker must be denied after Phase 5.1)", resp.StatusCode)
 	}
 }
 
-// TestRequirePlatformAdmin_SingleMode_TenantAdmin_Allowed verifies the
-// DEPLOYMENT_MODE=single shortcut: any tenant-admin qualifies as platform-admin
-// when the whole deployment is a single tenant.
-//
-// This prevents operators from needing to manually set is_global_admin for the
-// initial admin in a single-tenant deployment, where the only meaningful admin
-// is already the "platform" admin.
-func TestRequirePlatformAdmin_SingleMode_TenantAdmin_Allowed(t *testing.T) {
-	env := newPGA5Env(t, loader.DeploymentModeSingle)
+// TestRequirePlatformAdmin_TenantAdmin_Allowed verifies the single-tenant
+// shortcut (ADR-0031): any tenant-admin qualifies as platform-admin because the
+// tenant IS the deployment. This spares operators from manually setting
+// is_global_admin for the bootstrap admin.
+func TestRequirePlatformAdmin_TenantAdmin_Allowed(t *testing.T) {
+	env := newPGA5Env(t)
 	resp := env.get(t, "/api/v1/admin/tenants/"+detailTenantID, pga5TenantAdminToken)
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("tenant-admin in single-mode: expected 200, got %d (single-mode shortcut must qualify any tenant-admin)", resp.StatusCode)
-	}
-}
-
-// TestRequirePlatformAdmin_MultiMode_TenantAdmin_Denied verifies that the
-// tenant-admin shortcut only fires in single mode. In multi-mode, being a
-// tenant-admin does NOT make you a platform-admin — only is_global_admin=true
-// counts.
-func TestRequirePlatformAdmin_MultiMode_TenantAdmin_Denied(t *testing.T) {
-	env := newPGA5Env(t, loader.DeploymentModeMulti)
-	resp := env.get(t, "/api/v1/admin/tenants/"+detailTenantID, pga5TenantAdminToken)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("tenant-admin in multi-mode: expected 403, got %d (tenant-admin must NOT qualify as platform-admin in multi-mode)", resp.StatusCode)
+		t.Errorf("tenant-admin: expected 200, got %d (single-tenant shortcut must qualify any tenant-admin)", resp.StatusCode)
 	}
 }

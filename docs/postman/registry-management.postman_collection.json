@@ -487,62 +487,6 @@
           }
         },
         {
-          "name": "POST /api/v1/admin/tenants",
-          "request": {
-            "body": {
-              "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \n}"
-            },
-            "description": "POST /api/v1/admin/tenants",
-            "header": [],
-            "method": "POST",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "tenants"
-              ],
-              "raw": "{{baseUrl}}/api/v1/admin/tenants"
-            }
-          }
-        },
-        {
-          "name": "DELETE /api/v1/admin/tenants/{tenantID}",
-          "request": {
-            "description": "DELETE /api/v1/admin/tenants/{tenantID}",
-            "header": [],
-            "method": "DELETE",
-            "url": {
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "tenants",
-                ":tenantID"
-              ],
-              "raw": "{{baseUrl}}/api/v1/admin/tenants/:tenantID",
-              "variable": [
-                {
-                  "key": "tenantID",
-                  "value": "{{tenantID}}"
-                }
-              ]
-            }
-          }
-        },
-        {
           "name": "GET /api/v1/admin/tenants/{tenantID}",
           "request": {
             "description": "GET /api/v1/admin/tenants/{tenantID}",

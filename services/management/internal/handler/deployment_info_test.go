@@ -8,18 +8,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/steveokay/oci-janus/libs/config/loader"
 )
 
-// TestHandleDeploymentInfo verifies the public read-only endpoint that
-// the FE consumes at /api/v1/deployment-info. Unauthenticated by design —
-// it returns only the deployment posture, not tenant data.
+// TestHandleDeploymentInfo verifies the public read-only endpoint the FE
+// consumes at /api/v1/deployment-info. Unauthenticated by design — it returns
+// only the build version. The platform is single-tenant only (ADR-0031), so
+// the historical `deployment_mode` field was removed.
 func TestHandleDeploymentInfo(t *testing.T) {
-	h := &Handler{
-		deploymentMode: loader.DeploymentModeSingle,
-		buildVersion:   "test-1.0",
-	}
+	h := &Handler{buildVersion: "test-1.0"}
 
 	req := httptest.NewRequest("GET", "/api/v1/deployment-info", nil)
 	rr := httptest.NewRecorder()
@@ -28,30 +24,12 @@ func TestHandleDeploymentInfo(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, "application/json", rr.Header().Get("Content-Type"))
 
-	var body struct {
-		Mode    string `json:"deployment_mode"`
-		Version string `json:"version"`
-	}
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	require.Equal(t, "single", body.Mode)
-	require.Equal(t, "test-1.0", body.Version)
-}
-
-// TestHandleDeploymentInfo_MultiMode verifies that multi mode is correctly
-// returned in the response.
-func TestHandleDeploymentInfo_MultiMode(t *testing.T) {
-	h := &Handler{
-		deploymentMode: loader.DeploymentModeMulti,
-		buildVersion:   "v2.0.0",
-	}
-
-	req := httptest.NewRequest("GET", "/api/v1/deployment-info", nil)
-	rr := httptest.NewRecorder()
-	h.handleDeploymentInfo(rr, req)
-
-	require.Equal(t, http.StatusOK, rr.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	require.Equal(t, "multi", body["deployment_mode"])
-	require.Equal(t, "v2.0.0", body["version"])
+	require.Equal(t, "test-1.0", body["version"])
+
+	// The deployment_mode field was removed — assert it's gone so a regression
+	// that re-introduces multi-tenant chrome gating is caught here.
+	_, hasMode := body["deployment_mode"]
+	require.False(t, hasMode, "deployment_mode must not be present (single-tenant only)")
 }

@@ -171,59 +171,6 @@ func (h *Handler) handleAdminListTenants(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// POST /api/v1/admin/tenants
-type adminCreateTenantBody struct {
-	Name string `json:"name"`
-	Plan string `json:"plan"`
-}
-
-func (h *Handler) handleAdminCreateTenant(w http.ResponseWriter, r *http.Request) {
-	if !h.requirePlatformAdmin(w, r) {
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	var body adminCreateTenantBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if body.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-
-	t, err := h.tenant.CreateTenant(r.Context(), &tenantv1.CreateTenantRequest{
-		Name: body.Name,
-		Plan: body.Plan,
-	})
-	if err != nil {
-		// Surface AlreadyExists / InvalidArgument distinctly so the UI can
-		// show a friendly "name already taken" message; everything else maps
-		// to 500 with a generic body so we don't leak driver detail.
-		if st, ok := status.FromError(err); ok {
-			switch st.Code() {
-			case codes.AlreadyExists:
-				writeError(w, http.StatusConflict, "tenant name already in use")
-				return
-			case codes.InvalidArgument:
-				writeError(w, http.StatusBadRequest, st.Message())
-				return
-			}
-		}
-		slog.Error("admin: CreateTenant", "err", err, "name", body.Name)
-		writeError(w, http.StatusInternalServerError, "failed to create tenant")
-		return
-	}
-
-	// Best-effort audit. RabbitMQ publish failures must not block the response
-	// because the create already committed; registry-audit's RabbitMQ consumer
-	// is the same path that processes every other platform event.
-	h.publishTenantEvent(r, events.RoutingTenantCreated, t.GetTenantId(), body.Name)
-
-	writeJSON(w, http.StatusCreated, tenantToAdminResp(t))
-}
-
 // GET /api/v1/admin/tenants/{tenantID}
 //
 // FE-API-028 composition: registry-tenant gives identity (name/plan/slug/host),
@@ -417,27 +364,6 @@ func (h *Handler) publishTenantPlanChanged(r *http.Request, tenantID, newPlan st
 	if err := h.pub.Publish(r.Context(), events.RoutingTenantPlanChanged, evt); err != nil {
 		slog.WarnContext(r.Context(), "admin: publish tenant.plan_changed", "err", err, "tenant_id", tenantID)
 	}
-}
-
-// DELETE /api/v1/admin/tenants/{tenantID}
-func (h *Handler) handleAdminDeleteTenant(w http.ResponseWriter, r *http.Request) {
-	if !h.requirePlatformAdmin(w, r) {
-		return
-	}
-	tenantID := r.PathValue("tenantID")
-	if _, err := uuid.Parse(tenantID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid tenant id")
-		return
-	}
-
-	if _, err := h.tenant.DeleteTenant(r.Context(), &tenantv1.DeleteTenantRequest{TenantId: tenantID}); err != nil {
-		slog.Error("admin: DeleteTenant", "err", err)
-		writeError(w, http.StatusInternalServerError, "failed to delete tenant")
-		return
-	}
-
-	h.publishTenantEvent(r, events.RoutingTenantDeleted, tenantID, "")
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // publishTenantEvent emits a tenant.created / tenant.deleted RabbitMQ event so

@@ -5,17 +5,15 @@ import (
 	"net/http"
 )
 
-// handleDeploymentInfo returns the deployment posture the FE needs to decide
-// which chrome to render (tenant switcher, plan badge, signup form, etc.).
+// handleDeploymentInfo returns the deployment's build version.
 //
 // Public + unauthenticated by design — leaks NO tenant data, only the binary's
-// build metadata + DEPLOYMENT_MODE. Cached aggressively by the FE.
-//
-// Phase 1.4 of REDESIGN-001. See CLAUDE.md decision log.
+// build metadata. Cached aggressively by the FE. The platform is single-tenant
+// only (ADR-0031), so the historical `deployment_mode` field was removed — the
+// FE no longer branches on it.
 func (h *Handler) handleDeploymentInfo(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
-		"deployment_mode": string(h.deploymentMode),
-		"version":         h.buildVersion,
+		"version": h.buildVersion,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
