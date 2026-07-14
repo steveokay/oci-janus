@@ -1424,6 +1424,36 @@ Breaking changes:
 
 ---
 
+## Phase 9 — Retire the `multi` posture (single-tenant permanent)
+
+**Added 2026-07-14 · [ADR-0031](../../docs/adr/0031-retire-multi-tenant-posture.md), reverses the "keep `multi` as opt-in" half of ADR-0025 · [[memory:single-tenant-permanent-direction]].**
+
+Single-tenant is now the **permanent** product direction. Phase 9 removes the dormant `multi` posture that Phase 3 soft-hid. Scope confirmed by a 2026-07-14 surface-map survey: ~1500–2000 LOC across 6 areas, LOW risk (paths already mode-separated).
+
+**Guiding split — this is NOT a `tenant_id` removal (that stays frozen). Delete the toggle + SaaS re-exposure; harden the single path to always-on:**
+
+| KEEP (make unconditional) | REMOVE |
+|---|---|
+| `SingleTenantInjector` (always on) | `DEPLOYMENT_MODE` flag + `LoadDeploymentMode` + all `== multi` branches |
+| `deployment_metadata` + `GetDeploymentMetadata` + `bootstrap.FetchTenantID` + `registry-auth bootstrap` CLI | BFF admin-tenants CRUD routes (5) + `handler.go` mode gate |
+| `CreateTenant` RPC — bootstrap-only, "reject 2nd tenant" guard becomes **always-on** (was mode-gated at `grpc.go:89`) | FE Settings→Platform *tenants* section, create/delete/detail dialogs, tenant switcher, topbar multi-chip |
+| `tenant_id` columns/proto (frozen) | `/api/v1/deployment-info` mode field + `useDeploymentInfo` gating (keep version if wanted) |
+| Scanner/GC/retention (already have single-mode homes in Settings→Scanning/Housekeeping) | multi-only tests (e.g. `TestCreateTenant_MultiMode_*`) |
+
+**Sequencing (small PRs, low-risk first):**
+- **9.1 FE chrome** — drop the Platform *tenants* surface, dialogs, switcher, topbar multi-chip; collapse `useDeploymentInfo` mode gating (Scanning/Housekeeping already single-mode). Pure delete, no BE contract change.
+- **9.2 BFF** — unconditionally register (or delete) admin-tenants routes per keep/remove; drop the `deploymentMode` handler field + `handler.go:680` gate; drop the `deployment_mode` field from `/api/v1/deployment-info`.
+- **9.3 `SingleTenantInjector` always-on** — stop treating empty bootstrap-id as "multi no-op"; make injection unconditional across the 11 services (keep the interceptor + bootstrap fetch).
+- **9.4 tenant service** — make the `CreateTenant` 2nd-tenant guard unconditional; delete the `DeploymentMode` config field + handler param.
+- **9.5 config/loader** — delete `DeploymentMode` type + `LoadDeploymentMode` + the field from all service configs + `.env.example`/compose/helm mentions.
+- **9.6 docs** — rewrite CLAUDE.md §1/§9 + `docs/SERVICES.md` dual-mode language to single-only (code changes first, then rules); README hero drops "optional multi-tenant capability"; note the v2→v3 breaking change (a `=multi` deploy is no longer supported).
+
+**Gotchas (from survey):** (1) the injector/bootstrap wiring is spread across 11 services — mechanical but wide; (2) the compose `registry-bootstrap` one-shot dependency chain must keep working (it does — bootstrap stays); (3) don't delete `CreateTenant`/`deployment_metadata` (they're single-tenant machinery, not multi).
+
+**Status:** NOT STARTED — tracked, awaiting go-ahead to implement.
+
+---
+
 ## Cross-cutting concerns
 
 ### Testing strategy

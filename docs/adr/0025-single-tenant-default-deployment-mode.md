@@ -1,6 +1,6 @@
 # ADR-0025: Self-hosted single-tenant by default; `DEPLOYMENT_MODE=single|multi`
 
-**Status:** ACCEPTED.
+**Status:** ACCEPTED; the "keep `multi` as opt-in" half SUPERSEDED by ADR-0031 (2026-07-14). The single-tenant-by-default posture stands.
 **Date:** 2026-06-26.
 **Phase:** REDESIGN-001 Phase 0.
 
