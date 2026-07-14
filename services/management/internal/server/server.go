@@ -238,8 +238,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	srv := &http.Server{
 		Addr: addr,
-		// Apply CORS then RequestID on every request, including preflight OPTIONS.
-		Handler:      middleware.CORS(corsOrigin)(middleware.RequestID(mux)),
+		// SecureHeaders (§17) → CORS → RequestID → mux. See buildHandler.
+		Handler:      buildHandler(mux, corsOrigin),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,

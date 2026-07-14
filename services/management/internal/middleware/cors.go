@@ -23,15 +23,15 @@ import (
 //     matches the allowlist; otherwise omit the header (browser blocks)
 //   - Emit other CORS headers only when an allowed Origin is present, so
 //     non-CORS responses stay clean
-//   - Still emit the X-Content-Type-Options + X-Frame-Options security headers
-//     on every response (independent of CORS)
+//
+// The CLAUDE.md §17 security headers (X-Content-Type-Options, X-Frame-Options,
+// X-XSS-Protection) are NOT set here — they are owned by the shared
+// httpmiddleware.SecureHeaders wrapper that sits outside this middleware (see
+// server.buildHandler), so they cover CORS preflight 204s and auth 401s too.
 func CORS(allowedOrigins string) func(http.Handler) http.Handler {
 	allowlist := parseOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Security headers required on every response — CLAUDE.md §17.
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("X-Frame-Options", "DENY")
 			// Vary: Origin so caches don't serve a CORS response for one origin
 			// in response to a request from a different origin.
 			w.Header().Set("Vary", "Origin")
