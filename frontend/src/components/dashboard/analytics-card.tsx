@@ -140,7 +140,7 @@ function AnalyticsBody({
         <p className="text-[11px] text-[var(--color-fg-subtle)]">
           No {metric} recorded in this window.
           {metric === "pulls"
-            ? " Pull events are not yet emitted by the audit consumer — the series will populate once that wiring lands."
+            ? " Pull events are sampled (PULL_EVENT_SAMPLE_RATE) — a quiet window, or a low sample rate, can read as zero."
             : ""}
         </p>
       ) : null}

@@ -10,25 +10,24 @@ import (
 
 // Routing keys — all events are published to the registry.events topic exchange.
 const (
-	RoutingPushCompleted        = "push.completed"
-	RoutingPushFailed           = "push.failed"
-	RoutingManifestDeleted      = "manifest.deleted"
-	RoutingTagDeleted           = "tag.deleted"
-	RoutingScanQueued           = "scan.queued"
-	RoutingScanCompleted        = "scan.completed"
-	RoutingScanPolicyBlocked    = "scan.policy_blocked"
-	RoutingWebhookQueued        = "webhook.queued"
-	RoutingWebhookDelivered     = "webhook.delivered"
-	RoutingWebhookFailed        = "webhook.failed"
-	RoutingGCRunStarted         = "gc.run.started"
-	RoutingGCRunCompleted       = "gc.run.completed"
-	RoutingImageSigned          = "image.signed"
-	RoutingTenantCreated        = "tenant.created"
-	RoutingTenantDeleted        = "tenant.deleted"
-	RoutingTenantRenamed        = "tenant.renamed"      // FE-API-029
-	RoutingTenantPlanChanged    = "tenant.plan_changed" // FE-API-029
-	RoutingTenantDomainVerified = "tenant.domain.verified"
-	RoutingStoreQueued          = "store.queued" // proxy background store
+	RoutingPushCompleted     = "push.completed"
+	RoutingPushFailed        = "push.failed"
+	RoutingManifestDeleted   = "manifest.deleted"
+	RoutingTagDeleted        = "tag.deleted"
+	RoutingScanQueued        = "scan.queued"
+	RoutingScanCompleted     = "scan.completed"
+	RoutingScanPolicyBlocked = "scan.policy_blocked"
+	RoutingWebhookQueued     = "webhook.queued"
+	RoutingWebhookDelivered  = "webhook.delivered"
+	RoutingWebhookFailed     = "webhook.failed"
+	RoutingGCRunStarted      = "gc.run.started"
+	RoutingGCRunCompleted    = "gc.run.completed"
+	RoutingImageSigned       = "image.signed"
+	RoutingTenantCreated     = "tenant.created"
+	RoutingTenantDeleted     = "tenant.deleted"
+	RoutingTenantRenamed     = "tenant.renamed"      // FE-API-029
+	RoutingTenantPlanChanged = "tenant.plan_changed" // FE-API-029
+	RoutingStoreQueued       = "store.queued"        // proxy background store
 
 	// RoutingCachePopulated (FUT-017) — emitted by services/proxy after
 	// every successful cache write (cacheManifest upsert). Subscribed by
@@ -200,6 +199,70 @@ type PushCompletedPayload struct {
 	// stay compatible; consumer treats empty as "unknown — scan anyway"
 	// so the scanner stays correct against pre-Batch-5 deployments.
 	ArtifactType string `json:"artifact_type,omitempty"`
+}
+
+// PushFailedPayload is the payload for push.failed events (FUT-081). The
+// shared identifying fields reuse PushCompletedPayload's json tags so the audit
+// consumer can unmarshal either into PushCompletedPayload; Reason is the extra
+// field explaining the rejection (e.g. "quota_exceeded", "tag_immutable",
+// "internal_error").
+type PushFailedPayload struct {
+	RepositoryName string `json:"repository_name"`
+	RepoID         string `json:"repo_id"`
+	Tag            string `json:"tag"`
+	PushedBy       string `json:"pushed_by"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// ManifestDeletedPayload is the payload for manifest.deleted events (FUT-081),
+// published by services/core when a manifest is removed by digest.
+type ManifestDeletedPayload struct {
+	RepositoryName string `json:"repository_name"`
+	RepoID         string `json:"repo_id"`
+	Digest         string `json:"digest"`
+	DeletedBy      string `json:"deleted_by"`
+}
+
+// TagDeletedPayload is the payload for tag.deleted events (FUT-081), published
+// by services/core when a tag is removed (the underlying manifest survives per
+// OCI spec §4.4).
+type TagDeletedPayload struct {
+	RepositoryName string `json:"repository_name"`
+	RepoID         string `json:"repo_id"`
+	Tag            string `json:"tag"`
+	DeletedBy      string `json:"deleted_by"`
+}
+
+// WebhookQueuedPayload is the payload for webhook.queued events (FUT-081),
+// published by services/webhook when a delivery record is enqueued for an
+// endpoint in response to a subscribed event.
+type WebhookQueuedPayload struct {
+	DeliveryID string `json:"delivery_id"`
+	EndpointID string `json:"endpoint_id"`
+	EventType  string `json:"event_type"`
+}
+
+// WebhookDeliveredPayload is the payload for webhook.delivered events
+// (FUT-081), published by services/webhook after a delivery succeeds.
+type WebhookDeliveredPayload struct {
+	DeliveryID string `json:"delivery_id"`
+	EndpointID string `json:"endpoint_id"`
+	URL        string `json:"url"`
+	EventType  string `json:"event_type"`
+	Attempts   int    `json:"attempts"`
+}
+
+// WebhookFailedPayload is the payload for webhook.failed events (FUT-081),
+// published by services/webhook on a failed delivery attempt. Dead is true when
+// retries are exhausted and the delivery has been moved to the dead state.
+type WebhookFailedPayload struct {
+	DeliveryID string `json:"delivery_id"`
+	EndpointID string `json:"endpoint_id"`
+	URL        string `json:"url"`
+	EventType  string `json:"event_type"`
+	Error      string `json:"error"`
+	Attempts   int    `json:"attempts"`
+	Dead       bool   `json:"dead"`
 }
 
 // ScanCompletedPayload is the payload for scan.completed events.

@@ -418,24 +418,40 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 		}
 
 	case events.RoutingManifestDeleted:
+		// FUT-081: registry-core now publishes a typed ManifestDeletedPayload
+		// carrying the deleter + repo + digest, so the audit row records WHO
+		// deleted WHAT instead of a raw JSON blob.
+		var p events.ManifestDeletedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor, actorType := p.DeletedBy, "user"
+		if actor == "" {
+			actor, actorType = "system", "system"
+		}
 		return &repository.AuditEvent{
 			TenantID:   tenantID,
-			ActorID:    "system",
-			ActorType:  "system",
+			ActorID:    actor,
+			ActorType:  actorType,
 			Action:     "delete.manifest",
-			Resource:   string(event.Payload),
+			Resource:   p.RepositoryName + "@" + p.Digest,
 			Outcome:    "success",
 			Metadata:   meta,
 			OccurredAt: now,
 		}
 
 	case events.RoutingTagDeleted:
+		// FUT-081: typed TagDeletedPayload — see manifest.deleted above.
+		var p events.TagDeletedPayload
+		_ = json.Unmarshal(event.Payload, &p)
+		actor, actorType := p.DeletedBy, "user"
+		if actor == "" {
+			actor, actorType = "system", "system"
+		}
 		return &repository.AuditEvent{
 			TenantID:   tenantID,
-			ActorID:    "system",
-			ActorType:  "system",
+			ActorID:    actor,
+			ActorType:  actorType,
 			Action:     "delete.tag",
-			Resource:   string(event.Payload),
+			Resource:   p.RepositoryName + ":" + p.Tag,
 			Outcome:    "success",
 			Metadata:   meta,
 			OccurredAt: now,
@@ -845,20 +861,9 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			OccurredAt: now,
 		}
 
-	// tenant.domain.verified — keep mapped even though RM-001 plans to
-	// remove this event when Phase 2.1 ships. The audit table must remain
-	// valid until the routing key is removed from events.go.
-	case events.RoutingTenantDomainVerified:
-		return &repository.AuditEvent{
-			TenantID:   tenantID,
-			ActorID:    "system",
-			ActorType:  "system",
-			Action:     "tenant.domain.verify",
-			Resource:   string(event.Payload),
-			Outcome:    "success",
-			Metadata:   meta,
-			OccurredAt: now,
-		}
+	// FUT-081: the tenant.domain.verified case was removed here along with its
+	// routing-key constant — custom domains were removed in RM-001, so the
+	// event can never be published.
 
 	// store.queued is emitted by registry-proxy when a background blob
 	// store fails and needs a retry. Auditing it gives operators a trail

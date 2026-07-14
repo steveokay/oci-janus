@@ -2437,7 +2437,36 @@ Below is only what was genuinely untracked.
   local-disk / plaintext-PDF persistence deferral stays tracked via
   `docs/SERVICES.md` §624 `TODO(prod)` — object storage + signed URLs.)
 
-#### FUT-081 — Missing event publishers: deletions + webhook outcomes never reach the audit trail — **Tier 1 (audit completeness)**
+#### FUT-081 — Missing event publishers: deletions + webhook outcomes never reach the audit trail — ✅ SHIPPED 2026-07-14 (branch `feat/fut-081-event-publishers`)
+- **Shipped:** the six missing publishers are now wired (the audit `mapEvent`
+  cases already existed — this was purely a publisher gap):
+  - **registry-core** publishes `manifest.deleted` / `tag.deleted` from
+    `DeleteManifest` (typed `ManifestDeletedPayload` / `TagDeletedPayload`
+    carrying deleter + repo + digest/tag) and `push.failed` from the
+    manifest-push error paths (`PushFailedPayload`, reason ∈ {quota_exceeded,
+    tag_immutable, internal_error}) via a new `RecordPushFailed`. Best-effort
+    publish; a broker hiccup never fails a committed delete/response.
+  - **registry-webhook** gained a publisher (it had none) and emits
+    `webhook.queued` on enqueue + `webhook.delivered` / `webhook.failed`
+    (dead=true once retries exhausted) from the delivery loop, with a loop
+    guard that drops any inbound `webhook.*` event (the consumer binds `#`).
+  - **registry-audit** consumer now parses the typed delete payloads (real
+    actor + `repo@digest` / `repo:tag` resource instead of a raw JSON blob);
+    the dead `tenant.domain.verified` case + routing-key constant were
+    removed (custom domains gone, RM-001).
+  - **Stale-comment fixes:** `analytics-card.tsx` + audit `analytics.go` no
+    longer claim "pull events aren't emitted" — pull.image has been mapped
+    since FE-API-042 (a quiet window / low PULL_EVENT_SAMPLE_RATE reads as
+    zero, which is correct).
+  - TDD throughout (core delete + push.failed + webhook lifecycle tests,
+    RED→GREEN); spec-lint + golangci-lint + gofmt + all four FE gates green.
+    EVENTS.md updated.
+- **Deferred (tracked FUT-081 follow-up):** typing + actually publishing the
+  `auth.provider_*` events. They were documented in EVENTS.md as published by
+  the SSO admin handler but **nothing emits them** (FE-API-034's handler does
+  the DB write only) — EVENTS.md is now honest (marked PLANNED). Wiring the
+  publisher + typed payloads (like `rbac.role_*` / `service_account.lifecycle`)
+  is a small follow-up.
 - **Why:** five routing keys documented as live in `docs/EVENTS.md`
   have **no publisher anywhere**: `manifest.deleted` / `tag.deleted`
   (core publishes only `push.completed` + `pull.image` — deletions are
