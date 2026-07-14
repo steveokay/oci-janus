@@ -48,7 +48,18 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   designed; the new `user_sessions` rows still carry `tenant_id` (populated
   with the bootstrap tenant id) per the mode-agnostic schema rule.
 
-### 2. Tag immutability + image promotion workflow
+### 2. Tag immutability + image promotion workflow — DONE (immutability PR #25; promotion FUT-020 / PR #231 + #234 + #235, shipped 2026-06-25)
+- **Status note (2026-07-15):** this was a pre-implementation sketch that was
+  never marked done after the work shipped under two separate lanes. Both
+  halves are live: **tag immutability** (`repositories.immutable_tags` +
+  per-tag `tags.immutable` pin, migration `00014`, core `PutManifest`
+  preflight, FE `RepoImmutabilitySection` + pin pill) landed in PR #25;
+  **image promotion** shipped as **FUT-020** (see the FUT-020 entry below) via
+  PR #231 + follow-ups #234/#235 — `promotions` table (`00018`),
+  `PromoteTag`/`ListPromotions` RPCs, `image.promoted` event, BFF routes, and
+  the `PromoteTagDialog` + `PromotionsTab` FE. The one deferred slice from the
+  sketch below — *optionally re-sign the manifest on promote* — is not wired
+  (services/signer exists but is not called from the promote path).
 - **Why:** Without an immutability flag, an attacker (or a sleepy
   engineer) can re-push `myapp:1.0` and silently change what every
   consumer pulls. Image promotion (dev → staging → prod) is also
