@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { PromoteTagDialog } from "../PromoteTagDialog";
 
 // Tests for the FUT-020 PromoteTagDialog. Mocks the promotions API so
@@ -57,6 +58,8 @@ function renderDialog(open = true) {
 
 describe("PromoteTagDialog", () => {
   beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
     mockMutate.mockReset();
     mockMutate.mockResolvedValue({
       id: "prom-1",
@@ -180,5 +183,82 @@ describe("PromoteTagDialog", () => {
     expect(mockMutate).toHaveBeenCalledTimes(1);
     const arg = mockMutate.mock.calls[0][0] as { create_if_missing?: boolean };
     expect(arg.create_if_missing).toBe(true);
+  });
+
+  // FUT-020 follow-up — the re-sign switch must default off and its ON
+  // state flows into the mutation payload as re_sign_on_promote. Off state
+  // omits the key so the default promote-only path keeps a minimal payload.
+  it("forwards re_sign_on_promote when the re-sign switch is toggled on", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(
+      screen.getByRole("switch", {
+        name: /re-sign the destination manifest after promoting/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: /^promote$/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const arg = mockMutate.mock.calls[0][0] as { re_sign_on_promote?: boolean };
+    expect(arg.re_sign_on_promote).toBe(true);
+  });
+
+  it("does not forward re_sign_on_promote when the switch is left off", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole("button", { name: /^promote$/i }));
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const arg = mockMutate.mock.calls[0][0] as { re_sign_on_promote?: boolean };
+    expect(arg.re_sign_on_promote).toBeUndefined();
+  });
+
+  it("mentions the signature in the success toast when the BFF re-signed", async () => {
+    const user = userEvent.setup();
+    mockMutate.mockResolvedValueOnce({
+      id: "prom-1",
+      dst_org: "acme",
+      dst_repo: "api",
+      dst_tag: "prod",
+      src_org: "acme",
+      src_repo: "api",
+      src_tag: "v1.2.3",
+      src_digest: "sha256:abc",
+      dst_digest: "sha256:abc",
+      promoted_at: "2026-07-01T00:00:00Z",
+      re_signed: true,
+    });
+    renderDialog();
+    await user.click(screen.getByRole("button", { name: /^promote$/i }));
+
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(/signed/i);
+  });
+
+  it("warns in the toast when a requested re-sign did not complete", async () => {
+    const user = userEvent.setup();
+    mockMutate.mockResolvedValueOnce({
+      id: "prom-1",
+      dst_org: "acme",
+      dst_repo: "api",
+      dst_tag: "prod",
+      src_org: "acme",
+      src_repo: "api",
+      src_tag: "v1.2.3",
+      src_digest: "sha256:abc",
+      dst_digest: "sha256:abc",
+      promoted_at: "2026-07-01T00:00:00Z",
+      re_signed: false,
+      sign_error: "promotion succeeded but signing failed: kms unavailable",
+    });
+    renderDialog();
+    await user.click(screen.getByRole("button", { name: /^promote$/i }));
+
+    // The promotion still succeeded, so we use the success channel, but the
+    // copy must flag that signing did not complete so the operator retries.
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toMatch(
+      /signing did not complete/i,
+    );
   });
 });

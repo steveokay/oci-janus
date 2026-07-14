@@ -21,6 +21,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/middleware"
 )
 
@@ -49,6 +51,15 @@ type promoteRequest struct {
 	// does not exempt auto-creation from RBAC. Default false preserves
 	// the original 404-on-missing-dst behaviour.
 	CreateIfMissing bool `json:"create_if_missing,omitempty"`
+	// ReSignOnPromote (FUT-020 follow-up) — when true, after the promotion
+	// commits the BFF asks registry-signer to sign the DESTINATION repo +
+	// digest with the workspace default key, then publishes image.signed.
+	// The dev→prod hand-off is where an operator most wants a fresh
+	// signature bound to the destination reference. Opting in without a
+	// signer wired (SIGNER_GRPC_ADDR unset) is a 400 rejected BEFORE the
+	// promotion, so the caller is never told an unsigned image was signed.
+	// Default false keeps the original promote-only behaviour.
+	ReSignOnPromote bool `json:"re_sign_on_promote,omitempty"`
 }
 
 // promoteMaxNote caps operator-supplied notes at 256 chars. Kept small
@@ -73,6 +84,18 @@ type promotionResponse struct {
 	ActorUserID string    `json:"actor_user_id,omitempty"`
 	Note        string    `json:"note,omitempty"`
 	PromotedAt  time.Time `json:"promoted_at"`
+	// ReSigned reports whether the destination manifest carries a signature
+	// by the workspace key after this promotion. True when re_sign_on_promote
+	// was requested AND the signer confirmed a signature exists (freshly
+	// created OR already present for this digest+key). False when the caller
+	// did not opt in, or when signing failed (see SignError). Always present
+	// so the FE can render an unambiguous badge.
+	ReSigned bool `json:"re_signed"`
+	// SignError carries a human-readable reason when a requested re-sign did
+	// not complete. Empty on success or when re-sign was not requested. The
+	// promotion itself is already durable — this only reports the signing
+	// augmentation, which the caller can retry via the standalone sign route.
+	SignError string `json:"sign_error,omitempty"`
 }
 
 // toPromotionResponse converts a proto Promotion to its JSON wire form.
@@ -162,6 +185,16 @@ func (h *Handler) handlePromoteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail closed BEFORE promoting if the caller opted into re-signing but
+	// this deployment has no signer wired. Rejecting here (rather than
+	// promoting and then reporting re_signed=false) means we never leave a
+	// promoted tag the caller believes is signed when signing was impossible
+	// from the start — a configuration error, not a transient blip.
+	if body.ReSignOnPromote && h.signer == nil {
+		writeError(w, http.StatusBadRequest, "re_sign_on_promote requested but this deployment has no signer configured")
+		return
+	}
+
 	// Actor id from JWT sub. Empty when the caller is on a raw API key
 	// belonging to a service account with no shadow user id — the metadata
 	// handler treats empty as "anonymous" and passes nil into the tx.
@@ -237,7 +270,86 @@ func (h *Handler) handlePromoteTag(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusCreated, toPromotionResponse(prom))
+	resp := toPromotionResponse(prom)
+
+	// Re-sign on promote (FUT-020 follow-up). The signer-nil case was already
+	// rejected 400 above, so reaching here with the opt-in set means we have a
+	// wired signer. Signing is best-effort AFTER the durable promotion: a
+	// failure surfaces as re_signed=false + sign_error rather than rolling the
+	// promotion back, because the promotion is the primary (committed) action.
+	if body.ReSignOnPromote {
+		resp.ReSigned, resp.SignError = h.reSignPromotedManifest(r.Context(), tenantID, prom)
+	}
+
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// reSignPromotedManifest signs the promoted destination manifest with the
+// workspace default key and publishes image.signed on a fresh signature. It
+// returns (reSigned, signError):
+//
+//   - Fresh signature      → (true, "")   + image.signed published.
+//   - AlreadyExists        → (true, "")   NO event. Because promotion shares
+//     the source digest and signatures are keyed by (tenant, digest, key),
+//     re-signing a digest the workspace key already covers is a no-op that
+//     still satisfies "the promoted image is signed by this key" (admission
+//     in registry-core is digest-keyed). Idempotent, not an error.
+//   - Any other signer err → (false, msg) NO event. The promotion stays
+//     durable; the caller can retry via POST …/sign.
+//
+// signer_id is left empty so registry-signer falls back to the workspace
+// KeyID() — the promote flow signs as the deployment, not as a chosen SA.
+func (h *Handler) reSignPromotedManifest(ctx context.Context, tenantID string, prom *metadatav1.Promotion) (bool, string) {
+	dstRepo := prom.GetDstOrg() + "/" + prom.GetDstRepo()
+	signResp, err := h.signer.SignManifest(ctx, &signerv1.SignManifestRequest{
+		TenantId:       tenantID,
+		RepositoryName: dstRepo,
+		ManifestDigest: prom.GetDstDigest(),
+		SignerId:       "", // workspace default key
+	})
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
+			// The digest is already signed by the workspace key — the
+			// promoted image is admissible. Report success, publish nothing.
+			return true, ""
+		}
+		// Any other failure: the promotion stands, signing did not. Log
+		// loudly and tell the caller so they can retry via the sign route.
+		slog.Error("re-sign on promote", "err", err,
+			"dst", dstRepo+":"+prom.GetDstTag(), "digest", prom.GetDstDigest())
+		return false, "promotion succeeded but signing failed: " + err.Error()
+	}
+
+	// Fresh signature created — publish image.signed so audit + webhook +
+	// notification consumers see the promoted tag was signed. Mirrors the
+	// publish in handleSignManifest; a publish blip is logged, not fatal
+	// (the signature is already durable in the signer's store).
+	if h.pub != nil {
+		sig := signResp.GetSignature()
+		payload, _ := json.Marshal(events.ImageSignedPayload{
+			TenantID:        tenantID,
+			RepositoryName:  dstRepo,
+			Tag:             prom.GetDstTag(),
+			ManifestDigest:  prom.GetDstDigest(),
+			SignerID:        sig.GetSignerId(),
+			KeyID:           sig.GetKeyId(),
+			SignatureDigest: sig.GetSignatureDigest(),
+			SignedBy:        prom.GetActorUserId(),
+		})
+		evt := events.Event{
+			ID:         uuid.New().String(),
+			Type:       events.RoutingImageSigned,
+			TenantID:   tenantID,
+			OccurredAt: time.Now(),
+			Version:    "1.0",
+			Payload:    payload,
+		}
+		if err := h.pub.Publish(ctx, events.RoutingImageSigned, evt); err != nil {
+			slog.Error("publish image.signed (re-sign on promote)", "err", err,
+				"digest", prom.GetDstDigest())
+		}
+	}
+	return true, ""
 }
 
 // handleListPromotions returns recent promotions touching the given repo
