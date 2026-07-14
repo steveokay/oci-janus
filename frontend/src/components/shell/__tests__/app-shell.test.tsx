@@ -27,16 +27,6 @@ vi.mock("@/lib/api/workspace", () => ({
 vi.mock("@/lib/api/proxy-cache", () => ({
   useCacheStats: () => ({ data: { total_manifests: 0 } }),
 }));
-vi.mock("@/lib/api/deployment-info", () => ({
-  useDeploymentInfo: () => ({
-    data: { deployment_mode: "single", version: "dev" },
-  }),
-  // Topbar (mounted inside AppShell) now also imports isSingleMode from
-  // this module — mock it too so the render doesn't crash with
-  // "isSingleMode is not a function".
-  isSingleMode: (info: { deployment_mode: "single" | "multi" } | undefined) =>
-    info?.deployment_mode === "single",
-}));
 vi.mock("@/lib/auth/store", () => ({
   useAuthStore: (selector: (s: { claims: null }) => unknown) =>
     selector({ claims: null }),

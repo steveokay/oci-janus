@@ -2,15 +2,16 @@
 //
 // The "who/how" tab — identity, delivery, sign-in, lifecycle + deployment
 // posture:
-//   - Posture                   (read-only DeploymentInfoCard; single mode)
+//   - Posture                   (read-only DeploymentInfoCard)
 //   - Members + Organizations   (link → /members)
 //   - Workspace webhooks        (link → /webhooks)
-//   - SSO                       (read-only info card; configured in deploy files)
+//   - SSO                       (editable panel for global admins, else a
+//                                read-only info card)
 //   - Retention defaults        (link → per-org settings)
 //
 // The operational-maintenance surfaces (scan policy, scanner adapters, GC,
-// retention runs) moved to Settings › Housekeeping in the 2026-07-05 UI
-// cleanup; in multi mode they remain on the Platform tab.
+// retention runs) live on Settings › Scanning + Housekeeping. The platform is
+// single-tenant only (ADR-0031) — there is no separate Platform tab.
 //
 // Mode + role rules:
 //   - Parent route already gates the TAB itself on "caller has admin
@@ -36,7 +37,6 @@ import {
 import { SSOReadOnlyCard } from "@/components/admin/sso-readonly-card";
 import { SSOConfigPanel } from "@/components/settings/sso-config-panel";
 import { DeploymentInfoCard } from "@/components/admin/deployment-info-card";
-import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import { cn } from "@/lib/utils";
 
@@ -45,27 +45,19 @@ export const Route = createFileRoute("/_authenticated/settings/workspace")({
 });
 
 function WorkspaceTab(): React.ReactElement {
-  // In single mode the Workspace tab absorbs everything Platform-tab in
-  // multi mode would carry (Scanner / GC / Retention / Deployment info)
-  // because there IS no Platform tab in single mode — the deployment is
-  // the workspace is the platform.
+  // The platform is single-tenant only (ADR-0031) — the deployment is the
+  // workspace is the platform, so the Workspace tab carries the posture card
+  // and the SSO surface directly. There is no separate Platform tab.
   //
-  // We gate on the live deployment_mode rather than a build flag so an
-  // operator who flips DEPLOYMENT_MODE without restarting the dashboard
-  // sees the right surface on next page load.
-  const { data: deploymentInfo } = useDeploymentInfo();
-  const isSingleMode = deploymentInfo?.deployment_mode === "single";
   // Global admins get the editable SSO config panel; everyone else keeps the
   // read-only explainer card so the SSO section still documents the posture.
   const isGlobalAdmin = useIsGlobalAdmin();
 
   return (
     <div className="space-y-6">
-      {/* Posture — read-only deployment mode + version + TLS/mTLS flags.
-          Single mode only: in multi mode this lives on the Platform tab
-          (workspace == deployment == platform in single mode). Leads the tab
-          so an operator sees "what kind of deployment is this" first. */}
-      {isSingleMode ? <DeploymentInfoCard /> : null}
+      {/* Posture — read-only version + TLS/mTLS flags. Leads the tab so an
+          operator sees "what kind of deployment is this" first. */}
+      <DeploymentInfoCard />
 
       {/* Top row: Members/Orgs + Webhooks. Both are quick "go here" cards
           because their real surfaces are already polished elsewhere — the
@@ -89,12 +81,9 @@ function WorkspaceTab(): React.ReactElement {
         />
       </div>
 
-      {/* SSO read-only info card (shared SSOReadOnlyCard primitive). Per
-          RM-003/004 (Phase 2.2), SSO is now a global deployment-config
-          concern — there is no FE editor in single mode. Multi-mode operators
-          get the editable surface inside the Platform tab (4.2.d). For
-          everyone else this card explains the posture without misleading them
-          into thinking there's a toggle. */}
+      {/* SSO surface. Global admins get the editable config panel; everyone
+          else keeps the read-only explainer so the section still documents the
+          posture without implying they can change it. */}
       {isGlobalAdmin ? (
         <SSOConfigPanel />
       ) : (
@@ -104,8 +93,6 @@ function WorkspaceTab(): React.ReactElement {
               Edits require a deployment restart. To rotate a client secret or
               add a provider, update the deployment config and redeploy — the
               login screen picks up the change on the next page load.
-              Multi-tenant deployments expose an editable surface under Settings
-              › Platform.
             </>
           }
         />

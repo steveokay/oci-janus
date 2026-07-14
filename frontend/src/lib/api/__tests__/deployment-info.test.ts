@@ -3,12 +3,11 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// REDESIGN-001 Phase 4.1 — useDeploymentInfo() hook contract.
+// useDeploymentInfo() hook contract.
 //
-// The hook provides the immutable deployment posture (single vs multi mode)
-// to the FE so downstream chrome can render appropriately. This test file
-// ensures both "single" and "multi" modes are parsed correctly, and that
-// errors are surfaced properly.
+// The platform is single-tenant only (ADR-0031, REDESIGN-001 Phase 9) — the
+// historical `deployment_mode` flag was removed, so the hook now exposes only
+// the build `version` for the Workspace posture card.
 
 const getMock = vi.fn();
 vi.mock("../client", () => ({
@@ -28,48 +27,21 @@ function wrapper(): React.FC<{ children: React.ReactNode }> {
   return Wrap;
 }
 
-
 describe("useDeploymentInfo", () => {
   beforeEach(() => {
     getMock.mockReset();
   });
 
-  test("single mode response is parsed correctly", async () => {
+  test("exposes the build version", async () => {
     const { useDeploymentInfo } = await import("../deployment-info");
     getMock.mockResolvedValueOnce({
-      data: {
-        deployment_mode: "single",
-        version: "v1.0.0",
-      },
+      data: { version: "v1.0.0" },
     });
 
     const { result } = renderHook(() => useDeploymentInfo(), {
       wrapper: wrapper(),
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({
-      deployment_mode: "single",
-      version: "v1.0.0",
-    });
+    expect(result.current.data?.version).toBe("v1.0.0");
   });
-
-  test("multi mode response is parsed correctly", async () => {
-    const { useDeploymentInfo } = await import("../deployment-info");
-    getMock.mockResolvedValueOnce({
-      data: {
-        deployment_mode: "multi",
-        version: "dev",
-      },
-    });
-
-    const { result } = renderHook(() => useDeploymentInfo(), {
-      wrapper: wrapper(),
-    });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({
-      deployment_mode: "multi",
-      version: "dev",
-    });
-  });
-
 });

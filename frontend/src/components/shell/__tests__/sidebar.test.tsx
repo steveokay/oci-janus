@@ -39,11 +39,6 @@ vi.mock("@/lib/api/proxy-cache", () => ({
   useCacheStats: () => mockUseCacheStats(),
 }));
 
-// useDeploymentInfo — return a resolved single-mode deployment.
-vi.mock("@/lib/api/deployment-info", () => ({
-  useDeploymentInfo: () => ({ data: { deployment_mode: "single", version: "dev" } }),
-}));
-
 // useAuthStore — return null claims. The Platform group no longer exists,
 // so the claims value does not affect sidebar rendering in Phase 4.2.a.
 vi.mock("@/lib/auth/store", () => ({
