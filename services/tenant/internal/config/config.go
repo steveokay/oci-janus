@@ -33,13 +33,6 @@ type Config struct {
 	// to build the fallback host when no verified primary custom domain exists.
 	// Defaults to `registry.localhost` for local dev.
 	PlatformBaseDomain string `mapstructure:"PLATFORM_BASE_DOMAIN"`
-
-	// DeploymentMode controls whether this binary is the OSS self-hosted
-	// single-tenant default ("single") or the SaaS multi-tenant capability
-	// ("multi"). Populated via libs/config/loader.LoadDeploymentMode in Load();
-	// CreateTenant gates a second tenant insertion on this value
-	// (REDESIGN-001 Phase 3.2 / Q-001 — hard error).
-	DeploymentMode loader.DeploymentMode
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -67,15 +60,6 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-
-	// DEPLOYMENT_MODE is read separately because the loader rejects unknown
-	// values; viper would silently accept anything. Phase 3.2 needs this
-	// to gate CreateTenant from accepting a second tenant.
-	mode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("invalid DEPLOYMENT_MODE: %w", err)
-	}
-	cfg.DeploymentMode = mode
 
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)

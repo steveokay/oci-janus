@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/tenant/internal/repository"
 )
@@ -192,19 +191,10 @@ type testableHandler struct {
 	tenantv1.UnimplementedTenantServiceServer
 	repo               tenantRepo
 	platformBaseDomain string
-	// deploymentMode mirrors the production field; Phase 3.2 guard.
-	deploymentMode loader.DeploymentMode
 }
 
 func newTestable(repo tenantRepo) *testableHandler {
-	// Default to multi mode so existing tests (which predate Phase 3.2)
-	// keep their original behaviour. Guard-specific tests construct with
-	// newTestableWithMode below.
-	return &testableHandler{repo: repo, deploymentMode: loader.DeploymentModeMulti}
-}
-
-func newTestableWithMode(repo tenantRepo, mode loader.DeploymentMode) *testableHandler {
-	return &testableHandler{repo: repo, deploymentMode: mode}
+	return &testableHandler{repo: repo}
 }
 
 // Delegate all handler methods to the same logic as GRPCHandler by copying the
@@ -218,17 +208,15 @@ func (h *testableHandler) CreateTenant(ctx context.Context, req *tenantv1.Create
 	if !tenantNameRE.MatchString(req.Name) {
 		return nil, status.Errorf(codes.InvalidArgument, "tenant name must match ^[a-z0-9][a-z0-9-]{1,63}$")
 	}
-	// Phase 3.2 guard — mirror production logic so this fake handler stays
-	// behaviourally identical to GRPCHandler.
-	if h.deploymentMode != loader.DeploymentModeMulti {
-		count, err := h.repo.CountTenants(ctx)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "count tenants: %v", err)
-		}
-		if count >= 1 {
-			return nil, status.Error(codes.FailedPrecondition,
-				"DEPLOYMENT_MODE=single only allows one tenant; use the bootstrap CLI to (re)mint the first one")
-		}
+	// Single-tenant guard — mirror production logic so this fake handler stays
+	// behaviourally identical to GRPCHandler (ADR-0031 / Phase 9.4).
+	count, err := h.repo.CountTenants(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "count tenants: %v", err)
+	}
+	if count >= 1 {
+		return nil, status.Error(codes.FailedPrecondition,
+			"this deployment already owns its tenant; use the bootstrap CLI to (re)mint it")
 	}
 	plan := req.Plan
 	if plan == "" {
@@ -780,7 +768,7 @@ func TestNormalizeSlug_RenameDerivesValidHandle(t *testing.T) {
 // TestBuildTenantProto_WildcardHost verifies the simplified buildTenantProto
 // always produces the wildcard subdomain after REDESIGN-001 RM-001.
 func TestBuildTenantProto_WildcardHost(t *testing.T) {
-	h := New(nil, "registry.example.com", loader.DeploymentModeMulti)
+	h := New(nil, "registry.example.com")
 	rec := &repository.TenantRecord{ID: uuid.New(), Name: "Acme", Slug: "acme", CreatedAt: time.Now()}
 
 	got := h.buildTenantProto(rec)
@@ -796,7 +784,7 @@ func TestBuildTenantProto_WildcardHost(t *testing.T) {
 // TestBuildTenantProto_EmptySlug_UsesTenantID guards the edge case where slug
 // somehow ends up empty. The host must still be a parseable hostname.
 func TestBuildTenantProto_EmptySlug_UsesTenantID(t *testing.T) {
-	h := New(nil, "registry.example.com", loader.DeploymentModeMulti)
+	h := New(nil, "registry.example.com")
 	tid := uuid.New()
 	rec := &repository.TenantRecord{ID: tid, Name: "??", Slug: "", CreatedAt: time.Now()}
 
@@ -808,18 +796,18 @@ func TestBuildTenantProto_EmptySlug_UsesTenantID(t *testing.T) {
 	}
 }
 
-// ── Phase 3.2 single-tenant guard ────────────────────────────────────────
+// ── Single-tenant guard (ADR-0031 / Phase 9.4) ───────────────────────────
 
-// TestCreateTenant_SingleMode_RejectsSecondTenant pins the structural
-// invariant introduced by Phase 3.2 / Q-001: in single mode, a tenant
-// already exists → second CreateTenant fails with FAILED_PRECONDITION.
-func TestCreateTenant_SingleMode_RejectsSecondTenant(t *testing.T) {
+// TestCreateTenant_RejectsSecondTenant pins the structural invariant
+// (Phase 3.2 / 9.4, ADR-0031): a tenant already exists → a second CreateTenant
+// fails with FAILED_PRECONDITION. The guard is unconditional.
+func TestCreateTenant_RejectsSecondTenant(t *testing.T) {
 	repo := newFakeTenantRepo()
 	// Seed with one tenant so CountTenants returns >= 1.
 	if _, err := repo.CreateTenant(context.Background(), "bootstrap", "free"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	h := newTestableWithMode(repo, loader.DeploymentModeSingle)
+	h := newTestable(repo)
 
 	_, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: "second", Plan: "free"})
 
@@ -832,13 +820,12 @@ func TestCreateTenant_SingleMode_RejectsSecondTenant(t *testing.T) {
 	}
 }
 
-// TestCreateTenant_SingleMode_AllowsFirstTenant covers the bootstrap path:
-// single mode, empty table → CreateTenant succeeds (the bootstrap CLI is
-// the only legitimate caller in production but the constraint is purely
-// structural, not caller-identity-based).
-func TestCreateTenant_SingleMode_AllowsFirstTenant(t *testing.T) {
+// TestCreateTenant_AllowsFirstTenant covers the bootstrap path: empty table →
+// CreateTenant succeeds (the bootstrap CLI is the only legitimate caller in
+// production but the constraint is purely structural, not caller-identity-based).
+func TestCreateTenant_AllowsFirstTenant(t *testing.T) {
 	repo := newFakeTenantRepo()
-	h := newTestableWithMode(repo, loader.DeploymentModeSingle)
+	h := newTestable(repo)
 
 	tnt, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: "bootstrap", Plan: "free"})
 
@@ -850,53 +837,13 @@ func TestCreateTenant_SingleMode_AllowsFirstTenant(t *testing.T) {
 	}
 }
 
-// TestCreateTenant_MultiMode_AllowsMultipleTenants confirms the guard is
-// scoped to single mode — multi mode preserves the legacy unlimited-tenant
-// behaviour.
-func TestCreateTenant_MultiMode_AllowsMultipleTenants(t *testing.T) {
-	repo := newFakeTenantRepo()
-	h := newTestableWithMode(repo, loader.DeploymentModeMulti)
-
-	for _, name := range []string{"acme", "beta", "gamma"} {
-		if _, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: name, Plan: "free"}); err != nil {
-			t.Fatalf("multi-mode CreateTenant(%q): %v", name, err)
-		}
-	}
-	if got := len(repo.tenants); got != 3 {
-		t.Errorf("tenant count: got %d, want 3", got)
-	}
-}
-
-// TestCreateTenant_ZeroValueMode_FailsClosedAsSingle pins the documented
-// fail-closed default — a Handler constructed without an explicit mode
-// (zero value `DeploymentMode("")`) refuses a second CreateTenant, same
-// as explicit "single". Cheap insurance against a future refactor that
-// rebrands `DeploymentModeMulti` and accidentally inverts the default.
-func TestCreateTenant_ZeroValueMode_FailsClosedAsSingle(t *testing.T) {
-	repo := newFakeTenantRepo()
-	if _, err := repo.CreateTenant(context.Background(), "bootstrap", "free"); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	h := newTestableWithMode(repo, loader.DeploymentMode(""))
-
-	_, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: "second", Plan: "free"})
-
-	st, ok := status.FromError(err)
-	if !ok {
-		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
-	}
-	if st.Code() != codes.FailedPrecondition {
-		t.Errorf("zero-value mode must fail-closed: got %v, want FailedPrecondition", st.Code())
-	}
-}
-
-// TestCreateTenant_SingleMode_CountErr_MapsToInternal covers the count-RPC-
-// failure branch: if CountTenants errors out, the request must fail (not
-// fall through to the INSERT). Pins the fail-closed contract.
-func TestCreateTenant_SingleMode_CountErr_MapsToInternal(t *testing.T) {
+// TestCreateTenant_CountErr_MapsToInternal covers the count-RPC-failure branch:
+// if CountTenants errors out, the request must fail (not fall through to the
+// INSERT). Pins the fail-closed contract.
+func TestCreateTenant_CountErr_MapsToInternal(t *testing.T) {
 	repo := newFakeTenantRepo()
 	repo.countErr = errors.New("db down")
-	h := newTestableWithMode(repo, loader.DeploymentModeSingle)
+	h := newTestable(repo)
 
 	_, err := h.CreateTenant(context.Background(), &tenantv1.CreateTenantRequest{Name: "bootstrap", Plan: "free"})
 	if err == nil {
@@ -921,7 +868,7 @@ func TestCreateTenant_SingleMode_CountErr_MapsToInternal(t *testing.T) {
 // TestBuildTenantProto_EmptyBaseDomain_UsesBareSlug covers tests / misconfig
 // where PLATFORM_BASE_DOMAIN is empty. The host should be the bare slug.
 func TestBuildTenantProto_EmptyBaseDomain_UsesBareSlug(t *testing.T) {
-	h := New(nil, "", loader.DeploymentModeMulti)
+	h := New(nil, "")
 	rec := &repository.TenantRecord{ID: uuid.New(), Name: "Acme", Slug: "acme", CreatedAt: time.Now()}
 
 	got := h.buildTenantProto(rec)
