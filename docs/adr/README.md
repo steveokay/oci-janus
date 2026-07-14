@@ -39,6 +39,7 @@ Status legend:
 | [ADR-0028](0028-bootstrap-cli-replaces-dev-seed.md) | Bootstrap CLI replaces dev-seed admin migration | ACCEPTED | 2026-06-27 |
 | [ADR-0029](0029-aes-gcm-version-byte-prefix.md) | AES-256-GCM ciphertext `Version = 0x01` prefix | ACCEPTED | 2026-06-30 |
 | [ADR-0030](0030-audit-hash-chain-tip-from-chain-seq.md) | Audit hash-chain tip derived from `chain_seq` | ACCEPTED | 2026-06-30 |
+| [ADR-0031](0031-retire-multi-tenant-posture.md) | Retire the `multi` posture — single-tenant is the only mode | ACCEPTED | 2026-07-14 |
 
 ## Supersession pairs
 
@@ -47,6 +48,7 @@ Status legend:
 | ADR-0004 (Multi-tenant custom domains) | → | ADR-0025 (Single-tenant default) | REDESIGN-001 Phase 0 — custom-domain surface removed (RM-001). |
 | ADR-0019 (Per-tenant SSO) | → | ADR-0027 (Global SSO) | REDESIGN-001 Phase 2.2 — self-hosters have one IdP. |
 | ADR-0020 (Domain `is_primary` mutex) | → | ADR-0025 | Removed alongside the custom-domain table (RM-001). |
+| ADR-0025 (`multi` kept as opt-in) | → | ADR-0031 (Retire `multi`) | 2026-07-14 — single-tenant made the permanent product direction; dormant `multi` branches removed. 0025's single-by-default posture stands. |
 
 ## How ADRs are added
 
