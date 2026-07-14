@@ -29,7 +29,6 @@ import (
 
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
@@ -108,10 +107,6 @@ type Handler struct {
 	// Optional — when nil, every authenticated request passes through unthrottled
 	// (useful for tests that want deterministic timing).
 	rateLimiter *middleware.PerUserRateLimiter
-	// deploymentMode is the binary's deployment posture (single or multi-tenant).
-	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
-	// endpoint to tell the FE which chrome to render.
-	deploymentMode loader.DeploymentMode
 	// buildVersion is the binary version string injected at build time.
 	// Injected via WithDeploymentInfo; used by the public /api/v1/deployment-info
 	// endpoint.
@@ -256,12 +251,11 @@ func (h *Handler) WithCoreClient(c corev1.CoreServiceClient) *Handler {
 	return h
 }
 
-// WithDeploymentInfo wires the deployment posture and build version that
-// the /api/v1/deployment-info handler needs to tell the FE which chrome
-// to render (tenant switcher, plan badges, etc.). Must be called before
-// Register to ensure the endpoint is properly wired.
-func (h *Handler) WithDeploymentInfo(mode loader.DeploymentMode, version string) *Handler {
-	h.deploymentMode = mode
+// WithDeploymentInfo wires the build version that the /api/v1/deployment-info
+// handler reports. Must be called before Register to ensure the endpoint is
+// properly wired. (The platform is single-tenant only — ADR-0031 — so there is
+// no deployment-mode flag; the endpoint now reports version only.)
+func (h *Handler) WithDeploymentInfo(version string) *Handler {
 	h.buildVersion = version
 	return h
 }
@@ -654,33 +648,17 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Handlers return 404 "route disabled" (JSON body) when TENANT_GRPC_ADDR
 	// is unset — that's a handler-level gate that runs after registration.
 	//
-	// REDESIGN-001 Phase 2.3 (RM-005) — POST + DELETE are also gated by
-	// deployment mode, but at REGISTRATION time. In single-tenant deployments
-	// the BFF must not expose a way to create or delete tenants; the only
-	// tenant is the bootstrap tenant minted by `registry-auth bootstrap`
-	// (Phase 3.1).
-	//
-	// Response shape in single mode: because GET + PATCH on the same paths
-	// stay registered, ServeMux returns 405 Method Not Allowed (with an
-	// Allow header listing only GET / PATCH) rather than a flat 404. That's
-	// still strictly better than letting the handler return a 403 — the
-	// 405 body never confirms platform-admin gating existed and looks
-	// identical to any other route that doesn't support POST/DELETE.
-	//
-	// The gRPC CreateTenant on services/tenant stays — the bootstrap CLI
-	// uses it directly.
-	//
-	// GET (list/detail) and PATCH (rename) remain available in single mode so
-	// the single tenant can still be inspected and renamed via the admin API.
+	// Admin-tenant routes. The platform is single-tenant only (ADR-0031), so
+	// there is no create or delete: the one tenant is minted by `registry-auth
+	// bootstrap` (Phase 3.1) and lives for the deployment's lifetime. GET
+	// (list/detail) + PATCH (rename / plan) stay so that single tenant can be
+	// inspected and renamed via the admin API. (The gRPC CreateTenant on
+	// services/tenant also stays — the bootstrap CLI uses it directly.)
 	mux.Handle("GET /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminListTenants)))
 	mux.Handle("GET /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminGetTenant)))
 	// FE-API-029: rename + plan change. Patch body accepts optional name/plan
 	// fields; emits tenant.renamed / tenant.plan_changed RabbitMQ events.
 	mux.Handle("PATCH /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminUpdateTenant)))
-	if h.deploymentMode == loader.DeploymentModeMulti {
-		mux.Handle("POST /api/v1/admin/tenants", authMW(http.HandlerFunc(h.handleAdminCreateTenant)))
-		mux.Handle("DELETE /api/v1/admin/tenants/{tenantID}", authMW(http.HandlerFunc(h.handleAdminDeleteTenant)))
-	}
 
 	// FE-API-032 — GC status visibility. Status + runs history are
 	// read-only; the trigger requires the platform-admin marker. All

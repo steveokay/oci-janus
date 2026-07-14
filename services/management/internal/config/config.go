@@ -101,12 +101,6 @@ type Config struct {
 	// a dedicated "operator" tenant created out of band.
 	PlatformAdminTenantID string `mapstructure:"PLATFORM_ADMIN_TENANT_ID"`
 
-	// DeploymentMode controls whether the FE renders multi-tenant chrome
-	// (tenant switcher, plan badges) or single-tenant simplified UI.
-	// Loaded via loader.LoadDeploymentMode() after Viper unmarshal.
-	// Defaults to "single" (OSS self-hosted).
-	DeploymentMode loader.DeploymentMode
-
 	// BuildVersion is the binary version string injected at build time
 	// (via -ldflags in main.go). Served by the /api/v1/deployment-info endpoint.
 	// Not loaded from env — set by main() before calling server.Run().
@@ -119,13 +113,6 @@ func Load() (*Config, error) {
 	if err := loader.Load("registry-management", cfg); err != nil {
 		return nil, err
 	}
-
-	// Load deployment mode separately after Viper unmarshal.
-	deploymentMode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("load deployment mode: %w", err)
-	}
-	cfg.DeploymentMode = deploymentMode
 
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
