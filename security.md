@@ -1172,3 +1172,14 @@ under CLAUDE.md §7 "JWT Validation."
   1. Thread `tenantID` (already a parameter of `ListRepositories`) into the secondary query: `... FROM manifests WHERE repo_id = ANY($1::uuid[]) AND tenant_id = $2`, binding `tenantID` as `$2`. `manifests.tenant_id` already exists and is `NOT NULL` (`migrations/00001_initial_schema.sql:31`), so this is a zero-schema-change one-liner consistent with the `ListOrgSummaries` JOINs in the same file that all carry `m.tenant_id = o.tenant_id`.
   2. Add a regression test asserting the artifact_types pass returns nothing for a repo_id belonging to a different tenant.
 - **References:** CLAUDE.md §9 (tenant isolation — every metadata query filters by tenant_id); CWE-639 (authorization bypass through user-controlled key) as the class this hardens against.
+
+### SEC-089 — BFF API-key Bearer dispatch reviewed (FUT-082 follow-up, PR #341)
+- **Severity:** INFO
+- **Status:** RESOLVED (2026-07-14, reviewed PASS)
+- **Service:** `services/management`
+- **Raised:** 2026-07-14
+- **Description:** Auth-boundary security review of `RequireAuth` accepting API-key Bearer tokens (`key.<uuid>.<secret>`) at `services/management/internal/middleware/auth.go` (PR #341). The BFF previously validated JWTs only; it now dispatches the `key.` form to `auth.ValidateAPIKey` so registry-mcp / CLI / Terraform (long-lived-credential BFF consumers) can authenticate, mirroring the FUT-006 dispatch registry-auth's own HTTP middleware performs. Threat model verdict **PASS**: fail-closed (`err != nil || !kr.GetValid()` → 401; auth-unreachable → 401); API-key callers are marked `principal_kind=service_account`, so all 8 sensitive admin gates (gc/scanners/tenants/email/pr-registry/security-policies/webhooks + domain) 403 them before role resolution; cross-tenant pivot impossible (`ValidateAPIKeyRequest` has no tenant field, tenant sourced from the key's stored value, `X-Tenant-ID` never overrides working scope); no secret logging; malformed `key.` inputs fall through to JWT (then 401), never partial-accept. 0 CRITICAL / 0 HIGH / 0 MEDIUM / 1 LOW / 1 INFO.
+- **Remediation (SHOULD-FIX follow-ups, non-blocking):**
+  1. **SF-1 (LOW, pre-existing):** the middleware's `http.Error` 401 responses (both the API-key and the pre-existing JWT path) lack `X-Content-Type-Options: nosniff` (CLAUDE.md §17). Whole-middleware follow-up — ensure the secure-headers middleware wraps the error path.
+  2. **SF-2 (INFO):** the malformed-`key.`-falls-through regression test was **added inline in PR #341** (`TestRequireAuth_MalformedKey_FallsThroughToJWT`); a dedicated cross-tenant `X-Tenant-ID`-ignored assertion remains an accepted follow-up.
+- **References:** CLAUDE.md §7 (HTTP Bearer dispatch, FUT-006), §17; PENTEST-020 (header-only auth / CSRF posture); CWE-287, CWE-639 (verified NOT present).
