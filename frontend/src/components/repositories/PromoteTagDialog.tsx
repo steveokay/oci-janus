@@ -74,6 +74,7 @@ const schema = z.object({
     .max(256, "Keep the note under 256 characters.")
     .optional(),
   create_if_missing: z.boolean().default(false),
+  re_sign_on_promote: z.boolean().default(false),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -168,6 +169,7 @@ export function PromoteTagDialog({
       dst_tag: srcTag,
       note: "",
       create_if_missing: false,
+      re_sign_on_promote: false,
     },
   });
 
@@ -195,10 +197,21 @@ export function PromoteTagDialog({
         // Only forward when true — keeps the wire payload minimal on the
         // common (default off) path.
         create_if_missing: values.create_if_missing || undefined,
+        re_sign_on_promote: values.re_sign_on_promote || undefined,
       });
-      toast.success(
-        `Promoted ${srcOrg}/${srcRepo}:${srcTag} → ${prom.dst_org}/${prom.dst_repo}:${prom.dst_tag}.`,
-      );
+      // Base success line for the (always durable) promotion, then append the
+      // re-sign outcome so the operator knows whether the destination manifest
+      // is signed. The promotion succeeding while signing failed is a real
+      // state (re_signed=false + sign_error) — we still use the success channel
+      // because the promotion itself worked, but the copy flags the shortfall
+      // so the operator retries signing from the tag's Sign action.
+      let msg = `Promoted ${srcOrg}/${srcRepo}:${srcTag} → ${prom.dst_org}/${prom.dst_repo}:${prom.dst_tag}.`;
+      if (prom.sign_error) {
+        msg += " Signing did not complete — re-sign the destination tag manually.";
+      } else if (prom.re_signed) {
+        msg += " Destination manifest signed with the workspace key.";
+      }
+      toast.success(msg);
       onOpenChange(false);
     } catch (e) {
       const status = (e as { response?: { status?: number } })?.response
@@ -369,6 +382,42 @@ export function PromoteTagDialog({
                 render={({ field }) => (
                   <Switch
                     id="promote-create-if-missing"
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
+          </div>
+
+          {/* Re-sign toggle (FUT-020 follow-up). Same row layout as the
+              create-if-missing switch above. Off by default so promotion
+              stays a pure metadata copy unless the operator wants a fresh
+              signature bound to the destination — the dev→prod hand-off. */}
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <Label
+                  htmlFor="promote-re-sign"
+                  className="cursor-pointer text-sm"
+                >
+                  Re-sign the destination manifest after promoting
+                </Label>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--color-fg-subtle)]">
+                  Off (default) — promotion copies metadata only; the
+                  destination inherits whatever signatures already cover the
+                  digest. On — the workspace key signs the destination
+                  manifest after the promotion. Requires a configured signer;
+                  the promotion still succeeds if signing fails and you can
+                  retry from the tag&apos;s Sign action.
+                </p>
+              </div>
+              <Controller
+                control={control}
+                name="re_sign_on_promote"
+                render={({ field }) => (
+                  <Switch
+                    id="promote-re-sign"
                     checked={field.value}
                     onCheckedChange={field.onChange}
                   />

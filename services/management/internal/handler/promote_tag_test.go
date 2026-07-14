@@ -31,6 +31,7 @@ import (
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
+	signerv1 "github.com/steveokay/oci-janus/proto/gen/go/signer/v1"
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
 
@@ -91,12 +92,30 @@ type promoteTestEnv struct {
 	srv  *httptest.Server
 	meta *promoteMetaServer
 	pub  *fakePublisher
+	// signer is nil unless the env was built via newPromoteTestEnvWithSigner.
+	// When set, the re-sign-on-promote path (FUT-020 follow-up) is exercised;
+	// tests script signCalls / signFunc to force success / AlreadyExists / error.
+	signer *fakeSignerServer
 }
 
 // newPromoteTestEnv wires the standard fakes and returns handles the tests
 // need to configure per case. Same shape as newSignerTestEnv but keyed on
-// the promotion routes.
+// the promotion routes. The signer is left UNWIRED (h.signer == nil) so the
+// "re-sign requested but signer not configured" 400 path can be exercised.
 func newPromoteTestEnv(t *testing.T) *promoteTestEnv {
+	return newPromoteTestEnvOpt(t, false)
+}
+
+// newPromoteTestEnvWithSigner is newPromoteTestEnv plus a wired fake signer,
+// so the re-sign-on-promote path (FUT-020 follow-up) can be driven. The
+// returned env exposes the signer for per-case scripting.
+func newPromoteTestEnvWithSigner(t *testing.T) *promoteTestEnv {
+	return newPromoteTestEnvOpt(t, true)
+}
+
+// newPromoteTestEnvOpt is the shared builder. wireSigner controls whether a
+// fake signer gRPC server is registered and injected via WithSignerClient.
+func newPromoteTestEnvOpt(t *testing.T, wireSigner bool) *promoteTestEnv {
 	t.Helper()
 
 	authLis := bufconn.Listen(bufSize)
@@ -149,11 +168,25 @@ func newPromoteTestEnv(t *testing.T) *promoteTestEnv {
 	)
 	h = h.WithPublisher(pub)
 
+	// Optionally register + inject a fake signer so the re-sign-on-promote
+	// path is reachable. Left nil otherwise so the not-configured 400 fires.
+	var signer *fakeSignerServer
+	if wireSigner {
+		signer = &fakeSignerServer{}
+		signerLis := bufconn.Listen(bufSize)
+		signerGRPC := grpc.NewServer()
+		signerv1.RegisterSignerServiceServer(signerGRPC, signer)
+		healthpb.RegisterHealthServer(signerGRPC, &fakeHealthServer{})
+		go func() { _ = signerGRPC.Serve(signerLis) }()
+		t.Cleanup(signerGRPC.Stop)
+		h = h.WithSignerClient(signerv1.NewSignerServiceClient(dial(signerLis)))
+	}
+
 	mux := http.NewServeMux()
 	h.Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &promoteTestEnv{srv: srv, meta: meta, pub: pub}
+	return &promoteTestEnv{srv: srv, meta: meta, pub: pub, signer: signer}
 }
 
 // post fires a POST against the test server with the given bearer token.
@@ -426,6 +459,204 @@ func TestListPromotions_EmptyRendersEmptyArray(t *testing.T) {
 	got := string(raw["promotions"])
 	if got != "[]" {
 		t.Fatalf("want empty array literal, got %q", got)
+	}
+}
+
+// ─── Re-sign on promote (FUT-020 follow-up) ────────────────────────────────
+//
+// When the caller ticks "re-sign on promote", the BFF must, AFTER a durable
+// promotion, call signer.SignManifest against the DESTINATION repo + digest
+// and publish image.signed. The promotion is the primary operation; signing
+// is an augmentation layered on top, so a signer blip must not roll back the
+// (already-committed) promotion — it surfaces as re_signed=false + sign_error.
+
+// TestPromoteTag_ReSign_HappyPath — signer wired, opt-in true. Asserts 201,
+// re_signed=true, SignManifest called once against the DST repo + DST digest
+// with the workspace default key (empty signer_id), and BOTH image.promoted
+// and image.signed published.
+func TestPromoteTag_ReSign_HappyPath(t *testing.T) {
+	env := newPromoteTestEnvWithSigner(t)
+
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2","re_sign_on_promote":true}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("want 201, got %d", resp.StatusCode)
+	}
+
+	var got struct {
+		ReSigned  bool   `json:"re_signed"`
+		SignError string `json:"sign_error"`
+	}
+	decodeJSON(t, resp, &got)
+	if !got.ReSigned {
+		t.Error("re_signed should be true on a successful re-sign")
+	}
+	if got.SignError != "" {
+		t.Errorf("sign_error should be empty on success, got %q", got.SignError)
+	}
+
+	// SignManifest must have been called once, keyed to the DESTINATION.
+	env.signer.mu.Lock()
+	defer env.signer.mu.Unlock()
+	if len(env.signer.signCalls) != 1 {
+		t.Fatalf("want 1 SignManifest call, got %d", len(env.signer.signCalls))
+	}
+	sc := env.signer.signCalls[0]
+	if sc.GetRepositoryName() != "myorg/myrepo" {
+		t.Errorf("sign should target dst repo, got %q", sc.GetRepositoryName())
+	}
+	if sc.GetManifestDigest() != "sha256:aaa" {
+		t.Errorf("sign should target dst digest sha256:aaa, got %q", sc.GetManifestDigest())
+	}
+	if sc.GetSignerId() != "" {
+		t.Errorf("re-sign should use the workspace default key (empty signer_id), got %q", sc.GetSignerId())
+	}
+
+	// Both events published: image.promoted + image.signed.
+	if atomic.LoadInt64(&env.pub.count) != 2 {
+		t.Fatalf("want 2 publishes (promoted+signed), got %d", env.pub.count)
+	}
+	env.pub.mu.Lock()
+	defer env.pub.mu.Unlock()
+	var sawPromoted, sawSigned bool
+	for _, c := range env.pub.calls {
+		switch c.routingKey {
+		case events.RoutingImagePromoted:
+			sawPromoted = true
+		case events.RoutingImageSigned:
+			sawSigned = true
+		}
+	}
+	if !sawPromoted || !sawSigned {
+		t.Errorf("want both image.promoted + image.signed, got promoted=%v signed=%v", sawPromoted, sawSigned)
+	}
+}
+
+// TestPromoteTag_ReSign_DefaultDoesNotSign — with the signer wired but the
+// opt-in absent, no SignManifest call is made and re_signed is false. Guards
+// against re-sign firing on every promotion.
+func TestPromoteTag_ReSign_DefaultDoesNotSign(t *testing.T) {
+	env := newPromoteTestEnvWithSigner(t)
+
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2"}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("want 201, got %d", resp.StatusCode)
+	}
+	var got struct {
+		ReSigned bool `json:"re_signed"`
+	}
+	decodeJSON(t, resp, &got)
+	if got.ReSigned {
+		t.Error("re_signed should be false when opt-in absent")
+	}
+	env.signer.mu.Lock()
+	defer env.signer.mu.Unlock()
+	if len(env.signer.signCalls) != 0 {
+		t.Errorf("SignManifest should not fire without opt-in, got %d calls", len(env.signer.signCalls))
+	}
+	// Only image.promoted — never image.signed.
+	if atomic.LoadInt64(&env.pub.count) != 1 {
+		t.Errorf("want 1 publish (promoted only), got %d", env.pub.count)
+	}
+}
+
+// TestPromoteTag_ReSign_SignerNotConfigured — opt-in true but management has
+// no signer wired (SIGNER_GRPC_ADDR unset). Must reject 400 BEFORE promoting
+// so the caller isn't told the image was signed when it wasn't — and so we
+// never leave a promoted-but-unsigned tag the caller believes is signed.
+func TestPromoteTag_ReSign_SignerNotConfigured(t *testing.T) {
+	env := newPromoteTestEnv(t) // no signer wired
+
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2","re_sign_on_promote":true}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	// The promotion must NOT have happened — fail closed before any write.
+	if len(env.meta.promoteCalls) != 0 {
+		t.Errorf("metadata called despite unconfigured signer: %d calls", len(env.meta.promoteCalls))
+	}
+	if atomic.LoadInt64(&env.pub.count) != 0 {
+		t.Errorf("publisher called despite unconfigured signer: %d", env.pub.count)
+	}
+}
+
+// TestPromoteTag_ReSign_SignFailureStillPromotes — the promotion committed but
+// the signer errored. The promotion is durable and cannot be rolled back over
+// a signing blip, so the response is 201 with re_signed=false + a non-empty
+// sign_error. image.promoted still fires; image.signed does NOT.
+func TestPromoteTag_ReSign_SignFailureStillPromotes(t *testing.T) {
+	env := newPromoteTestEnvWithSigner(t)
+	env.signer.signFunc = func(_ context.Context, _ *signerv1.SignManifestRequest) (*signerv1.SignManifestResponse, error) {
+		return nil, status.Error(codes.Internal, "kms unavailable")
+	}
+
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2","re_sign_on_promote":true}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("want 201 (promotion is durable), got %d", resp.StatusCode)
+	}
+	var got struct {
+		ReSigned  bool   `json:"re_signed"`
+		SignError string `json:"sign_error"`
+	}
+	decodeJSON(t, resp, &got)
+	if got.ReSigned {
+		t.Error("re_signed should be false after a signer error")
+	}
+	if got.SignError == "" {
+		t.Error("sign_error should be populated so the caller knows to retry signing")
+	}
+	// Promotion still happened.
+	if len(env.meta.promoteCalls) != 1 {
+		t.Errorf("want 1 metadata call, got %d", len(env.meta.promoteCalls))
+	}
+	// image.promoted published, image.signed NOT.
+	env.pub.mu.Lock()
+	defer env.pub.mu.Unlock()
+	for _, c := range env.pub.calls {
+		if c.routingKey == events.RoutingImageSigned {
+			t.Error("image.signed must not publish when the sign failed")
+		}
+	}
+}
+
+// TestPromoteTag_ReSign_AlreadySignedIsIdempotent — because promotion shares
+// the source digest and the workspace key is digest-keyed, re-signing a digest
+// the workspace key already signed returns AlreadyExists from the signer. That
+// still satisfies "the promoted image is signed by this key" (admission is
+// digest-keyed), so the BFF reports re_signed=true with no sign_error and does
+// NOT double-publish image.signed.
+func TestPromoteTag_ReSign_AlreadySignedIsIdempotent(t *testing.T) {
+	env := newPromoteTestEnvWithSigner(t)
+	env.signer.signFunc = func(_ context.Context, _ *signerv1.SignManifestRequest) (*signerv1.SignManifestResponse, error) {
+		return nil, status.Error(codes.AlreadyExists, "already signed by this key")
+	}
+
+	body := `{"dst_org":"myorg","dst_repo":"myrepo","dst_tag":"v2","re_sign_on_promote":true}`
+	resp := env.post(t, "/api/v1/repositories/myorg/myrepo/tags/v1.0/promote", writerToken, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("want 201, got %d", resp.StatusCode)
+	}
+	var got struct {
+		ReSigned  bool   `json:"re_signed"`
+		SignError string `json:"sign_error"`
+	}
+	decodeJSON(t, resp, &got)
+	if !got.ReSigned {
+		t.Error("AlreadyExists means the digest is signed by this key — re_signed should be true")
+	}
+	if got.SignError != "" {
+		t.Errorf("AlreadyExists is not an error to surface, got sign_error=%q", got.SignError)
+	}
+	// No image.signed (no NEW signature was created); only image.promoted.
+	env.pub.mu.Lock()
+	defer env.pub.mu.Unlock()
+	for _, c := range env.pub.calls {
+		if c.routingKey == events.RoutingImageSigned {
+			t.Error("image.signed must not publish when nothing new was signed")
+		}
 	}
 }
 

@@ -35,6 +35,14 @@ export interface Promotion {
   actor_user_id?: string;
   note?: string;
   promoted_at: string;
+  // FUT-020 follow-up — re-sign on promote. re_signed reports whether the
+  // destination manifest carries a signature by the workspace key after the
+  // promotion (true when re_sign_on_promote was requested and the signer
+  // confirmed a signature, false otherwise). sign_error carries a reason when
+  // a requested re-sign did not complete — the promotion is still durable.
+  // Both are only present on the POST /promote response, never on history rows.
+  re_signed?: boolean;
+  sign_error?: string;
 }
 
 // PromoteInput is the shape the promote mutation accepts. The source is
@@ -49,6 +57,11 @@ export interface PromoteInput {
   // preserves the original 404-on-missing-dst behaviour so callers who
   // don't opt in don't accidentally create empty repos on typos.
   create_if_missing?: boolean;
+  // FUT-020 follow-up — when true, after the promotion commits the BFF asks
+  // registry-signer to sign the destination manifest with the workspace key.
+  // Opting in when no signer is configured is rejected 400 before promoting.
+  // Default false preserves the original promote-only behaviour.
+  re_sign_on_promote?: boolean;
 }
 
 // promotionKeys centralises the react-query cache keys so hooks can

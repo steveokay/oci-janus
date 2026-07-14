@@ -57,9 +57,15 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
   **image promotion** shipped as **FUT-020** (see the FUT-020 entry below) via
   PR #231 + follow-ups #234/#235 — `promotions` table (`00018`),
   `PromoteTag`/`ListPromotions` RPCs, `image.promoted` event, BFF routes, and
-  the `PromoteTagDialog` + `PromotionsTab` FE. The one deferred slice from the
-  sketch below — *optionally re-sign the manifest on promote* — is not wired
-  (services/signer exists but is not called from the promote path).
+  the `PromoteTagDialog` + `PromotionsTab` FE. The last deferred slice from the
+  sketch below — *optionally re-sign the manifest on promote* — shipped
+  2026-07-15: `re_sign_on_promote` on the promote BFF route calls
+  `signer.SignManifest` against the destination repo+digest with the workspace
+  key, publishes `image.signed`, and returns `re_signed` / `sign_error`; the
+  `PromoteTagDialog` gained a matching toggle. Opting in without a signer wired
+  is a 400 before the promotion; a signer error after the (durable) promotion
+  surfaces as `re_signed=false` + `sign_error` rather than rolling back. **This
+  feature is now fully complete.**
 - **Why:** Without an immutability flag, an attacker (or a sleepy
   engineer) can re-push `myapp:1.0` and silently change what every
   consumer pulls. Image promotion (dev → staging → prod) is also
