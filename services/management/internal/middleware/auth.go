@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/steveokay/oci-janus/libs/auth/bearer"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
 )
@@ -57,6 +59,33 @@ func RequireAuth(authClient authv1.AuthServiceClient) func(http.Handler) http.Ha
 				return
 			}
 
+			// FUT-082 follow-up — API-key Bearer dispatch. A token of the form
+			// `key.<uuid>.<64-hex-secret>` is a long-lived API key, not a JWT.
+			// registry-mcp (and CLI/Terraform) authenticate to the BFF this way
+			// because a 300s-TTL JWT is unusable for a persistent client. The
+			// `key.` discriminator mirrors the FUT-006 dispatch registry-auth's
+			// own HTTP middleware performs: route the key to auth.ValidateAPIKey
+			// and synthesise the same tenant/user context a JWT would produce.
+			// API-key callers are marked service_account (a non-interactive
+			// machine credential) so the Phase 5.4 admin gates deny them from
+			// sensitive interactive-admin surfaces regardless of the owner's
+			// roles — they must exchange for a JWT to reach those.
+			if keyID, secret, isKey := parseAPIKeyBearer(token); isKey {
+				kr, err := authClient.ValidateAPIKey(r.Context(), &authv1.ValidateAPIKeyRequest{
+					KeyId:     keyID.String(),
+					RawSecret: secret,
+				})
+				if err != nil || !kr.GetValid() {
+					http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
+					return
+				}
+				ctx := context.WithValue(r.Context(), contextKeyTenantID, kr.GetTenantId())
+				ctx = context.WithValue(ctx, contextKeyUserID, kr.GetUserId())
+				ctx = context.WithValue(ctx, contextKeyPrincipalKind, PrincipalKindServiceAccount)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			resp, err := authClient.ValidateToken(r.Context(), &authv1.ValidateTokenRequest{Token: token})
 			if err != nil || !resp.GetValid() {
 				http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
@@ -86,6 +115,31 @@ func RequireAuth(authClient authv1.AuthServiceClient) func(http.Handler) http.Ha
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// parseAPIKeyBearer tries to interpret token as an API-key Bearer of the form
+// `key.<uuid>.<secret>`. Returns (keyID, secret, true) on success. On any
+// structural mismatch (missing prefix, wrong segment count, unparseable UUID,
+// empty secret) it returns the zero value + false so RequireAuth falls through
+// to JWT validation. The secret is never logged here — leaking a partial match
+// is worse than a generic downstream auth failure. Mirrors the identically
+// named helper in services/auth (FUT-006).
+func parseAPIKeyBearer(token string) (uuid.UUID, string, bool) {
+	const prefix = "key."
+	if !strings.HasPrefix(token, prefix) {
+		return uuid.Nil, "", false
+	}
+	// The secret is 64 lowercase hex chars (no dots), so cutting on the first
+	// dot after the prefix splits id from secret exactly.
+	idStr, secret, ok := strings.Cut(token[len(prefix):], ".")
+	if !ok || secret == "" {
+		return uuid.Nil, "", false
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return uuid.Nil, "", false
+	}
+	return id, secret, true
 }
 
 // TenantIDFromContext returns the tenant ID injected by RequireAuth.
