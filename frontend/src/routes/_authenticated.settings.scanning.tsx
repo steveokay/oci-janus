@@ -5,9 +5,10 @@
 // (which engines run + their health). Split out of Housekeeping so that tab
 // stays scoped to storage cleanup (GC + retention).
 //
-// Mode: single mode only (same gating as Housekeeping) — in multi mode these
-// live on the Platform tab. The tab is gated in the Settings layout; this
-// component renders the sections for whoever reaches the URL.
+// The platform is single-tenant (same posture as Housekeeping), so these
+// scanning surfaces live on their own Settings tab — there is no separate
+// Platform console. This component renders the sections for whoever reaches
+// the URL.
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ScanPolicyEditor } from "@/components/security/scan-policy-editor";

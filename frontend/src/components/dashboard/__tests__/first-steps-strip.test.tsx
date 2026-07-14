@@ -11,8 +11,8 @@ import type { Workspace } from "@/lib/api/workspace";
 //
 // Tests verify:
 //   - Endpoint host + custom-host badge render in the eyebrow.
-//     (Plan badge removed in Phase 2.4 / RM-006 — no billing in
-//     single-mode default. New case below pins the removal.)
+//     (Plan badge removed in Phase 2.4 / RM-006 — no billing on the
+//     single-tenant platform. New case below pins the removal.)
 //   - "Create an API key" + "Read the docs" links surface.
 //   - All three commands (login / tag / push) render verbatim.
 //   - Replace-org-image hint renders.

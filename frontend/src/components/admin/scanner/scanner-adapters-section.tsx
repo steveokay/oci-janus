@@ -2,9 +2,9 @@
 //
 // Reusable scanner-adapter management surface — health card + adapter
 // grid + test-scan panel + promote dialog. Extracted from the old
-// _authenticated.admin.scanner.tsx route body so both the Platform tab
-// and (in single mode) the Workspace tab can embed the same UI without
-// duplicating dialog/promote state.
+// _authenticated.admin.scanner.tsx route body so the Settings surfaces
+// (Scanning tab) can embed the same UI without duplicating dialog/promote
+// state.
 //
 // What's NOT in here:
 //   - Platform-admin banner.
