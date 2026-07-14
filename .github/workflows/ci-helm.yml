@@ -1,0 +1,68 @@
+name: CI — helm
+
+# The umbrella Helm chart (infra/helm/registry) is the production deploy
+# artifact. Nothing else in CI renders or lints it, so a broken template, a
+# missing subchart dependency, or a regression in the gateway /api/v1 routing
+# split (FUT-083) would ship silently. This lane closes that gap:
+#   - lint            : `helm lint` the umbrella + every subchart
+#   - template        : `helm template` render smoke (catches template errors)
+#   - routing-contract: the golden test that asserts the auth-vs-BFF routing
+#                       split is encoded in the rendered IngressRoutes
+#
+# A live kind + Traefik smoke (proving runtime matcher precedence + nginx boot
+# under a read-only rootfs) is a deliberate follow-up — these checks prove the
+# rendered manifests are structurally correct, not that a cluster accepts them.
+on:
+  push:
+    paths:
+      - "infra/helm/**"
+      - ".github/workflows/ci-helm.yml"
+  pull_request:
+    paths:
+      - "infra/helm/**"
+      - ".github/workflows/ci-helm.yml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.4"
+      - name: helm lint (umbrella + subcharts)
+        run: |
+          cd infra/helm/registry
+          helm lint .
+          helm lint charts/management charts/frontend
+
+  template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.4"
+      - name: helm template render smoke
+        # Renders with default values AND fails on any template error. Piping to
+        # a file keeps the (large) manifest out of the log while still failing
+        # the step on a non-zero helm exit.
+        run: |
+          cd infra/helm/registry
+          helm template . > /tmp/rendered.yaml
+          echo "Rendered $(grep -c '^kind:' /tmp/rendered.yaml) top-level resources."
+
+  routing-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.4"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install pyyaml
+      - name: Assert gateway routing contract (FUT-083)
+        run: python infra/helm/registry/tests/routing_contract_test.py
