@@ -34,13 +34,11 @@ import (
 // FE-API-030 surfaces — so a caller can't trigger a count of an arbitrary
 // audit action just by changing the parameter.
 //
-// Note: pull.image is not currently produced by services/audit's
-// eventconsumer (the core/pull path doesn't publish a routing key the audit
-// service consumes — see services/audit/internal/eventconsumer/consumer.go).
-// The query still works correctly when pull.image is absent — it just
-// returns zero rows — which is the correct behaviour for FE-API-030: the
-// BFF pre-allocates an empty series and the dashboard shows a flat-zero
-// sparkline until pull events start being written.
+// Note: pull.image IS written by services/audit's eventconsumer (FE-API-042 —
+// registry-core's RecordPull publishes pull.image and consumer.go maps it to a
+// "pull.image" audit action). Pulls are sampled at PULL_EVENT_SAMPLE_RATE, so a
+// quiet window (or a low sample rate) legitimately returns zero rows — the BFF
+// pre-allocates an empty series and the dashboard renders a flat-zero sparkline.
 var allowedAnalyticsActions = map[string]struct{}{
 	"push.image": {},
 	"pull.image": {},

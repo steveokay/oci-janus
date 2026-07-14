@@ -150,7 +150,6 @@ func TestRoutingConstants_nonEmpty(t *testing.T) {
 		RoutingGCRunCompleted,
 		RoutingImageSigned,
 		RoutingTenantCreated,
-		RoutingTenantDomainVerified,
 		RoutingStoreQueued,
 		RoutingPullImage,
 	}

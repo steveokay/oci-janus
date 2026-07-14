@@ -275,6 +275,9 @@ type testRegistry struct {
 	rdb       *redis.Client
 	uploads   *UploadStore
 	referrers *ReferrerStore
+	// pub records every published event so tests can assert the publish side
+	// effects (FUT-081). It behaves like noopPublisher for tests that ignore it.
+	pub *recordingPublisher
 }
 
 // buildTestRegistry starts in-process fake gRPC servers and creates a Registry
@@ -323,12 +326,13 @@ func buildTestRegistry(t *testing.T) (*testRegistry, func()) {
 	uploads := NewUploadStore(rdb)
 	refs := NewReferrerStore(rdb)
 
+	pub := &recordingPublisher{}
 	reg := newRegistryWithClients(
 		metadatav1.NewMetadataServiceClient(metaConn),
 		storagev1.NewStorageServiceClient(storageConn),
 		uploads,
 		refs,
-		noopPublisher{},
+		pub,
 	)
 
 	tr := &testRegistry{
@@ -338,6 +342,7 @@ func buildTestRegistry(t *testing.T) (*testRegistry, func()) {
 		rdb:       rdb,
 		uploads:   uploads,
 		referrers: refs,
+		pub:       pub,
 	}
 	cleanup := func() {
 		_ = metaConn.Close()
@@ -723,7 +728,7 @@ func TestDeleteManifest_byTag_removesTagOnly(t *testing.T) {
 		"v1.0", "application/vnd.oci.image.manifest.v1+json", rawJSON, "u")
 
 	// Delete the tag.
-	if err := tr.reg.DeleteManifest(ctx, "tenant-1", repo.GetRepoId(), "v1.0"); err != nil {
+	if err := tr.reg.DeleteManifest(ctx, "tenant-1", repo.GetRepoId(), "myorg/myrepo", "v1.0", "u"); err != nil {
 		t.Fatalf("DeleteManifest (by tag): %v", err)
 	}
 
@@ -754,7 +759,7 @@ func TestDeleteManifest_byDigest_removesManifest(t *testing.T) {
 	digest, _, _ := tr.reg.PutManifest(ctx, "tenant-1", repo.GetRepoId(), "myorg/myrepo",
 		digest_of(rawJSON), "application/vnd.oci.image.manifest.v1+json", rawJSON, "u")
 
-	if err := tr.reg.DeleteManifest(ctx, "tenant-1", repo.GetRepoId(), digest); err != nil {
+	if err := tr.reg.DeleteManifest(ctx, "tenant-1", repo.GetRepoId(), "myorg/myrepo", digest, "u"); err != nil {
 		t.Fatalf("DeleteManifest (by digest): %v", err)
 	}
 
@@ -771,7 +776,7 @@ func TestDeleteManifest_unknownTag_returnsErrNotFound(t *testing.T) {
 	defer cleanup()
 
 	repo, _ := tr.reg.GetOrCreateRepository(context.Background(), "tenant-1", "myorg/myrepo")
-	err := tr.reg.DeleteManifest(context.Background(), "tenant-1", repo.GetRepoId(), "missing-tag")
+	err := tr.reg.DeleteManifest(context.Background(), "tenant-1", repo.GetRepoId(), "myorg/myrepo", "missing-tag", "u")
 	if err != ErrNotFound {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -784,7 +789,7 @@ func TestDeleteManifest_unknownDigest_returnsErrNotFound(t *testing.T) {
 	defer cleanup()
 
 	repo, _ := tr.reg.GetOrCreateRepository(context.Background(), "tenant-1", "myorg/myrepo")
-	err := tr.reg.DeleteManifest(context.Background(), "tenant-1", repo.GetRepoId(), "sha256:"+strings.Repeat("0", 64))
+	err := tr.reg.DeleteManifest(context.Background(), "tenant-1", repo.GetRepoId(), "myorg/myrepo", "sha256:"+strings.Repeat("0", 64), "u")
 	if err != ErrNotFound {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}

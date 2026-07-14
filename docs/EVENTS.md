@@ -13,16 +13,16 @@ Exchange: registry.dlx       (topic, durable) — dead-letter target
 
 Routing keys:
   push.completed
-  push.failed
+  push.failed               # FUT-081 (publisher: registry-core on a rejected/failed manifest push — reason ∈ {quota_exceeded, tag_immutable, internal_error})
   pull.image                     # FE-API-042 (publisher: registry-core after a successful GetManifest; sampled via PULL_EVENT_SAMPLE_RATE; powers /activity pull events + max_idle_days retention)
-  manifest.deleted
-  tag.deleted
+  manifest.deleted          # FUT-081 (publisher: registry-core on DELETE manifest-by-digest)
+  tag.deleted               # FUT-081 (publisher: registry-core on DELETE tag)
   scan.queued
   scan.completed
   scan.policy_blocked
-  webhook.queued
-  webhook.delivered
-  webhook.failed
+  webhook.queued            # FUT-081 (publisher: registry-webhook when a delivery is enqueued for an endpoint)
+  webhook.delivered         # FUT-081 (publisher: registry-webhook on a successful delivery)
+  webhook.failed            # FUT-081 (publisher: registry-webhook on a failed attempt; dead=true once retries are exhausted)
   gc.run.started
   gc.run.completed
   image.signed              # published by registry-management on /sign success (FE-API-026)
@@ -30,7 +30,6 @@ Routing keys:
   tenant.deleted
   tenant.renamed            # FE-API-029
   tenant.plan_changed       # FE-API-029
-  tenant.domain.verified
   store.queued              # proxy background-store retry
   rbac.role_granted         # published by registry-auth on GrantRole success
   rbac.role_revoked         # published by registry-auth on RevokeRole success
@@ -38,20 +37,22 @@ Routing keys:
   retention.applied         # FE-API-040 (publisher: registry-metadata retention executor; emitted when a tag is soft-deleted into grace)
   retention.grace_completed # FE-API-041 (publisher: registry-metadata retention executor; emitted when a graced tag is hard-deleted)
   service_account.lifecycle # FE-API-048 (publisher: registry-auth; one routing key with embedded Action ∈ {created, updated, disabled, deleted, key_issued, key_revoked})
-  auth.provider_created     # FE-API-034 (publisher: registry-auth SSO admin handler)
-  auth.provider_updated     # FE-API-034
-  auth.provider_deleted     # FE-API-034
-  auth.user_sso_provisioned # FE-API-034 (publisher: OAuth/SAML callback path)
+  auth.provider_created     # PLANNED — FE-API-034 (no publisher yet; see note below)
+  auth.provider_updated     # PLANNED
+  auth.provider_deleted     # PLANNED
+  auth.user_sso_provisioned # PLANNED
   pr.namespace.provisioned  # FUT-023 Phase 1 (publisher: registry-metadata after a per-PR org namespace is created)
   pr.namespace.torn_down    # FUT-023 Phase 1 (publisher: registry-metadata on PR close/merge teardown; Promoted flag distinguishes merge+promote from close)
 ```
 
-> The `auth.*` routing keys above are not yet typed in
-> `libs/rabbitmq/events`; the SSO admin handler declares them locally
-> (`services/auth/internal/handler/sso_admin.go`) and the audit consumer
-> treats them generically (routing key + payload JSON). A follow-up
-> commit can promote them to typed payloads in the shared events
-> package.
+> **`auth.*` provider events are PLANNED, not live (FUT-081 follow-up).**
+> They have no routing-key constant or typed payload in
+> `libs/rabbitmq/events`, and nothing publishes them yet — the SSO admin
+> handler (`services/auth/internal/handler/http_sso_admin.go`, FE-API-034)
+> performs the DB write but does not emit an event. Wiring the publisher +
+> promoting these to typed payloads (like the other `auth`-owned events
+> `rbac.role_*` and `service_account.lifecycle`) is a tracked FUT-081
+> follow-up.
 
 ---
 

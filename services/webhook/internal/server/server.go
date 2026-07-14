@@ -26,6 +26,7 @@ import (
 
 	"github.com/steveokay/oci-janus/libs/rabbitmq/consumer"
 	"github.com/steveokay/oci-janus/libs/rabbitmq/events"
+	"github.com/steveokay/oci-janus/libs/rabbitmq/publisher"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 	"github.com/steveokay/oci-janus/services/webhook/internal/config"
 	"github.com/steveokay/oci-janus/services/webhook/internal/delivery"
@@ -62,7 +63,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	repo := repository.New(pool)
 	dispatcher := delivery.NewDispatcher(cfg.DeliveryTimeoutSecs)
 
-	w, err := worker.New(repo, dispatcher, cfg.CredentialKeyHex, cfg.DeliveryPollIntervalSecs)
+	// FUT-081: publisher for the webhook.queued/delivered/failed lifecycle
+	// events. Same broker the consumer below uses; confirm mode is on by default.
+	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
+	if err != nil {
+		return fmt.Errorf("rabbitmq publisher: %w", err)
+	}
+	defer pub.Close()
+
+	w, err := worker.New(repo, dispatcher, pub, cfg.CredentialKeyHex, cfg.DeliveryPollIntervalSecs)
 	if err != nil {
 		return fmt.Errorf("new worker: %w", err)
 	}

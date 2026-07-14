@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,22 +35,31 @@ type workerDispatcher interface {
 	Deliver(ctx context.Context, targetURL string, payload []byte, hmacKey []byte) error
 }
 
+// eventPublisher is the subset of *publisher.Publisher the Worker uses to emit
+// webhook lifecycle events (FUT-081). Extracted so tests can record publishes
+// and so a nil publisher (broker not wired) degrades to a no-op.
+type eventPublisher interface {
+	Publish(ctx context.Context, routingKey string, event events.Event) error
+}
+
 // Worker drives RabbitMQ event ingestion and the HTTP delivery retry loop.
 type Worker struct {
 	repo          workerRepo
 	dispatcher    workerDispatcher
+	publisher     eventPublisher
 	credentialKey []byte
 	pollInterval  time.Duration
 }
 
 // New creates a Worker. credentialKeyHex is the hex-encoded 32-byte AES key used
-// to decrypt per-endpoint HMAC secrets stored in the database.
-func New(repo *repository.Repository, dispatcher *delivery.Dispatcher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
-	return newWithDeps(repo, dispatcher, credentialKeyHex, pollIntervalSecs)
+// to decrypt per-endpoint HMAC secrets stored in the database. pub emits the
+// webhook.queued/delivered/failed lifecycle events (FUT-081).
+func New(repo *repository.Repository, dispatcher *delivery.Dispatcher, pub eventPublisher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
+	return newWithDeps(repo, dispatcher, pub, credentialKeyHex, pollIntervalSecs)
 }
 
 // newWithDeps is the internal constructor used by both New and tests.
-func newWithDeps(repo workerRepo, dispatcher workerDispatcher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
+func newWithDeps(repo workerRepo, dispatcher workerDispatcher, pub eventPublisher, credentialKeyHex string, pollIntervalSecs int) (*Worker, error) {
 	key, err := hex.DecodeString(credentialKeyHex)
 	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("CREDENTIAL_KEY_HEX must be a 64-character hex string (32 bytes)")
@@ -57,9 +67,38 @@ func newWithDeps(repo workerRepo, dispatcher workerDispatcher, credentialKeyHex 
 	return &Worker{
 		repo:          repo,
 		dispatcher:    dispatcher,
+		publisher:     pub,
 		credentialKey: key,
 		pollInterval:  time.Duration(pollIntervalSecs) * time.Second,
 	}, nil
+}
+
+// publishLifecycle emits a webhook.* lifecycle event best-effort (FUT-081). A
+// nil publisher or a broker error is logged and swallowed — it must never break
+// delivery processing. tenantID stamps the envelope so the audit consumer maps
+// the event to the right tenant.
+func (w *Worker) publishLifecycle(ctx context.Context, tenantID uuid.UUID, routingKey string, payload any) {
+	if w.publisher == nil {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.WarnContext(ctx, "webhook lifecycle marshal failed (best-effort)", "routing_key", routingKey, "error", err)
+		return
+	}
+	evt := events.Event{
+		ID:         uuid.NewString(),
+		Type:       routingKey,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    body,
+	}
+	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := w.publisher.Publish(pubCtx, routingKey, evt); err != nil {
+		slog.WarnContext(ctx, "webhook lifecycle publish failed (best-effort)", "routing_key", routingKey, "error", err)
+	}
 }
 
 // HandleEvent is the consumer.Handler for all subscribed event types.
@@ -78,6 +117,13 @@ func (w *Worker) HandleEvent(ctx context.Context, event events.Event) error {
 			"event_id", event.ID, "event_type", event.Type)
 		return nil
 	}
+	// FUT-081 loop guard: the consumer binds '#', so it also receives the
+	// webhook.queued/delivered/failed events this worker publishes. Never fan
+	// those back out into deliveries — that would let a wildcard endpoint
+	// subscription drive an infinite publish→deliver→publish loop.
+	if strings.HasPrefix(event.Type, "webhook.") {
+		return nil
+	}
 	tenantID, err := uuid.Parse(event.TenantID)
 	if err != nil {
 		return fmt.Errorf("invalid tenant_id in event %s: %w", event.ID, err)
@@ -94,14 +140,23 @@ func (w *Worker) HandleEvent(ctx context.Context, event events.Event) error {
 	}
 
 	for _, ep := range endpoints {
-		if _, err := w.repo.CreateDelivery(ctx, ep.ID, tenantID, event.Type, body); err != nil {
+		dr, err := w.repo.CreateDelivery(ctx, ep.ID, tenantID, event.Type, body)
+		if err != nil {
 			slog.ErrorContext(ctx, "create delivery record failed",
 				"endpoint_id", ep.ID,
 				"event_id", event.ID,
 				"error", err,
 			)
 			// Continue — don't fail the whole handler if one endpoint DB write fails.
+			continue
 		}
+		// FUT-081: record the enqueue so the audit trail shows the delivery was
+		// scheduled (the delivered/failed outcome follows from the retry loop).
+		w.publishLifecycle(ctx, tenantID, events.RoutingWebhookQueued, events.WebhookQueuedPayload{
+			DeliveryID: dr.ID.String(),
+			EndpointID: ep.ID.String(),
+			EventType:  event.Type,
+		})
 	}
 	return nil
 }
@@ -167,6 +222,7 @@ func (w *Worker) attemptDelivery(ctx context.Context, d *repository.DeliveryReco
 	deliveryCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 
+	attempts := d.Attempts + 1
 	err = w.dispatcher.Deliver(deliveryCtx, ep.URL, d.Payload, hmacKeyBytes)
 	if err == nil {
 		if markErr := w.repo.MarkDelivered(ctx, d.ID); markErr != nil {
@@ -177,13 +233,21 @@ func (w *Worker) attemptDelivery(ctx context.Context, d *repository.DeliveryReco
 			"endpoint_id", ep.ID,
 			"url", ep.URL,
 		)
+		// FUT-081: emit the successful-delivery outcome.
+		w.publishLifecycle(ctx, d.TenantID, events.RoutingWebhookDelivered, events.WebhookDeliveredPayload{
+			DeliveryID: d.ID.String(),
+			EndpointID: ep.ID.String(),
+			URL:        ep.URL,
+			EventType:  d.EventType,
+			Attempts:   attempts,
+		})
 		return
 	}
 
 	slog.WarnContext(ctx, "webhook delivery failed",
 		"delivery_id", d.ID,
 		"endpoint_id", ep.ID,
-		"attempts", d.Attempts+1,
+		"attempts", attempts,
 		"error", err,
 	)
 
@@ -199,6 +263,17 @@ func (w *Worker) attemptDelivery(ctx context.Context, d *repository.DeliveryReco
 			"url", ep.URL,
 		)
 	}
+	// FUT-081: emit the failed-attempt outcome (dead=true once retries are
+	// exhausted) so operators can alert on a misconfigured endpoint.
+	w.publishLifecycle(ctx, d.TenantID, events.RoutingWebhookFailed, events.WebhookFailedPayload{
+		DeliveryID: d.ID.String(),
+		EndpointID: ep.ID.String(),
+		URL:        ep.URL,
+		EventType:  d.EventType,
+		Error:      err.Error(),
+		Attempts:   attempts,
+		Dead:       dead,
+	})
 }
 
 // EventRoutingKeys lists all RabbitMQ routing keys the webhook service subscribes to.

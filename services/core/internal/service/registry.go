@@ -922,7 +922,14 @@ func (r *Registry) checkSignatureAdmission(ctx context.Context, tenantID, repoID
 // DeleteManifest removes a manifest by digest, or only a tag by name.
 // Per OCI spec §4.4: when the reference is a tag, ONLY the tag is deleted;
 // the underlying manifest remains accessible by digest.
-func (r *Registry) DeleteManifest(ctx context.Context, tenantID, repoID, reference string) error {
+//
+// FUT-081: on a successful delete it publishes tag.deleted (tag branch) or
+// manifest.deleted (digest branch) so the audit trail and deletion-subscribed
+// webhooks see the removal. repoName + deletedBy come from the handler (the
+// request-scoped repo name + JWT subject) for a meaningful audit row. The
+// publish is best-effort — a broker hiccup must not fail a delete that already
+// committed in metadata.
+func (r *Registry) DeleteManifest(ctx context.Context, tenantID, repoID, repoName, reference, deletedBy string) error {
 	ctx5, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -937,6 +944,12 @@ func (r *Registry) DeleteManifest(ctx context.Context, tenantID, repoID, referen
 			}
 			return fmt.Errorf("delete tag rpc: %w", err)
 		}
+		r.publishDelete(ctx, tenantID, events.RoutingTagDeleted, events.TagDeletedPayload{
+			RepositoryName: repoName,
+			RepoID:         repoID,
+			Tag:            reference,
+			DeletedBy:      deletedBy,
+		})
 		return nil
 	}
 
@@ -950,7 +963,53 @@ func (r *Registry) DeleteManifest(ctx context.Context, tenantID, repoID, referen
 		}
 		return fmt.Errorf("delete manifest rpc: %w", err)
 	}
+	r.publishDelete(ctx, tenantID, events.RoutingManifestDeleted, events.ManifestDeletedPayload{
+		RepositoryName: repoName,
+		RepoID:         repoID,
+		Digest:         reference,
+		DeletedBy:      deletedBy,
+	})
 	return nil
+}
+
+// RecordPushFailed publishes a push.failed event (FUT-081) best-effort so a
+// rejected/failed manifest push is visible in the audit trail + the
+// notifications bell (FE-API-008) instead of vanishing into an HTTP error.
+// reason is a short machine tag ("quota_exceeded", "tag_immutable",
+// "internal_error"). The payload reuses PushCompletedPayload's field tags so
+// the audit consumer can unmarshal either type.
+func (r *Registry) RecordPushFailed(ctx context.Context, tenantID, repoID, repoName, reference, pushedBy, reason string) {
+	r.publishDelete(ctx, tenantID, events.RoutingPushFailed, events.PushFailedPayload{
+		RepositoryName: repoName,
+		RepoID:         repoID,
+		Tag:            reference,
+		PushedBy:       pushedBy,
+		Reason:         reason,
+	})
+}
+
+// publishDelete emits an event best-effort. Shared by DeleteManifest's tag +
+// manifest branches and RecordPushFailed so the envelope construction lives in
+// one place. (Named for its first caller; it is a generic best-effort publish.)
+func (r *Registry) publishDelete(ctx context.Context, tenantID, routingKey string, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.WarnContext(ctx, "delete event marshal failed (best-effort)", "routing_key", routingKey, "error", err)
+		return
+	}
+	evt := events.Event{
+		ID:         uuid.New().String(),
+		Type:       routingKey,
+		TenantID:   tenantID,
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    body,
+	}
+	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := r.publisher.Publish(pubCtx, routingKey, evt); err != nil {
+		slog.WarnContext(ctx, "delete event publish failed (best-effort)", "routing_key", routingKey, "error", err)
+	}
 }
 
 // --- Tags ---

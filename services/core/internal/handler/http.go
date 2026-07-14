@@ -523,6 +523,8 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 	// its storage quota. Manifests are small (≤ 4 MiB) but still count, and rejecting
 	// here keeps storage_used in sync with what the metadata service tracks.
 	if quotaErr := h.registry.CheckQuota(r.Context(), tenantID, int64(len(body))); quotaErr == service.ErrQuotaExceeded {
+		// FUT-081: repo not resolved yet, so repo_id is empty in the payload.
+		h.registry.RecordPushFailed(r.Context(), tenantID, "", name, reference, claims.UserID, "quota_exceeded")
 		ociError(w, http.StatusForbidden, "DENIED", "tenant storage quota exceeded")
 		return
 	}
@@ -542,10 +544,12 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request, name
 		// stay on the generic UNKNOWN 500 path so a transient DB blip
 		// doesn't masquerade as a permanent immutability rejection.
 		if errors.Is(err, service.ErrTagImmutable) {
+			h.registry.RecordPushFailed(r.Context(), tenantID, repo.GetRepoId(), name, reference, claims.UserID, "tag_immutable")
 			ociError(w, http.StatusBadRequest, "MANIFEST_INVALID",
 				"tag is immutable (repo immutable_tags=true or per-tag pin set); push to a new tag or unpin first")
 			return
 		}
+		h.registry.RecordPushFailed(r.Context(), tenantID, repo.GetRepoId(), name, reference, claims.UserID, "internal_error")
 		slog.ErrorContext(r.Context(), "put manifest", "err", err)
 		ociError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
@@ -578,7 +582,7 @@ func (h *Handler) handleDeleteManifest(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
-	if err := h.registry.DeleteManifest(r.Context(), tenantID, repo.GetRepoId(), reference); err == service.ErrNotFound {
+	if err := h.registry.DeleteManifest(r.Context(), tenantID, repo.GetRepoId(), name, reference, claims.UserID); err == service.ErrNotFound {
 		ociError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
 		return
 	} else if err != nil {

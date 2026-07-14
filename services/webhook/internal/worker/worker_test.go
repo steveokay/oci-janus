@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -42,6 +43,7 @@ type fakeWorkerRepo struct {
 	// CreateDelivery
 	deliveryRec *repository.DeliveryRecord
 	createErr   error
+	createCalls int
 
 	// PollDueDeliveries
 	pollRecs []*repository.DeliveryRecord
@@ -66,6 +68,9 @@ func (f *fakeWorkerRepo) FindEndpointsForEvent(_ context.Context, _ uuid.UUID, _
 }
 
 func (f *fakeWorkerRepo) CreateDelivery(_ context.Context, _, _ uuid.UUID, _ string, _ []byte) (*repository.DeliveryRecord, error) {
+	f.mu.Lock()
+	f.createCalls++
+	f.mu.Unlock()
 	return f.deliveryRec, f.createErr
 }
 
@@ -106,14 +111,53 @@ func (f *fakeDispatcher) Deliver(_ context.Context, _ string, _ []byte, _ []byte
 	return f.err
 }
 
+// fakePublisher (FUT-081) records every published lifecycle event so tests can
+// assert webhook.queued / webhook.delivered / webhook.failed were emitted.
+type fakePublisher struct {
+	mu    sync.Mutex
+	calls []recordedPublish
+}
+
+type recordedPublish struct {
+	routingKey string
+	event      events.Event
+}
+
+func (p *fakePublisher) Publish(_ context.Context, routingKey string, evt events.Event) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, recordedPublish{routingKey: routingKey, event: evt})
+	return nil
+}
+
+func (p *fakePublisher) byKey(routingKey string) []recordedPublish {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []recordedPublish
+	for _, c := range p.calls {
+		if c.routingKey == routingKey {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // makeWorker creates a Worker with the provided fakes and validKeyHex.
 func makeWorker(t *testing.T, repo workerRepo, disp workerDispatcher) *Worker {
+	w, _ := makeWorkerWithPub(t, repo, disp)
+	return w
+}
+
+// makeWorkerWithPub is makeWorker but also returns the recording publisher for
+// tests that assert lifecycle events (FUT-081).
+func makeWorkerWithPub(t *testing.T, repo workerRepo, disp workerDispatcher) (*Worker, *fakePublisher) {
 	t.Helper()
-	w, err := newWithDeps(repo, disp, validKeyHex, 60)
+	pub := &fakePublisher{}
+	w, err := newWithDeps(repo, disp, pub, validKeyHex, 60)
 	if err != nil {
 		t.Fatalf("newWithDeps: %v", err)
 	}
-	return w
+	return w, pub
 }
 
 // encryptSecret encrypts a plaintext HMAC secret using validKey so fake endpoint
@@ -130,7 +174,7 @@ func encryptSecret(t *testing.T, plain string) string {
 // TestNew_invalidKey verifies that newWithDeps() rejects a key that is not
 // 64 hex characters (32 bytes).
 func TestNew_invalidKey(t *testing.T) {
-	_, err := newWithDeps(&fakeWorkerRepo{}, &fakeDispatcher{}, "tooshort", 5)
+	_, err := newWithDeps(&fakeWorkerRepo{}, &fakeDispatcher{}, &fakePublisher{}, "tooshort", 5)
 	if err == nil {
 		t.Fatal("expected error for invalid credential key")
 	}
@@ -138,7 +182,7 @@ func TestNew_invalidKey(t *testing.T) {
 
 // TestNew_validKey verifies that newWithDeps() succeeds with a valid 64-hex key.
 func TestNew_validKey(t *testing.T) {
-	w, err := newWithDeps(&fakeWorkerRepo{}, &fakeDispatcher{}, validKeyHex, 5)
+	w, err := newWithDeps(&fakeWorkerRepo{}, &fakeDispatcher{}, &fakePublisher{}, validKeyHex, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,5 +439,129 @@ func TestEventRoutingKeys_includesRequiredEvents(t *testing.T) {
 		if _, ok := keySet[want]; !ok {
 			t.Errorf("EventRoutingKeys() missing required key %q", want)
 		}
+	}
+}
+
+// ── FUT-081: webhook lifecycle events ─────────────────────────────────────────
+
+// TestHandleEvent_publishesQueued verifies that enqueuing a delivery emits one
+// webhook.queued event carrying the delivery + endpoint + source event type.
+func TestHandleEvent_publishesQueued(t *testing.T) {
+	endpointID := uuid.New()
+	deliveryID := uuid.New()
+	tenantID := "11111111-1111-1111-1111-111111111111"
+	repo := &fakeWorkerRepo{
+		endpoints: []*repository.EndpointRecord{
+			{ID: endpointID, TenantID: uuid.MustParse(tenantID), URL: "https://example.com/hook", Events: []string{"push.completed"}},
+		},
+		deliveryRec: &repository.DeliveryRecord{ID: deliveryID, EndpointID: endpointID, TenantID: uuid.MustParse(tenantID)},
+	}
+	w, pub := makeWorkerWithPub(t, repo, &fakeDispatcher{})
+
+	if err := w.HandleEvent(context.Background(), events.Event{
+		ID: uuid.NewString(), TenantID: tenantID, Type: events.RoutingPushCompleted,
+	}); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+
+	queued := pub.byKey(events.RoutingWebhookQueued)
+	if len(queued) != 1 {
+		t.Fatalf("expected 1 webhook.queued, got %d", len(queued))
+	}
+	if queued[0].event.TenantID != tenantID {
+		t.Errorf("queued event TenantID: got %q, want %q", queued[0].event.TenantID, tenantID)
+	}
+	var p events.WebhookQueuedPayload
+	if err := json.Unmarshal(queued[0].event.Payload, &p); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if p.DeliveryID != deliveryID.String() || p.EndpointID != endpointID.String() || p.EventType != events.RoutingPushCompleted {
+		t.Errorf("queued payload mismatch: %+v", p)
+	}
+}
+
+// TestHandleEvent_skipsOwnLifecycleEvents guards against a feedback loop: the
+// consumer binds '#', so it also receives the webhook.* events it publishes.
+// Those must be ignored (no delivery created, no re-publish).
+func TestHandleEvent_skipsOwnLifecycleEvents(t *testing.T) {
+	repo := &fakeWorkerRepo{
+		endpoints: []*repository.EndpointRecord{
+			{ID: uuid.New(), TenantID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), URL: "https://x/y"},
+		},
+		deliveryRec: &repository.DeliveryRecord{ID: uuid.New()},
+	}
+	w, pub := makeWorkerWithPub(t, repo, &fakeDispatcher{})
+
+	for _, rk := range []string{events.RoutingWebhookQueued, events.RoutingWebhookDelivered, events.RoutingWebhookFailed} {
+		if err := w.HandleEvent(context.Background(), events.Event{
+			ID: uuid.NewString(), TenantID: "11111111-1111-1111-1111-111111111111", Type: rk,
+		}); err != nil {
+			t.Fatalf("HandleEvent(%s): %v", rk, err)
+		}
+	}
+	if repo.createCalls != 0 {
+		t.Errorf("expected 0 CreateDelivery calls for webhook.* events, got %d", repo.createCalls)
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("expected 0 publishes for webhook.* events, got %d", len(pub.calls))
+	}
+}
+
+// TestAttemptDelivery_publishesDelivered verifies a successful send emits one
+// webhook.delivered event.
+func TestAttemptDelivery_publishesDelivered(t *testing.T) {
+	endpointID := uuid.New()
+	deliveryID := uuid.New()
+	tenantID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	repo := &fakeWorkerRepo{
+		endpointRec: &repository.EndpointRecord{ID: endpointID, URL: "https://example.com/hook", SecretEnc: encryptSecret(t, "s")},
+	}
+	w, pub := makeWorkerWithPub(t, repo, &fakeDispatcher{err: nil})
+
+	w.attemptDelivery(context.Background(), &repository.DeliveryRecord{
+		ID: deliveryID, EndpointID: endpointID, TenantID: tenantID, EventType: "push.completed", Payload: []byte(`{}`),
+	})
+
+	delivered := pub.byKey(events.RoutingWebhookDelivered)
+	if len(delivered) != 1 {
+		t.Fatalf("expected 1 webhook.delivered, got %d", len(delivered))
+	}
+	if delivered[0].event.TenantID != tenantID.String() {
+		t.Errorf("delivered TenantID: got %q, want %q", delivered[0].event.TenantID, tenantID.String())
+	}
+	var p events.WebhookDeliveredPayload
+	if err := json.Unmarshal(delivered[0].event.Payload, &p); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if p.DeliveryID != deliveryID.String() || p.URL != "https://example.com/hook" || p.EventType != "push.completed" {
+		t.Errorf("delivered payload mismatch: %+v", p)
+	}
+}
+
+// TestAttemptDelivery_publishesFailedWithDead verifies a failed, retry-exhausted
+// send emits one webhook.failed event with dead=true.
+func TestAttemptDelivery_publishesFailedWithDead(t *testing.T) {
+	endpointID := uuid.New()
+	deliveryID := uuid.New()
+	tenantID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	repo := &fakeWorkerRepo{
+		endpointRec: &repository.EndpointRecord{ID: endpointID, URL: "https://example.com/hook", SecretEnc: encryptSecret(t, "s")},
+	}
+	w, pub := makeWorkerWithPub(t, repo, &fakeDispatcher{err: errors.New("boom")})
+
+	w.attemptDelivery(context.Background(), &repository.DeliveryRecord{
+		ID: deliveryID, EndpointID: endpointID, TenantID: tenantID, EventType: "push.completed", Payload: []byte(`{}`), Attempts: 5,
+	})
+
+	failed := pub.byKey(events.RoutingWebhookFailed)
+	if len(failed) != 1 {
+		t.Fatalf("expected 1 webhook.failed, got %d", len(failed))
+	}
+	var p events.WebhookFailedPayload
+	if err := json.Unmarshal(failed[0].event.Payload, &p); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if p.DeliveryID != deliveryID.String() || !p.Dead || p.Error == "" {
+		t.Errorf("failed payload mismatch: %+v", p)
 	}
 }
