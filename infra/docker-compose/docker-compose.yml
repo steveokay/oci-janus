@@ -580,10 +580,10 @@ services:
       MTLS_CA_CERT_PATH: /certs/ca.crt
       MTLS_CERT_PATH: /certs/proxy.crt
       MTLS_KEY_PATH: /certs/proxy.key
-      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup.
-      # The proxy gRPC server pins every inbound RPC to the tenant returned
-      # by registry-tenant's GetDeploymentMetadata at startup. Required
-      # when DEPLOYMENT_MODE=single (the platform default).
+      # REDESIGN-001 Phase 3.4 — bootstrap-tenant-id lookup. The proxy gRPC
+      # server pins every inbound RPC to the tenant returned by
+      # registry-tenant's GetDeploymentMetadata at startup (the platform is
+      # single-tenant — ADR-0031). Required.
       TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro
@@ -725,10 +725,10 @@ services:
       # rejects writes that carry a plaintext webhook secret.
       # Generate with `openssl rand -hex 32`.
       AUDIT_EXPORT_SECRETS_KEY_HEX: ${AUDIT_EXPORT_SECRETS_KEY_HEX:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
-      # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup.
-      # The audit gRPC server pins every inbound RPC to the tenant returned by
-      # registry-tenant's GetDeploymentMetadata at startup. Required when
-      # DEPLOYMENT_MODE=single (the platform default).
+      # REDESIGN-001 Phase 3.4 — bootstrap-tenant-id lookup. The audit gRPC
+      # server pins every inbound RPC to the tenant returned by
+      # registry-tenant's GetDeploymentMetadata at startup (the platform is
+      # single-tenant — ADR-0031). Required.
       TENANT_GRPC_ADDR: registry-tenant:50051
     volumes:
       - certs_data:/certs:ro

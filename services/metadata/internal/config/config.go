@@ -25,7 +25,7 @@ type Config struct {
 	// REDESIGN-001 Phase 3.4 — tenant gRPC client for SingleTenantInjector.
 	//
 	// TenantGRPCAddr is the host:port of registry-tenant's gRPC server.
-	// Required in DEPLOYMENT_MODE=single so metadata can fetch the
+	// Required so metadata can fetch the
 	// bootstrap_tenant_id at startup and wire libs/middleware/grpc.
 	// SingleTenantInjector. In multi mode the value is ignored and the
 	// dial is skipped (the injector is a no-op for empty bootstrap id).
@@ -43,12 +43,6 @@ type Config struct {
 	// The raw hex stays on the config; the hex->[]byte decode + handler
 	// wiring happens in internal/server (a separate FUT-023 task).
 	PRRegistryKeyHex string `mapstructure:"PR_REGISTRY_KEY_HEX"`
-
-	// DeploymentMode is the binary's posture, normalised by
-	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
-	// Read in Load() — not via Viper bindings — to keep the validated/typed
-	// value isolated from raw env string handling.
-	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load binds environment variables into Config and validates required fields.
@@ -57,13 +51,6 @@ func Load() (*Config, error) {
 	if err := loader.Load("registry-metadata", cfg); err != nil {
 		return nil, err
 	}
-	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper so
-	// invalid values fail at startup. Defaults to single per the OSS posture.
-	mode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("load deployment mode: %w", err)
-	}
-	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}

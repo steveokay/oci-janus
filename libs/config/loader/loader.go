@@ -208,37 +208,6 @@ func Load(serviceName string, cfg any) error {
 	return nil
 }
 
-// DeploymentMode describes how this binary is deployed.
-// "single" — one tenant per deployment, auto-bootstrapped, FE hides tenant chrome.
-// "multi"  — multi-tenant capability enabled, FE renders tenant switcher / admin.
-type DeploymentMode string
-
-const (
-	// DeploymentModeSingle is the default deployment mode for self-hosted OSS installations.
-	// One tenant per deployment, auto-bootstrapped.
-	DeploymentModeSingle DeploymentMode = "single"
-
-	// DeploymentModeMulti enables multi-tenant capability.
-	// FE renders tenant switcher / admin panels.
-	DeploymentModeMulti DeploymentMode = "multi"
-)
-
-// LoadDeploymentMode reads DEPLOYMENT_MODE env var.
-// Defaults to "single" (the OSS self-hosted default).
-// Returns an error for unknown values so misconfiguration fails loudly at startup.
-func LoadDeploymentMode() (DeploymentMode, error) {
-	v := strings.TrimSpace(os.Getenv("DEPLOYMENT_MODE"))
-	if v == "" {
-		return DeploymentModeSingle, nil
-	}
-	switch DeploymentMode(v) {
-	case DeploymentModeSingle, DeploymentModeMulti:
-		return DeploymentMode(v), nil
-	default:
-		return "", fmt.Errorf("invalid DEPLOYMENT_MODE %q: must be 'single' or 'multi'", v)
-	}
-}
-
 // RequireFields returns an error listing the names of any required config fields
 // whose values are empty. Pass a map of env-var-name → current-value pairs.
 //

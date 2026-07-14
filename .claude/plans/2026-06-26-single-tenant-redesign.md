@@ -1455,7 +1455,7 @@ Single-tenant is now the **permanent** product direction. Phase 9 removes the do
 - **9.2 BFF** — ✅ DONE (#347)
 - **9.3 `SingleTenantInjector` always-on** — ✅ DONE (`feat/redesign-9.3-injector-always-on`) — gate removed across all 11 services; injector unconditional; shared lib + tests reframed off "multi mode"; `DeploymentMode` config fields left defined for 9.5.
 - **9.4 tenant service** — ✅ DONE (`feat/redesign-9.4-tenant-guard-unconditional`) — `CreateTenant` guard unconditional; `deploymentMode` handler param/field + tenant config field + `LoadDeploymentMode()` call removed; multi-only tests deleted. `loader.DeploymentMode` type + env/compose/helm mentions stay for 9.5.
-- **9.5 config/loader** — ⬜ OPEN
+- **9.5 config/loader** — ✅ DONE (`feat/redesign-9.5-remove-deployment-mode`) — `loader.DeploymentMode`/`LoadDeploymentMode` + the field from all 10 remaining service configs deleted; auth bootstrap CLI multi-branch removed (idempotency single-only); stale `DEPLOYMENT_MODE` comments + compose mentions swept. Docs prose is 9.6.
 - **9.6 docs** — ⬜ OPEN
 
 ---

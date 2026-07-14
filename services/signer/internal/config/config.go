@@ -54,12 +54,6 @@ type Config struct {
 	// libs/middleware/grpc.SingleTenantInjector; in multi mode the dial is
 	// skipped (the injector is a no-op for empty bootstrap id anyway).
 	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
-
-	// DeploymentMode is the binary's posture, normalised by
-	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
-	// Read in Load() — not via Viper bindings — to keep the validated/typed
-	// value isolated from raw env string handling.
-	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -83,13 +77,6 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper so
-	// invalid values fail at startup. Defaults to single per the OSS posture.
-	mode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("load deployment mode: %w", err)
-	}
-	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}

@@ -35,7 +35,7 @@ type Config struct {
 	// REDESIGN-001 Phase 3.4 — tenant gRPC client for SingleTenantInjector.
 	//
 	// TenantGRPCAddr is the host:port of registry-tenant's gRPC server.
-	// Required in DEPLOYMENT_MODE=single so core can fetch the
+	// Required so core can fetch the
 	// bootstrap_tenant_id at startup and wire libs/middleware/grpc.
 	// SingleTenantInjector into its server chain. In multi mode the value
 	// is ignored and the dial is skipped (the injector is a no-op for
@@ -43,12 +43,6 @@ type Config struct {
 	//
 	// Cert paths reuse the per-server mTLS material above.
 	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
-
-	// DeploymentMode is the binary's posture, normalised by
-	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
-	// Read in Load() — not via Viper bindings — to keep the validated/typed
-	// value isolated from raw env string handling.
-	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 
 	RedisAddr     string `mapstructure:"REDIS_ADDR"`
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
@@ -92,13 +86,6 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
-	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper so
-	// invalid values fail at startup. Defaults to single per the OSS posture.
-	mode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("load deployment mode: %w", err)
-	}
-	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}

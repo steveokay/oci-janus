@@ -96,8 +96,8 @@ func effectiveTenantAdmin(assignments []*authv1.RoleAssignment, tenantID string)
 //   - users.is_global_admin = true (Phase 5.1 typed primitive). This is the
 //     canonical gate going forward — it is set/cleared exclusively via
 //     SetGlobalAdmin and cannot be minted by calling GrantRole with scope='*'.
-//   - In DEPLOYMENT_MODE=single, ANY tenant-admin grant qualifies because the
-//     deployment IS the platform — there is no meaningful distinction between
+//   - ANY tenant-admin grant qualifies because the deployment IS the platform
+//     (single-tenant — ADR-0031) — there is no meaningful distinction between
 //     "this tenant's admin" and "the platform's admin" when there's only one
 //     tenant.
 //

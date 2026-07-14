@@ -168,8 +168,9 @@ func (h *Handler) handleSnoozeAPIKeyReview(w http.ResponseWriter, r *http.Reques
 	// SnoozeAPIKeyReview, because that RPC has no tenant_id in its
 	// request shape (SEC-069 follow-up). Without this pre-flight scan,
 	// a tenant-A admin could snooze a tenant-B key by knowing its UUID
-	// — exploitable only in DEPLOYMENT_MODE=multi but still HIGH.
-	// The pre-flight ALSO enforces the non-admin ownership rule.
+	// — the pre-flight is defence in depth (the platform is single-tenant,
+	// but the tenant_id boundary still holds). The pre-flight ALSO enforces
+	// the non-admin ownership rule.
 	listResp, err := h.auth.ListStaleKeys(r.Context(), &authv1.ListStaleKeysRequest{
 		TenantId: tenantID,
 	})
