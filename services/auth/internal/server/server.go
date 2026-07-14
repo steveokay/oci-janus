@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -106,33 +105,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	svc.SetSessionRepo(sessionRepo)
 	svc.SetSessionActiveUpdater(service.NewSessionActiveUpdater(rdb, sessionRepo, slog.Default()))
 
-	// Resolve the authoritative bootstrap tenant id once, up-front. In single
-	// mode this comes from services/tenant.deployment_metadata (the same source
-	// the Phase 3.4 SingleTenantInjector uses below); we thread it into both the
-	// SCIM wiring and the injector so neither drifts onto the dev-default id.
-	// Fail-loud in single mode — the single-tenant defence-in-depth layers must
-	// not silently fall back to DEV_DEFAULT_TENANT_ID.
-	var bootstrapTenantID string
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		bootstrapTenantID, err = fetchBootstrapTenantID(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		}
+	// Resolve the authoritative bootstrap tenant id once, up-front. It comes
+	// from services/tenant.deployment_metadata (the same source the Phase 3.4
+	// SingleTenantInjector uses below); we thread it into both the SCIM wiring
+	// and the injector so neither drifts onto the dev-default id. Fail-loud —
+	// the single-tenant defence-in-depth layers must not silently fall back to
+	// DEV_DEFAULT_TENANT_ID (ADR-0031).
+	bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
 	}
 
 	// SCIM 2.0 provisioning (Tier-1 #5) — wire the DB-backed scim_config repo so
 	// VerifySCIMToken can gate the /scim/v2/* surface, and so provisioned users
-	// (Phase 2) land under the deployment's authoritative bootstrap tenant. In
-	// single mode that is the deployment_metadata bootstrap tenant resolved
-	// above; in multi mode we fall back to DEV_DEFAULT_TENANT_ID (SCIM is a
-	// single-mode enterprise feature — the fallback keeps legacy/dev boots
-	// working). Token verification (Phase 1) ignores the tenant, so this is safe
-	// even before the Phase 3 generate endpoint lands.
-	scimTenantIDStr := bootstrapTenantID
-	if scimTenantIDStr == "" {
-		scimTenantIDStr = cfg.DevDefaultTenantID
-	}
-	scimTenantID, _ := uuid.Parse(scimTenantIDStr)
+	// (Phase 2) land under the deployment's authoritative bootstrap tenant — the
+	// deployment_metadata bootstrap tenant resolved above (ADR-0031). Token
+	// verification (Phase 1) ignores the tenant, so this is safe even before the
+	// Phase 3 generate endpoint lands.
+	scimTenantID, _ := uuid.Parse(bootstrapTenantID)
 	svc.SetSCIMRepo(users, scimTenantID)
 
 	// ── 3b. RabbitMQ publisher (RBAC audit events) ────────────────────────────
@@ -151,24 +141,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// ── 4. gRPC server ────────────────────────────────────────────────────────
 	//
-	// REDESIGN-001 Phase 3.4 — Single-tenant injector wiring (pilot service).
-	//
-	// In DEPLOYMENT_MODE=single we look up the bootstrap tenant id from
-	// services/tenant.deployment_metadata at startup so the server-side
-	// interceptor can reject mismatched x-tenant-id metadata. Fail-loud:
-	// if the lookup errors, auth exits — silently degrading this defence-in-
-	// depth layer is worse than failing to start. In multi mode we skip the
-	// dial entirely (the injector is a no-op for empty bootstrap id anyway).
-	var singleTenantInterceptor grpc.UnaryServerInterceptor
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		// bootstrapTenantID was resolved up-front (above the SCIM wiring) so the
-		// SCIM tenant and this injector share one authoritative lookup.
-		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
-		slog.Info("single-mode tenant injector wired",
-			"bootstrap_tenant_id", bootstrapTenantID,
-			"tenant_grpc", cfg.TenantGRPCAddr,
-		)
-	}
+	// REDESIGN-001 Phase 3.4 / 9.3 — Single-tenant injector wiring (pilot
+	// service). The platform is single-tenant (ADR-0031), so the injector is
+	// wired unconditionally; it rejects mismatched x-tenant-id metadata.
+	// bootstrapTenantID was resolved up-front (above the SCIM wiring) so the
+	// SCIM tenant and this injector share one authoritative lookup.
+	singleTenantInterceptor := grpcmw.SingleTenantInjector(bootstrapTenantID)
+	slog.Info("single-tenant injector wired",
+		"bootstrap_tenant_id", bootstrapTenantID,
+		"tenant_grpc", cfg.TenantGRPCAddr,
+	)
 
 	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
@@ -570,7 +552,7 @@ func runMigrations(cfg *config.Config) error {
 // longer than that just hides the misconfiguration.
 func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
 	if cfg.TenantGRPCAddr == "" {
-		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required (Phase 3.4)")
 	}
 	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {
@@ -588,11 +570,11 @@ func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, er
 // buildGRPCOptions returns the server options list, including mTLS credentials
 // if configured.
 //
-// extraUnary is an optional additional unary interceptor appended to the end of
-// the shared chain. REDESIGN-001 Phase 3.4 uses it to slot the
-// SingleTenantInjector into the chain when DEPLOYMENT_MODE=single, so the
+// extraUnary is an additional unary interceptor appended to the end of the
+// shared chain. REDESIGN-001 Phase 3.4 / 9.3 uses it to slot the
+// SingleTenantInjector into the chain (always wired now — ADR-0031), so the
 // "normalise the inbound x-tenant-id" defence runs after auth + tracing.
-// Pass nil in multi mode (or when no extra interceptor is required).
+// The nil check below is retained defensively.
 func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
 	chain := grpcmw.ServerInterceptors()
 	if extraUnary != nil {

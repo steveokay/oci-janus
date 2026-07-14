@@ -62,10 +62,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// CreateTenant.
 	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain, cfg.DeploymentMode)
 
-	// REDESIGN-001 Phase 3.4 — in single-tenant mode every inbound RPC is
-	// pinned to the bootstrap tenant. services/tenant is the canonical
-	// source of GetDeploymentMetadata, so it can't self-dial like every
-	// other service does — instead the bootstrap tenant id is read
+	// REDESIGN-001 Phase 3.4 / 9.3 — the platform is single-tenant (ADR-0031),
+	// so every inbound RPC is pinned to the bootstrap tenant. services/tenant
+	// is the canonical source of GetDeploymentMetadata, so it can't self-dial
+	// like every other service does — instead the bootstrap tenant id is read
 	// directly from the repository (same DB it would serve over gRPC).
 	//
 	// Special case: the deployment may legitimately be pre-bootstrap on
@@ -73,25 +73,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// the tenant service is up). In that window we skip wiring the
 	// injector and log a warning so the operator sees what happened.
 	// Once `make dev-bootstrap` (or the prod equivalent) runs, the next
-	// restart picks it up. Phase 3.2's CreateTenant guard already
-	// prevents a second tenant insertion in single mode, so the gap is
-	// covered by a different invariant in the meantime.
+	// restart picks it up. The CreateTenant guard already prevents a second
+	// tenant insertion, so the gap is covered by a different invariant in the
+	// meantime. This is why tenant keeps the switch instead of failing loud
+	// like every other service.
 	var singleTenantInterceptor grpc.UnaryServerInterceptor
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		bootstrapTenantID, err := readBootstrapTenantID(ctx, repo)
-		switch {
-		case errors.Is(err, repository.ErrNotFound):
-			slog.Warn(
-				"single-mode: bootstrap_tenant_id not yet written — SingleTenantInjector NOT wired this boot; run the bootstrap CLI then restart",
-				"key", tenantbootstrap.DeploymentMetadataKey,
-			)
-		case err != nil:
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		default:
-			singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
-			slog.Info("single-mode tenant injector wired (self-read from local repo)",
-				"bootstrap_tenant_id", bootstrapTenantID)
-		}
+	bootstrapTenantID, err := readBootstrapTenantID(ctx, repo)
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		slog.Warn(
+			"bootstrap_tenant_id not yet written — SingleTenantInjector NOT wired this boot; run the bootstrap CLI then restart",
+			"key", tenantbootstrap.DeploymentMetadataKey,
+		)
+	case err != nil:
+		return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+	default:
+		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
+		slog.Info("single-tenant injector wired (self-read from local repo)",
+			"bootstrap_tenant_id", bootstrapTenantID)
 	}
 
 	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)

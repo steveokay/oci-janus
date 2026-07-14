@@ -15,7 +15,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -42,23 +41,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// ── 2. gRPC server ────────────────────────────────────────────────────────
 	//
-	// REDESIGN-001 Phase 3.4 — Single-tenant injector wiring. In
-	// DEPLOYMENT_MODE=single we look up the bootstrap tenant id from
-	// services/tenant.deployment_metadata at startup so the server-side
-	// interceptor can reject mismatched x-tenant-id metadata. Fail-loud:
-	// if the lookup errors, storage exits. In multi mode the dial is skipped.
-	var singleTenantInterceptor grpc.UnaryServerInterceptor
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		}
-		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
-		slog.Info("single-mode tenant injector wired",
-			"bootstrap_tenant_id", bootstrapTenantID,
-			"tenant_grpc", cfg.TenantGRPCAddr,
-		)
+	// REDESIGN-001 Phase 3.4 / 9.3 — the platform is single-tenant (ADR-0031),
+	// so we look up the bootstrap tenant id from
+	// services/tenant.deployment_metadata at startup and wire the server-side
+	// interceptor unconditionally; it rejects mismatched x-tenant-id metadata.
+	// Fail-loud: if the lookup errors, storage exits.
+	bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
 	}
+	singleTenantInterceptor := grpcmw.SingleTenantInjector(bootstrapTenantID)
+	slog.Info("single-tenant injector wired",
+		"bootstrap_tenant_id", bootstrapTenantID,
+		"tenant_grpc", cfg.TenantGRPCAddr,
+	)
 
 	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
@@ -157,7 +153,7 @@ func initDriver(cfg *config.Config) (driver.Driver, error) {
 }
 
 // buildGRPCOptions assembles server options. extraUnary is the optional
-// Phase 3.4 SingleTenantInjector (nil in multi mode).
+// Phase 3.4 SingleTenantInjector (the nil check below is retained defensively).
 func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor) ([]grpc.ServerOption, error) {
 	chain := grpcmw.ServerInterceptors()
 	if extraUnary != nil {
@@ -187,7 +183,7 @@ func buildGRPCOptions(cfg *config.Config, extraUnary grpc.UnaryServerInterceptor
 // any error to a fatal startup failure (REDESIGN-001 Phase 3.4).
 func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
 	if cfg.TenantGRPCAddr == "" {
-		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required (Phase 3.4)")
 	}
 	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {

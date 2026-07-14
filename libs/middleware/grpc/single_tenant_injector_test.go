@@ -12,13 +12,15 @@ import (
 )
 
 // REDESIGN-001 Phase 3.3 — middleware behaviour matrix is tightly
-// specified, so the tests pin every quadrant:
+// specified, so the tests pin every quadrant. The platform is single-tenant
+// (ADR-0031 / Phase 9.3); an empty bootstrap id is only the defensive
+// pre-bootstrap passthrough shape, not a supported "multi mode":
 //
-//   1. multi mode (bootstrap == "")        → pass through, no md mutation
-//   2. single mode + md absent             → inject bootstrap id
-//   3. single mode + md == bootstrap       → pass through unchanged
-//   4. single mode + md != bootstrap       → reject InvalidArgument
-//   5. single mode + md empty string       → treated as "absent"
+//   1. unset id (bootstrap == "")          → pass through, no md mutation
+//   2. bootstrapped + md absent            → inject bootstrap id
+//   3. bootstrapped + md == bootstrap      → pass through unchanged
+//   4. bootstrapped + md != bootstrap      → reject InvalidArgument
+//   5. bootstrapped + md empty string      → treated as "absent"
 //
 // Every case asserts BOTH the handler return path AND what the handler
 // saw on the context, so a future refactor that flips one without the
@@ -67,10 +69,10 @@ func dispatch(t *testing.T, bootstrap string, mdPairs ...string) (*recordingHand
 	return rec, resp, err
 }
 
-func TestSingleTenantInjector_MultiMode_PassesThrough(t *testing.T) {
-	// bootstrap == "" → middleware must be a true no-op even when no
-	// metadata is supplied. The handler runs and sees whatever the caller
-	// sent (empty, in this case).
+func TestSingleTenantInjector_UnsetID_PassesThrough(t *testing.T) {
+	// bootstrap == "" → the defensive pre-bootstrap shape. The middleware
+	// must be a true no-op even when no metadata is supplied. The handler
+	// runs and sees whatever the caller sent (empty, in this case).
 	rec, resp, err := dispatch(t, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,22 +81,23 @@ func TestSingleTenantInjector_MultiMode_PassesThrough(t *testing.T) {
 		t.Fatalf("unexpected response: %v", resp)
 	}
 	if !rec.called {
-		t.Error("handler must be invoked in multi mode")
+		t.Error("handler must be invoked when the injector has no bootstrap id")
 	}
 	if rec.sawValue != "" {
-		t.Errorf("multi mode must not inject anything; handler saw %q", rec.sawValue)
+		t.Errorf("unset id must not inject anything; handler saw %q", rec.sawValue)
 	}
 }
 
-func TestSingleTenantInjector_MultiMode_LeavesExistingMDAlone(t *testing.T) {
-	// Even in multi mode, if the caller DID send a tenant id, the
-	// middleware must not touch it — multi mode means "trust the caller".
-	rec, _, err := dispatch(t, "", tenantIDMetadataKey, "multi-tenant-real-uuid")
+func TestSingleTenantInjector_UnsetID_LeavesExistingMDAlone(t *testing.T) {
+	// Even in the defensive unset-id shape, if the caller DID send a tenant
+	// id, the middleware must not touch it — with no bootstrap id there is
+	// nothing to enforce against.
+	rec, _, err := dispatch(t, "", tenantIDMetadataKey, "some-real-uuid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if rec.sawValue != "multi-tenant-real-uuid" {
-		t.Errorf("multi mode must pass metadata through unchanged; handler saw %q", rec.sawValue)
+	if rec.sawValue != "some-real-uuid" {
+		t.Errorf("unset id must pass metadata through unchanged; handler saw %q", rec.sawValue)
 	}
 }
 

@@ -19,7 +19,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/steveokay/oci-janus/libs/auth/mtls"
-	"github.com/steveokay/oci-janus/libs/config/loader"
 	grpcmw "github.com/steveokay/oci-janus/libs/middleware/grpc"
 	httpmiddleware "github.com/steveokay/oci-janus/libs/middleware/http"
 	"github.com/steveokay/oci-janus/libs/observability/metrics"
@@ -138,22 +137,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}()
 	}
 
-	// REDESIGN-001 Phase 3.4 — in single-tenant mode every inbound RPC is
-	// pinned to the bootstrap tenant via a server interceptor. The tenant ID
-	// itself is fetched once at startup from registry-tenant's
-	// GetDeploymentMetadata RPC. In multi mode the tenant ID comes from the
-	// gateway/JWT and no interceptor is wired.
-	var singleTenantInterceptor grpc.UnaryServerInterceptor
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		}
-		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
-		slog.Info("single-mode tenant injector wired",
-			"bootstrap_tenant_id", bootstrapTenantID,
-			"tenant_grpc", cfg.TenantGRPCAddr)
+	// REDESIGN-001 Phase 3.4 / 9.3 — the platform is single-tenant (ADR-0031),
+	// so every inbound RPC is pinned to the bootstrap tenant via a server
+	// interceptor, wired unconditionally. The tenant ID itself is fetched once
+	// at startup from registry-tenant's GetDeploymentMetadata RPC.
+	bootstrapTenantID, err := fetchBootstrapTenantID(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
 	}
+	singleTenantInterceptor := grpcmw.SingleTenantInjector(bootstrapTenantID)
+	slog.Info("single-tenant injector wired",
+		"bootstrap_tenant_id", bootstrapTenantID,
+		"tenant_grpc", cfg.TenantGRPCAddr)
 
 	// gRPC server — mTLS-aware when certs are configured, plaintext in dev.
 	// Mirrors the auth / signer / metadata pattern. FUT-013 surfaced the
@@ -283,7 +278,7 @@ func buildGRPCServerOptions(cfg *config.Config, extraUnary grpc.UnaryServerInter
 // pull through the wrong tenant.
 func fetchBootstrapTenantID(ctx context.Context, cfg *config.Config) (string, error) {
 	if cfg.TenantGRPCAddr == "" {
-		return "", fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
+		return "", fmt.Errorf("TENANT_GRPC_ADDR is required (Phase 3.4)")
 	}
 	tenantCreds, err := cfg.MTLSClientCreds("registry-tenant")
 	if err != nil {

@@ -12,17 +12,20 @@ import (
 
 // REDESIGN-001 Phase 3.3 — single-tenant context injector.
 //
-// The whole system already filters every query by tenant_id, but in single
-// mode the value is constant and the FE/BFF could either forget to send it
-// (a regression) or send a stale UUID (e.g. a tenant rename in dev where a
-// browser tab kept the old id). This middleware is defence-in-depth on the
-// gRPC plane: it normalises the inbound x-tenant-id metadata to the
-// bootstrap tenant id so downstream queries can trust the context, and it
-// rejects requests that ship a CONFLICTING tenant_id with a clear error
-// instead of silently routing them somewhere they don't belong.
+// The whole system already filters every query by tenant_id, but the value
+// is constant (the platform hosts exactly one tenant — ADR-0031) and the
+// FE/BFF could either forget to send it (a regression) or send a stale UUID
+// (e.g. a tenant rename in dev where a browser tab kept the old id). This
+// middleware is defence-in-depth on the gRPC plane: it normalises the
+// inbound x-tenant-id metadata to the bootstrap tenant id so downstream
+// queries can trust the context, and it rejects requests that ship a
+// CONFLICTING tenant_id with a clear error instead of silently routing them
+// somewhere they don't belong.
 //
-// The interceptor is a no-op in multi mode — the value of bootstrapTenantID
-// drives the behaviour (empty string ⇒ no-op).
+// Phase 9.3 (ADR-0031) made injection unconditional: every service wires
+// this interceptor at startup once it has fetched the bootstrap tenant id.
+// An empty bootstrapTenantID is now only a defensive pre-bootstrap shape
+// (see SingleTenantInjector) — not a "multi mode" the platform still ships.
 
 // tenantIDMetadataKey is the gRPC metadata key carrying the active tenant
 // identity on every RPC. Lowercase per HTTP/2 wire format; gRPC's metadata
@@ -31,11 +34,12 @@ import (
 const tenantIDMetadataKey = "x-tenant-id"
 
 // TenantIDFromIncomingContext returns the x-tenant-id metadata value on the
-// inbound gRPC context, or "" if absent. In single mode SingleTenantInjector
-// has already populated it with the bootstrap tenant id, so a handler serving
-// an unauthenticated/tenant-less caller (e.g. the FUT-023 SCM webhook, which
+// inbound gRPC context, or "" if absent. SingleTenantInjector has already
+// populated it with the bootstrap tenant id, so a handler serving an
+// unauthenticated/tenant-less caller (e.g. the FUT-023 SCM webhook, which
 // carries no JWT) can recover the active tenant from the context instead of
-// the request body. Returns "" in multi mode when no caller supplied one.
+// the request body. Returns "" only in the defensive pre-bootstrap shape
+// where the injector was wired with an empty id.
 func TenantIDFromIncomingContext(ctx context.Context) string {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -48,7 +52,8 @@ func TenantIDFromIncomingContext(ctx context.Context) string {
 }
 
 // SingleTenantInjector returns a unary interceptor that enforces a single
-// canonical tenant_id when bootstrapTenantID is non-empty (single mode).
+// canonical tenant_id. Every service wires it unconditionally once it has
+// resolved the bootstrap tenant id (ADR-0031 / Phase 9.3).
 //
 // Unary only by design: streams in this codebase carry tenant_id in the
 // first request message (not metadata), so a stream variant would be a
@@ -57,8 +62,12 @@ func TenantIDFromIncomingContext(ctx context.Context) string {
 //
 // Behaviour matrix:
 //
-//	bootstrapTenantID == ""  → no-op (multi mode); the interceptor passes
-//	                            every request through untouched.
+//	bootstrapTenantID == ""  → defensive passthrough. Not a supported mode:
+//	                            it only occurs before the platform has been
+//	                            bootstrapped (or if a caller ignores the
+//	                            fetch error). The interceptor passes every
+//	                            request through untouched rather than force
+//	                            the caller to nil-check.
 //	x-tenant-id absent       → inject bootstrapTenantID into the metadata so
 //	                            downstream handlers see a populated value.
 //	x-tenant-id == bootstrap → pass through unchanged.
@@ -85,9 +94,10 @@ func TenantIDFromIncomingContext(ctx context.Context) string {
 // of a hard dependency on the tenant service.
 func SingleTenantInjector(bootstrapTenantID string) grpc.UnaryServerInterceptor {
 	if bootstrapTenantID == "" {
-		// Multi mode (or "I haven't bootstrapped yet" — same shape from
-		// the middleware's perspective). Return the identity interceptor
-		// so the chain still works without a nil check on the caller.
+		// Defensive pre-bootstrap shape only — the platform is single-tenant
+		// (ADR-0031) and every caller fetches a real bootstrap id before
+		// wiring this. Return the identity interceptor so the chain still
+		// works without a nil check on the caller.
 		return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			return handler(ctx, req)
 		}
@@ -119,7 +129,7 @@ func SingleTenantInjector(bootstrapTenantID string) grpc.UnaryServerInterceptor 
 				"bootstrap_tenant_id", bootstrapTenantID,
 			)
 			return nil, status.Errorf(codes.InvalidArgument,
-				"DEPLOYMENT_MODE=single hosts a single tenant (%s); request supplied %q",
+				"this deployment hosts a single tenant (%s); request supplied %q",
 				bootstrapTenantID, values[0])
 		}
 

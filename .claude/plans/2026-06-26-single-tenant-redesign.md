@@ -1450,7 +1450,13 @@ Single-tenant is now the **permanent** product direction. Phase 9 removes the do
 
 **Gotchas (from survey):** (1) the injector/bootstrap wiring is spread across 11 services — mechanical but wide; (2) the compose `registry-bootstrap` one-shot dependency chain must keep working (it does — bootstrap stays); (3) don't delete `CreateTenant`/`deployment_metadata` (they're single-tenant machinery, not multi).
 
-**Status:** NOT STARTED — tracked, awaiting go-ahead to implement.
+**Status (as-of 2026-07-14):** IN PROGRESS.
+- **9.1 FE chrome** — ✅ DONE (#346)
+- **9.2 BFF** — ✅ DONE (#347)
+- **9.3 `SingleTenantInjector` always-on** — ✅ DONE (`feat/redesign-9.3-injector-always-on`) — gate removed across all 11 services; injector unconditional; shared lib + tests reframed off "multi mode"; `DeploymentMode` config fields left defined for 9.5.
+- **9.4 tenant service** — ⬜ OPEN
+- **9.5 config/loader** — ⬜ OPEN
+- **9.6 docs** — ⬜ OPEN
 
 ---
 
