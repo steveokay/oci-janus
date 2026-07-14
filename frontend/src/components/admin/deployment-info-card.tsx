@@ -1,15 +1,13 @@
-// REDESIGN-001 Phase 4.2.d — DeploymentInfoCard.
+// DeploymentInfoCard — read-only display of the deployment's version + posture.
 //
-// Read-only display of the deployment's mode + version + posture flags.
-// Sources are the public /api/v1/deployment-info (mode + version, Phase 4.1)
-// and the caller's claims (tenant id). Used by:
-//   - Settings › Platform tab (multi-mode + global-admin operators)
-//   - Settings › Workspace tab (single-mode operators — there's no
-//     Platform tab in single mode, so deployment info collapses here)
+// Sources are the public /api/v1/deployment-info (version) and the caller's
+// claims (tenant id). Rendered on the Settings › Workspace tab. The platform
+// is single-tenant only (ADR-0031), so "Mode" is a static label rather than a
+// runtime flag.
 //
-// There's intentionally no "edit" surface — DEPLOYMENT_MODE / mTLS posture
-// are deployment-time configuration baked into env vars and Helm values.
-// Changing them means redeploying the control plane.
+// There's intentionally no "edit" surface — the mTLS posture is deployment-time
+// configuration baked into env vars and Helm values. Changing it means
+// redeploying the control plane.
 import * as React from "react";
 import { Server, ShieldCheck, Hash, Activity } from "lucide-react";
 import {
@@ -65,22 +63,8 @@ export function DeploymentInfoCard(): React.ReactElement {
             <InfoRow
               icon={<Activity className="size-4" />}
               label="Mode"
-              value={
-                isLoading ? (
-                  <Skeleton className="h-5 w-20" />
-                ) : (
-                  <Badge tone={data?.deployment_mode === "single" ? "neutral" : "accent"}>
-                    {data?.deployment_mode ?? "unknown"}
-                  </Badge>
-                )
-              }
-              hint={
-                data?.deployment_mode === "single"
-                  ? "One tenant. Workspace admin == effective platform admin."
-                  : data?.deployment_mode === "multi"
-                    ? "Multi-tenant. Platform admin gate is required for cross-tenant surfaces."
-                    : undefined
-              }
+              value={<Badge tone="neutral">single-tenant</Badge>}
+              hint="One tenant per deployment. Workspace admin == effective platform admin."
             />
             <InfoRow
               icon={<Hash className="size-4" />}
@@ -104,11 +88,7 @@ export function DeploymentInfoCard(): React.ReactElement {
                   <span className="text-[var(--color-fg-muted)]">—</span>
                 )
               }
-              hint={
-                data?.deployment_mode === "single"
-                  ? "The single bootstrap tenant — this id is fixed for the lifetime of this deployment."
-                  : "Your currently-active tenant."
-              }
+              hint="The single bootstrap tenant — this id is fixed for the lifetime of this deployment."
             />
             <InfoRow
               icon={<ShieldCheck className="size-4" />}

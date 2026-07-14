@@ -3,24 +3,20 @@
 //
 //   /settings/workspace     — identity / delivery / sign-in / lifecycle +
 //                             deployment posture.
-//   /settings/scanning      — scan policy + scanner adapters. Single-mode
-//                             only (multi mode → Platform tab).
-//   /settings/housekeeping  — garbage collection + retention. Single-mode
-//                             only (multi mode → Platform tab).
+//   /settings/scanning      — scan policy + scanner adapters.
+//   /settings/housekeeping  — garbage collection + retention.
 //   /settings/notifications — the per-category notification-preference matrix.
-//   /settings/platform      — cross-tenant + infra surfaces. Multi-mode +
-//                             is_global_admin only.
+//   /settings/integrations  — deployment-wide integration config (global-admin).
 //
 // Personal account state (identity, password, API keys, MFA, sessions) is NOT
 // here — it moved to the top-level /profile page in the 2026-07-05 UI cleanup.
 //
-// Tab visibility is mode + role gated:
-//   - Workspace is shown when the caller holds ≥ admin on any scope.
-//   - Scanning + Housekeeping are shown to those admins in single mode only
-//     (multi mode keeps the maintenance surfaces on Platform).
+// The platform is single-tenant only (ADR-0031) — there is no cross-tenant
+// Platform tab. Tab visibility is role gated:
+//   - Workspace / Scanning / Housekeeping are shown when the caller holds
+//     ≥ admin on any scope.
 //   - Notifications is always shown (personal preference).
-//   - Platform is shown only when DEPLOYMENT_MODE=multi AND
-//     users.is_global_admin=true.
+//   - Integrations is shown only to users.is_global_admin=true.
 //
 // Each tab renders inside the persistent header/tab-rail via <Outlet/>, so
 // switching tabs only swaps the right pane without re-mounting the chrome.
@@ -33,7 +29,6 @@ import {
 } from "@tanstack/react-router";
 import { Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useDeploymentInfo } from "@/lib/api/deployment-info";
 import { useAbilities, useIsGlobalAdmin } from "@/lib/api/abilities";
 
 export const Route = createFileRoute("/_authenticated/settings")({
@@ -46,8 +41,7 @@ type SettingsTab =
   | "scanning"
   | "housekeeping"
   | "notifications"
-  | "integrations"
-  | "platform";
+  | "integrations";
 
 interface TabDef {
   key: SettingsTab;
@@ -56,14 +50,12 @@ interface TabDef {
     | "/settings/scanning"
     | "/settings/housekeeping"
     | "/settings/notifications"
-    | "/settings/integrations"
-    | "/settings/platform";
+    | "/settings/integrations";
   label: string;
 }
 
 function SettingsLayout(): React.ReactElement {
   const { location } = useRouterState();
-  const { data: deploymentInfo } = useDeploymentInfo();
   const { data: abilities } = useAbilities();
   const isGlobalAdmin = useIsGlobalAdmin();
 
@@ -84,23 +76,16 @@ function SettingsLayout(): React.ReactElement {
     );
   }, [abilities]);
 
-  // Platform tab is multi-mode + is_global_admin only. Single-mode hides
-  // it entirely so the bootstrap admin doesn't see an empty tab —
-  // single-mode operators get all the same controls inside Housekeeping.
-  const isSingleMode = deploymentInfo?.deployment_mode === "single";
-  const showPlatformTab =
-    deploymentInfo?.deployment_mode === "multi" && isGlobalAdmin;
-
   const tabs: TabDef[] = React.useMemo(() => {
     const out: TabDef[] = [];
     if (hasAnyAdminScope) {
       out.push({ key: "workspace", to: "/settings/workspace", label: "Workspace" });
     }
     // Scanning (scan policy + scanner adapters) and Housekeeping (GC +
-    // retention) are the single-mode home for the maintenance surfaces; in
-    // multi mode they stay on the Platform tab, so both are gated on single
-    // mode + admin.
-    if (hasAnyAdminScope && isSingleMode) {
+    // retention) are the maintenance surfaces — shown to any admin. The
+    // platform is single-tenant only (ADR-0031), so there is no cross-tenant
+    // Platform tab; these are the sole home for the maintenance controls.
+    if (hasAnyAdminScope) {
       out.push({
         key: "scanning",
         to: "/settings/scanning",
@@ -120,7 +105,7 @@ function SettingsLayout(): React.ReactElement {
     });
     // Integrations (FUT-023 ephemeral PR registries + future SCM/CI hooks) is a
     // deployment-wide config surface — global-admin only, matching the
-    // global-admin-gated BFF routes. Shown in either deployment mode.
+    // global-admin-gated BFF routes.
     if (isGlobalAdmin) {
       out.push({
         key: "integrations",
@@ -128,16 +113,13 @@ function SettingsLayout(): React.ReactElement {
         label: "Integrations",
       });
     }
-    if (showPlatformTab) {
-      out.push({ key: "platform", to: "/settings/platform", label: "Platform" });
-    }
     return out;
-  }, [hasAnyAdminScope, isSingleMode, isGlobalAdmin, showPlatformTab]);
+  }, [hasAnyAdminScope, isGlobalAdmin]);
 
   // Eyebrow above the H1 tracks the active tab — it was hardcoded "Account",
-  // which read wrong on /settings/workspace and /settings/platform. Derived
-  // from the pathname (same source of truth the tab rail uses for its
-  // active state) rather than tab state so deep links land correct.
+  // which read wrong on /settings/workspace. Derived from the pathname (same
+  // source of truth the tab rail uses for its active state) rather than tab
+  // state so deep links land correct.
   const eyebrow = location.pathname.startsWith("/settings/scanning")
     ? "Scanning"
     : location.pathname.startsWith("/settings/housekeeping")
@@ -146,9 +128,7 @@ function SettingsLayout(): React.ReactElement {
         ? "Notifications"
         : location.pathname.startsWith("/settings/integrations")
           ? "Integrations"
-          : location.pathname.startsWith("/settings/platform")
-            ? "Platform"
-            : "Workspace";
+          : "Workspace";
 
   return (
     <div className="space-y-6 p-6">

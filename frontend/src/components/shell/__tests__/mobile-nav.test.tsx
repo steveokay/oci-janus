@@ -35,10 +35,6 @@ vi.mock("@/lib/api/proxy-cache", () => ({
   useCacheStats: () => mockUseCacheStats(),
 }));
 
-vi.mock("@/lib/api/deployment-info", () => ({
-  useDeploymentInfo: () => ({ data: { deployment_mode: "single", version: "dev" } }),
-}));
-
 vi.mock("@/lib/auth/store", () => ({
   useAuthStore: (selector: (s: { claims: null }) => unknown) =>
     selector({ claims: null }),
