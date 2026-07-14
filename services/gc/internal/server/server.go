@@ -75,12 +75,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 	defer storageConn.Close()
 
-	// Tenant directory dial — optional in multi mode (legacy code path),
-	// mandatory in single mode (REDESIGN-001 Phase 3.4 reuses this conn
-	// for the bootstrap-tenant-id fetch wired into the gRPC server
-	// interceptor below). When unset in multi the collector falls back
-	// to scanning metadata, which fails in production but keeps the
-	// legacy unit tests green.
+	// Tenant directory dial — mandatory (REDESIGN-001 Phase 3.4 / 9.3 reuses
+	// this conn for the bootstrap-tenant-id fetch wired into the gRPC server
+	// interceptor below). The platform is single-tenant (ADR-0031), so
+	// TENANT_GRPC_ADDR is required; see the fail-loud check below.
 	var (
 		tenantConn        *grpc.ClientConn
 		bootstrapTenantID string
@@ -96,24 +94,23 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 		defer tenantConn.Close()
 	}
-	// REDESIGN-001 Phase 3.4 — fetch the bootstrap tenant once at boot
+	// REDESIGN-001 Phase 3.4 / 9.3 — fetch the bootstrap tenant once at boot
 	// and pin every inbound RPC to it via SingleTenantInjector. The fetch
-	// reuses tenantConn so the gc service does not open a second TCP
-	// stream to registry-tenant. Fail-loud on missing TENANT_GRPC_ADDR in
-	// single mode because the alternative — silently routing every sweep
-	// to the wrong tenant — is far worse than a clean startup error.
-	if cfg.DeploymentMode == loader.DeploymentModeSingle {
-		if tenantConn == nil {
-			return fmt.Errorf("TENANT_GRPC_ADDR is required when DEPLOYMENT_MODE=single (Phase 3.4)")
-		}
-		bootstrapTenantID, err = tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
-		if err != nil {
-			return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
-		}
-		slog.Info("single-mode tenant injector wired",
-			"bootstrap_tenant_id", bootstrapTenantID,
-			"tenant_grpc", cfg.TenantGRPCAddr)
+	// reuses tenantConn so the gc service does not open a second TCP stream
+	// to registry-tenant. The platform is single-tenant (ADR-0031), so this
+	// is unconditional; fail-loud on missing TENANT_GRPC_ADDR because the
+	// alternative — silently routing every sweep to the wrong tenant — is far
+	// worse than a clean startup error.
+	if tenantConn == nil {
+		return fmt.Errorf("TENANT_GRPC_ADDR is required (Phase 3.4)")
 	}
+	bootstrapTenantID, err = tenantbootstrap.FetchTenantID(ctx, tenantv1.NewTenantServiceClient(tenantConn))
+	if err != nil {
+		return fmt.Errorf("phase 3.4 bootstrap tenant id lookup: %w", err)
+	}
+	slog.Info("single-tenant injector wired",
+		"bootstrap_tenant_id", bootstrapTenantID,
+		"tenant_grpc", cfg.TenantGRPCAddr)
 
 	pub, err := publisher.New(cfg.RabbitMQURL, events.ExchangeEvents)
 	if err != nil {
@@ -212,10 +209,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		go runLoop(ctx, col, interval)
 	}
 
-	var singleTenantInterceptor grpc.UnaryServerInterceptor
-	if bootstrapTenantID != "" {
-		singleTenantInterceptor = grpcmw.SingleTenantInjector(bootstrapTenantID)
-	}
+	singleTenantInterceptor := grpcmw.SingleTenantInjector(bootstrapTenantID)
 	grpcOpts, err := buildGRPCOptions(cfg, singleTenantInterceptor)
 	if err != nil {
 		return fmt.Errorf("build gRPC options: %w", err)
