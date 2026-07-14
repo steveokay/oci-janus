@@ -94,9 +94,10 @@ gRPC. Persistence conventions (pgx, migrations, RLS) are in
 Details: [Authentication](AUTH.md) · [Observability](OBSERVABILITY.md) ·
 [Hardening checklist](HARDENING-CHECKLIST.md).
 
-## Deployment modes
+## Deployment posture
 
-The `DEPLOYMENT_MODE` env var picks the posture; the schema and wire format are
-identical across both. `single` (default) is a self-hosted, one-team OSS deploy;
-`multi` re-exposes the SaaS multi-tenant surface. See
+The platform is single-tenant: one deployment serves one bootstrap tenant. The
+`tenant_id` columns stay frozen in the schema and wire format, but the
+`DEPLOYMENT_MODE` toggle and the SaaS/`multi` surface were removed in v3
+([ADR-0031](adr/0031-retire-multi-tenant-posture.md)). See
 [Migrating v1 → v2](MIGRATION-v1-to-v2.md) and the ADRs for rationale.

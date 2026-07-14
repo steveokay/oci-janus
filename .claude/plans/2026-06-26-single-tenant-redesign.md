@@ -1450,13 +1450,13 @@ Single-tenant is now the **permanent** product direction. Phase 9 removes the do
 
 **Gotchas (from survey):** (1) the injector/bootstrap wiring is spread across 11 services — mechanical but wide; (2) the compose `registry-bootstrap` one-shot dependency chain must keep working (it does — bootstrap stays); (3) don't delete `CreateTenant`/`deployment_metadata` (they're single-tenant machinery, not multi).
 
-**Status (as-of 2026-07-14):** IN PROGRESS.
+**Status (as-of 2026-07-14):** ✅ COMPLETE — Phase 9 fully shipped; the `multi` posture and `DEPLOYMENT_MODE` toggle are gone. The platform is single-tenant, permanently.
 - **9.1 FE chrome** — ✅ DONE (#346)
 - **9.2 BFF** — ✅ DONE (#347)
 - **9.3 `SingleTenantInjector` always-on** — ✅ DONE (`feat/redesign-9.3-injector-always-on`) — gate removed across all 11 services; injector unconditional; shared lib + tests reframed off "multi mode"; `DeploymentMode` config fields left defined for 9.5.
 - **9.4 tenant service** — ✅ DONE (`feat/redesign-9.4-tenant-guard-unconditional`) — `CreateTenant` guard unconditional; `deploymentMode` handler param/field + tenant config field + `LoadDeploymentMode()` call removed; multi-only tests deleted. `loader.DeploymentMode` type + env/compose/helm mentions stay for 9.5.
 - **9.5 config/loader** — ✅ DONE (`feat/redesign-9.5-remove-deployment-mode`) — `loader.DeploymentMode`/`LoadDeploymentMode` + the field from all 10 remaining service configs deleted; auth bootstrap CLI multi-branch removed (idempotency single-only); stale `DEPLOYMENT_MODE` comments + compose mentions swept. Docs prose is 9.6.
-- **9.6 docs** — ⬜ OPEN
+- **9.6 docs** — ✅ DONE (`feat/redesign-9.6-docs-single-tenant`) — CLAUDE.md §1/§9 + README + SERVICES/architecture/index/api-reference/AUTH/guide-* rewritten single-only; MIGRATION got a v3 breaking-change warning; MCP env + env-reference regenerated. Historical ADRs/plans left intact.
 
 ---
 

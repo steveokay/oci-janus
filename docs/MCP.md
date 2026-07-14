@@ -52,9 +52,9 @@ from another MCP server the operator has configured.
 
    Copy the key (`key.<uuid>.<64-hex-secret>`) — the UI shows it once.
 
-2. **Grab the tenant id** from `/settings` (or `/admin/tenants` in
-   multi-mode). In single-mode this is the bootstrap tenant id
-   emitted by the `registry-auth bootstrap` CLI.
+2. **Grab the tenant id** from `/settings`. The platform is
+   single-tenant, so this is the bootstrap tenant id emitted by the
+   `registry-auth bootstrap` CLI.
 
 3. **Edit Claude Desktop's config.** File location:
 
@@ -166,8 +166,8 @@ and add the missing `read` scope.
 
 **"Audit events return empty."** — The BFF filters by the caller's
 tenant; confirm MCP_TENANT_ID matches the tenant whose events you
-expect. In single-mode this is the bootstrap tenant id, printed at
-the end of `make dev-bootstrap`.
+expect. This is the bootstrap tenant id, printed at the end of
+`make dev-bootstrap`.
 
 **"Claude Desktop crashes right after connecting."** — Almost always a
 stdout leak from a log line. File a bug — the invariant test

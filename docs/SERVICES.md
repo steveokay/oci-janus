@@ -862,10 +862,10 @@ Cron loop drains queued rows between ticks via `PersistedRunner.ClaimNextQueued`
 
 ## 12. registry-tenant
 
-**Purpose:** Tenant lifecycle management + per-tenant configuration. Also the source of `bootstrap_tenant_id` via `GetDeploymentMetadata` (single-mode SingleTenantInjector). Custom domain CRUD was removed (REDESIGN-001 RM-001).
+**Purpose:** Tenant lifecycle management + per-tenant configuration. Also the source of `bootstrap_tenant_id` via `GetDeploymentMetadata` (feeds every service's SingleTenantInjector). Custom domain CRUD was removed (REDESIGN-001 RM-001).
 
 **Responsibilities:**
-- CRUD for tenants (super-admin API, not exposed to end users). In single mode `CreateTenant` returns `FAILED_PRECONDITION` on the second insert.
+- View/rename the tenant + bootstrap-only create (super-admin API, not exposed to end users). `CreateTenant` returns `FAILED_PRECONDITION` on the second insert (unconditional — the platform is single-tenant, ADR-0031).
 - Per-tenant quota configuration
 - Per-tenant feature flags (proxy cache enabled, signing required, scan policy)
 - Provision tenant isolation: create org in `registry-metadata`, create S3 prefix/bucket policy
@@ -1064,7 +1064,7 @@ MTLS_KEY_PATH=                   # required in production
 **Environment variables:**
 - `MCP_MANAGEMENT_URL` — base URL of the management BFF the tools query.
 - `MCP_API_KEY` — service-account key (`key.<uuid>.<hex>` form); scrubbed from every error path before returning to the LLM.
-- `MCP_TENANT_ID` — tenant whose data the tools scope to (bootstrap tenant id in single mode).
+- `MCP_TENANT_ID` — tenant whose data the tools scope to (the bootstrap tenant id).
 - `MCP_TRANSPORT` — `stdio` (default) or `http`.
 - `MCP_HTTP_ADDR` — HTTP listen address (default `:8092`); only used when `MCP_TRANSPORT=http`.
 
