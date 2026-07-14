@@ -5,10 +5,9 @@
 // Scanning tab; identity/delivery/sign-in/lifecycle + posture live on
 // Workspace.
 //
-// Mode: single mode only. In multi mode these same sections live on the
-// Platform tab (workspace == deployment == platform in single mode, so
-// there's no Platform tab to host them there). The tab itself is gated to
-// single mode in the Settings layout; this component renders the sections
+// The platform is single-tenant (workspace == deployment == platform), so
+// these storage-cleanup surfaces live on their own Settings tab — there is
+// no separate Platform console. This component renders the sections
 // unconditionally for whoever reaches the URL.
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";

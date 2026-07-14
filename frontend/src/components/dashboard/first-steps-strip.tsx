@@ -24,7 +24,7 @@ import type { Workspace } from "@/lib/api/workspace";
 //   1. Header — eyebrow + endpoint + platform/custom-host badge +
 //      copy-host + "Create API key" + "Read the docs" + tagline.
 //      (Plan badge removed per Phase 2.4 / RM-006 — same rationale as
-//      the sidebar brand block: no billing in single-mode default.)
+//      the sidebar brand block: no billing on the single-tenant platform.)
 //   2. Terminal block — three single-line commands (login / tag /
 //      push), each individually copyable. Same dark surface +
 //      traffic-light chrome as PullCommandCard so the visual language

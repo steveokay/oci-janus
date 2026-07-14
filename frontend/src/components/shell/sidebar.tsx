@@ -177,13 +177,12 @@ export function SidebarBody({
         </span>
         <div className="flex min-w-0 flex-col leading-tight">
           {/* REDESIGN-001 Phase 2.4 (RM-006) — the plan badge that used to
-              live here was meaningful only in multi-tenant SaaS where each
-              tenant's plan drove billing surfaces. In the self-hosted
-              default posture there's no billing, so the badge was empty
-              chrome. The `plan` field is still served by the BFF
-              (HD-004 — keep the column for forward compat) and remains
-              on the multi-mode admin Tenants page; it just stops rendering
-              in the personal navigation chrome. */}
+              live here was meaningful only in a multi-tenant SaaS posture
+              where each tenant's plan drove billing surfaces. The platform
+              is single-tenant, so there's no billing and the badge was empty
+              chrome. The `plan` field is still served by the BFF (HD-004 —
+              keep the column for forward compat); it just stops rendering in
+              the personal navigation chrome. */}
           <span className="truncate text-sm font-semibold tracking-tight">
             {workspaceName}
           </span>

@@ -118,9 +118,9 @@ export function hasAbility(
     }
 
     // Tenant-scoped grant covers every org and repo in that tenant.
-    // (Mirrors effectiveTenantAdmin + the special-case in effectiveGlobalAdmin
-    // for single-mode deployments; here we generalise: any tenant grant
-    // covers any sub-scope because the abilities endpoint is tenant-scoped.)
+    // (Mirrors effectiveTenantAdmin + the single-tenant tenant-admin shortcut
+    // in effectiveGlobalAdmin; here we generalise: any tenant grant covers any
+    // sub-scope because the abilities endpoint is tenant-scoped.)
     if (a.scope_type === "tenant") {
       return true;
     }

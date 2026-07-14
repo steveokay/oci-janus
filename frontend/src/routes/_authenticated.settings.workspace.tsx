@@ -112,9 +112,9 @@ function WorkspaceTab(): React.ReactElement {
       />
 
       {/* Scan policy, scanner adapters, garbage collection, and retention
-          moved to Settings › Housekeeping (single mode) / the Platform tab
-          (multi mode) — the Workspace tab now stays scoped to identity /
-          delivery / sign-in / lifecycle + deployment posture. */}
+          moved to Settings › Scanning and Settings › Housekeeping — the
+          Workspace tab now stays scoped to identity / delivery / sign-in /
+          lifecycle + deployment posture. */}
     </div>
   );
 }

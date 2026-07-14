@@ -25,8 +25,8 @@ import { authStore } from "@/lib/auth/store";
 export function DeploymentInfoCard(): React.ReactElement {
   const { data, isLoading, isError, refetch } = useDeploymentInfo();
   // Tenant id is taken from the JWT claims rather than a separate /me
-  // round-trip; it's the bootstrap tenant in single mode and the
-  // current tenant in multi mode. Same value either way.
+  // round-trip; the platform is single-tenant, so this is always the
+  // bootstrap tenant id.
   const tenantId = authStore.getClaims()?.tenant_id ?? null;
 
   if (isError) {
@@ -53,9 +53,9 @@ export function DeploymentInfoCard(): React.ReactElement {
             Deployment info
           </h2>
           <p className="text-sm text-[var(--color-fg-muted)]">
-            Read-only snapshot of how this control plane is running.
-            DEPLOYMENT_MODE and TLS posture are baked into the deployment
-            config — change them by redeploying, not from here.
+            Read-only snapshot of how this control plane is running. The
+            TLS posture is baked into the deployment config — change it by
+            redeploying, not from here.
           </p>
         </CardHeader>
         <CardContent>

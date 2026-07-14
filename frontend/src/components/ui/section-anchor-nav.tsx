@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 // existing `scroll-mt-24` so the target header isn't tucked under the topbar.
 //
 // Callers pass only the sections that are actually rendered — e.g. the
-// workspace tab's single-mode block is conditional, so it filters the item
+// workspace tab's posture block is conditional, so it filters the item
 // list before handing it here rather than rendering dead chips.
 
 interface SectionAnchorItem {
@@ -30,7 +30,7 @@ export function SectionAnchorNav({
   items,
   ariaLabel,
 }: SectionAnchorNavProps): React.ReactElement | null {
-  // Nothing to expose (e.g. multi-mode workspace filtered every chip away):
+  // Nothing to expose (e.g. the workspace filtered every chip away):
   // render nothing rather than an empty bar.
   if (items.length === 0) return null;
 
