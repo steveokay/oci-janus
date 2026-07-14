@@ -68,12 +68,11 @@ func TestCORS_noOrigin_skipsCORSHeaders(t *testing.T) {
 	if got := rr.Header().Get("Access-Control-Allow-Methods"); got != "" {
 		t.Errorf("Access-Control-Allow-Methods set on non-CORS request: %q", got)
 	}
-	// Security headers are always set.
-	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Errorf("X-Content-Type-Options: got %q, want nosniff", got)
-	}
-	if got := rr.Header().Get("X-Frame-Options"); got != "DENY" {
-		t.Errorf("X-Frame-Options: got %q, want DENY", got)
+	// The §17 security headers are no longer owned by CORS — they moved to the
+	// shared httpmiddleware.SecureHeaders wrapper (see server.buildHandler +
+	// its TestBuildHandler_SetsSecurityHeaders). CORS still owns Vary: Origin.
+	if got := rr.Header().Get("Vary"); got != "Origin" {
+		t.Errorf("Vary: got %q, want Origin", got)
 	}
 }
 
