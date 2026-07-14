@@ -225,9 +225,11 @@ type ManifestBlob struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
-// GetManifest proxies GET /api/v1/repositories/{org}/{repo}/manifests/{tag}.
+// GetManifest proxies GET /api/v1/repositories/{org}/{repo}/tags/{tag}/manifest.
+// FUT-082: the previous path (.../manifests/{tag}) did not exist on the BFF —
+// the manifest is nested under the tag resource.
 func (r *Registry) GetManifest(ctx context.Context, org, repo, tag string) (*Manifest, error) {
-	path := fmt.Sprintf("/api/v1/repositories/%s/%s/manifests/%s",
+	path := fmt.Sprintf("/api/v1/repositories/%s/%s/tags/%s/manifest",
 		url.PathEscape(org), url.PathEscape(repo), url.PathEscape(tag))
 	m := &Manifest{}
 	if err := r.getJSON(ctx, path, nil, m); err != nil {
@@ -237,13 +239,17 @@ func (r *Registry) GetManifest(ctx context.Context, org, repo, tag string) (*Man
 }
 
 // ServiceAccount is the shape the list_service_accounts tool surfaces.
+// Field names match the management BFF's GET /api/v1/service-accounts
+// response (which in turn maps the auth ListServiceAccounts gRPC reply).
 type ServiceAccount struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`
+	Description    string   `json:"description,omitempty"`
 	AllowedScopes  []string `json:"allowed_scopes,omitempty"`
-	DisabledAt     string   `json:"disabled_at,omitempty"`
+	Disabled       bool     `json:"disabled,omitempty"`
 	ActiveKeyCount int      `json:"active_key_count,omitempty"`
 	CreatedAt      string   `json:"created_at,omitempty"`
+	LastUsedAt     string   `json:"last_used_at,omitempty"`
 }
 
 // ListServiceAccounts proxies GET /api/v1/service-accounts.
@@ -369,10 +375,12 @@ type CVE struct {
 	Summary  string `json:"summary,omitempty"`
 }
 
-// GetScanReport proxies GET /api/v1/repositories/{org}/{repo}/scans/{digest}.
-func (r *Registry) GetScanReport(ctx context.Context, org, repo, digest string) (*ScanReport, error) {
-	path := fmt.Sprintf("/api/v1/repositories/%s/%s/scans/%s",
-		url.PathEscape(org), url.PathEscape(repo), url.PathEscape(digest))
+// GetScanReport proxies GET /api/v1/scan-by-digest/{digest}.
+// FUT-082: the previous path (.../repositories/{org}/{repo}/scans/{digest}) did
+// not exist — scan results are keyed by digest on the BFF, org/repo are not
+// part of the route.
+func (r *Registry) GetScanReport(ctx context.Context, digest string) (*ScanReport, error) {
+	path := fmt.Sprintf("/api/v1/scan-by-digest/%s", url.PathEscape(digest))
 	rep := &ScanReport{}
 	if err := r.getJSON(ctx, path, nil, rep); err != nil {
 		return nil, err
@@ -389,10 +397,11 @@ type Signature struct {
 	Backend   string `json:"backend,omitempty"` // cosign / notary
 }
 
-// ListSignatures proxies GET /api/v1/repositories/{org}/{repo}/signatures/{digest}.
-func (r *Registry) ListSignatures(ctx context.Context, org, repo, digest string) ([]Signature, error) {
-	path := fmt.Sprintf("/api/v1/repositories/%s/%s/signatures/%s",
-		url.PathEscape(org), url.PathEscape(repo), url.PathEscape(digest))
+// ListSignatures proxies GET /api/v1/signatures-by-digest/{digest}.
+// FUT-082: the previous path (.../repositories/{org}/{repo}/signatures/{digest})
+// did not exist — signatures are keyed by digest on the BFF.
+func (r *Registry) ListSignatures(ctx context.Context, digest string) ([]Signature, error) {
+	path := fmt.Sprintf("/api/v1/signatures-by-digest/%s", url.PathEscape(digest))
 	var out struct {
 		Signatures []Signature `json:"signatures"`
 	}
@@ -405,18 +414,23 @@ func (r *Registry) ListSignatures(ctx context.Context, org, repo, digest string)
 // Promotion is the shape the list_promotions tool surfaces. Depends on
 // FUT-020 having shipped — if the BFF returns 404, the tool falls back
 // to a human-readable "not deployed" message.
+//
+// Field names match the management BFF's promotionResponse (src_*/dst_*),
+// which both the per-repo route and the FUT-082 tenant-wide
+// GET /api/v1/promotions route emit.
 type Promotion struct {
-	ID         string `json:"id"`
-	PromotedAt string `json:"promoted_at"`
-	FromOrg    string `json:"from_org"`
-	FromRepo   string `json:"from_repo"`
-	FromTag    string `json:"from_tag"`
-	ToOrg      string `json:"to_org"`
-	ToRepo     string `json:"to_repo"`
-	ToTag      string `json:"to_tag"`
-	Digest     string `json:"digest"`
-	ActorID    string `json:"actor_id,omitempty"`
-	Note       string `json:"note,omitempty"`
+	ID          string `json:"id"`
+	PromotedAt  string `json:"promoted_at"`
+	SrcOrg      string `json:"src_org"`
+	SrcRepo     string `json:"src_repo"`
+	SrcTag      string `json:"src_tag"`
+	SrcDigest   string `json:"src_digest,omitempty"`
+	DstOrg      string `json:"dst_org"`
+	DstRepo     string `json:"dst_repo"`
+	DstTag      string `json:"dst_tag"`
+	DstDigest   string `json:"dst_digest,omitempty"`
+	ActorUserID string `json:"actor_user_id,omitempty"`
+	Note        string `json:"note,omitempty"`
 }
 
 // ListPromotions proxies GET /api/v1/repositories/{org}/{repo}/promotions.

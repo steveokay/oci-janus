@@ -43,8 +43,8 @@ type RegistryClient interface {
 	ListServiceAccounts(ctx context.Context) ([]client.ServiceAccount, error)
 	ListStaleKeys(ctx context.Context) ([]client.StaleKey, error)
 	ListAuditEvents(ctx context.Context, f client.AuditFilter) ([]client.AuditEvent, error)
-	GetScanReport(ctx context.Context, org, repo, digest string) (*client.ScanReport, error)
-	ListSignatures(ctx context.Context, org, repo, digest string) ([]client.Signature, error)
+	GetScanReport(ctx context.Context, digest string) (*client.ScanReport, error)
+	ListSignatures(ctx context.Context, digest string) ([]client.Signature, error)
 	ListPromotions(ctx context.Context, org, repo string) ([]client.Promotion, error)
 }
 

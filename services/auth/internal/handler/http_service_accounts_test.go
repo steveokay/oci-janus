@@ -40,11 +40,27 @@ type handlerFakeSARepo struct {
 	// scopeShrinkCount is the value returned by CountKeysAffectedByScopeShrink.
 	// Tests that need a non-zero count can set this directly.
 	scopeShrinkCount int64
+	// stats optionally carries per-SA List stats (active key count + last-used
+	// timestamp) keyed by SA id. When an entry is present, List copies it onto
+	// the returned ServiceAccountWithStats so tests can assert the gRPC/HTTP
+	// mapping of ActiveKeyCount / LastUsedAt. Absent entries default to zero
+	// count and nil last-used.
+	stats map[uuid.UUID]saListStats
+}
+
+// saListStats is a lightweight holder for the List-derived stats a test wants
+// the fake repo to surface for a given SA id.
+type saListStats struct {
+	activeKeyCount int32
+	lastUsedAt     *time.Time
 }
 
 // newHandlerFakeSARepo allocates a fresh, empty handlerFakeSARepo.
 func newHandlerFakeSARepo() *handlerFakeSARepo {
-	return &handlerFakeSARepo{accounts: make(map[uuid.UUID]*repository.ServiceAccount)}
+	return &handlerFakeSARepo{
+		accounts: make(map[uuid.UUID]*repository.ServiceAccount),
+		stats:    make(map[uuid.UUID]saListStats),
+	}
 }
 
 // CreateAtomic inserts a new SA and returns a synthesised shadow user UUID.
@@ -103,7 +119,14 @@ func (f *handlerFakeSARepo) List(
 		if !includeDisabled && sa.DisabledAt != nil {
 			continue
 		}
-		out = append(out, repository.ServiceAccountWithStats{ServiceAccount: *sa})
+		row := repository.ServiceAccountWithStats{ServiceAccount: *sa}
+		// Overlay any test-supplied stats so callers can assert the
+		// ActiveKeyCount / LastUsedAt mapping without a real DB.
+		if st, ok := f.stats[sa.ID]; ok {
+			row.ActiveKeyCount = st.activeKeyCount
+			row.LastUsedAt = st.lastUsedAt
+		}
+		out = append(out, row)
 	}
 	if pageSize > 0 && len(out) > pageSize {
 		out = out[:pageSize]

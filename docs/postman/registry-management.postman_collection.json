@@ -648,6 +648,30 @@
     {
       "item": [
         {
+          "name": "GET /api/v1/audit",
+          "request": {
+            "description": "GET /api/v1/audit",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit"
+              ],
+              "raw": "{{baseUrl}}/api/v1/audit"
+            }
+          }
+        }
+      ],
+      "name": "audit"
+    },
+    {
+      "item": [
+        {
           "name": "GET /api/v1/deployment-info",
           "request": {
             "auth": {
@@ -1597,6 +1621,30 @@
         }
       ],
       "name": "pr-registry"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/promotions",
+          "request": {
+            "description": "GET /api/v1/promotions",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions"
+              ],
+              "raw": "{{baseUrl}}/api/v1/promotions"
+            }
+          }
+        }
+      ],
+      "name": "promotions"
     },
     {
       "item": [
@@ -3860,6 +3908,30 @@
         }
       ],
       "name": "security"
+    },
+    {
+      "item": [
+        {
+          "name": "GET /api/v1/service-accounts",
+          "request": {
+            "description": "GET /api/v1/service-accounts",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "service-accounts"
+              ],
+              "raw": "{{baseUrl}}/api/v1/service-accounts"
+            }
+          }
+        }
+      ],
+      "name": "service-accounts"
     },
     {
       "item": [

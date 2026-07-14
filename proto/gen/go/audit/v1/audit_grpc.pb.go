@@ -39,6 +39,7 @@ const (
 	AuditService_GetNotificationWebhookConfig_FullMethodName      = "/registry.audit.v1.AuditService/GetNotificationWebhookConfig"
 	AuditService_PutNotificationWebhookConfig_FullMethodName      = "/registry.audit.v1.AuditService/PutNotificationWebhookConfig"
 	AuditService_SendTestNotificationWebhook_FullMethodName       = "/registry.audit.v1.AuditService/SendTestNotificationWebhook"
+	AuditService_ListAuditEvents_FullMethodName                   = "/registry.audit.v1.AuditService/ListAuditEvents"
 )
 
 // AuditServiceClient is the client API for AuditService service.
@@ -130,6 +131,11 @@ type AuditServiceClient interface {
 	GetNotificationWebhookConfig(ctx context.Context, in *GetNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error)
 	PutNotificationWebhookConfig(ctx context.Context, in *PutNotificationWebhookConfigRequest, opts ...grpc.CallOption) (*NotificationWebhookConfig, error)
 	SendTestNotificationWebhook(ctx context.Context, in *SendTestNotificationWebhookRequest, opts ...grpc.CallOption) (*SendTestNotificationWebhookResponse, error)
+	// FUT-082 — tenant-wide audit-event query for the management BFF (and,
+	// through it, registry-mcp). Wraps the existing Repository.Query so the BFF
+	// exposes a read-only /api/v1/audit surface that the repo-scoped
+	// GetRepoActivity does not cover.
+	ListAuditEvents(ctx context.Context, in *ListAuditEventsRequest, opts ...grpc.CallOption) (*ListAuditEventsResponse, error)
 }
 
 type auditServiceClient struct {
@@ -340,6 +346,16 @@ func (c *auditServiceClient) SendTestNotificationWebhook(ctx context.Context, in
 	return out, nil
 }
 
+func (c *auditServiceClient) ListAuditEvents(ctx context.Context, in *ListAuditEventsRequest, opts ...grpc.CallOption) (*ListAuditEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAuditEventsResponse)
+	err := c.cc.Invoke(ctx, AuditService_ListAuditEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuditServiceServer is the server API for AuditService service.
 // All implementations should embed UnimplementedAuditServiceServer
 // for forward compatibility
@@ -429,6 +445,11 @@ type AuditServiceServer interface {
 	GetNotificationWebhookConfig(context.Context, *GetNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error)
 	PutNotificationWebhookConfig(context.Context, *PutNotificationWebhookConfigRequest) (*NotificationWebhookConfig, error)
 	SendTestNotificationWebhook(context.Context, *SendTestNotificationWebhookRequest) (*SendTestNotificationWebhookResponse, error)
+	// FUT-082 — tenant-wide audit-event query for the management BFF (and,
+	// through it, registry-mcp). Wraps the existing Repository.Query so the BFF
+	// exposes a read-only /api/v1/audit surface that the repo-scoped
+	// GetRepoActivity does not cover.
+	ListAuditEvents(context.Context, *ListAuditEventsRequest) (*ListAuditEventsResponse, error)
 }
 
 // UnimplementedAuditServiceServer should be embedded to have forward compatible implementations.
@@ -494,6 +515,9 @@ func (UnimplementedAuditServiceServer) PutNotificationWebhookConfig(context.Cont
 }
 func (UnimplementedAuditServiceServer) SendTestNotificationWebhook(context.Context, *SendTestNotificationWebhookRequest) (*SendTestNotificationWebhookResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendTestNotificationWebhook not implemented")
+}
+func (UnimplementedAuditServiceServer) ListAuditEvents(context.Context, *ListAuditEventsRequest) (*ListAuditEventsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListAuditEvents not implemented")
 }
 
 // UnsafeAuditServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -867,6 +891,24 @@ func _AuditService_SendTestNotificationWebhook_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuditService_ListAuditEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAuditEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuditServiceServer).ListAuditEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuditService_ListAuditEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuditServiceServer).ListAuditEvents(ctx, req.(*ListAuditEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuditService_ServiceDesc is the grpc.ServiceDesc for AuditService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -953,6 +995,10 @@ var AuditService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendTestNotificationWebhook",
 			Handler:    _AuditService_SendTestNotificationWebhook_Handler,
+		},
+		{
+			MethodName: "ListAuditEvents",
+			Handler:    _AuditService_ListAuditEvents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

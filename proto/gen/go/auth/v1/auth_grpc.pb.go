@@ -42,6 +42,7 @@ const (
 	AuthService_PutTokenPolicy_FullMethodName        = "/registry.auth.v1.AuthService/PutTokenPolicy"
 	AuthService_ListStaleKeys_FullMethodName         = "/registry.auth.v1.AuthService/ListStaleKeys"
 	AuthService_SnoozeAPIKeyReview_FullMethodName    = "/registry.auth.v1.AuthService/SnoozeAPIKeyReview"
+	AuthService_ListServiceAccounts_FullMethodName   = "/registry.auth.v1.AuthService/ListServiceAccounts"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -131,6 +132,10 @@ type AuthServiceClient interface {
 	// does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
 	ListStaleKeys(ctx context.Context, in *ListStaleKeysRequest, opts ...grpc.CallOption) (*ListStaleKeysResponse, error)
 	SnoozeAPIKeyReview(ctx context.Context, in *SnoozeAPIKeyReviewRequest, opts ...grpc.CallOption) (*StaleKey, error)
+	// FUT-082 — service-account listing for the management BFF (and, through it,
+	// registry-mcp). Wraps the existing HTTP list surface so the BFF stays a
+	// pure gRPC client of auth rather than reverse-proxying auth's REST route.
+	ListServiceAccounts(ctx context.Context, in *ListServiceAccountsRequest, opts ...grpc.CallOption) (*ListServiceAccountsResponse, error)
 }
 
 type authServiceClient struct {
@@ -361,6 +366,16 @@ func (c *authServiceClient) SnoozeAPIKeyReview(ctx context.Context, in *SnoozeAP
 	return out, nil
 }
 
+func (c *authServiceClient) ListServiceAccounts(ctx context.Context, in *ListServiceAccountsRequest, opts ...grpc.CallOption) (*ListServiceAccountsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListServiceAccountsResponse)
+	err := c.cc.Invoke(ctx, AuthService_ListServiceAccounts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations should embed UnimplementedAuthServiceServer
 // for forward compatibility
@@ -448,6 +463,10 @@ type AuthServiceServer interface {
 	// does NOT auto-revoke — FUT-003's idle_revoke is the auto-action.
 	ListStaleKeys(context.Context, *ListStaleKeysRequest) (*ListStaleKeysResponse, error)
 	SnoozeAPIKeyReview(context.Context, *SnoozeAPIKeyReviewRequest) (*StaleKey, error)
+	// FUT-082 — service-account listing for the management BFF (and, through it,
+	// registry-mcp). Wraps the existing HTTP list surface so the BFF stays a
+	// pure gRPC client of auth rather than reverse-proxying auth's REST route.
+	ListServiceAccounts(context.Context, *ListServiceAccountsRequest) (*ListServiceAccountsResponse, error)
 }
 
 // UnimplementedAuthServiceServer should be embedded to have forward compatible implementations.
@@ -519,6 +538,9 @@ func (UnimplementedAuthServiceServer) ListStaleKeys(context.Context, *ListStaleK
 }
 func (UnimplementedAuthServiceServer) SnoozeAPIKeyReview(context.Context, *SnoozeAPIKeyReviewRequest) (*StaleKey, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SnoozeAPIKeyReview not implemented")
+}
+func (UnimplementedAuthServiceServer) ListServiceAccounts(context.Context, *ListServiceAccountsRequest) (*ListServiceAccountsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListServiceAccounts not implemented")
 }
 
 // UnsafeAuthServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -928,6 +950,24 @@ func _AuthService_SnoozeAPIKeyReview_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_ListServiceAccounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServiceAccountsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).ListServiceAccounts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_ListServiceAccounts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).ListServiceAccounts(ctx, req.(*ListServiceAccountsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1022,6 +1062,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SnoozeAPIKeyReview",
 			Handler:    _AuthService_SnoozeAPIKeyReview_Handler,
+		},
+		{
+			MethodName: "ListServiceAccounts",
+			Handler:    _AuthService_ListServiceAccounts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

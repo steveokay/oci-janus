@@ -54,6 +54,12 @@ func (f *fakeAuditClient) GetNotifications(
 // ── remaining auditv1.AuditServiceClient stubs ────────────────────────────────
 // These stubs satisfy the interface but are never called in activity tests.
 
+// ListAuditEvents is part of the auditv1.AuditServiceClient interface but is
+// never exercised by the activity handler tests; the stub returns an empty
+// response so the fake continues to satisfy the (recently extended) interface.
+func (f *fakeAuditClient) ListAuditEvents(_ context.Context, _ *auditv1.ListAuditEventsRequest, _ ...grpc.CallOption) (*auditv1.ListAuditEventsResponse, error) {
+	return nil, nil
+}
 func (f *fakeAuditClient) GetBuildHistory(_ context.Context, _ *auditv1.GetBuildHistoryRequest, _ ...grpc.CallOption) (*auditv1.GetBuildHistoryResponse, error) {
 	return nil, nil
 }

@@ -49,6 +49,22 @@ func (r *Repository) RawInsertManifestForTest(
 	return nil
 }
 
+// InsertTenantForTest inserts a tenants row so integration tests can stand up
+// a SECOND tenant alongside the seeded dev tenant. organizations.tenant_id has
+// a FK to tenants(id), so any test that seeds an org under a fresh tenant must
+// create the tenant row first. Idempotent via ON CONFLICT DO NOTHING so a test
+// can call it defensively.
+//
+// DO NOT call from production code. The name embeds "ForTest" so a grep
+// catches misuse during code review.
+func (r *Repository) InsertTenantForTest(ctx context.Context, tenantID, name string) error {
+	const q = `INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`
+	if _, err := r.pool.Exec(ctx, q, tenantID, name); err != nil {
+		return fmt.Errorf("insert tenant for test: %w", err)
+	}
+	return nil
+}
+
 // SetManifestLastPulledForTest stamps manifests.last_pulled_at directly for a
 // given digest within a (tenant, repo). The production path is the FE-API-042
 // 24h-debounced consumer; the FE-API-043 evaluator tests need to seed

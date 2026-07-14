@@ -416,6 +416,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote", authMW(http.HandlerFunc(h.handlePromoteTag)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/promotions", authMW(http.HandlerFunc(h.handleListPromotions)))
 
+	// FUT-082 — tenant-wide read surfaces that back three registry-mcp
+	// tools whose BFF routes did not exist before (list_service_accounts,
+	// list_audit_events, list_promotions with no org/repo). All three are
+	// authenticated + tenant-scoped; handlers live in mcp_bff_routes.go.
+	mux.Handle("GET /api/v1/service-accounts", authMW(http.HandlerFunc(h.handleListServiceAccounts)))
+	mux.Handle("GET /api/v1/audit", authMW(http.HandlerFunc(h.handleListAuditEvents)))
+	mux.Handle("GET /api/v1/promotions", authMW(http.HandlerFunc(h.handleListPromotionsTenantWide)))
+
 	// Vulnerability scanning — tag-scoped per CLAUDE.md §4.13.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleGetScan)))
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/scan", authMW(http.HandlerFunc(h.handleTriggerScan)))

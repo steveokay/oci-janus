@@ -1334,6 +1334,37 @@
         ]
       }
     },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "get_api_v1_audit",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "GET /api/v1/audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/deployment-info": {
       "get": {
         "operationId": "get_api_v1_deployment_info",
@@ -2162,6 +2193,37 @@
         "summary": "GET /api/v1/pr-registry/namespaces",
         "tags": [
           "pr-registry"
+        ]
+      }
+    },
+    "/api/v1/promotions": {
+      "get": {
+        "operationId": "get_api_v1_promotions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "GET /api/v1/promotions",
+        "tags": [
+          "promotions"
         ]
       }
     },
@@ -5298,6 +5360,37 @@
         ]
       }
     },
+    "/api/v1/service-accounts": {
+      "get": {
+        "operationId": "get_api_v1_service_accounts",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "GET /api/v1/service-accounts",
+        "tags": [
+          "service-accounts"
+        ]
+      }
+    },
     "/api/v1/sign-by-digest/{digest}": {
       "post": {
         "operationId": "post_api_v1_sign_by_digest_digest",
@@ -6292,6 +6385,9 @@
       "name": "admin"
     },
     {
+      "name": "audit"
+    },
+    {
       "name": "deployment-info"
     },
     {
@@ -6310,6 +6406,9 @@
       "name": "pr-registry"
     },
     {
+      "name": "promotions"
+    },
+    {
       "name": "proxy"
     },
     {
@@ -6323,6 +6422,9 @@
     },
     {
       "name": "security"
+    },
+    {
+      "name": "service-accounts"
     },
     {
       "name": "sign-by-digest"

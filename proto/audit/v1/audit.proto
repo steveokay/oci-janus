@@ -100,6 +100,38 @@ service AuditService {
   rpc GetNotificationWebhookConfig(GetNotificationWebhookConfigRequest) returns (NotificationWebhookConfig);
   rpc PutNotificationWebhookConfig(PutNotificationWebhookConfigRequest) returns (NotificationWebhookConfig);
   rpc SendTestNotificationWebhook(SendTestNotificationWebhookRequest) returns (SendTestNotificationWebhookResponse);
+
+  // FUT-082 — tenant-wide audit-event query for the management BFF (and,
+  // through it, registry-mcp). Wraps the existing Repository.Query so the BFF
+  // exposes a read-only /api/v1/audit surface that the repo-scoped
+  // GetRepoActivity does not cover.
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+}
+
+// FUT-082 — tenant-wide audit-event query.
+message ListAuditEventsRequest {
+  string tenant_id = 1;
+  string actor_id  = 2; // optional filter
+  string action    = 3; // optional filter (e.g. "delete.tag")
+  int32  limit     = 4; // 1..500, default 100
+  int32  offset    = 5; // pagination offset
+}
+
+// AuditEventRecord is the read-only projection of one audit_events row.
+message AuditEventRecord {
+  string                    id          = 1;
+  string                    tenant_id   = 2;
+  string                    actor_id    = 3;
+  string                    actor_type  = 4;
+  string                    actor_ip    = 5;
+  string                    action      = 6;
+  string                    resource    = 7;
+  string                    outcome     = 8;
+  google.protobuf.Timestamp occurred_at = 9;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEventRecord events = 1;
 }
 
 // GetBuildHistoryRequest filters build history for a specific tag in a repository.

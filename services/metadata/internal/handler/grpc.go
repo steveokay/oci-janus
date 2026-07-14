@@ -165,6 +165,9 @@ type metadataRepo interface {
 	// ListPromotions returns recent promotions filtered by (optional) org/repo.
 	PromoteTag(ctx context.Context, in repository.PromoteTagInput) (*metadatav1.Promotion, error)
 	ListPromotions(ctx context.Context, tenantID uuid.UUID, org, repo string, limit int32) ([]*metadatav1.Promotion, error)
+	// FUT-082: tenant-wide promotions list (all repos) — dispatched by the
+	// handler when both org and repo are empty.
+	ListPromotionsByTenant(ctx context.Context, tenantID uuid.UUID, limit int32) ([]*metadatav1.Promotion, error)
 
 	// FUT-023 Phase 1 — ephemeral PR-scoped registries. The config CRUD +
 	// namespace list + org teardown primitive backing the five PR-registry
@@ -1139,14 +1142,43 @@ func (h *MetadataHandler) PromoteTag(ctx context.Context, req *metadatav1.Promot
 	return prom, nil
 }
 
-// ListPromotions returns recent promotions for the tenant, optionally
-// filtered by (org, repo). Limit is clamped to [1, 200] in the repository.
+// ListPromotions returns recent promotions for the tenant. It supports two
+// mutually-exclusive query shapes discriminated by whether org+repo are set:
+//
+//   - BOTH empty  → tenant-wide list: every promotion across all repos for
+//     the tenant (FUT-082 — backs registry-mcp's list_promotions tool + the
+//     BFF workspace view). Dispatched to ListPromotionsByTenant.
+//   - BOTH set    → per-repo list: promotions touching {org}/{repo} on either
+//     the src or dst side. Dispatched to ListPromotions.
+//   - Exactly one set (org without repo, or repo without org) → an invalid,
+//     half-specified per-repo query. Rejected with InvalidArgument rather
+//     than silently coerced, so a caller that dropped one field sees the
+//     mistake instead of getting an unexpectedly broad result.
+//
+// Limit is clamped to [1, 200] in the repository (identical clamp on both
+// paths).
 func (h *MetadataHandler) ListPromotions(ctx context.Context, req *metadatav1.ListPromotionsRequest) (*metadatav1.ListPromotionsResponse, error) {
 	tenantUUID, err := uuid.Parse(req.GetTenantId())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
 	}
-	proms, err := h.repo.ListPromotions(ctx, tenantUUID, req.GetOrg(), req.GetRepo(), req.GetLimit())
+
+	org, repo := req.GetOrg(), req.GetRepo()
+	// Reject the half-specified combination up front. Only both-empty
+	// (tenant-wide) and both-set (per-repo) are meaningful.
+	if (org == "") != (repo == "") {
+		return nil, status.Error(codes.InvalidArgument,
+			"org and repo must be provided together (both set = per-repo, both empty = tenant-wide)")
+	}
+
+	var proms []*metadatav1.Promotion
+	if org == "" && repo == "" {
+		// Tenant-wide branch — no org/repo filter.
+		proms, err = h.repo.ListPromotionsByTenant(ctx, tenantUUID, req.GetLimit())
+	} else {
+		// Per-repo branch — unchanged existing behavior.
+		proms, err = h.repo.ListPromotions(ctx, tenantUUID, org, repo, req.GetLimit())
+	}
 	if err != nil {
 		return nil, mapErr(err)
 	}
