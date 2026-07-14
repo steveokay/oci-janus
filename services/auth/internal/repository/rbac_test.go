@@ -31,9 +31,11 @@ func setupRBACWithSA(t *testing.T, ctx context.Context) (*UserRepository, *Servi
 	// its own t.Cleanup for the container lifetime.
 	dsn := containers.Postgres(t)
 
-	// Apply all schema migrations through the polymorphic api_keys migration
-	// (the latest T1–T3 migration in this sprint).
-	gooseUpTo(t, dsn, "20260622000003")
+	// Apply the FULL current migration set — this helper seeds via the live
+	// UserRepository.Create, which targets the HEAD users schema (is_global_admin,
+	// onboarding_complete, …). Pinning to an intermediate migration omits those
+	// columns and the INSERT fails (FUT-085). gooseUp is in migrations_test.go.
+	gooseUp(t, dsn)
 
 	// Build the shared pgxpool used by all three repositories.
 	pool, err := pgxpool.New(ctx, dsn)

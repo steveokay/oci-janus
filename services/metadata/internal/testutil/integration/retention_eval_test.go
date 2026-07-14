@@ -104,16 +104,24 @@ func TestEvaluateRetention_emptyRepo_returnsEmptyResult(t *testing.T) {
 }
 
 // TestEvaluateRetention_allProtected_skipsAll seeds three manifests where
-// every one carries the "latest" tag, then runs a policy that protects
-// "latest" — every manifest goes into protected_skipped and the would-delete
-// list is empty.
+// every one carries a "latest-*" tag, then runs a policy that protects
+// anything matching "latest" — every manifest goes into protected_skipped and
+// the would-delete list is empty.
+//
+// NOTE: the tag names must be DISTINCT. tags carries UNIQUE(repo_id, name)
+// (migration 00001) and PutTag upserts via ON CONFLICT (repo_id, name) DO
+// UPDATE, so seeding three manifests all named "latest" would leave the tag
+// pointing at only the last manifest and orphan the other two — they'd match
+// max_age_days and land in would_delete, not protected_skipped. Distinct
+// "latest-a/b/c" tags all match the unanchored "latest" pattern (MatchString
+// is a substring match), so all three are correctly protected.
 func TestEvaluateRetention_allProtected_skipsAll(t *testing.T) {
 	repo := buildRepo(t)
 	repoID := seedRetentionEvalRepo(t, repo)
 	now := time.Now().UTC()
-	seedManifest(t, repo, repoID, "aaa", now.Add(-100*24*time.Hour), 100, []string{"latest"})
-	seedManifest(t, repo, repoID, "bbb", now.Add(-50*24*time.Hour), 200, []string{"latest"})
-	seedManifest(t, repo, repoID, "ccc", now.Add(-10*24*time.Hour), 300, []string{"latest"})
+	seedManifest(t, repo, repoID, "aaa", now.Add(-100*24*time.Hour), 100, []string{"latest-a"})
+	seedManifest(t, repo, repoID, "bbb", now.Add(-50*24*time.Hour), 200, []string{"latest-b"})
+	seedManifest(t, repo, repoID, "ccc", now.Add(-10*24*time.Hour), 300, []string{"latest-c"})
 	ctx := context.Background()
 
 	cand := &metadatav1.RetentionPolicyCandidate{

@@ -293,13 +293,21 @@ func TestAPIKeyRepoFUT003(t *testing.T) {
 	})
 
 	t.Run("ListIdleKeys_ReturnsOnlyKeysOlderThanThreshold", func(t *testing.T) {
-		// Seed three keys in ONE tenant:
-		//   - idleKey       — last_used_at is well before cutoff (should return)
-		//   - freshKey      — last_used_at is well after cutoff (should NOT return)
-		//   - neverUsedKey  — NULL last_used_at (should return by definition)
+		// Idleness is anchored to COALESCE(last_used_at, created_at) — a
+		// never-used key falls back to its creation time and earns the SAME
+		// idle grace period as a used key (fix #276). So the "never used"
+		// dimension only decides idleness *together with* created_at:
+		//   - idleKey       — last_used_at well before cutoff              (return)
+		//   - freshKey      — last_used_at well after cutoff               (skip)
+		//   - oldNeverUsed  — NULL last_used_at, created_at before cutoff  (return)
+		//   - newNeverUsed  — NULL last_used_at, created_at after cutoff   (skip)
+		// The last row is the regression #276 fixed: a freshly-issued key
+		// must NOT be revoked on the next tick before it is ever wired up.
 		idleTenant := uuid.New()
 
-		mkKeyInTenant := func(tenant uuid.UUID, name string, lastUsed *time.Time) uuid.UUID {
+		// mkKeyInTenant seeds a key with an explicit last_used_at (may be nil)
+		// and created_at, so the test can drive the COALESCE anchor precisely.
+		mkKeyInTenant := func(tenant uuid.UUID, name string, lastUsed *time.Time, createdAt time.Time) uuid.UUID {
 			var userID uuid.UUID
 			require.NoError(t, pool.QueryRow(ctx, `
 				INSERT INTO users (tenant_id, username, email, password_hash, kind)
@@ -307,9 +315,9 @@ func TestAPIKeyRepoFUT003(t *testing.T) {
 				RETURNING id`, tenant, name).Scan(&userID))
 			var keyID uuid.UUID
 			require.NoError(t, pool.QueryRow(ctx, `
-				INSERT INTO api_keys (tenant_id, user_id, name, key_hash, key_prefix, scopes, last_used_at)
-				VALUES ($1, $2, $3, 'hash', 'prefix'||substr(md5(random()::text),1,6), '{}', $4)
-				RETURNING id`, tenant, userID, name, lastUsed).Scan(&keyID))
+				INSERT INTO api_keys (tenant_id, user_id, name, key_hash, key_prefix, scopes, last_used_at, created_at)
+				VALUES ($1, $2, $3, 'hash', 'prefix'||substr(md5(random()::text),1,6), '{}', $4, $5)
+				RETURNING id`, tenant, userID, name, lastUsed, createdAt).Scan(&keyID))
 			return keyID
 		}
 
@@ -317,11 +325,14 @@ func TestAPIKeyRepoFUT003(t *testing.T) {
 		oldTime := now.Add(-30 * 24 * time.Hour)
 		recentTime := now.Add(-1 * time.Hour)
 
-		idleKey := mkKeyInTenant(idleTenant, "idle", &oldTime)
-		freshKey := mkKeyInTenant(idleTenant, "fresh", &recentTime)
-		neverUsedKey := mkKeyInTenant(idleTenant, "never-used", nil)
+		idleKey := mkKeyInTenant(idleTenant, "idle", &oldTime, oldTime)
+		freshKey := mkKeyInTenant(idleTenant, "fresh", &recentTime, oldTime)
+		// Never-used, created long ago → COALESCE anchor is old → idle.
+		oldNeverUsed := mkKeyInTenant(idleTenant, "old-never-used", nil, oldTime)
+		// Never-used, created just now → COALESCE anchor is recent → NOT idle.
+		newNeverUsed := mkKeyInTenant(idleTenant, "new-never-used", nil, recentTime)
 
-		// Cutoff = 7 days ago — anything last-used before this counts.
+		// Cutoff = 7 days ago — anything last-active before this counts.
 		cutoff := now.Add(-7 * 24 * time.Hour)
 		got, err := repo.ListIdleKeys(ctx, idleTenant, cutoff)
 		require.NoError(t, err)
@@ -331,7 +342,8 @@ func TestAPIKeyRepoFUT003(t *testing.T) {
 			ids[k.ID] = true
 		}
 		require.True(t, ids[idleKey], "idle key should be listed")
-		require.True(t, ids[neverUsedKey], "never-used key should be listed")
+		require.True(t, ids[oldNeverUsed], "never-used key created before cutoff should be listed")
+		require.False(t, ids[newNeverUsed], "never-used key created after cutoff should NOT be listed (grace period, #276)")
 		require.False(t, ids[freshKey], "fresh key should NOT be listed")
 	})
 

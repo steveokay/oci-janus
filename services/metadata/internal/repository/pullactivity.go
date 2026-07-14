@@ -33,12 +33,19 @@ import (
 // clause already returns 0 rows after the first apply within the debounce
 // window). The consumer NACK/retry path is safe to re-deliver.
 func (r *Repository) UpsertManifestLastPulledAt(ctx context.Context, manifestID, tenantID string, pulledAt time.Time) (int64, error) {
+	// $3 is cast to timestamptz explicitly. Without the cast, Postgres infers
+	// the type of the untyped `$3` from the `$3 - INTERVAL '24 hours'`
+	// subexpression: because one operand is an interval, it resolves `$3` as
+	// interval too, making the outer comparison `last_pulled_at (timestamptz)
+	// < interval` — an operator that does not exist (SQLSTATE 42883). Pinning
+	// $3::timestamptz forces `timestamptz - interval → timestamptz`, so the
+	// comparison is timestamptz < timestamptz as intended (FUT-085).
 	const q = `
 		UPDATE manifests
 		   SET last_pulled_at = $3
 		 WHERE id = $1
 		   AND tenant_id = $2
-		   AND (last_pulled_at IS NULL OR last_pulled_at < $3 - INTERVAL '24 hours')`
+		   AND (last_pulled_at IS NULL OR last_pulled_at < $3::timestamptz - INTERVAL '24 hours')`
 
 	tag, err := r.pool.Exec(ctx, q, manifestID, tenantID, pulledAt)
 	if err != nil {

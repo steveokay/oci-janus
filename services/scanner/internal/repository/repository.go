@@ -110,6 +110,13 @@ func (r *Repository) UpsertScanPolicy(ctx context.Context, p *ScanPolicy) (*Scan
 	if p.UpdatedBy != uuid.Nil {
 		updatedBy = p.UpdatedBy
 	}
+	// A nil Go slice encodes to SQL NULL, which the exempt_cves NOT NULL
+	// constraint rejects. Normalise to an empty slice so a policy with no
+	// exemptions stores '{}' (the column default) rather than failing.
+	exemptCVEs := p.ExemptCVEs
+	if exemptCVEs == nil {
+		exemptCVEs = []string{}
+	}
 	var out ScanPolicy
 	// ON CONFLICT updates every field — there is no field-level "leave alone"
 	// for scan policy mutations; the BFF always sends the full policy state.
@@ -129,7 +136,7 @@ func (r *Repository) UpsertScanPolicy(ctx context.Context, p *ScanPolicy) (*Scan
 		 RETURNING tenant_id, auto_scan_on_push, block_on_severity,
 		           exempt_cves, scanner_plugin, scanner_version_pin,
 		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
-		p.TenantID, p.AutoScanOnPush, p.BlockOnSeverity, p.ExemptCVEs,
+		p.TenantID, p.AutoScanOnPush, p.BlockOnSeverity, exemptCVEs,
 		p.ScannerPlugin, p.ScannerVersionPin, updatedBy,
 	).Scan(&out.TenantID, &out.AutoScanOnPush, &out.BlockOnSeverity,
 		&out.ExemptCVEs, &out.ScannerPlugin, &out.ScannerVersionPin,
@@ -180,6 +187,11 @@ func (r *Repository) UpsertOrgScanPolicy(ctx context.Context, p *ScanPolicy) (*S
 	if p.UpdatedBy != uuid.Nil {
 		updatedBy = p.UpdatedBy
 	}
+	// Normalise nil → '{}' so the exempt_cves NOT NULL constraint holds.
+	exemptCVEs := p.ExemptCVEs
+	if exemptCVEs == nil {
+		exemptCVEs = []string{}
+	}
 	var out ScanPolicy
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO org_scan_policies
@@ -198,7 +210,7 @@ func (r *Repository) UpsertOrgScanPolicy(ctx context.Context, p *ScanPolicy) (*S
 		 RETURNING tenant_id, org_id, auto_scan_on_push, block_on_severity,
 		           exempt_cves, scanner_plugin, scanner_version_pin, enabled,
 		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
-		p.OrgID, p.TenantID, p.AutoScanOnPush, p.BlockOnSeverity, p.ExemptCVEs,
+		p.OrgID, p.TenantID, p.AutoScanOnPush, p.BlockOnSeverity, exemptCVEs,
 		p.ScannerPlugin, p.ScannerVersionPin, p.Enabled, updatedBy,
 	).Scan(&out.TenantID, &out.OrgID, &out.AutoScanOnPush, &out.BlockOnSeverity,
 		&out.ExemptCVEs, &out.ScannerPlugin, &out.ScannerVersionPin, &out.Enabled,
@@ -253,6 +265,11 @@ func (r *Repository) UpsertRepoScanPolicy(ctx context.Context, p *ScanPolicy) (*
 	if p.UpdatedBy != uuid.Nil {
 		updatedBy = p.UpdatedBy
 	}
+	// Normalise nil → '{}' so the exempt_cves NOT NULL constraint holds.
+	exemptCVEs := p.ExemptCVEs
+	if exemptCVEs == nil {
+		exemptCVEs = []string{}
+	}
 	var out ScanPolicy
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO repo_scan_policies
@@ -272,7 +289,7 @@ func (r *Repository) UpsertRepoScanPolicy(ctx context.Context, p *ScanPolicy) (*
 		 RETURNING tenant_id, org_id, repo_id, auto_scan_on_push, block_on_severity,
 		           exempt_cves, scanner_plugin, scanner_version_pin, enabled,
 		           updated_at, COALESCE(updated_by, '00000000-0000-0000-0000-000000000000'::uuid)`,
-		p.RepoID, p.TenantID, p.OrgID, p.AutoScanOnPush, p.BlockOnSeverity, p.ExemptCVEs,
+		p.RepoID, p.TenantID, p.OrgID, p.AutoScanOnPush, p.BlockOnSeverity, exemptCVEs,
 		p.ScannerPlugin, p.ScannerVersionPin, p.Enabled, updatedBy,
 	).Scan(&out.TenantID, &out.OrgID, &out.RepoID, &out.AutoScanOnPush, &out.BlockOnSeverity,
 		&out.ExemptCVEs, &out.ScannerPlugin, &out.ScannerVersionPin, &out.Enabled,

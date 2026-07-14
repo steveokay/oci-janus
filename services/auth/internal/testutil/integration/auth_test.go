@@ -35,6 +35,13 @@ type testEnv struct {
 	// testUsername and testPassword are a freshly created user for each test run.
 	testUsername string
 	testPassword string
+	// svc + users expose the service + user repository so individual tests can
+	// seed privileged callers (e.g. a global admin) the way handler-package
+	// tests do via users.SetGlobalAdmin. POST /api/v1/users is admin-gated
+	// (PENTEST-002/003), so a test that exercises it must first authenticate
+	// as an admin.
+	svc   *service.Service
+	users *repository.UserRepository
 }
 
 // newTestEnv wires up real Postgres + Redis containers, runs migrations, and
@@ -105,7 +112,60 @@ func newTestEnv(t *testing.T) *testEnv {
 		tenantID:     tenantID,
 		testUsername: testUsername,
 		testPassword: testPassword,
+		svc:          svc,
+		users:        users,
 	}
+}
+
+// loginToken logs a user in via POST /api/v1/login and returns the bearer
+// token. Fails the test on any non-200 or decode error.
+func (env *testEnv) loginToken(t *testing.T, username, password string) string {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"tenant_id": env.tenantID.String(),
+		"username":  username,
+		"password":  password,
+	})
+	resp, err := http.Post(env.srv.URL+"/api/v1/login", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login for %s: want 200, got %d", username, resp.StatusCode)
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if lr.Token == "" {
+		t.Fatalf("login for %s returned empty token", username)
+	}
+	return lr.Token
+}
+
+// seedAdminToken creates a fresh human user, promotes it to global admin
+// (users.is_global_admin — the same fast-path callerIsTenantAdmin honours),
+// logs it in, and returns a bearer token. Mirrors the handler-package pattern
+// of users.SetGlobalAdmin + login, giving tests an admin caller for the
+// admin-gated routes (POST /api/v1/users, etc.).
+func (env *testEnv) seedAdminToken(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	const (
+		adminUsername = "integration-admin"
+		adminPassword = "AdminInt@Pass1234"
+	)
+	u, err := env.svc.CreateUser(ctx, env.tenantID, adminUsername, "admin-int@example.com", "Integration Admin", adminPassword)
+	if err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	if err := env.users.SetGlobalAdmin(ctx, u.ID, true); err != nil {
+		t.Fatalf("promote admin user: %v", err)
+	}
+	return env.loginToken(t, adminUsername, adminPassword)
 }
 
 // TestToken_DockerFlow tests the Docker token auth endpoint:
@@ -219,14 +279,22 @@ func TestCreateUser_AndLogin(t *testing.T) {
 		email    = "testuser@example.com"
 	)
 
-	// Create user.
+	// POST /api/v1/users is admin-gated (requireAuth + callerIsTenantAdmin,
+	// PENTEST-002/003) and REM-018 requires a non-empty display_name. Seed a
+	// global-admin caller and create the user with its bearer token.
+	adminToken := env.seedAdminToken(t)
+
 	createBody, _ := json.Marshal(map[string]string{
-		"tenant_id": env.tenantID.String(),
-		"username":  username,
-		"email":     email,
-		"password":  password,
+		"tenant_id":    env.tenantID.String(),
+		"username":     username,
+		"email":        email,
+		"display_name": "Test User",
+		"password":     password,
 	})
-	resp, err := http.Post(env.srv.URL+"/api/v1/users", "application/json", bytes.NewReader(createBody))
+	req, _ := http.NewRequest(http.MethodPost, env.srv.URL+"/api/v1/users", bytes.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}

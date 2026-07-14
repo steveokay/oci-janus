@@ -4,11 +4,34 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+// mapNotFound translates a MinIO "object missing" error into os.ErrNotExist so
+// callers (the handler's mapErrCtx) can detect it with errors.Is and return
+// codes.NotFound. Every driver in this package is expected to signal a missing
+// key with os.ErrNotExist — the filesystem driver gets this for free from
+// os.Open/os.Stat, but the MinIO SDK returns its own typed error response, so
+// we normalise it here. Non-not-found errors are returned unchanged (still
+// wrapped, so mapErrCtx logs the real cause server-side and returns Internal).
+//
+// The "NoSuchKey" code is returned by GetObject/StatObject for a missing
+// object; "NoSuchBucket" is included so a misconfigured bucket also surfaces as
+// NotFound rather than a raw internal error on the wire.
+func mapNotFound(err error) error {
+	if err == nil {
+		return nil
+	}
+	code := minio.ToErrorResponse(err).Code
+	if code == "NoSuchKey" || code == "NoSuchBucket" {
+		return fmt.Errorf("%w: %v", os.ErrNotExist, err)
+	}
+	return err
+}
 
 // MinIODriver implements Driver using a MinIO (or S3-compatible) backend.
 type MinIODriver struct {
@@ -61,12 +84,14 @@ func (d *MinIODriver) PutBlob(ctx context.Context, key string, r io.Reader, size
 func (d *MinIODriver) GetBlob(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	obj, err := d.client.GetObject(ctx, d.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, mapNotFound(err)
 	}
+	// GetObject is lazy: a missing key does not error until the first read/stat,
+	// so the NotFound translation has to happen on the Stat result here.
 	info, err := obj.Stat()
 	if err != nil {
 		obj.Close()
-		return nil, 0, err
+		return nil, 0, mapNotFound(err)
 	}
 	return obj, info.Size, nil
 }
@@ -74,7 +99,7 @@ func (d *MinIODriver) GetBlob(ctx context.Context, key string) (io.ReadCloser, i
 func (d *MinIODriver) StatBlob(ctx context.Context, key string) (BlobInfo, error) {
 	info, err := d.client.StatObject(ctx, d.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
-		return BlobInfo{}, err
+		return BlobInfo{}, mapNotFound(err)
 	}
 	return BlobInfo{
 		Key:          info.Key,

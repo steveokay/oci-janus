@@ -29,15 +29,14 @@ func newUserRepoWithMigrations(t *testing.T, ctx context.Context) *UserRepositor
 	// Spin up a fresh PostgreSQL 16 container.
 	dsn := containers.Postgres(t)
 
-	// Apply migrations through the latest — UserRepository.Create/scanOne read
+	// Apply the FULL current migration set — UserRepository.Create/scanOne read
 	// the full current users column set (is_global_admin @ 20260629000001,
 	// onboarding_complete @ 20260629000002, sso_subject @ 20260629222534/
-	// 20260630120000). The old 20260622000003 target predated all of them, so
-	// Create failed with "column ... does not exist" — a latent break in this
-	// integration-tagged test that the standard `go test ./...` CI job skips.
-	// Targeting the latest keeps the fixture aligned with the live schema.
-	// gooseUpTo is defined in migrations_test.go (same package, same build tag).
-	gooseUpTo(t, dsn, "20260703120300")
+	// 20260630120000, …). Any fixed pin goes stale the moment a later migration
+	// touches the users columns Create references, re-introducing "column ... does
+	// not exist" (FUT-085). gooseUp keeps the fixture aligned with the live schema
+	// automatically. gooseUp is defined in migrations_test.go (same package + tag).
+	gooseUp(t, dsn)
 
 	// Build the pgxpool that the repository will use for queries.
 	pool, err := pgxpool.New(ctx, dsn)
