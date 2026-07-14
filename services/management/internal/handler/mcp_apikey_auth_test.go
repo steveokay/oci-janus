@@ -57,6 +57,27 @@ func TestRequireAuth_APIKeyBearer_BadKeyRejected(t *testing.T) {
 	}
 }
 
+// TestRequireAuth_MalformedKey_FallsThroughToJWT locks the parseAPIKeyBearer
+// robustness the SEC-089 review flagged: a `key.`-prefixed token that is NOT
+// a well-formed `key.<uuid>.<secret>` must fall through to JWT validation
+// (which then 401s), never partial-accept the key path. Covers a bad UUID
+// segment, a missing secret, and a `key.`-only token.
+func TestRequireAuth_MalformedKey_FallsThroughToJWT(t *testing.T) {
+	env := newTestEnv(t)
+	for _, tok := range []string{
+		"key.not-a-uuid." + apiKeySecret, // uuid.Parse fails
+		"key." + apiKeyID + ".",          // empty secret
+		"key." + apiKeyID,                // no second dot
+		"key.",                           // prefix only
+	} {
+		resp := env.get(t, "/api/v1/service-accounts", tok)
+		resp.Body.Close()
+		if resp.StatusCode != 401 {
+			t.Errorf("malformed key %q got HTTP %d, want 401 (must fall through to JWT, not partial-accept)", tok, resp.StatusCode)
+		}
+	}
+}
+
 // ValidateAPIKey accepts the single canned key id and returns the standard
 // test identity; any other id is Unauthenticated. Declared here so the
 // FUT-006-style BFF dispatch has a fake to call. The shared fakeAuthServer
