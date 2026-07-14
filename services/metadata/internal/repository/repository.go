@@ -1274,7 +1274,8 @@ func (r *Repository) ListUntaggedManifests(ctx context.Context, tenantID, repoID
 		SELECT m.id, m.repo_id, m.tenant_id, m.digest, m.media_type, m.raw_json,
 		       m.size_bytes, m.created_at,
 		       m.quarantined, COALESCE(m.quarantine_reason, ''),
-		       m.quarantined_at, COALESCE(m.quarantined_by, '')
+		       m.quarantined_at, COALESCE(m.quarantined_by, ''),
+		       COALESCE(m.config_media_type, '')
 		FROM   manifests m
 		WHERE  m.repo_id = $1 AND m.tenant_id = $2
 		  AND  NOT EXISTS (

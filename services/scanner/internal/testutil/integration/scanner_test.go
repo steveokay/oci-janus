@@ -15,6 +15,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,12 +23,41 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"google.golang.org/grpc"
 
 	"github.com/steveokay/oci-janus/libs/testutil/containers"
+	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	"github.com/steveokay/oci-janus/services/scanner/internal/reportworker"
 	"github.com/steveokay/oci-janus/services/scanner/internal/repository"
 	scannermigrations "github.com/steveokay/oci-janus/services/scanner/migrations"
 )
+
+// fakeMetaClient is an in-process reportworker.MetadataClient double for the
+// integration test. FUT-080 wired the report worker to registry-metadata's
+// GetSecurityOverview + ListTenantVulnerabilities so a report reflects real
+// severity totals + CVE findings. The integration harness stands up Postgres
+// but not a metadata gRPC server, so we supply canned-but-non-trivial data
+// here — the worker still exercises the full render path (summary counts +
+// findings → SPDX/PDF), and the assertions below confirm the fetched CVE
+// lands in the rendered SBOM. Returning an error from either method would
+// make the worker mark the report failed, so both return valid payloads.
+type fakeMetaClient struct{}
+
+func (fakeMetaClient) GetSecurityOverview(_ context.Context, _ *metadatav1.GetSecurityOverviewRequest, _ ...grpc.CallOption) (*metadatav1.SecurityOverview, error) {
+	return &metadatav1.SecurityOverview{
+		SeverityCounts: &metadatav1.SecurityCounts{Critical: 1, High: 2},
+	}, nil
+}
+
+func (fakeMetaClient) ListTenantVulnerabilities(_ context.Context, _ *metadatav1.ListTenantVulnerabilitiesRequest, _ ...grpc.CallOption) (*metadatav1.ListTenantVulnerabilitiesResponse, error) {
+	// A single page with one finding, no next-page token: enough to prove the
+	// worker threads real findings into the rendered report.
+	return &metadatav1.ListTenantVulnerabilitiesResponse{
+		Vulnerabilities: []*metadatav1.TenantVulnerability{
+			{CveId: "CVE-2024-0001", Severity: "CRITICAL", PackageName: "openssl", PackageVersion: "1.1.1", FixedIn: "1.1.1a"},
+		},
+	}, nil
+}
 
 // newRepo spins up Postgres 16, applies all scanner migrations, returns a
 // repository wired to a fresh pool.
@@ -319,7 +349,7 @@ func TestReportWorker_processesPendingRow(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	w := reportworker.New(repo, reportworker.Config{
+	w := reportworker.New(repo, fakeMetaClient{}, reportworker.Config{
 		OutputDir:    outDir,
 		PollInterval: 50 * time.Millisecond,
 	})
@@ -350,6 +380,12 @@ func TestReportWorker_processesPendingRow(t *testing.T) {
 			s, _ := os.ReadFile(rec.SBOMPath)
 			if len(s) == 0 || s[0] != '{' {
 				t.Errorf("sbom not JSON object: %s", string(s[:min(len(s), 32)]))
+			}
+			// FUT-080: the finding fetched from metadata must actually appear in
+			// the rendered report — proves the worker threaded real metadata
+			// findings through, not just that some file was written.
+			if !strings.Contains(string(s), "CVE-2024-0001") {
+				t.Errorf("rendered SBOM missing the fetched CVE; got:\n%s", string(s))
 			}
 			// Ensure the file is under outDir.
 			rel, err := filepath.Rel(outDir, rec.PDFPath)

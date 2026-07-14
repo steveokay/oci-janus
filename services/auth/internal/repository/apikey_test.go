@@ -45,9 +45,11 @@ func setupAPIKeyRepo(t *testing.T, ctx context.Context) (*pgxpool.Pool, *UserRep
 	// Spin up a fresh PostgreSQL 16 container.
 	dsn := containers.Postgres(t)
 
-	// Apply all schema migrations through the polymorphic api_keys migration.
-	// gooseUpTo is defined in migrations_test.go (same package + build tag).
-	gooseUpTo(t, dsn, "20260622000003")
+	// Apply the FULL current migration set — this helper seeds via the live
+	// UserRepository.Create, which targets the HEAD users schema (is_global_admin,
+	// onboarding_complete, …). Pinning to an intermediate migration omits those
+	// columns and the INSERT fails (FUT-085). gooseUp is in migrations_test.go.
+	gooseUp(t, dsn)
 
 	// Build the shared connection pool.
 	pool, err := pgxpool.New(ctx, dsn)

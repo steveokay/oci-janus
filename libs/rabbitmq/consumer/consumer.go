@@ -41,8 +41,8 @@ type Consumer struct {
 	ch   *amqp.Channel
 	cfg  Config
 
-	// retries tracks per-DeliveryTag attempt counts so that an in-memory
-	// counter survives across NACK(requeue=true) cycles on the same channel.
+	// retries tracks per-message attempt counts so that an in-memory counter
+	// survives across NACK(requeue=true) cycles.
 	//
 	// Why not x-death? RabbitMQ only adds the x-death header when a message
 	// is actually dead-lettered (NACK with requeue=false on a queue that has
@@ -51,16 +51,26 @@ type Consumer struct {
 	// stay at 0 forever and the message would loop between consumer + queue
 	// indefinitely on any persistent handler error (REM-015).
 	//
-	// DeliveryTag is a uint64 monotonic counter scoped to the AMQP channel; it
-	// is stable across redeliveries of the *same* message on the *same*
-	// channel, and that is the only scope we need — if the channel drops, the
-	// new channel gets fresh tags and the counter is irrelevant (RabbitMQ
-	// itself redelivers the message, which we want to count as attempt 0).
+	// Why key by message identity and NOT DeliveryTag? A DeliveryTag is a
+	// uint64 scoped to the AMQP channel that the broker assigns to each
+	// *delivery* — it monotonically increments and a redelivered message
+	// (after NACK(requeue=true)) is handed to us under a BRAND-NEW tag. So a
+	// tag-keyed counter never accumulates: every redelivery misses the map,
+	// restarts at 0, and requeues forever — reintroducing the exact REM-015
+	// loop the counter was meant to break (FUT-085 caught this in CI: handler
+	// calls climbed into the tens of thousands with retry stuck at 0).
 	//
-	// Memory is bounded by prefetch_count × MaxRetries entries (a few KB in
-	// the worst case), and entries are cleared on every terminal state (ACK
+	// The stable identity across redeliveries is the message id (the publisher
+	// stamps amqp.Publishing.MessageId with events.Event.ID, and the broker
+	// preserves message properties across requeue/redelivery). We key on that.
+	// messageKey derives it, falling back to the JSON body's ID and finally to
+	// the DeliveryTag so a message with no id at least fails safe (routes to
+	// DLX after MaxRetries+1 rather than looping unbounded).
+	//
+	// Memory is bounded by prefetch_count × in-flight-messages entries (a few
+	// KB worst-case), and entries are cleared on every terminal state (ACK
 	// success, NACK-to-DLX, or unparseable payload).
-	retries sync.Map // key: uint64 DeliveryTag, value: int attempt count
+	retries sync.Map // key: string message identity, value: int attempt count
 }
 
 // New connects to the broker, declares the queue with DLX routing, and binds
@@ -126,12 +136,15 @@ func New(url string, cfg Config) (*Consumer, error) {
 // Consume starts the consumer loop. It blocks until ctx is cancelled or the
 // AMQP channel closes. The handler is called synchronously for each delivery.
 //
-// Retry logic (REM-015): each Delivery carries a monotonic DeliveryTag.
-// We track per-tag attempt counts in c.retries. On handler failure we NACK
-// with requeue=true (incrementing the in-memory counter) until the counter
-// reaches MaxRetries, at which point we NACK with requeue=false and the
-// broker routes the message to the DLX. Counter entries are cleared on
-// every terminal state to keep memory bounded.
+// Retry logic (REM-015 / FUT-085): we track per-message attempt counts in
+// c.retries, keyed by the message identity (see messageKey) so the counter
+// survives NACK(requeue=true) redeliveries — the broker re-assigns a fresh
+// DeliveryTag on every redelivery, so a tag-keyed counter would reset to 0
+// each time and loop forever. On handler failure we NACK with requeue=true
+// (incrementing the in-memory counter) until the counter reaches MaxRetries,
+// at which point we NACK with requeue=false and the broker routes the message
+// to the DLX. Counter entries are cleared on every terminal state to keep
+// memory bounded.
 func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 	deliveries, err := c.ch.ConsumeWithContext(ctx, c.cfg.Queue,
 		"",    // consumer tag — auto-generated
@@ -170,17 +183,17 @@ func (c *Consumer) handle(ctx context.Context, d amqp.Delivery, handler Handler)
 		return
 	}
 
+	// key identifies this message across redeliveries so the retry counter
+	// accumulates instead of resetting under a fresh DeliveryTag every requeue.
+	key := messageKey(d, event)
+
 	if err := handler(ctx, event); err != nil {
-		// Read current attempt count; first failure starts at 0.
-		// Note: d.Redelivered is true on the second-and-later delivery of the
-		// same message. We don't rely on it to *count* (the broker doesn't
-		// expose a tag-level redelivery count), but the field is useful as a
-		// sanity-check in logs and as a hint when the counter map is empty
-		// (e.g. after a process restart that drained the channel — the broker
-		// re-delivers but our counter resets to 0, which is the correct
-		// behaviour: a brand-new process gets a fresh retry budget).
+		// Read current attempt count; first failure starts at 0. d.Redelivered
+		// is true on the second-and-later delivery of the same message; we log
+		// it as a sanity check but the *count* comes from the message-keyed map
+		// (the broker doesn't expose a per-message redelivery count).
 		var retries int
-		if v, ok := c.retries.Load(d.DeliveryTag); ok {
+		if v, ok := c.retries.Load(key); ok {
 			retries = v.(int)
 		}
 
@@ -196,7 +209,7 @@ func (c *Consumer) handle(ctx context.Context, d amqp.Delivery, handler Handler)
 
 		if retries >= c.cfg.MaxRetries {
 			// Exhausted retries — NACK without requeue routes via x-dead-letter-exchange to the DLX.
-			c.retries.Delete(d.DeliveryTag)
+			c.retries.Delete(key)
 			_ = d.Nack(false, false)
 			return
 		}
@@ -205,14 +218,37 @@ func (c *Consumer) handle(ctx context.Context, d amqp.Delivery, handler Handler)
 		// observes the new value. Storing retries+1 is correct because we
 		// just consumed one attempt; the next handler call will be attempt
 		// number retries+1.
-		c.retries.Store(d.DeliveryTag, retries+1)
+		c.retries.Store(key, retries+1)
 		_ = d.Nack(false, true) // requeue for immediate retry
 		return
 	}
 
 	// Success — drop any counter entry from prior failed attempts and ACK.
-	c.retries.Delete(d.DeliveryTag)
+	c.retries.Delete(key)
 	_ = d.Ack(false)
+}
+
+// messageKey returns a stable identity for a delivery that survives
+// NACK(requeue=true) redeliveries — unlike DeliveryTag, which the broker
+// re-assigns on every (re)delivery. Preference order:
+//
+//  1. amqp.Delivery.MessageId — set by libs/rabbitmq/publisher to the
+//     events.Event.ID and preserved by the broker across requeues. This is
+//     the correct scope for the retry counter.
+//  2. The JSON body's event.ID — a fallback for messages published by a
+//     path that didn't stamp MessageId.
+//  3. The DeliveryTag as a last resort — a message with no stable id can't be
+//     retry-counted across requeues, but keying on the tag still bounds the
+//     first attempt and fails safe toward the DLX rather than a silent loop.
+//     Prefixed so it can never collide with a real message id.
+func messageKey(d amqp.Delivery, event events.Event) string {
+	if d.MessageId != "" {
+		return "mid:" + d.MessageId
+	}
+	if event.ID != "" {
+		return "eid:" + event.ID
+	}
+	return fmt.Sprintf("tag:%d", d.DeliveryTag)
 }
 
 // Close shuts down the channel and connection. Call on service shutdown.

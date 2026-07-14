@@ -31,8 +31,11 @@ func setupMFARepo(t *testing.T, ctx context.Context) (*pgxpool.Pool, *UserReposi
 	// t.Cleanup for teardown.
 	dsn := containers.Postgres(t)
 
-	// Apply the schema through the Task 1 MFA migration.
-	gooseUpTo(t, dsn, "20260705120000")
+	// Apply the FULL current migration set. This helper seeds via the live
+	// UserRepository.Create (HEAD users schema); pinning to an intermediate
+	// migration risks omitting later columns and breaking the INSERT (FUT-085).
+	// gooseUp is defined in migrations_test.go.
+	gooseUp(t, dsn)
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {

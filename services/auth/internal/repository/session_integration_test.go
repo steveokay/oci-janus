@@ -84,9 +84,14 @@ func TestSessionRepository_lifecycle(t *testing.T) {
 		t.Fatalf("after revoke expected only s2, got %+v", live)
 	}
 
-	// With only s2 live, RevokeOthers(keep=s2) revokes nothing.
+	// RevokeOthers(keep=s2) is idempotent by design (SEC-081): it selects
+	// EVERY non-kept, unexpired row — revoked or not — and COALESCEs
+	// revoked_at, so a retry after a transient Redis-gate failure re-returns
+	// the same set and re-drives every gate. s1 is already revoked but its
+	// expires_at is still 24h in the future, so it is re-returned here.
+	// s2 is kept, `other`'s session belongs to a different user. Expect s1.
 	revoked, err := repo.RevokeOthers(ctx, userID, s2)
-	if err != nil || len(revoked) != 0 {
-		t.Fatalf("RevokeOthers with only s2 live should revoke 0, got %d err=%v", len(revoked), err)
+	if err != nil || len(revoked) != 1 || revoked[0].SID != s1 {
+		t.Fatalf("RevokeOthers(keep=s2) should re-return the revoked-but-unexpired s1 (SEC-081 idempotency), got %+v err=%v", revoked, err)
 	}
 }

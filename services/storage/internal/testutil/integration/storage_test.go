@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	"net"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -28,6 +29,12 @@ import (
 const (
 	// bufSize is the in-memory buffer capacity for the bufconn gRPC listener.
 	bufSize = 1024 * 1024 // 1 MiB
+
+	// testTenant is the tenant id used by every request in this suite. Under
+	// PENTEST-026 the handler requires a non-empty tenant_id and rejects any
+	// key that does not live under "<root>/<tenant_id>/" — so every test key
+	// below is constructed as "blobs/test-tenant/…" to match this value.
+	testTenant = "test-tenant"
 )
 
 // buildTestEnv starts a MinIO container, creates the MinIO driver, wires it
@@ -69,9 +76,13 @@ func buildTestEnv(t *testing.T) storagev1.StorageServiceClient {
 	t.Cleanup(srv.Stop)
 
 	// 5. Dial the in-process server using lis.DialContext as the context dialer.
+	//    Wrapped to match grpc.WithContextDialer's `func(ctx, target) (net.Conn, error)`
+	//    signature — bufconn's DialContext takes only ctx.
 	conn, err := grpc.NewClient(
 		"passthrough:///bufconn",
-		grpc.WithContextDialer(lis.DialContext),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -97,7 +108,7 @@ func TestPutBlob_BlobExists_StatBlob_RoundTrip(t *testing.T) {
 	mustPutBlob(t, client, key, payload)
 
 	// BlobExists must return true.
-	existsResp, err := client.BlobExists(ctx, &storagev1.BlobExistsRequest{Key: key})
+	existsResp, err := client.BlobExists(ctx, &storagev1.BlobExistsRequest{Key: key, TenantId: testTenant})
 	if err != nil {
 		t.Fatalf("BlobExists: %v", err)
 	}
@@ -106,7 +117,7 @@ func TestPutBlob_BlobExists_StatBlob_RoundTrip(t *testing.T) {
 	}
 
 	// StatBlob must report the correct size.
-	statResp, err := client.StatBlob(ctx, &storagev1.StatBlobRequest{Key: key})
+	statResp, err := client.StatBlob(ctx, &storagev1.StatBlobRequest{Key: key, TenantId: testTenant})
 	if err != nil {
 		t.Fatalf("StatBlob: %v", err)
 	}
@@ -121,7 +132,6 @@ func TestPutBlob_BlobExists_StatBlob_RoundTrip(t *testing.T) {
 // verifying the reassembled bytes are identical to what was uploaded.
 func TestPutBlob_GetBlob_BytesMatch(t *testing.T) {
 	client := buildTestEnv(t)
-	ctx := context.Background()
 
 	payload := []byte("the quick brown fox jumps over the lazy dog")
 	key := "blobs/test-tenant/sha256/th/the-quick-fox"
@@ -150,12 +160,12 @@ func TestDeleteBlob_BlobGoneAfterDelete(t *testing.T) {
 	mustPutBlob(t, client, key, payload)
 
 	// Delete the blob.
-	if _, err := client.DeleteBlob(ctx, &storagev1.DeleteBlobRequest{Key: key}); err != nil {
+	if _, err := client.DeleteBlob(ctx, &storagev1.DeleteBlobRequest{Key: key, TenantId: testTenant}); err != nil {
 		t.Fatalf("DeleteBlob: %v", err)
 	}
 
 	// BlobExists must return false.
-	existsResp, err := client.BlobExists(ctx, &storagev1.BlobExistsRequest{Key: key})
+	existsResp, err := client.BlobExists(ctx, &storagev1.BlobExistsRequest{Key: key, TenantId: testTenant})
 	if err != nil {
 		t.Fatalf("BlobExists after delete: %v", err)
 	}
@@ -164,7 +174,7 @@ func TestDeleteBlob_BlobGoneAfterDelete(t *testing.T) {
 	}
 
 	// GetBlob must return codes.NotFound.
-	stream, err := client.GetBlob(ctx, &storagev1.GetBlobRequest{Key: key})
+	stream, err := client.GetBlob(ctx, &storagev1.GetBlobRequest{Key: key, TenantId: testTenant})
 	if err != nil {
 		t.Fatalf("GetBlob (after delete) stream open: %v", err)
 	}
@@ -205,7 +215,8 @@ func TestGetBlob_MissingKey_ReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	stream, err := client.GetBlob(ctx, &storagev1.GetBlobRequest{
-		Key: "blobs/test-tenant/sha256/no/nonexistent-key",
+		Key:      "blobs/test-tenant/sha256/no/nonexistent-key",
+		TenantId: testTenant,
 	})
 	if err != nil {
 		// Some servers return the error on stream open rather than first Recv.
@@ -274,6 +285,7 @@ func mustPutBlob(t *testing.T, client storagev1.StorageServiceClient, key string
 		Data: &storagev1.PutBlobRequest_Meta{
 			Meta: &storagev1.PutBlobMeta{
 				Key:         key,
+				TenantId:    testTenant,
 				Size:        int64(len(payload)),
 				ContentType: "application/octet-stream",
 			},
@@ -313,7 +325,7 @@ func mustGetBlob(t *testing.T, client storagev1.StorageServiceClient, key string
 
 	ctx := context.Background()
 
-	stream, err := client.GetBlob(ctx, &storagev1.GetBlobRequest{Key: key})
+	stream, err := client.GetBlob(ctx, &storagev1.GetBlobRequest{Key: key, TenantId: testTenant})
 	if err != nil {
 		t.Fatalf("GetBlob stream open: %v", err)
 	}

@@ -32,10 +32,13 @@ import (
 func TestMarkOnboardingComplete_HappyPath_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
-	// Spin up a fresh PostgreSQL 16 container and advance the schema all the
-	// way to the migration that adds the column under test.
+	// Spin up a fresh PostgreSQL 16 container and apply the FULL current migration
+	// set. This test seeds via the live UserRepository.Create, whose RETURNING
+	// clause reads sso_subject (added @ 20260629222534) — later than the old
+	// 20260629000002 pin, so pinning left the column absent and Create failed
+	// (FUT-085). gooseUp is defined in migrations_test.go.
 	dsn := containers.Postgres(t)
-	gooseUpTo(t, dsn, "20260629000002")
+	gooseUp(t, dsn)
 
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)

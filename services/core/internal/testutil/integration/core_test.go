@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -66,6 +67,18 @@ func (s *mockAuthServer) ValidateToken(_ context.Context, req *authv1.ValidateTo
 	}, nil
 }
 
+// GetUserPermissions returns the RBAC access list the core handler's checkAccess()
+// consults on every request (in addition to the JWT's own access list). It mirrors
+// the push/pull/delete-on-all-repos grant returned by ValidateToken so that the
+// server-side RBAC check agrees with the token and write paths are permitted.
+func (s *mockAuthServer) GetUserPermissions(_ context.Context, _ *authv1.GetUserPermissionsRequest) (*authv1.GetUserPermissionsResponse, error) {
+	return &authv1.GetUserPermissionsResponse{
+		Access: []*authv1.RepositoryAccess{
+			{Type: "repository", Name: "*", Actions: []string{"push", "pull", "delete"}},
+		},
+	}, nil
+}
+
 // mockMetadataServer stores repositories, manifests, and tags in memory.
 type mockMetadataServer struct {
 	metadatav1.UnimplementedMetadataServiceServer
@@ -117,6 +130,19 @@ func (s *mockMetadataServer) GetRepository(_ context.Context, req *metadatav1.Ge
 	return nil, status.Errorf(codes.NotFound, "repository not found")
 }
 
+// GetRepositoryByName resolves a repo by (tenant_id, name). The core read and
+// delete paths call this (only the manifest PUT path creates via CreateRepository),
+// so the mock must implement it or those paths surface Unimplemented → HTTP 500.
+func (s *mockMetadataServer) GetRepositoryByName(_ context.Context, req *metadatav1.GetRepositoryByNameRequest) (*metadatav1.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := req.GetTenantId() + ":" + req.GetName()
+	if r, ok := s.repos[key]; ok {
+		return r, nil
+	}
+	return nil, status.Errorf(codes.NotFound, "repository not found")
+}
+
 func (s *mockMetadataServer) PutManifest(_ context.Context, req *metadatav1.PutManifestRequest) (*metadatav1.Manifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,7 +163,10 @@ func (s *mockMetadataServer) GetManifest(_ context.Context, req *metadatav1.GetM
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	m, ok := s.manifests[req.GetRepoId()+":"+req.GetDigest()]
+	// GetManifestRequest carries a single `reference` field (tag or digest).
+	// The Registry service resolves tags to digests via GetTag before calling
+	// GetManifest, so `reference` here is always the manifest digest.
+	m, ok := s.manifests[req.GetRepoId()+":"+req.GetReference()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "manifest not found")
 	}
@@ -183,8 +212,8 @@ func (s *mockMetadataServer) ListTags(req *metadatav1.ListTagsRequest, stream me
 			continue
 		}
 		name := k[len(prefix):]
-		// honour the "last" cursor for pagination
-		if req.GetLastName() != "" && name <= req.GetLastName() {
+		// honour the "last" cursor for pagination (ListTagsRequest.last)
+		if req.GetLast() != "" && name <= req.GetLast() {
 			continue
 		}
 		tag := &metadatav1.Tag{
@@ -300,7 +329,7 @@ func (s *mockStorageServer) PutBlob(stream storagev1.StorageService_PutBlobServe
 	s.blobs[key] = buf
 	s.mu.Unlock()
 
-	return stream.SendAndClose(&storagev1.PutBlobResponse{Size: int64(len(buf))})
+	return stream.SendAndClose(&storagev1.PutBlobResponse{Key: key, BytesWritten: int64(len(buf))})
 }
 
 // GetBlob streams blob data in 64 KiB chunks.
@@ -377,11 +406,14 @@ func newCoreEnv(t *testing.T) *coreEnv {
 	t.Cleanup(storageSrv.GracefulStop)
 
 	// dialBufconn returns a *grpc.ClientConn connected to a bufconn listener.
-	// bufconn.Listener.DialContext returns net.Conn, matching grpc.WithContextDialer's signature.
+	// grpc.WithContextDialer expects func(context.Context, string) (net.Conn, error),
+	// so wrap bufconn.Listener.DialContext (which takes only a context) to match.
 	dialBufconn := func(lis *bufconn.Listener) *grpc.ClientConn {
 		conn, err := grpc.NewClient(
 			"passthrough:///bufconn",
-			grpc.WithContextDialer(lis.DialContext),
+			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+				return lis.DialContext(ctx)
+			}),
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 		if err != nil {
@@ -407,7 +439,7 @@ func newCoreEnv(t *testing.T) *coreEnv {
 	if err != nil {
 		t.Fatalf("init rabbitmq publisher: %v", err)
 	}
-	t.Cleanup(pub.Close)
+	t.Cleanup(func() { _ = pub.Close() })
 
 	// ── Service + handler ─────────────────────────────────────────────────────
 	uploadStore := service.NewUploadStore(rdb)

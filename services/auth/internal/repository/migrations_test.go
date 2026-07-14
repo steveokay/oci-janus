@@ -52,6 +52,33 @@ func gooseUpTo(t *testing.T, dsn string, versionPrefix string) {
 	}
 }
 
+// gooseUp applies the FULL current embedded auth migration set (every .sql file
+// in services/auth/migrations, via authmigrations.FS) — the same embed.FS and
+// goose the production auth service uses at startup (see
+// services/auth/internal/server/server.go). Setup helpers that seed rows via the
+// live repository code (UserRepository.Create, etc.) MUST use this rather than a
+// pinned gooseUpTo(...): the repository queries always target the HEAD schema, so
+// pinning to an intermediate migration leaves out later columns (e.g.
+// users.is_global_admin @ 20260629000001, users.onboarding_complete @
+// 20260629000002) and the INSERT fails with "column ... does not exist"
+// (FUT-085). gooseUpTo remains for migration round-trip tests that must stop at a
+// specific version to assert that migration's up/down behaviour.
+func gooseUp(t *testing.T, dsn string) {
+	t.Helper()
+
+	sqlDB := openSQLDB(t, dsn)
+
+	// Reset goose's global state each call so parallel/repeated tests don't
+	// inherit a stale base FS or dialect.
+	goose.SetBaseFS(authmigrations.FS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatalf("goose.SetDialect: %v", err)
+	}
+	if err := goose.Up(sqlDB, "."); err != nil {
+		t.Fatalf("goose.Up (full migration set): %v", err)
+	}
+}
+
 // gooseDownTo rolls back migrations until the database is at versionPrefix.
 // After this call the schema only contains objects created by migrations
 // numbered <= versionPrefix.
