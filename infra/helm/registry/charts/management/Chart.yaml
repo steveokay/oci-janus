@@ -1,0 +1,6 @@
+apiVersion: v2
+name: management
+description: registry-management — REST BFF for the dashboard, CLI and Terraform (HTTP-only, no gRPC server)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

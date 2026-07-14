@@ -2477,7 +2477,28 @@ Below is only what was genuinely untracked.
   never-drifting) or an integration smoke against a live BFF. Feeds
   the FUT-055 positioning decision.
 
-#### FUT-083 — Helm deploy can't serve the dashboard: management chart + `/api/v1` routing contract — **Tier 1 (for Helm deployers)**
+#### FUT-083 — Helm deploy can't serve the dashboard: management chart + `/api/v1` routing contract — ✅ SHIPPED 2026-07-14 (branch `feat/fut-083-helm-management-chart`)
+- **Shipped (full-dashboard scope):** two new umbrella subcharts —
+  `charts/management/` (registry-management BFF, HTTP-only on :8085,
+  httpGet `/healthz` probes, all `*_GRPC_ADDR` + CORS + mTLS-client env,
+  ESO secret-ref, NetworkPolicy/PDB/HPA/SA mirroring the `auth` chart) and
+  `charts/frontend/` (nginx serving the built SPA on :8080, static/no-secrets,
+  read-only rootfs as non-root uid 101 with `fsGroup: 101` + emptyDir cache/run
+  mounts). Both wired into the parent `Chart.yaml` deps + `values.yaml`.
+  `charts/gateway/templates/ingressroutes.yaml` rewritten to implement the
+  auth-vs-BFF `/api/v1` split via explicit Traefik `priority:` (BFF exceptions
+  100 → mgmt; auth prefixes + /auth/ + /.well-known/ 90 → auth; /v2/cache/ 95 →
+  proxy; /v2/ 80 → core; /api/v1/ catch-all 60 → mgmt; / 1 → frontend). The
+  routing contract is documented in `docs/DEPLOYMENT.md` ("API routing
+  contract") as the one canonical place, cross-referencing the vite + nginx
+  implementations. New golden test `infra/helm/registry/tests/routing_contract_test.py`
+  renders the chart and asserts the whole contract (TDD: 24 assertions, RED→GREEN);
+  `helm lint` clean on umbrella + both subcharts. Compose split (`frontend/nginx.conf`)
+  verified already correct — no change needed there. **Caveat:** verified via
+  `helm template`/`helm lint` structural rendering only — no local
+  kind/kubectl, so live Traefik matcher precedence + nginx-on-read-only-rootfs
+  boot were not exercised on a cluster (follow-up: a CI `helm template` + kind
+  smoke, tracked with FUT-085's CI gaps).
 - **Why:** two compounding deploy-blockers: (1)
   `infra/helm/registry/charts/` has no `registry-management` subchart
   despite `docs/DEPLOYMENT.md:59` listing it — a Helm install deploys

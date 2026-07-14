@@ -1,5 +1,29 @@
 # Wildcard platform domain — routes *.registry.example.com
 # Tenant is resolved from subdomain by registry-tenant gRPC lookup (cached in Redis).
+#
+# API routing contract (FUT-083)
+# ------------------------------
+# The dashboard is served end-to-end from this host: the SPA static bundle,
+# the auth API, and the management BFF all share one origin. Traefik must split
+# the /api/v1 namespace exactly like frontend/nginx.conf and frontend/vite.config.ts
+# (the dev + compose implementations) or BFF-owned calls 404 against auth.
+#
+# Routing is precedence-ordered via explicit `priority:` (higher = matched
+# first), so a more-specific rule always wins regardless of declaration order:
+#
+#   priority 100  BFF exceptions that live UNDER an auth prefix
+#                 (users/me/notification-preferences, access/oidc-trust,
+#                  access/token-policy, access/review)        -> registry-management
+#   priority  95  /v2/cache/  (pull-through proxy)            -> registry-proxy
+#   priority  90  auth-owned /api/v1 prefixes + /auth/ + /.well-known/
+#                 (login, logout, token, apikeys, users,
+#                  service-accounts, access, auth)            -> registry-auth
+#   priority  80  /v2/  (OCI Distribution Spec)               -> registry-core
+#   priority  60  /api/v1/  catch-all (everything else BFF)   -> registry-management
+#   priority   1  /  catch-all (SPA static + history fallback)-> registry-frontend
+#
+# Keep this table in sync with frontend/nginx.conf and frontend/vite.config.ts
+# — a change to the auth-vs-BFF split must land in all three.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -10,21 +34,24 @@ spec:
   entryPoints:
     - websecure
   routes:
-    # OCI Distribution Spec — /v2/* → registry-core
-    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/v2/`)
+    # ── BFF exceptions that live under an auth prefix → registry-management ──
+    # Highest priority so they shadow the auth-owned /api/v1/users and
+    # /api/v1/access prefixes below.
+    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && (PathPrefix(`/api/v1/users/me/notification-preferences`) || PathPrefix(`/api/v1/access/oidc-trust`) || PathPrefix(`/api/v1/access/token-policy`) || PathPrefix(`/api/v1/access/review`))
       kind: Rule
+      priority: 100
       middlewares:
         - name: security-headers
         - name: strip-internal-headers
         - name: rate-limit
       services:
-        - name: registry-core
-          port: 8080
+        - name: registry-management
+          port: 8085
 
-    # Pull-through proxy cache — /v2/cache/* → registry-proxy
+    # ── Pull-through proxy cache — /v2/cache/* → registry-proxy ──
     - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/v2/cache/`)
       kind: Rule
-      priority: 20   # higher priority than the /v2/ rule above
+      priority: 95
       middlewares:
         - name: security-headers
         - name: strip-internal-headers
@@ -33,9 +60,13 @@ spec:
         - name: registry-proxy
           port: 8080
 
-    # Auth endpoints — /auth/* and /.well-known/* → registry-auth
-    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
+    # ── Auth-owned API + token surfaces → registry-auth ──
+    # The /api/v1 prefixes auth owns (user/apikey/session/RBAC management) plus
+    # the OAuth/JWKS surfaces. Everything else under /api/v1 falls through to
+    # the management catch-all at priority 60.
+    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && (PathPrefix(`/api/v1/login`) || PathPrefix(`/api/v1/logout`) || PathPrefix(`/api/v1/token`) || PathPrefix(`/api/v1/apikeys`) || PathPrefix(`/api/v1/users`) || PathPrefix(`/api/v1/service-accounts`) || PathPrefix(`/api/v1/access`) || PathPrefix(`/api/v1/auth`) || PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
       kind: Rule
+      priority: 90
       middlewares:
         - name: security-headers
         - name: strip-internal-headers
@@ -44,15 +75,44 @@ spec:
         - name: registry-auth
           port: 8080
 
-    # Management API — /api/v1/* → registry-auth (user/apikey management)
-    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/api/v1/`)
+    # ── OCI Distribution Spec — /v2/* → registry-core ──
+    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/v2/`)
       kind: Rule
+      priority: 80
       middlewares:
         - name: security-headers
         - name: strip-internal-headers
         - name: rate-limit
       services:
-        - name: registry-auth
+        - name: registry-core
+          port: 8080
+
+    # ── Management API catch-all — every other /api/v1/* → registry-management ──
+    # This is the FUT-083 fix: the BFF, not registry-auth, owns the bulk of the
+    # dashboard API (repositories, scans, signatures, webhooks, GC, orgs, …).
+    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/api/v1/`)
+      kind: Rule
+      priority: 60
+      middlewares:
+        - name: security-headers
+        - name: strip-internal-headers
+        - name: rate-limit
+      services:
+        - name: registry-management
+          port: 8085
+
+    # ── SPA static bundle + history fallback — everything else → registry-frontend ──
+    # Lowest priority: only reached when no API/registry rule above matched.
+    # registry-frontend's nginx serves the hashed assets and falls back unknown
+    # paths to index.html so TanStack Router handles them client-side.
+    - match: HostRegexp(`^[a-z0-9-]+\.{{ .Values.platformDomain }}$`) && PathPrefix(`/`)
+      kind: Rule
+      priority: 1
+      middlewares:
+        - name: security-headers
+        - name: strip-internal-headers
+      services:
+        - name: registry-frontend
           port: 8080
 
   tls:

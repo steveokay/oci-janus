@@ -42,6 +42,12 @@ dependencies:
   - name: tenant
     version: "0.1.0"
     repository: "file://charts/tenant"
+  - name: management
+    version: "0.1.0"
+    repository: "file://charts/management"
+  - name: frontend
+    version: "0.1.0"
+    repository: "file://charts/frontend"
   - name: backup
     version: "0.1.0"
     repository: "file://charts/backup"

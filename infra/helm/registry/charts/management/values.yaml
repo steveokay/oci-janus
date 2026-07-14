@@ -1,0 +1,70 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/steveokay/registry-management
+  pullPolicy: IfNotPresent
+  tag: ""  # defaults to .Chart.AppVersion
+
+# registry-management is HTTP-only — it is a gRPC *client* of the backend
+# services and runs no gRPC server, so there is a single business port.
+service:
+  httpPort: 8085
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  name: ""
+
+# Name of a pre-existing K8s Secret containing the service's secret env vars
+# (mTLS client cert/key material paths, PLATFORM_ADMIN_TENANT_ID override,
+# RABBITMQ_URL credentials, …). Populated by External Secrets Operator
+# referencing Vault / AWS SM. Non-secret defaults live in `env` below.
+secretName: registry-management-secrets
+
+# Non-secret configuration. The BFF discovers every backend over in-cluster
+# DNS (`registry-<svc>:50051`). Each *_GRPC_ADDR is optional: an empty value
+# disables that route family with a 404 "route disabled" (mirrors the compose
+# contract), so an operator can trim the surface by clearing an addr.
+env:
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  HTTP_ADDR: ":8085"
+  OTEL_SERVICE_NAME: registry-management
+  AUTH_GRPC_ADDR: registry-auth:50051
+  METADATA_GRPC_ADDR: registry-metadata:50051
+  AUDIT_GRPC_ADDR: registry-audit:50051
+  TENANT_GRPC_ADDR: registry-tenant:50051
+  WEBHOOK_GRPC_ADDR: registry-webhook:50051
+  SIGNER_GRPC_ADDR: registry-signer:50051
+  SCANNER_GRPC_ADDR: registry-scanner:50051
+  GC_GRPC_ADDR: registry-gc:50051
+  PROXY_GRPC_ADDR: registry-proxy:50051
+  CORE_GRPC_ADDR: registry-core:50051
+  # mTLS client material — the referenced files are projected into the pod by
+  # the platform's secret store (SecretProviderClass / ESO). Paths only; the
+  # bytes are never in values.
+  MTLS_CA_CERT_PATH: /certs/ca.crt
+  MTLS_CERT_PATH: /certs/management.crt
+  MTLS_KEY_PATH: /certs/management.key
+  # CORS_ALLOWED_ORIGIN must be the dashboard's public origin in production
+  # (e.g. https://app.registry.example.com). Set via values.prod.yaml.
+  CORS_ALLOWED_ORIGIN: ""
+  # PLATFORM_HOST is the public host the SPA is served from; used to build
+  # absolute links in emails/webhooks. Override per environment.
+  PLATFORM_HOST: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "frontend.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Serve HTTP to the gateway only — the SPA reaches browsers via Traefik.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      ports:
+        - port: {{ .Values.service.httpPort }}
+  egress:
+    # Allow DNS.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # The baked nginx.conf also proxies /api and /auth to the auth (:8080) and
+    # management (:8085) services as a fallback for direct-to-pod access. In the
+    # gateway-fronted topology the gateway intercepts those paths before they
+    # reach this pod, so this egress is normally unused — allowed for resilience.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: 8080
+        - port: 8085

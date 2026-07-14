@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "management.fullname" . }}
+  labels:
+    {{- include "management.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "management.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept HTTP from the gateway only (the dashboard/API traffic arrives
+    # via Traefik; management runs no gRPC server so there is no gRPC ingress).
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      ports:
+        - port: {{ .Values.service.httpPort }}
+  egress:
+    # Allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow gRPC to the backend services it fans out to (auth, metadata,
+    # audit, tenant, webhook, signer, scanner, gc, proxy, core — all :50051).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - port: 50051
+    # Allow RabbitMQ (publishes management-originated events, e.g. audit).
+    - ports:
+        - port: 5672
