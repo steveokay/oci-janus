@@ -333,8 +333,8 @@ disabled" (no oracle).
 
 - **D5 — baseline grant.** A newly provisioned user is passwordless
   (IdP-authenticated only), lands under the deployment bootstrap tenant
-  (`s.scimTenantID`, threaded from `deployment_metadata` in single mode — not the
-  dev default), and receives `reader@org:*`. A failed grant fails the whole
+  (`s.scimTenantID`, threaded from `deployment_metadata` — not the dev default),
+  and receives `reader@org:*`. A failed grant fails the whole
   provision so no role-less orphan is left behind.
 - **D3 — takeover guard.** On an email collision, an existing **passwordless**
   account is linked (external_id backfilled); an existing **local-password**

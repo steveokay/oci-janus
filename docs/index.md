@@ -28,8 +28,8 @@ Relative to a plain `distribution/distribution` deployment, OCI-Janus ships:
   compromised audit service cannot rewrite history.
 - **Read-only MCP server** so AI assistants can safely inspect repositories,
   audit events, health, and promotions.
-- **Optional multi-tenant mode** (`DEPLOYMENT_MODE=multi`) for operators who
-  genuinely need SaaS-style isolation. The default is single-tenant.
+- **Single-tenant by design** — one deployment serves one bootstrap tenant; the
+  `tenant_id` columns stay in the schema as a defence-in-depth boundary.
 
 ## Where to go next
 

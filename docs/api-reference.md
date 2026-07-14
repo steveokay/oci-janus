@@ -55,7 +55,7 @@ curl -s http://localhost:8085/api/v1/repositories \
   returned by the previous call — never numeric offsets.
 - **Errors** map gRPC status codes to HTTP: `FAILED_PRECONDITION` → 409,
   `PERMISSION_DENIED` → 403, `NOT_FOUND` → 404, `RESOURCE_EXHAUSTED` → 429/503.
-- **Tenancy** is implicit from your token in single mode (the bootstrap tenant).
+- **Tenancy** is implicit from your token (the platform is single-tenant — the bootstrap tenant).
 
 ## Postman collection
 

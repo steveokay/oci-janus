@@ -324,7 +324,7 @@ drift-guard keeps it in sync — so it never falls behind the code.
 |---|---|---|
 | `MCP_MANAGEMENT_URL` | `http://registry-management:8091` | MCP_MANAGEMENT_URL is the BFF root. Every tool proxies through this URL — no direct gRPC dial-outs from the MCP surface. Keeps the tool permissions honest to what an operator could do in the dashboard. |
 | `MCP_API_KEY` | — | MCP_API_KEY is a service-account key issued from /api-keys with read scopes. Format: key.<uuid>.<64-hex-secret> (FUT-006). Revoke any time from the dashboard — the MCP server treats it as opaque. |
-| `MCP_TENANT_ID` | — | MCP_TENANT_ID pins the tenant whose data the MCP surface exposes. In single-mode deployments this is the bootstrap tenant id; in multi-mode it's the workspace the operator wants Claude to reason about. UUID. |
+| `MCP_TENANT_ID` | — | MCP_TENANT_ID pins the tenant whose data the MCP surface exposes. The platform is single-tenant, so this is the bootstrap tenant id emitted by the registry-auth bootstrap CLI. UUID. |
 
 ## registry-metadata
 

@@ -1,16 +1,15 @@
 # Settings
 
 **Sidebar → Settings** (`/settings`) is a tabbed area for configuration. Which
-tabs you see depends on your role and the deployment mode:
+tabs you see depends on your role:
 
 | Tab | Who sees it |
 |---|---|
 | **Workspace** | Admins (any admin role) |
-| **Scanning** | Admins — **single-mode only** |
-| **Housekeeping** | Admins — **single-mode only** |
+| **Scanning** | Admins |
+| **Housekeeping** | Admins |
 | **Notifications** | Everyone (personal preferences; admins also see channel config) |
 | **Integrations** | **Global admins only** |
-| **Platform** | **Global admins — multi-mode only** |
 
 Each tab is its own URL, so you can bookmark a specific one.
 
@@ -32,9 +31,9 @@ Here you can:
 
 A hub of link cards pointing at the identity, delivery, and lifecycle surfaces —
 **Members & organizations**, **Workspace webhooks**, **Retention defaults**, plus
-a read-only **SSO posture** card and, in single mode, a **deployment info** card
-(mode, version, TLS/mTLS flags). It is a router, not an editor: the actual
-editing happens on the linked pages.
+a read-only **SSO posture** card and a **deployment info** card (version,
+TLS/mTLS flags). It is a router, not an editor: the actual editing happens on
+the linked pages.
 
 <figure markdown="span">
   ![The Settings Workspace tab with its hub of link cards](../assets/screenshots/settings.png){ loading=lazy }
@@ -47,17 +46,11 @@ editing happens on the linked pages.
 
 ## Scanning
 
-!!! info "Single-mode only"
-    In multi-tenant deployments these controls live on the **Platform** tab.
-
 Two sections: the **scan policy** editor (the same one on [Security ›
 Policies](security.md#policies)) and **scanner adapters** — a grid of configured
 scanners with health status and a per-adapter **test scan**. Admin-gated.
 
 ## Housekeeping
-
-!!! info "Single-mode only"
-    In multi-tenant deployments these controls live on the **Platform** tab.
 
 Storage cleanup: **garbage collection** and **retention** runs. Each shows
 status (Idle / Running / Failed), recent runs, and a **Run now** button.
@@ -124,22 +117,8 @@ the PR closes.
     set on the deployment; without it the save returns a 409 telling you to set
     it first. See [Self-hosting](../SELF-HOSTING.md) for the KEK inventory.
 
-## Platform
-
-!!! info "Global admins, multi-mode only"
-    Non-global-admins are redirected to the Workspace tab; the tab is hidden in
-    single mode entirely.
-
-The cross-tenant and infrastructure console. A banner reminds you that actions
-here affect **every tenant** on the control plane. Anchored sections:
-
-- **Tenants** — create, edit, and delete tenants.
-- **Scanner adapters**, **Garbage collection**, **Retention** — the same
-  controls as the single-mode Scanning/Housekeeping tabs, applied platform-wide.
-- **Deployment** — read-only mode/version/TLS info.
-- **SSO** — read-only posture (an editable multi-tenant SSO surface is a later
-  phase).
-
 !!! tip "Old bookmarks still work"
-    `/admin/scanner` and `/admin/tenants` redirect to the right place —
-    `/settings/platform` in multi mode, `/settings/workspace` in single mode.
+    The pre-9.1 admin routes redirect into Settings — `/admin/scanner` →
+    `/settings/scanning` and `/admin/tenants` → `/settings/workspace`. The
+    former **Platform** tab (tenant create/delete, cross-tenant console) was
+    removed with the multi-tenant posture (ADR-0031).

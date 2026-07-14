@@ -1,6 +1,6 @@
 # OCI-Janus
 
-Self-hosted OCI registry with mTLS between every service, multi-key JWT signing, tamper-evident audit, and optional multi-tenant mode for SaaS operators.
+Self-hosted, single-tenant OCI registry with mTLS between every service, multi-key JWT signing, and a tamper-evident audit trail.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.25.11-00ADD8?logo=go)](https://go.dev)
@@ -11,7 +11,7 @@ Self-hosted OCI registry with mTLS between every service, multi-key JWT signing,
 
 📚 **Full documentation is published at [steveokay.github.io/oci-janus](https://steveokay.github.io/oci-janus/)** — a guided quickstart, dashboard walkthrough, integrations catalog, an interactive OpenAPI explorer, and every reference below rendered as a browsable site.
 
-OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, a pluggable storage-driver interface (MinIO / any S3-compatible store including AWS S3, and local filesystem shipped today; native GCS/Azure drivers on the roadmap), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), a tamper-evident audit log with per-tenant SHA-256 hash chain, and an optional multi-tenant mode (`DEPLOYMENT_MODE=multi`) for operators who do need SaaS-style isolation.
+OCI-Janus is a production-grade OCI Distribution Spec v1.1 registry written in Go. It's built for teams who want the feature scope of Docker Hub / Harbor / ECR — image push/pull, vulnerability scanning, signing, RBAC, audit — without the cloud bill or the operational footprint of `distribution/distribution` plus a handful of glued-on services. The differentiators relative to plain `distribution/distribution`: mTLS between every internal service (not just at the edge), multi-key JWT signing with hot rotation, a pluggable storage-driver interface (MinIO / any S3-compatible store including AWS S3, and local filesystem shipped today; native GCS/Azure drivers on the roadmap), pluggable scanner plugins (Trivy, Grype, Clair), Cosign signing (Notary v2 planned), and a tamper-evident audit log with a SHA-256 hash chain. It is single-tenant by design — one deployment serves one tenant.
 
 ---
 
@@ -83,16 +83,11 @@ Canonical rules live in [`CLAUDE.md`](CLAUDE.md); per-decision history lives in 
 
 ---
 
-## Deployment modes
+## Deployment posture
 
-The `DEPLOYMENT_MODE` env var picks the posture; the schema and wire format are identical across both.
+OCI-Janus is **single-tenant**. One tenant is provisioned via `registry-auth bootstrap`; `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on any second insert, and the `SingleTenantInjector` interceptor stamps every request with the bootstrap tenant id. The FE hides tenant-switcher, plan/billing, and custom-domain surfaces.
 
-| Mode | Use case | Bootstrap | FE chrome |
-|---|---|---|---|
-| `single` (default) | Self-hosted, one-team OSS deploy | One tenant via `registry-auth bootstrap` | Tenant switcher / plan UI hidden |
-| `multi` | SaaS-style multi-tenant | First tenant via bootstrap; subsequent via Settings → Platform → Tenants | Full SaaS surface |
-
-In single mode `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on the second insert, and the `SingleTenantInjector` interceptor stamps every request with the bootstrap tenant id. See [ADR-0025](docs/adr/0025-single-tenant-default-deployment-mode.md) for the rationale; upgrading from v1 → v2: [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).
+The `tenant_id` columns stay in the schema and wire format (frozen — they back the audit hash-chain, RLS, and storage-key layout), but the `DEPLOYMENT_MODE` toggle and the SaaS/`multi` posture were removed in v3. **A `DEPLOYMENT_MODE=multi` deployment is no longer supported.** See [ADR-0031](docs/adr/0031-retire-multi-tenant-posture.md) (which supersedes [ADR-0025](docs/adr/0025-single-tenant-default-deployment-mode.md)); upgrading from v1 → v2: [`docs/MIGRATION-v1-to-v2.md`](docs/MIGRATION-v1-to-v2.md).
 
 ---
 

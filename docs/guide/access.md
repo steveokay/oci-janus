@@ -42,9 +42,6 @@ Editing requires org admin/owner.
 
 ### Tenant users
 
-!!! info "Multi-mode only"
-    This surface exists only in multi-tenant deployments.
-
 **Sidebar → Access → Tenant users** (`/tenant/users`) is a tenant-admin console
 to **invite** users (they redeem a one-time token to set a password),
 **disable/re-enable** accounts, and **elevate** a user to org admin. You cannot

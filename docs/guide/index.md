@@ -66,9 +66,8 @@ service backs them:
 | **Settings** (pinned at the bottom) | Settings |
 
 Some entries only appear when they are relevant to your deployment or your role
-— for example, **Pull-through cache** is hidden unless the proxy is wired, and
-**Tenant users** is a multi-tenant surface. The sections below call out those
-conditions where they apply.
+— for example, **Pull-through cache** is hidden unless the proxy is wired. The
+sections below call out those conditions where they apply.
 
 ### Topbar controls
 
@@ -104,10 +103,10 @@ Throughout this guide, admonitions flag when a screen or action is limited:
     Actions marked like this require an **admin** or **owner** role (enforced
     server-side — a non-admin attempt returns a 403, surfaced as an error toast).
 
-!!! info "Deployment mode"
-    OCI-Janus runs **single-tenant by default**. A few surfaces (Tenant users,
-    the Settings › Platform tab) exist only in **multi-tenant** deployments
-    (`DEPLOYMENT_MODE=multi`). These are marked **multi-mode only**.
+!!! info "Single-tenant"
+    OCI-Janus is **single-tenant** — one deployment serves one tenant. The
+    former multi-tenant-only surfaces (the Settings › Platform tab and the
+    tenant switcher) were removed in v3 ([ADR-0031](../adr/0031-retire-multi-tenant-posture.md)).
 
 ## Where to next
 

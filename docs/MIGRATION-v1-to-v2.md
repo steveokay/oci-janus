@@ -13,13 +13,23 @@
 
 # Migrating from v1 to v2 (REDESIGN-001)
 
-> **tl;dr.** Both modes share the same three steps: `docker compose down`
-> → run the bootstrap CLI once → `docker compose up -d`. **Multi mode** is
-> the same plus a tenant-create flow after bootstrap. **In either mode** we
-> recommend (optionally) setting `MTLS_PEER_CN_ALLOWLIST` per gRPC server
-> after you've confirmed every legitimate caller's certificate CN — see
-> Step 6. No active re-encryption pass is required (see Step 3). Downtime:
-> 5–15 min, dominated by snapshot time.
+!!! warning "v3 removed the multi-tenant posture"
+    This guide is the historical **v1 → v2** upgrade, when `DEPLOYMENT_MODE`
+    still offered a `multi` posture. **As of v3 the `DEPLOYMENT_MODE` toggle and
+    the `multi`/SaaS posture are removed** — the platform is single-tenant only
+    ([ADR-0031](adr/0031-retire-multi-tenant-posture.md), superseding
+    [ADR-0025](adr/0025-single-tenant-default-deployment-mode.md)). A
+    `DEPLOYMENT_MODE=multi` deployment is no longer supported. If you are
+    upgrading straight to v3, ignore every "multi mode" instruction below and
+    treat the deployment as single-tenant; **do not set `DEPLOYMENT_MODE`** (it
+    is unread in v3).
+
+> **tl;dr (v2).** The three steps: `docker compose down` → run the bootstrap
+> CLI once → `docker compose up -d`. **In either mode** we recommend
+> (optionally) setting `MTLS_PEER_CN_ALLOWLIST` per gRPC server after you've
+> confirmed every legitimate caller's certificate CN — see Step 6. No active
+> re-encryption pass is required (see Step 3). Downtime: 5–15 min, dominated by
+> snapshot time.
 
 For operators upgrading an existing v1 deployment. New installs: start at
 [`README.md`](https://github.com/steveokay/oci-janus/blob/main/README.md). v1 = any commit before REDESIGN-001 lands; v2 =
@@ -71,8 +81,9 @@ a release tagged `v2.0.0-rc1` or later.
 Full design rationale lives in [`docs/adr/`](adr/README.md). Operator-relevant deltas:
 
 - **ADR-0025** — `DEPLOYMENT_MODE` defaults to `single`. Multi-tenant
-  operators MUST set `DEPLOYMENT_MODE=multi` explicitly.
-  ([adr/0025](adr/0025-single-tenant-default-deployment-mode.md))
+  operators MUST set `DEPLOYMENT_MODE=multi` explicitly. **(Superseded in v3 by
+  [ADR-0031](adr/0031-retire-multi-tenant-posture.md): `multi` and the toggle
+  are removed.)** ([adr/0025](adr/0025-single-tenant-default-deployment-mode.md))
 - **ADR-0026** — Platform-admin is now the typed `users.is_global_admin`
   column. Existing magic-string `(admin, org, '*')` grants migrated
   automatically. ([adr/0026](adr/0026-is-global-admin-typed-primitive.md))

@@ -46,14 +46,13 @@ External references:
 
 A production-grade OCI-compliant Docker registry platform built in Go. Equivalent in feature scope to Docker Hub / Nexus / AWS ECR, designed primarily for self-hosted deployment.
 
-### Deployment mode
+### Deployment posture
 
-The platform ships in two postures controlled by `DEPLOYMENT_MODE`:
+The platform is **single-tenant** (ADR-0031). One bootstrap tenant is provisioned via the `registry-auth bootstrap` CLI; its id is recorded in `tenant.deployment_metadata` under `bootstrap_tenant_id`. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted, and every gRPC server wires `libs/middleware/grpc.SingleTenantInjector` to stamp the bootstrap tenant id onto every request. The FE hides tenant-switcher, plan/billing, custom-domain, and tenant-create surfaces.
 
-- **`single` (default, OSS posture)** — self-hosted single-tenant. One bootstrap tenant is provisioned via the `registry-auth bootstrap` CLI; FE chrome hides tenant switcher, plan/billing, custom domains, and tenant-create flows. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted. (REDESIGN-001 Decision #25.)
-- **`multi`** — preserves the SaaS posture for operators who want multi-tenant capability. Same proto contracts; FE re-exposes the multi-tenant surfaces.
+The dormant `multi`/SaaS posture and the `DEPLOYMENT_MODE` toggle were removed in REDESIGN-001 Phase 9 ([ADR-0031](docs/adr/0031-retire-multi-tenant-posture.md), superseding the "keep `multi` as opt-in" half of ADR-0025). **A `DEPLOYMENT_MODE=multi` deployment is no longer supported — this is the v2→v3 breaking change.**
 
-Storage schemas keep `tenant_id` columns in both modes — single mode just populates them with the bootstrap tenant id.
+The `tenant_id UUID NOT NULL` columns stay frozen in the schema and wire format (load-bearing for the audit hash-chain, RLS, and storage-key layout); single-tenant just populates them with the one bootstrap tenant id.
 
 ### Core Capabilities
 
@@ -184,7 +183,7 @@ github.com/steveokay/oci-janus/
 | 9 | `registry-webhook` | Reliable webhook delivery with retries + HMAC + delivery payload retrieval | Postgres (webhook schema) | SSRF block-list; HTTPS-only; `GetDelivery` for FE inspection |
 | 10 | `registry-audit` | Immutable audit log + analytics + notifications | Postgres (audit schema) | `FORCE ROW LEVEL SECURITY`, `registry_audit_app` role; PG14 `date_bin` time-series; email notification transport (Resend/SMTP) + per-user delivery log (FUT-019 Phase 3, KEK `NOTIFY_EMAIL_KEY_HEX`); shared org webhook notification channel (HMAC-signed POST per scheduled notification, FUT-019, KEK `NOTIFY_WEBHOOK_KEY_HEX`) |
 | 11 | `registry-gc` | Mark-sweep garbage collection + GC status visibility | Postgres (`gc_runs` table) | `pg_try_advisory_lock`; FNV-64a key per tenant; async `RunNow` queues a row + drains via `FOR UPDATE SKIP LOCKED` |
-| 12 | `registry-tenant` | Tenant CRUD (single-mode rejects 2nd insert; multi-mode allows full CRUD) + `deployment_metadata` source for `bootstrap_tenant_id` | Postgres (tenant schema — `tenants.slug`, `deployment_metadata`) | `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` in single mode; `GetDeploymentMetadata` RPC feeds every other service's SingleTenantInjector (REDESIGN-001 Phase 3.4). Custom domain CRUD removed (RM-001) |
+| 12 | `registry-tenant` | Tenant view/rename + bootstrap-only create (rejects a 2nd insert) + `deployment_metadata` source for `bootstrap_tenant_id` | Postgres (tenant schema — `tenants.slug`, `deployment_metadata`) | `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` on a 2nd insert (unconditional — ADR-0031); `GetDeploymentMetadata` RPC feeds every other service's SingleTenantInjector (REDESIGN-001 Phase 3.4). Custom domain CRUD removed (RM-001) |
 | 13 | `registry-management` | REST BFF for the dashboard (and CLI/Terraform) | — | No gRPC server; translates HTTP → gRPC; mounts SSO + signer + scanner + gc routes when their gRPC addrs are set; FUT-023 public SCM webhook receiver (`POST /webhooks/scm/github/pr`, unauthenticated) + PR-registry admin routes (`/api/v1/pr-registry/{config,namespaces}`) |
 | 14 | `registry-mcp` | Model Context Protocol server exposing the registry to AI agents (Claude Desktop / Cursor) | — | `stdio` (default) or `http` MCP server (`MCP_TRANSPORT`; HTTP default `:8092`); 12 read-only tools; pure HTTP client of the management BFF (no gRPC server, no DB, no RabbitMQ, no mTLS); env `MCP_MANAGEMENT_URL` / `MCP_API_KEY` / `MCP_TENANT_ID` / `MCP_TRANSPORT` / `MCP_HTTP_ADDR`; detail in [`docs/MCP.md`](docs/MCP.md) |
 
@@ -362,14 +361,13 @@ Per-driver env var tables: see [`docs/SERVICES.md` §4](docs/SERVICES.md#4-regis
 
 ## 9. Multi-Tenancy
 
-### Deployment modes
+### Deployment posture
 
-The platform supports two `DEPLOYMENT_MODE` values (REDESIGN-001 Decision #25):
+The platform is **single-tenant** ([ADR-0031](docs/adr/0031-retire-multi-tenant-posture.md), superseding the "keep `multi` as opt-in" half of Decision #25). One bootstrap tenant is provisioned by the `registry-auth bootstrap` CLI; its id is recorded in `tenant.deployment_metadata` under the `bootstrap_tenant_id` key. Every gRPC server wires `libs/middleware/grpc.SingleTenantInjector` to inject `bootstrap_tenant_id` into requests missing tenant metadata and to reject mismatched tenant ids with `InvalidArgument`. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted (unconditional). Custom domain CRUD has been removed (REDESIGN-001 RM-001).
 
-- **`single` (default)** — self-hosted OSS posture. One bootstrap tenant is provisioned by the `registry-auth bootstrap` CLI; its id is recorded in `tenant.deployment_metadata` under the `bootstrap_tenant_id` key. Every gRPC server wires `libs/middleware/grpc.SingleTenantInjector` to inject `bootstrap_tenant_id` into requests missing tenant metadata and to reject mismatched tenant ids with `InvalidArgument`. `services/tenant.CreateTenant` returns `FAILED_PRECONDITION` when a second tenant insert is attempted. Custom domain CRUD has been removed (REDESIGN-001 RM-001).
-- **`multi`** — preserves the SaaS posture. Tenant create/delete + tenant switcher + plan badge UI are re-exposed; the single-tenant guards are bypassed.
+The `DEPLOYMENT_MODE` toggle and the dormant `multi`/SaaS posture were removed in Phase 9. **A `DEPLOYMENT_MODE=multi` deployment is no longer supported — the v2→v3 breaking change.**
 
-The wire format and schema are mode-agnostic — `tenant_id UUID NOT NULL` columns persist in both modes. Single mode just populates them with the bootstrap tenant id.
+`tenant_id UUID NOT NULL` columns stay frozen in the schema and wire format — single-tenant just populates them with the bootstrap tenant id. They are load-bearing for the audit hash-chain, RLS, and storage-key layout, so removing `tenant_id` is explicitly out of scope.
 
 ### Tenant Isolation
 
@@ -377,7 +375,7 @@ The wire format and schema are mode-agnostic — `tenant_id UUID NOT NULL` colum
 - All queries in `registry-metadata` must filter by `tenant_id` — never query across tenants.
 - Storage keys are prefixed with `tenant_id` (see [`docs/SERVICES.md` §4 storage key layout](docs/SERVICES.md#4-registry-storage)).
 - RabbitMQ messages include `tenant_id` in payload and as a message header.
-- `libs/middleware/grpc.SingleTenantInjector` enforces the single-mode invariant at the interceptor layer (REDESIGN-001 Phase 3.4).
+- `libs/middleware/grpc.SingleTenantInjector` enforces the single-tenant invariant at the interceptor layer, wired unconditionally on every service (REDESIGN-001 Phase 3.4 / 9.3).
 
 ### Row-Level Security (RLS)
 
