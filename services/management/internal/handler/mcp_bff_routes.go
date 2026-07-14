@@ -15,7 +15,7 @@
 // request). All three surfaces return TENANT-SCOPED data to any authenticated
 // caller — no extra role gate. That matches the existing read-only posture of
 // handleListStaleKeys (which returns tenant data to non-admins) and the
-// single-tenant-by-design deployment (DEPLOYMENT_MODE=single): the operator
+// single-tenant-by-design deployment: the operator
 // who minted the MCP API key owns the whole tenant. A future multi-tenant
 // hardening pass may want to gate audit/service-accounts behind tenant-admin.
 package handler

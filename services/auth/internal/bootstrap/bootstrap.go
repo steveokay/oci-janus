@@ -108,9 +108,6 @@ type Config struct {
 	AuthDBDSN string
 	// TenantDBDSN is the Postgres DSN for the tenant schema (TENANT_DB_DSN).
 	TenantDBDSN string
-	// DeploymentMode controls single-vs-multi bootstrap idempotency.
-	// Valid values: "single" (default), "multi".
-	DeploymentMode string
 }
 
 // Run is the bootstrap CLI entry point. It parses flags from args, reads the
@@ -185,7 +182,7 @@ func runWithConfig(ctx context.Context, cfg Config, password string, stdout io.W
 
 	// ── 4. Idempotency check on the tenant DB ─────────────────────────────────
 
-	if err := checkIdempotency(ctx, tenantPool, tenantID, cfg.DeploymentMode); err != nil {
+	if err := checkIdempotency(ctx, tenantPool, tenantID); err != nil {
 		return err
 	}
 
@@ -303,19 +300,13 @@ func parseArgs(args []string) (Config, error) {
 	if tenantDSN == "" {
 		return Config{}, validationError("TENANT_DB_DSN environment variable is required")
 	}
-	deployMode := os.Getenv("DEPLOYMENT_MODE")
-	if deployMode == "" {
-		deployMode = "single"
-	}
-
 	return Config{
-		AdminEmail:     *adminEmail,
-		AdminUsername:  *adminUsername,
-		TenantName:     *tenantName,
-		TenantID:       tenantID,
-		AuthDBDSN:      authDSN,
-		TenantDBDSN:    tenantDSN,
-		DeploymentMode: deployMode,
+		AdminEmail:    *adminEmail,
+		AdminUsername: *adminUsername,
+		TenantName:    *tenantName,
+		TenantID:      tenantID,
+		AuthDBDSN:     authDSN,
+		TenantDBDSN:   tenantDSN,
 	}, nil
 }
 
@@ -345,13 +336,6 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.TenantName == "" {
 		return validationError("--tenant-name is required")
-	}
-	mode := cfg.DeploymentMode
-	if mode == "" {
-		mode = "single"
-	}
-	if mode != "single" && mode != "multi" {
-		return validationError("DEPLOYMENT_MODE must be 'single' or 'multi', got %q", mode)
 	}
 	return nil
 }
@@ -398,14 +382,15 @@ func readPasswordFromStdin(r io.Reader) (string, error) {
 // ── Tenant DB operations ──────────────────────────────────────────────────────
 
 // checkIdempotency queries deployment_metadata to determine whether a previous
-// bootstrap has already run and whether the current call is permitted.
+// bootstrap has already run and whether the current call is permitted. The
+// platform is single-tenant (ADR-0031), so a deployment owns exactly one
+// bootstrap_tenant_id.
 //
 // Rules:
 //   - No row found → fresh deployment, proceed unconditionally.
-//   - Row found + single mode + same tenant ID → idempotent re-bootstrap, proceed.
-//   - Row found + single mode + different tenant ID → error (only one tenant allowed).
-//   - Row found + multi mode → always proceed (multi supports additional tenants).
-func checkIdempotency(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, mode string) error {
+//   - Row found + same tenant ID → idempotent re-bootstrap, proceed.
+//   - Row found + different tenant ID → error (only one tenant allowed).
+func checkIdempotency(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) error {
 	var rawValue string
 	err := pool.QueryRow(ctx,
 		`SELECT value::text FROM deployment_metadata WHERE key = 'bootstrap_tenant_id'`,
@@ -423,29 +408,15 @@ func checkIdempotency(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUI
 	// The stored JSONB is a JSON string ("\"<uuid>\"") so ::text gives us "\"<uuid>\"".
 	recorded := strings.Trim(rawValue, `"`)
 
-	deployMode := mode
-	if deployMode == "" {
-		deployMode = "single"
-	}
-
-	switch deployMode {
-	case "single":
-		if recorded == tenantID.String() {
-			// Same tenant ID — safe to replay (idempotent).
-			slog.Info("bootstrap: idempotent re-bootstrap detected (same tenant ID)", "tenant_id", tenantID)
-			return nil
-		}
-		return validationError(
-			"deployment already bootstrapped (DEPLOYMENT_MODE=single allows one bootstrap_tenant_id); recorded=%s, requested=%s",
-			recorded, tenantID,
-		)
-	case "multi":
-		// Multi-mode supports multiple tenants — no restriction.
-		slog.Info("bootstrap: DEPLOYMENT_MODE=multi, proceeding with additional tenant", "tenant_id", tenantID)
+	if recorded == tenantID.String() {
+		// Same tenant ID — safe to replay (idempotent).
+		slog.Info("bootstrap: idempotent re-bootstrap detected (same tenant ID)", "tenant_id", tenantID)
 		return nil
-	default:
-		return validationError("unknown DEPLOYMENT_MODE %q", deployMode)
 	}
+	return validationError(
+		"deployment already bootstrapped (the platform hosts a single tenant); recorded=%s, requested=%s",
+		recorded, tenantID,
+	)
 }
 
 // writeTenant inserts the tenant row, its policy defaults, and the

@@ -1,5 +1,5 @@
 // Package bootstrap holds the per-service bootstrap-tenant-id lookup that
-// every backend service performs once at startup in DEPLOYMENT_MODE=single.
+// every backend service performs once at startup (the platform is single-tenant).
 //
 // REDESIGN-001 Phase 3.4 — rule-of-three extraction.
 //

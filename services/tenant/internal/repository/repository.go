@@ -82,7 +82,7 @@ func New(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
 
 // CountTenants returns the total number of rows in the tenants table.
 // Used by the Phase 3.2 single-tenant guard in CreateTenant to short-circuit
-// when DEPLOYMENT_MODE=single and a tenant already exists. Pure read, no
+// when a tenant already exists (the platform is single-tenant). Pure read, no
 // transaction needed — a stale-by-one-row read is acceptable because the
 // real uniqueness gate downstream is the slug index, which a second
 // concurrent CreateTenant would still trip.

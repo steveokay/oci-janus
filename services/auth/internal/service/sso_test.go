@@ -454,11 +454,12 @@ func TestSSO_DifferentProvider_SameSubject_Distinct(t *testing.T) {
 }
 
 // TestSSO_SEC040_TenantFilterOnSubjectLookup is the regression test for
-// SEC-040 — the Phase 5.5 partial index was missing tenant_id, so in
-// DEPLOYMENT_MODE=multi a recycled IdP subject reachable from two tenants
-// sharing one provider could resolve to a user in the wrong tenant. The
-// lookup is now (tenant_id, provider, subject); a subject that exists in
-// tenant A must NOT be visible to an EnsureSSOUser call scoped to tenant B.
+// SEC-040 — the Phase 5.5 partial index was missing tenant_id, so a recycled
+// IdP subject reachable from two tenants sharing one provider could resolve to
+// a user in the wrong tenant. The lookup is now (tenant_id, provider, subject);
+// a subject that exists in tenant A must NOT be visible to an EnsureSSOUser
+// call scoped to tenant B. The tenant_id column stays a defence-in-depth
+// boundary even though the platform hosts a single tenant (ADR-0031).
 func TestSSO_SEC040_TenantFilterOnSubjectLookup(t *testing.T) {
 	ctx := context.Background()
 	sso, fakes := newSSOService(t)

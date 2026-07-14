@@ -158,22 +158,12 @@ type Config struct {
 	// REDESIGN-001 Phase 3.4 — tenant gRPC client (Phase 3.4 pilot service).
 	//
 	// TenantGRPCAddr is the host:port of registry-tenant's gRPC server.
-	// Required in DEPLOYMENT_MODE=single so the auth service can fetch the
-	// bootstrap_tenant_id from deployment_metadata at startup and wire
-	// libs/middleware/grpc.SingleTenantInjector into its server chain.
-	//
-	// In DEPLOYMENT_MODE=multi this field is ignored — the injector is a
-	// no-op when bootstrap_tenant_id is empty, so we skip the startup RPC
-	// entirely to avoid an unnecessary dial.
+	// Required (the platform is single-tenant — ADR-0031) so the auth service
+	// can fetch the bootstrap_tenant_id from deployment_metadata at startup and
+	// wire libs/middleware/grpc.SingleTenantInjector into its server chain.
 	//
 	// Reuses the same mTLS material as AuditGRPCAddr.
 	TenantGRPCAddr string `mapstructure:"TENANT_GRPC_ADDR"`
-
-	// DeploymentMode is the binary's posture, normalised by
-	// libs/config/loader.LoadDeploymentMode. Empty env defaults to single.
-	// Read in Load() — not via Viper bindings — to keep the validated/typed
-	// value isolated from raw env string handling.
-	DeploymentMode loader.DeploymentMode `mapstructure:"-"`
 
 	// TrustedProxyCIDRs is a comma-separated CIDR list of trusted reverse
 	// proxies (SEC-009). When the TCP peer falls within one of these
@@ -205,13 +195,6 @@ func Load() (*Config, error) {
 	if err := loader.Load("registry-auth", cfg); err != nil {
 		return nil, err
 	}
-	// REDESIGN-001 Phase 3.4 — read DEPLOYMENT_MODE via the typed helper so
-	// invalid values fail at startup. Defaults to single per the OSS posture.
-	mode, err := loader.LoadDeploymentMode()
-	if err != nil {
-		return nil, fmt.Errorf("load deployment mode: %w", err)
-	}
-	cfg.DeploymentMode = mode
 	if err := validate(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}

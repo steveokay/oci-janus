@@ -25,7 +25,7 @@ func main() {
 	// Must happen BEFORE config.Load so the bootstrap CLI does not fail due to
 	// missing server-only env vars (OTEL_EXPORTER, MTLS_CA_CERT_PATH, etc.).
 	// The bootstrap subcommand has its own minimal config (AUTH_DB_DSN,
-	// TENANT_DB_DSN, DEPLOYMENT_MODE) loaded inside bootstrap.Run.
+	// TENANT_DB_DSN) loaded inside bootstrap.Run.
 	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
 		if err := bootstrap.Run(context.Background(), os.Args[2:], os.Stdin, os.Stdout); err != nil {
 			var verr *bootstrap.ValidationError

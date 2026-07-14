@@ -384,8 +384,8 @@ type ListOpts struct{}
 // sharing one IdP (e.g. both consuming Google Workspace OAuth) could resolve
 // the same `(provider, subject)` tuple to a user in the wrong tenant.
 // Single-tenant deployments are unaffected at runtime (only one tenant
-// exists) but the schema-level boundary belongs here so the gap cannot
-// reopen when DEPLOYMENT_MODE=multi is the active posture. Migration
+// exists) but the schema-level boundary belongs here as defence in depth so a
+// stray cross-tenant row can never resolve to the wrong user. Migration
 // `20260630120000_users_sso_subject_tenant_filter.sql` covers the matching
 // index over `(tenant_id, sso_provider_id, sso_subject)`.
 //
