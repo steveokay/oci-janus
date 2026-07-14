@@ -1,0 +1,62 @@
+name: CI — integration
+
+# FUT-085(a): the 53 `//go:build integration` test files across 9 services +
+# libs never ran in CI, so DB-migration regressions and testcontainers-backed
+# repository bugs were invisible. These suites spin up real Postgres / Redis /
+# RabbitMQ / MinIO via testcontainers (libs/testutil/containers), so they are
+# too slow for the per-PR lanes — this workflow runs them nightly and on manual
+# dispatch instead. GitHub's ubuntu-latest runners ship a working Docker daemon,
+# which is all testcontainers needs.
+#
+# Invocation note: `go test -tags integration ./...` (NOT the per-service
+# Makefile `test-integration` target, whose hardcoded
+# `./internal/testutil/integration/...` path misses services like tenant that
+# keep their integration tests next to the code under `internal/repository/`).
+
+on:
+  schedule:
+    # 03:17 UTC daily — off-peak, odd minute to avoid the top-of-hour surge.
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+  # Self-validate whenever the integration lane itself changes — this proves
+  # the workflow + invocation on the PR that touches it WITHOUT burdening every
+  # unrelated PR with the slow (testcontainers) suites. Nightly stays the
+  # primary cadence for catching regressions from ordinary code changes.
+  pull_request:
+    paths: [".github/workflows/ci-integration.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    # Container pulls + `-race` make these slow; 30 min is generous headroom
+    # over the largest suite (auth, 19 files).
+    timeout-minutes: 30
+    strategy:
+      # One red service must not mask the others — surface every failure.
+      fail-fast: false
+      matrix:
+        # The 9 services + libs that carry `//go:build integration` files.
+        module:
+          - services/audit
+          - services/auth
+          - services/core
+          - services/metadata
+          - services/proxy
+          - services/scanner
+          - services/storage
+          - services/tenant
+          - services/webhook
+          - libs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - name: Integration tests (${{ matrix.module }})
+        working-directory: ${{ matrix.module }}
+        # -race matches the per-service Makefile `test-integration` target and
+        # catches data races on the concurrent repository/consumer paths that
+        # only integration coverage exercises.
+        run: go test -race -tags integration ./...
