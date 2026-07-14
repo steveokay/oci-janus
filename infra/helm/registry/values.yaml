@@ -62,6 +62,30 @@ gc:
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 500m, memory: 256Mi }
 
+# registry-management — REST BFF for the dashboard. HTTP-only. The two
+# per-environment knobs (there are no secrets here) MUST be set in an overlay:
+#   env.CORS_ALLOWED_ORIGIN — the dashboard's public origin
+#   env.PLATFORM_HOST       — the public host used to build absolute links
+# Every *_GRPC_ADDR defaults to the in-cluster service DNS in the subchart's
+# own values.yaml; clear one to disable that route family (404 "route disabled").
+management:
+  replicaCount: 2
+  env:
+    CORS_ALLOWED_ORIGIN: ""
+    PLATFORM_HOST: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+# registry-frontend — nginx serving the built dashboard SPA. Static bundle,
+# no secrets. Per-environment config (tenant id, API base) is baked into the
+# image at build time, so overriding it means building a per-env image.
+frontend:
+  replicaCount: 2
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+
 # Automated DR. Disabled by default so review / dev environments don't
 # require a backup bucket. Production overlays (values.prod.yaml) must set
 # `enabled: true` and provision the secrets referenced by the subchart.

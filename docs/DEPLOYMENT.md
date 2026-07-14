@@ -56,8 +56,41 @@ helm/
 │       ├── registry-audit/
 │       ├── registry-gc/
 │       ├── registry-tenant/
-│       └── registry-management/      # REST BFF for the dashboard (and CLI/Terraform); HTTP-only, no gRPC server
+│       ├── registry-management/      # REST BFF for the dashboard (and CLI/Terraform); HTTP-only, no gRPC server
+│       └── registry-frontend/        # nginx serving the built dashboard SPA (static assets + SPA fallback)
 ```
+
+## API routing contract (dashboard)
+
+The dashboard is served from a single origin: the SPA static bundle, the auth
+API, and the management BFF all share the platform host. The gateway must split
+the `/api/v1` namespace between **registry-auth** (identity/RBAC surfaces) and
+**registry-management** (everything else the dashboard calls), or BFF-owned
+requests 404 against auth. This split is defined in **three places that must
+stay in sync**:
+
+| Environment | Implementation | Mechanism |
+|---|---|---|
+| Local dev (`vite`) | `frontend/vite.config.ts` | first-match proxy table |
+| Compose | `frontend/nginx.conf` | nginx longest-prefix `location` blocks |
+| Kubernetes (Helm) | `charts/gateway/templates/ingressroutes.yaml` | Traefik `IngressRoute` rules, precedence via explicit `priority:` |
+
+The contract (highest precedence first):
+
+1. **BFF exceptions under an auth prefix** → registry-management:
+   `/api/v1/users/me/notification-preferences`, `/api/v1/access/oidc-trust`,
+   `/api/v1/access/token-policy`, `/api/v1/access/review`.
+2. **Auth-owned prefixes** → registry-auth: `/api/v1/{login,logout,token,apikeys,users,service-accounts,access,auth}`
+   plus `/auth/` and `/.well-known/`.
+3. **`/v2/`** → registry-core; **`/v2/cache/`** → registry-proxy.
+4. **`/api/v1/` catch-all** → registry-management (repositories, scans,
+   signatures, webhooks, GC, orgs, …).
+5. **`/` catch-all** → registry-frontend (SPA static + history fallback).
+
+`infra/helm/registry/tests/routing_contract_test.py` renders the umbrella chart
+and asserts the Helm side of this contract (subcharts present + every rule's
+service + the priority ordering). Run it after touching the gateway routes or
+either new subchart.
 
 ## Per-service Helm chart requirements
 
