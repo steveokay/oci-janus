@@ -57,10 +57,9 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	repo := repository.New(pool)
 
 	// Pass the configured platform base domain so handler.GetTenant can build
-	// the wildcard host `<slug>.<base>` (FE-API-007). Deployment mode is read
-	// at config-load time and feeds the Phase 3.2 single-tenant guard in
-	// CreateTenant.
-	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain, cfg.DeploymentMode)
+	// the wildcard host `<slug>.<base>` (FE-API-007). The single-tenant guard
+	// in CreateTenant is now unconditional (ADR-0031 / Phase 9.4).
+	grpcHdl := handler.New(repo, cfg.PlatformBaseDomain)
 
 	// REDESIGN-001 Phase 3.4 / 9.3 — the platform is single-tenant (ADR-0031),
 	// so every inbound RPC is pinned to the bootstrap tenant. services/tenant
