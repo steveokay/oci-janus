@@ -2640,6 +2640,14 @@ Below is only what was genuinely untracked.
   TESTING.md to measured reality (pairs with FUT-075); (c) gosec job;
   (d) `release.yml` on semver tags per CI-CD.md. Candidates to absorb
   into the REM-020 reshape backlog as new numbered sub-items.
+- **Status:** **(a) DONE** (PR #344, 2026-07-14) — nightly
+  `ci-integration.yml` matrix (9 services + libs); enabling it caught
+  **5 real production bugs** the never-run suites were hiding (MinIO
+  404-vs-500, scanner nil-slice `NOT NULL` violation, metadata
+  every-pull DLX error killing idle retention, metadata
+  `ListUntaggedManifests` 12-vs-13 scan drift, and the REM-015
+  requeue-loop fix that never worked). **(b) coverage gate, (c) gosec,
+  (d) release.yml remain OPEN.**
 
 #### FUT-086 — Frontend e2e suite (Playwright) — **Tier 2**
 - **Why:** 57 vitest unit/component files but **zero e2e** — no
