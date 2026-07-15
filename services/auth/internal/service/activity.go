@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	"github.com/steveokay/oci-janus/services/auth/internal/repository"
@@ -100,6 +101,11 @@ type ListActivityOpts struct {
 	PageSize int32
 	// PageToken is the opaque cursor returned by a prior call.
 	PageToken string
+	// Since lower-bounds occurred_at on the returned feed. The zero value means
+	// "no explicit bound" — the audit service then applies its own default
+	// window (7 days). A non-zero value replaces the old limit-as-time-proxy
+	// approximation with a real server-side time filter (FUT-088 #1).
+	Since time.Time
 }
 
 // List resolves the target principal, enforces tenant isolation and
@@ -143,11 +149,19 @@ func (s *ActivityService) List(ctx context.Context, opts ListActivityOpts) ([]Pr
 	// audit proto currently does not expose an actor_id request filter. The
 	// tenant_id binding provides the primary isolation guarantee; the actor_id
 	// filter narrows the feed to the target principal's events only.
-	resp, err := s.audit.GetNotifications(ctx, &auditv1.GetNotificationsRequest{
+	req := &auditv1.GetNotificationsRequest{
 		TenantId:  opts.CallerTenantID.String(),
 		Limit:     opts.PageSize,
 		PageToken: opts.PageToken,
-	})
+	}
+	// Only set the lower bound when the caller supplied one. Sending
+	// timestamppb.New(zeroTime) would encode a year-1 bound and defeat the
+	// audit service's own default window; leaving Since nil is the signal for
+	// "use the default".
+	if !opts.Since.IsZero() {
+		req.Since = timestamppb.New(opts.Since)
+	}
+	resp, err := s.audit.GetNotifications(ctx, req)
 	if err != nil {
 		return nil, "", err
 	}

@@ -32,6 +32,9 @@ interface ActivityTableProps {
   principalUserID: string | undefined;
   // limit controls how many events we request from the backend (default 50).
   limit?: number;
+  // since is an RFC3339 lower bound on event time (the selected window). When
+  // set, the backend time-bounds the feed server-side (FUT-088 #1).
+  since?: string;
   // onLoadMore is called when the operator clicks "Load more". The parent
   // controls the limit so it can raise it in state.
   onLoadMore?: () => void;
@@ -43,10 +46,11 @@ interface ActivityTableProps {
 export function ActivityTable({
   principalUserID,
   limit = 50,
+  since,
   onLoadMore,
   principalDisplayName,
 }: ActivityTableProps): React.ReactElement {
-  const q = useActivity(principalUserID, limit);
+  const q = useActivity(principalUserID, limit, since);
 
   // Flatten: the hook wraps the list in `data.activity`.
   const rows: PrincipalActivity[] = q.data?.activity ?? [];

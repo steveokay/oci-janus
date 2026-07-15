@@ -2735,10 +2735,15 @@ Below is only what was genuinely untracked.
 #### FUT-088 — UI paper-cuts batch (2026-07-12 audit) — **Tier 3**
 > Re-triaged 2026-07-15: items 2 + 4 were already fixed; 7a had no rot. Batch 1
 > (below) shipped org bulk-scan + the stale T26 TODO. Remaining items are open.
-- **API-key activity time chips are fake** —
-  `api-keys.activity.tsx:29-39` uses `limit` as a proxy for 24h/7d/30d;
-  needs real `from`/`to` (or `since`/`until`) params on the
-  `/access/activity` BFF handler + FE swap. **STILL OPEN** (medium — BFF+FE).
+- ~~**API-key activity time chips are fake**~~ ✅ DONE (batch 4) — the
+  `/access/activity` auth handler now parses an RFC3339 `since` param and
+  threads it into the audit query (`GetNotificationsRequest.since`, which
+  already existed), so each 24h/7d/30d window is a real server-side time
+  bound. FE: `sinceForRange()` in `@/lib/activity-range` computes the bound
+  per window; `limit` reverts to a page size clamped at the backend's 200 cap
+  (fixing the old 30d window's `limit=500` → 400). Live-verified: window
+  counts move monotonically (30d=16 > 7d=8 > 1h=0); `since=2099` → 0 events;
+  malformed `since` → 400. No proto change needed.
 - ~~**Hardcoded retention grace window**~~ ✅ DONE (batch 3) — GC now reports
   its `RETENTION_GRACE_DAYS` on `GCStatus.retention_grace_days` (single source
   of truth); the BFF surfaces it best-effort on `/workspace/me`

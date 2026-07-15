@@ -12,6 +12,7 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -34,6 +35,9 @@ func (h *HTTPHandler) RegisterAccessActivity(mux *http.ServeMux) {
 //   - limit — maximum events to return per page (default 50, max 200).
 //   - page_token — opaque cursor for the next page (pass the value from the
 //     previous response's next_page_token field).
+//   - since — RFC3339 lower bound on event time. When present, the feed is
+//     time-bounded server-side (the FE date-range chips use this). Absent ⇒
+//     the audit service's default window (7 days). Malformed ⇒ 400.
 //
 // Response envelope:
 //
@@ -99,6 +103,21 @@ func (h *HTTPHandler) getAccessActivity(w http.ResponseWriter, r *http.Request) 
 
 	pageToken := r.URL.Query().Get("page_token")
 
+	// Parse the optional `since` lower bound (RFC3339). When present it replaces
+	// the old limit-as-time-proxy approximation with a real server-side time
+	// filter (FUT-088 #1). A malformed value is a client error — reject it
+	// rather than silently falling back to the default window, which would make
+	// a typo'd timestamp look like it "worked" but return the wrong range.
+	var since time.Time
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		parsed, perr := time.Parse(time.RFC3339, raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "BADREQUEST", "since must be an RFC3339 timestamp")
+			return
+		}
+		since = parsed
+	}
+
 	// Determine admin status. callerIsTenantAdmin is fail-closed (returns false
 	// on lookup error) which is the correct security posture here. SA bearers
 	// (claims.PrincipalKind == "service_account") are also denied admin
@@ -116,6 +135,7 @@ func (h *HTTPHandler) getAccessActivity(w http.ResponseWriter, r *http.Request) 
 		TargetUserID:   targetID,
 		PageSize:       int32(limit),
 		PageToken:      pageToken,
+		Since:          since,
 	})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
