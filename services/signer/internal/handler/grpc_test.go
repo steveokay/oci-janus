@@ -88,6 +88,12 @@ func (h *testableSignerHandler) SignManifest(ctx context.Context, req *signerv1.
 		signerID = h.signer.KeyID()
 	}
 
+	// Mirror production: reject a duplicate sign of the same (tenant, digest,
+	// signer) with AlreadyExists.
+	if existing := h.store.FindRec(ctx, req.TenantId, req.ManifestDigest, signerID); existing != nil {
+		return nil, status.Error(codes.AlreadyExists, "manifest already signed by this signer")
+	}
+
 	rec := &sigstore.Record{
 		TenantID:        req.TenantId,
 		SignerID:        signerID,
@@ -317,6 +323,35 @@ func TestSignManifest_StoresRecordInStore(t *testing.T) {
 	}
 }
 
+// TestSignManifest_DuplicateSign_ReturnsAlreadyExists exercises the REAL
+// GRPCHandler (fakeSigner satisfies signing.Signer, so no mirror is needed).
+// A second sign of the same (tenant, digest, signer) must return AlreadyExists
+// and must not append a duplicate record. Both callers depend on this: the
+// management sign_manifest handler maps AlreadyExists → HTTP 409, and
+// re-sign-on-promote treats it as an idempotent success.
+func TestSignManifest_DuplicateSign_ReturnsAlreadyExists(t *testing.T) {
+	f := &fakeSigner{keyID: testSignerKey, sigB64: validSigB64}
+	store := sigstore.New()
+	h := New(f, store) // real handler, not the mirror
+
+	req := &signerv1.SignManifestRequest{
+		TenantId:       testTenantID,
+		RepositoryName: testRepoName,
+		ManifestDigest: testDigest,
+	}
+	if _, err := h.SignManifest(context.Background(), req); err != nil {
+		t.Fatalf("first sign: unexpected error: %v", err)
+	}
+	_, err := h.SignManifest(context.Background(), req)
+	if grpcCodeSigner(err) != codes.AlreadyExists {
+		t.Errorf("second sign code = %v, want AlreadyExists", grpcCodeSigner(err))
+	}
+	recs := store.List(context.Background(), testTenantID, testDigest)
+	if len(recs) != 1 {
+		t.Errorf("store has %d records after duplicate sign, want 1", len(recs))
+	}
+}
+
 // ── VerifyManifest tests ──────────────────────────────────────────────────────
 
 func TestVerifyManifest_ValidSignature_ReturnsVerifiedTrue(t *testing.T) {
@@ -454,10 +489,13 @@ func TestListSignatures_NoSignatures_ReturnsEmptyList(t *testing.T) {
 
 func TestListSignatures_MultipleSignatures_ReturnsAll(t *testing.T) {
 	store := sigstore.New()
-	for range 3 {
+	// Distinct signer IDs — the store dedups on (tenant, digest, signer), so
+	// "multiple signatures" means multiple signers on the same manifest, not
+	// the same signer added repeatedly (that now collapses to one row).
+	for _, signer := range []string{"key-a", "key-b", "key-c"} {
 		store.Add(&sigstore.Record{
 			TenantID:       testTenantID,
-			SignerID:       testSignerKey,
+			SignerID:       signer,
 			ManifestDigest: testDigest,
 			RepositoryName: testRepoName,
 			SignedAt:       time.Now(),

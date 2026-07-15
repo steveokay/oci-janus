@@ -75,6 +75,15 @@ func (h *GRPCHandler) SignManifest(ctx context.Context, req *signerv1.SignManife
 		signerID = h.signer.KeyID()
 	}
 
+	// Idempotency: reject a second sign of the same (tenant, digest, signer)
+	// with AlreadyExists rather than silently creating a duplicate record.
+	// The management sign_manifest handler maps this to HTTP 409, and
+	// re-sign-on-promote treats it as an idempotent success — both callers
+	// depend on the signer returning this code.
+	if existing := h.store.FindRec(ctx, req.TenantId, req.ManifestDigest, signerID); existing != nil {
+		return nil, status.Error(codes.AlreadyExists, "manifest already signed by this signer")
+	}
+
 	rec := &sigstore.Record{
 		TenantID:        req.TenantId,
 		SignerID:        signerID,
