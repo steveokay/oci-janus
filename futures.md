@@ -2743,10 +2743,10 @@ Below is only what was genuinely untracked.
   `GRACE_DAYS = 7` client-side; BFF `/workspace/me` should return the
   platform grace setting (add `retention_grace_days` to the Workspace
   response) so the pending-delete ETA can't drift. **STILL OPEN** (low — BFF+FE).
-- **MCP connect card** in Settings › Integrations — zero in-app MCP
-  presence; the natural home for a connect-an-AI-agent setup snippet
-  (render the `docs/MCP.md` connect config: `MCP_MANAGEMENT_URL` /
-  `MCP_API_KEY` / `MCP_TENANT_ID` / transport). **STILL OPEN** (low — FE-only).
+- ~~**MCP connect card**~~ ✅ DONE (batch 2) — `MCPConnectCard` on Settings ›
+  Integrations (admin-gated) renders the Claude Desktop stdio config with the
+  live tenant id baked in + API-key/URL placeholders, a copy button, and a link
+  to the full MCP guide. Wires the previously docs-only setup into the app.
 - **Unused hooks sweep** — audit + remove/`@deprecated` the zero-importer
   exports the re-triage confirmed: `useAbility`, `useActiveAdapter`,
   `useReport`, `useUpdateOIDCTrust`, and the single-upstream proxy-policy
