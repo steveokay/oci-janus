@@ -192,26 +192,52 @@ export function totalSeverityCount(
   return SEVERITY_ORDER.reduce((sum, k) => sum + (counts[k] ?? 0), 0);
 }
 
-// Trivy findings_json is an array of JSON-serialised findings. We don't make
-// schema assumptions beyond what the backend currently emits — fields are
-// optional so this stays forward-compatible.
+// A single vulnerability finding. The scanner's plugin.Finding struct has no
+// json tags, so the wire keys are the capitalized Go field names — NOT the
+// snake_case shape you'd expect from the rest of the API. Fields are optional
+// so this stays forward-compatible with whatever the scanner emits.
 export interface ScanFinding {
-  vulnerability_id?: string;
-  severity?: string;
-  package_name?: string;
-  installed_version?: string;
-  fixed_version?: string;
-  title?: string;
-  description?: string;
-  primary_url?: string;
+  CVE?: string;
+  Severity?: string;
+  Package?: string;
+  Version?: string;
+  FixedIn?: string;
+  Description?: string;
+  References?: string[];
 }
 
+// b64ToUtf8 decodes a standard base64 string to a UTF-8 string. atob yields a
+// binary (latin1) string, so we round-trip through bytes + TextDecoder to keep
+// multibyte characters in vulnerability descriptions intact.
+function b64ToUtf8(b64: string): string {
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// parseFindings turns the management BFF's findings_json into an array.
+//
+// The BFF passes the scanner's findings straight through as a Go `[]byte`
+// (the findings_json JSONB column), which Go serializes to a base64-encoded
+// string — so we decode base64 first. We fall back to treating the input as
+// plain JSON in case a future BFF ever emits it already decoded, and return an
+// empty array on anything unparseable rather than throwing into the render.
 export function parseFindings(raw?: string): ScanFinding[] {
   if (!raw) return [];
+  const candidates: string[] = [];
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as ScanFinding[]) : [];
+    candidates.push(b64ToUtf8(raw));
   } catch {
-    return [];
+    // not valid base64 — fall through to the plain-JSON attempt
   }
+  candidates.push(raw);
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return parsed as ScanFinding[];
+    } catch {
+      // try the next candidate
+    }
+  }
+  return [];
 }

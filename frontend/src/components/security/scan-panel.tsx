@@ -426,8 +426,8 @@ function FindingsTable({
     };
     return [...findings].sort(
       (a, b) =>
-        (rank[(a.severity ?? "").toUpperCase()] ?? 99) -
-        (rank[(b.severity ?? "").toUpperCase()] ?? 99),
+        (rank[(a.Severity ?? "").toUpperCase()] ?? 99) -
+        (rank[(b.Severity ?? "").toUpperCase()] ?? 99),
     );
   }, [findings]);
 
@@ -452,51 +452,56 @@ function FindingsTable({
         </TableHeader>
         <TableBody>
           {sorted.slice(0, 50).map((f, i) => {
-            const sev = (f.severity ?? "").toUpperCase() as SeverityKey;
+            const sev = (f.Severity ?? "").toUpperCase() as SeverityKey;
             const tone: "critical" | "high" | "medium" | "low" | "neutral" =
               SEVERITY_ORDER.includes(sev)
                 ? (sev.toLowerCase() as Exclude<typeof tone, "neutral">)
                 : "neutral";
+            // plugin.Finding carries a list of reference URLs (no single
+            // "primary" one) and a free-text Description — surface the first
+            // reference as the external link and the description as the
+            // secondary line under the CVE.
+            const referenceUrl = f.References?.[0];
             return (
-              <TableRow key={`${f.vulnerability_id}-${i}`}>
+              <TableRow key={`${f.CVE}-${i}`}>
                 <TableCell>
-                  <Badge tone={tone}>{f.severity ?? "—"}</Badge>
+                  <Badge tone={tone}>{f.Severity ?? "—"}</Badge>
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
                     <code className="font-mono text-xs font-medium">
-                      {f.vulnerability_id ?? "—"}
+                      {f.CVE ?? "—"}
                     </code>
-                    {f.primary_url ? (
+                    {referenceUrl ? (
                       <a
-                        href={f.primary_url}
+                        href={referenceUrl}
                         target="_blank"
                         rel="noreferrer noopener"
                         className="text-[var(--color-accent)] hover:underline"
-                        aria-label={`Open ${f.vulnerability_id} reference`}
+                        aria-label={`Open ${f.CVE} reference`}
                       >
                         <ExternalLink className="size-3" />
                       </a>
                     ) : null}
                   </div>
-                  {f.title ? (
+                  {f.Description ? (
                     <div className="mt-0.5 truncate text-xs text-[var(--color-fg-muted)]">
-                      {f.title}
+                      {f.Description}
                     </div>
                   ) : null}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
-                  <div>{f.package_name ?? "—"}</div>
-                  {f.installed_version ? (
+                  <div>{f.Package ?? "—"}</div>
+                  {f.Version ? (
                     <div className="text-[var(--color-fg-muted)]">
-                      {f.installed_version}
+                      {f.Version}
                     </div>
                   ) : null}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
-                  {f.fixed_version ? (
+                  {f.FixedIn ? (
                     <span className="text-[var(--color-success)]">
-                      {f.fixed_version}
+                      {f.FixedIn}
                     </span>
                   ) : (
                     <span className="text-[var(--color-fg-subtle)]">
