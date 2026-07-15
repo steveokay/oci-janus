@@ -32,6 +32,11 @@ export interface Workspace {
   host_is_custom: boolean;
   domains: WorkspaceDomainEntry[];
   created_at: string;
+  // Platform soft-delete grace window in days (GC's RETENTION_GRACE_DAYS),
+  // surfaced so the pending-delete ETA can be rendered accurately instead of
+  // hardcoding the default. Omitted (absent/0) when the GC service isn't wired
+  // or is unreachable — callers fall back to their default.
+  retention_grace_days?: number;
 }
 
 export const workspaceKeys = {

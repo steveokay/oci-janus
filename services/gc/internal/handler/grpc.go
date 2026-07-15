@@ -71,15 +71,21 @@ type GRPCHandler struct {
 	// best-effort next_scheduled_at into GCStatus. Zero means "unknown"
 	// and the handler omits the field.
 	scheduleInterval time.Duration
+	// retentionGraceDays is the configured RETENTION_GRACE_DAYS soft-delete
+	// window, surfaced on GCStatus so the dashboard can render an accurate
+	// pending-delete ETA. GC owns this value; echoing it here makes it the
+	// single source of truth for downstream (BFF → FE) consumers.
+	retentionGraceDays int32
 }
 
 // New creates a GRPCHandler. Pass a nil runRequests to disable RunNow
 // (useful for read-only unit tests).
-func New(repo Repository, runRequests chan<- uuid.UUID, scheduleInterval time.Duration) *GRPCHandler {
+func New(repo Repository, runRequests chan<- uuid.UUID, scheduleInterval time.Duration, retentionGraceDays int32) *GRPCHandler {
 	return &GRPCHandler{
-		repo:             repo,
-		runRequests:      runRequests,
-		scheduleInterval: scheduleInterval,
+		repo:               repo,
+		runRequests:        runRequests,
+		scheduleInterval:   scheduleInterval,
+		retentionGraceDays: retentionGraceDays,
 	}
 }
 
@@ -102,7 +108,8 @@ func (h *GRPCHandler) GetStatus(ctx context.Context, _ *gcv1.GetStatusRequest) (
 			// next_scheduled_at off `now` so the dashboard shows when
 			// the first sweep is expected.
 			return &gcv1.GCStatus{
-				NextScheduledAt: h.projectedNextSchedule(time.Time{}),
+				NextScheduledAt:    h.projectedNextSchedule(time.Time{}),
+				RetentionGraceDays: h.retentionGraceDays,
 			}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "get latest run: %v", err)
@@ -118,6 +125,7 @@ func (h *GRPCHandler) GetStatus(ctx context.Context, _ *gcv1.GetStatusRequest) (
 		LastRunBytesFreed:       rec.BytesFreed,
 		LastRunError:            rec.ErrorMessage,
 		LastRunTriggeredBy:      rec.TriggeredBy,
+		RetentionGraceDays:      h.retentionGraceDays,
 	}
 	if ts := tsFromOptional(rec.StartedAt); ts != nil {
 		out.LastRunStartedAt = ts

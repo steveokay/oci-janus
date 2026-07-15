@@ -25,7 +25,7 @@ const validUserUUID = "11111111-1111-1111-1111-111111111111"
 // the RPC inserts a queued retention row and returns {run_id, "queued"}.
 func TestTriggerRetention_happyPath_returnsQueued(t *testing.T) {
 	ch := make(chan uuid.UUID, 1)
-	h := New(&fakeRepo{}, ch, time.Hour)
+	h := New(&fakeRepo{}, ch, time.Hour, 0)
 	resp, err := h.TriggerRetentionRun(context.Background(), &gcv1.TriggerRetentionRunRequest{
 		TenantId:    uuid.NewString(),
 		RepoId:      uuid.NewString(),
@@ -51,7 +51,7 @@ func TestTriggerRetention_happyPath_returnsQueued(t *testing.T) {
 // TestTriggerRetention_missingRepoID_rejected.
 func TestTriggerRetention_missingRepoID_rejected(t *testing.T) {
 	ch := make(chan uuid.UUID, 1)
-	h := New(&fakeRepo{}, ch, time.Hour)
+	h := New(&fakeRepo{}, ch, time.Hour, 0)
 	_, err := h.TriggerRetentionRun(context.Background(), &gcv1.TriggerRetentionRunRequest{
 		TenantId:    uuid.NewString(),
 		TriggeredBy: validUserUUID,
@@ -62,7 +62,7 @@ func TestTriggerRetention_missingRepoID_rejected(t *testing.T) {
 // TestTriggerRetention_invalidRepoID_rejected verifies the UUID parse fires.
 func TestTriggerRetention_invalidRepoID_rejected(t *testing.T) {
 	ch := make(chan uuid.UUID, 1)
-	h := New(&fakeRepo{}, ch, time.Hour)
+	h := New(&fakeRepo{}, ch, time.Hour, 0)
 	_, err := h.TriggerRetentionRun(context.Background(), &gcv1.TriggerRetentionRunRequest{
 		TenantId:    uuid.NewString(),
 		RepoId:      "not-a-uuid",
@@ -74,7 +74,7 @@ func TestTriggerRetention_invalidRepoID_rejected(t *testing.T) {
 // TestTriggerRetention_repoFailsToCreate_returns500.
 func TestTriggerRetention_repoFailsToCreate_returns500(t *testing.T) {
 	ch := make(chan uuid.UUID, 1)
-	h := New(&fakeRepo{retentionCreateErr: errors.New("db down")}, ch, time.Hour)
+	h := New(&fakeRepo{retentionCreateErr: errors.New("db down")}, ch, time.Hour, 0)
 	_, err := h.TriggerRetentionRun(context.Background(), &gcv1.TriggerRetentionRunRequest{
 		TenantId:    uuid.NewString(),
 		RepoId:      uuid.NewString(),
@@ -86,7 +86,7 @@ func TestTriggerRetention_repoFailsToCreate_returns500(t *testing.T) {
 // TestTriggerRetention_disabledDispatcher_failsPrecondition verifies the
 // "RunNow disabled" branch fires when runRequests is nil.
 func TestTriggerRetention_disabledDispatcher_failsPrecondition(t *testing.T) {
-	h := New(&fakeRepo{}, nil, time.Hour)
+	h := New(&fakeRepo{}, nil, time.Hour, 0)
 	_, err := h.TriggerRetentionRun(context.Background(), &gcv1.TriggerRetentionRunRequest{
 		TenantId:    uuid.NewString(),
 		RepoId:      uuid.NewString(),
@@ -118,7 +118,7 @@ func TestGetRetentionRunStatus_happyPath_returnsMode(t *testing.T) {
 			TriggeredBy:      validUserUUID,
 		},
 	}
-	h := New(repo, nil, time.Hour)
+	h := New(repo, nil, time.Hour, 0)
 
 	got, err := h.GetRetentionRunStatus(context.Background(), &gcv1.GetRetentionRunStatusRequest{
 		RunId:    runID.String(),
@@ -150,7 +150,7 @@ func TestGetRetentionRunStatus_gracePopulatesDeletedCounters(t *testing.T) {
 			BytesFreed:       1 << 30,
 		},
 	}
-	h := New(repo, nil, time.Hour)
+	h := New(repo, nil, time.Hour, 0)
 
 	got, err := h.GetRetentionRunStatus(context.Background(), &gcv1.GetRetentionRunStatusRequest{
 		RunId: repo.getRunByIDResult.RunID.String(),
@@ -168,7 +168,7 @@ func TestGetRetentionRunStatus_gracePopulatesDeletedCounters(t *testing.T) {
 
 // TestGetRetentionRunStatus_notFound_returns404.
 func TestGetRetentionRunStatus_notFound_returns404(t *testing.T) {
-	h := New(&fakeRepo{getRunByIDErr: repository.ErrNotFound}, nil, time.Hour)
+	h := New(&fakeRepo{getRunByIDErr: repository.ErrNotFound}, nil, time.Hour, 0)
 	_, err := h.GetRetentionRunStatus(context.Background(), &gcv1.GetRetentionRunStatusRequest{
 		RunId: uuid.NewString(),
 	})
@@ -177,7 +177,7 @@ func TestGetRetentionRunStatus_notFound_returns404(t *testing.T) {
 
 // TestGetRetentionRunStatus_invalidRunID_returns400.
 func TestGetRetentionRunStatus_invalidRunID_returns400(t *testing.T) {
-	h := New(&fakeRepo{}, nil, time.Hour)
+	h := New(&fakeRepo{}, nil, time.Hour, 0)
 	_, err := h.GetRetentionRunStatus(context.Background(), &gcv1.GetRetentionRunStatusRequest{
 		RunId: "bad",
 	})
