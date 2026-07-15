@@ -182,14 +182,14 @@ func diffLayers(from, to []manifestLayer, fromTotal, toTotal int64) layerDiff {
 	}
 	for _, l := range to {
 		if _, ok := fromSet[l.Digest]; !ok {
-			d.Added = append(d.Added, layerRef{Digest: l.Digest, Size: l.Size, MediaType: l.MediaType})
+			d.Added = append(d.Added, layerRef(l))
 		} else {
 			d.CommonCount++
 		}
 	}
 	for _, l := range from {
 		if _, ok := toSet[l.Digest]; !ok {
-			d.Removed = append(d.Removed, layerRef{Digest: l.Digest, Size: l.Size, MediaType: l.MediaType})
+			d.Removed = append(d.Removed, layerRef(l))
 		}
 	}
 	return d
@@ -384,14 +384,12 @@ func diffVulns(fromFindings, toFindings []byte) vulnDiff {
 	d := vulnDiff{Available: true, Added: []vulnRef{}, Removed: []vulnRef{}}
 	for _, cve := range sortedFindingKeys(toMap) {
 		if _, ok := fromMap[cve]; !ok {
-			f := toMap[cve]
-			d.Added = append(d.Added, vulnRef{CVE: f.CVE, Severity: f.Severity, Package: f.Package, Version: f.Version, FixedIn: f.FixedIn})
+			d.Added = append(d.Added, vulnRef(toMap[cve]))
 		}
 	}
 	for _, cve := range sortedFindingKeys(fromMap) {
 		if _, ok := toMap[cve]; !ok {
-			f := fromMap[cve]
-			d.Removed = append(d.Removed, vulnRef{CVE: f.CVE, Severity: f.Severity, Package: f.Package, Version: f.Version, FixedIn: f.FixedIn})
+			d.Removed = append(d.Removed, vulnRef(fromMap[cve]))
 		}
 	}
 	return d
