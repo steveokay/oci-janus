@@ -28,8 +28,8 @@ func TestUpdateRepositoryBody_MaxCVSSScore_absent(t *testing.T) {
 	if b.MaxCVSSScore != nil {
 		t.Errorf("MaxCVSSScore should be nil when key is absent")
 	}
-	if b.Description != "hello" {
-		t.Errorf("Description: got %q, want %q", b.Description, "hello")
+	if b.Description == nil || *b.Description != "hello" {
+		t.Errorf("Description: got %v, want *%q", b.Description, "hello")
 	}
 }
 

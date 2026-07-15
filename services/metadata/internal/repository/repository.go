@@ -127,7 +127,8 @@ func (r *Repository) UpdateRepository(ctx context.Context, tenantID, repoID, des
 			SET    description = $1
 			WHERE  id = $2 AND tenant_id = $3
 			RETURNING id, org_id, tenant_id, name, is_public,
-			          storage_quota, created_at, description, immutable_tags, require_signature
+			          storage_quota, created_at, description, immutable_tags, require_signature,
+			          max_cvss_score
 		)
 		SELECT ` + repoSelectCols + `
 		FROM   updated r

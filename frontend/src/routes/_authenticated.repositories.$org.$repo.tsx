@@ -13,6 +13,7 @@ import { RepoImmutabilitySection } from "@/components/repositories/repo-immutabi
 import { RepoSignaturePolicySection } from "@/components/repositories/repo-signature-policy-section";
 import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
 import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-policy-section";
+import { RepoDescriptionSection } from "@/components/repositories/repo-description-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
 import { PromotionsTab } from "@/components/repositories/PromotionsTab";
@@ -229,8 +230,13 @@ function RepositoryDetail(): React.ReactElement {
               <SettingsSection
                 id="general"
                 eyebrow="General"
-                description="Repository metadata — name, owner, description, quota. Editors for these surfaces land in a later sprint alongside their backend RPCs."
+                description="Repository metadata. The description editor is live; rename, transfer, and quota editors land alongside their backend RPCs."
               >
+                {/* Tier 2 #2 — description editor. Wires the existing    */}
+                {/* UpdateRepository RPC (description field); no new       */}
+                {/* backend. Sits above the placeholder because it's the  */}
+                {/* one General surface with a shipped backend today.     */}
+                <RepoDescriptionSection org={org} repo={repo} />
                 <RepoGeneralPlaceholder />
               </SettingsSection>
             </div>
@@ -296,20 +302,19 @@ function SettingsSection({
   );
 }
 
-// RepoGeneralPlaceholder — slot card for the eventual rename /
-// transfer / description / quota CRUD surfaces. Rendering it now
-// (rather than leaving "General" empty) makes the three-section
-// structure visible on every repo, including freshly-created ones,
-// and gives operators a single place to look for "edit metadata"
-// affordances once they ship.
+// RepoGeneralPlaceholder — slot card for the remaining General-section
+// editors whose backend hasn't shipped yet. The description editor
+// (RepoDescriptionSection) now renders above this card; rename, transfer,
+// and quota still land here once their RPCs exist. Rendering it keeps the
+// "more is coming" affordance visible so operators know where to look.
 function RepoGeneralPlaceholder(): React.ReactElement {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Repository metadata</CardTitle>
+        <CardTitle>More metadata editors</CardTitle>
         <CardDescription>
-          Rename, transfer, description, and quota editors land here in a
-          later sprint alongside their backend RPCs.
+          Rename, transfer, and quota editors land here alongside their
+          backend RPCs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -317,9 +322,6 @@ function RepoGeneralPlaceholder(): React.ReactElement {
           <li>Rename — change the repo's slug under the same org.</li>
           <li>
             Transfer — move the repo to another org you belong to.
-          </li>
-          <li>
-            Description — long-form README rendered on the repo overview.
           </li>
           <li>
             Quota override — per-repo cap on storage / pull bandwidth.
