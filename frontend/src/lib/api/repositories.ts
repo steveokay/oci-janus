@@ -242,3 +242,36 @@ export function useRenameRepository() {
     },
   });
 }
+
+// POST /repositories/{org}/{repo}/transfer — re-parents the repo to another org
+// and migrates repo-scoped RBAC grants. Same response shape as rename
+// (roles_rewritten + optional rbac_warning on partial success). The dest_org
+// is an org name, not an id.
+interface TransferRepoArgs {
+  org: string;
+  repo: string;
+  dest_org: string;
+}
+
+export function useTransferRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      org,
+      repo,
+      dest_org,
+    }: TransferRepoArgs): Promise<RenameRepoResponse> => {
+      const { data } = await apiClient.post<RenameRepoResponse>(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/transfer`,
+        { dest_org },
+      );
+      return data;
+    },
+    // The repo now lives under a new org, so the old detail key is stale and
+    // every list must refetch.
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: repoKeys.detail(org, repo) });
+      void qc.invalidateQueries({ queryKey: repoKeys.all });
+    },
+  });
+}

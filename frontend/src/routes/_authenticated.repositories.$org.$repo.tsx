@@ -16,18 +16,12 @@ import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-polic
 import { RepoDescriptionSection } from "@/components/repositories/repo-description-section";
 import { RepoQuotaSection } from "@/components/repositories/repo-quota-section";
 import { RepoRenameSection } from "@/components/repositories/repo-rename-section";
+import { RepoTransferSection } from "@/components/repositories/repo-transfer-section";
 import { RepoVisibilitySection } from "@/components/repositories/repo-visibility-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
 import { PromotionsTab } from "@/components/repositories/PromotionsTab";
 import { AnalyticsCard } from "@/components/dashboard/analytics-card";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Tabs,
   TabsContent,
@@ -233,7 +227,7 @@ function RepositoryDetail(): React.ReactElement {
               <SettingsSection
                 id="general"
                 eyebrow="General"
-                description="Repository metadata. Visibility, description, storage-quota, and rename editors are live; transfer lands alongside its backend RPC."
+                description="Repository metadata — visibility, description, storage quota, rename, and transfer."
               >
                 {/* Tier 2 #2 — visibility toggle. Public repos allow     */}
                 {/* anonymous pull; dedicated UpdateRepositoryVisibility   */}
@@ -250,7 +244,9 @@ function RepositoryDetail(): React.ReactElement {
                 {/* Repo rename — dedicated POST /rename route that also     */}
                 {/* migrates repo-scoped RBAC grants in registry-auth.       */}
                 <RepoRenameSection org={org} repo={repo} />
-                <RepoGeneralPlaceholder />
+                {/* Repo transfer — POST /transfer re-parents the repo to    */}
+                {/* another org + migrates repo-scoped RBAC grants.          */}
+                <RepoTransferSection org={org} repo={repo} />
               </SettingsSection>
             </div>
 
@@ -312,31 +308,5 @@ function SettingsSection({
       </div>
       <div className="space-y-4">{children}</div>
     </section>
-  );
-}
-
-// RepoGeneralPlaceholder — slot card for the remaining General-section editors
-// whose backend hasn't shipped yet. The description, storage-quota, and rename
-// editors now render above this card; transfer still lands here once its
-// metadata RPC (org reparent + RBAC scope migration) is wired into the BFF.
-// Rendering it keeps the "more is coming" affordance visible so operators know
-// where to look.
-function RepoGeneralPlaceholder(): React.ReactElement {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>More metadata editors</CardTitle>
-        <CardDescription>
-          The transfer editor lands here alongside its backend RPC.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="space-y-1 text-sm text-[var(--color-fg-muted)]">
-          <li>
-            Transfer — move the repo to another org you belong to.
-          </li>
-        </ul>
-      </CardContent>
-    </Card>
   );
 }
