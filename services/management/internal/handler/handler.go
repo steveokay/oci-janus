@@ -360,6 +360,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Rename re-parents the repo's name + migrates repo-scoped RBAC grants.
 	// Admin-gated in the handler body (repo settings General section).
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/rename", authMW(http.HandlerFunc(h.handleRenameRepository)))
+	// Transfer re-parents the repo to another org + migrates repo-scoped RBAC
+	// grants. Admin-gated on BOTH source repo and dest org in the handler body.
+	mux.Handle("POST /api/v1/repositories/{org}/{repo}/transfer", authMW(http.HandlerFunc(h.handleTransferRepository)))
 	mux.Handle("DELETE /api/v1/repositories/{org}/{repo}", authMW(http.HandlerFunc(h.handleDeleteRepository)))
 
 	// Tag management.

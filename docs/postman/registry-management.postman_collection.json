@@ -3479,6 +3479,47 @@
           }
         },
         {
+          "name": "POST /api/v1/repositories/{org}/{repo}/transfer",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/transfer",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "transfer"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/transfer",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "GET /api/v1/repositories/{org}/{repo}/trusted-keys",
           "request": {
             "description": "GET /api/v1/repositories/{org}/{repo}/trusted-keys",
