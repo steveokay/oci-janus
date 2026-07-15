@@ -107,7 +107,23 @@ func NewWithDB(repo sigstoreRepo) *Store {
 func (s *Store) Add(rec *Record) {
 	key := recordKey{tenant: rec.TenantID, manifestDigest: rec.ManifestDigest}
 	s.mu.Lock()
-	s.data[key] = append(s.data[key], rec)
+	// Dedup on signer_id so the in-memory cache mirrors the DB's
+	// UNIQUE(tenant_id, manifest_digest, signer_id) + ON CONFLICT DO UPDATE
+	// semantics: a re-sign with the same signer replaces the existing record
+	// in place rather than appending a duplicate. Without this, two SignManifest
+	// calls for the same (tenant, digest, signer) left two identical rows in the
+	// cache while the DB held only one — so List() over-reported signatures.
+	replaced := false
+	for i, existing := range s.data[key] {
+		if existing.SignerID == rec.SignerID {
+			s.data[key][i] = rec
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.data[key] = append(s.data[key], rec)
+	}
 	s.mu.Unlock()
 
 	if s.repo != nil {
