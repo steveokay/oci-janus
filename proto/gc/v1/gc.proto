@@ -93,6 +93,13 @@ message GCStatus {
   // intentionally not authoritative — the cron loop ticks against its
   // own internal timer, not this field.
   google.protobuf.Timestamp next_scheduled_at        = 12;
+  // retention_grace_days is the soft-delete grace window (GC's
+  // RETENTION_GRACE_DAYS): the number of days a manifest sits with
+  // retention_pending_delete_at set before the retention_grace sweep hard-
+  // deletes it. This is GC's single source of truth for the window; the BFF
+  // surfaces it so the dashboard can render an accurate pending-delete ETA
+  // instead of hardcoding the default. 0 means "unknown / not reported".
+  int32                     retention_grace_days     = 13;
 }
 
 // GCRun is one historical or in-flight sweep row.

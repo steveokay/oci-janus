@@ -2739,10 +2739,12 @@ Below is only what was genuinely untracked.
   `api-keys.activity.tsx:29-39` uses `limit` as a proxy for 24h/7d/30d;
   needs real `from`/`to` (or `since`/`until`) params on the
   `/access/activity` BFF handler + FE swap. **STILL OPEN** (medium — BFF+FE).
-- **Hardcoded retention grace window** — `tags-panel.tsx:598` pins
-  `GRACE_DAYS = 7` client-side; BFF `/workspace/me` should return the
-  platform grace setting (add `retention_grace_days` to the Workspace
-  response) so the pending-delete ETA can't drift. **STILL OPEN** (low — BFF+FE).
+- ~~**Hardcoded retention grace window**~~ ✅ DONE (batch 3) — GC now reports
+  its `RETENTION_GRACE_DAYS` on `GCStatus.retention_grace_days` (single source
+  of truth); the BFF surfaces it best-effort on `/workspace/me`
+  (`retention_grace_days`, omitted when GC is unwired/unreachable); the FE
+  tags-panel pending-delete pill reads it via `useWorkspace()` and falls back
+  to 7. Live-verified: `/workspace/me` → `retention_grace_days: 7`.
 - ~~**MCP connect card**~~ ✅ DONE (batch 2) — `MCPConnectCard` on Settings ›
   Integrations (admin-gated) renders the Claude Desktop stdio config with the
   live tenant id baked in + API-key/URL placeholders, a copy button, and a link

@@ -231,7 +231,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if runRequests != nil {
 		dispatchCh = runRequests
 	}
-	gcv1.RegisterGCServiceServer(grpcSrv, handler.New(grpcRepo, dispatchCh, interval))
+	gcv1.RegisterGCServiceServer(grpcSrv, handler.New(grpcRepo, dispatchCh, interval, int32(cfg.RetentionGraceDays)))
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

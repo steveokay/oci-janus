@@ -159,7 +159,7 @@ func (f *fakeRepo) GetTenantRetentionSavings(_ context.Context, tenantID uuid.UU
 // state: GetLatest returns ErrNotFound, the handler must return a
 // zero-valued GCStatus and never NPE on missing timestamps.
 func TestGetStatus_NoRuns_returnsEmptyStatus(t *testing.T) {
-	h := New(&fakeRepo{}, nil, 24*time.Hour)
+	h := New(&fakeRepo{}, nil, 24*time.Hour, 7)
 	resp, err := h.GetStatus(context.Background(), &gcv1.GetStatusRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -169,6 +169,10 @@ func TestGetStatus_NoRuns_returnsEmptyStatus(t *testing.T) {
 	}
 	if resp.GetNextScheduledAt() == nil {
 		t.Error("next_scheduled_at should be populated from `now` when no runs exist")
+	}
+	// The configured grace window is reported even before the first run.
+	if resp.GetRetentionGraceDays() != 7 {
+		t.Errorf("retention_grace_days: got %d, want 7", resp.GetRetentionGraceDays())
 	}
 }
 
@@ -193,10 +197,13 @@ func TestGetStatus_WithCompletedRun_populatesAllFields(t *testing.T) {
 			TriggeredBy:      "cron",
 		},
 	}
-	h := New(repo, nil, 24*time.Hour)
+	h := New(repo, nil, 24*time.Hour, 14)
 	resp, err := h.GetStatus(context.Background(), &gcv1.GetStatusRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetRetentionGraceDays() != 14 {
+		t.Errorf("retention_grace_days: got %d, want 14", resp.GetRetentionGraceDays())
 	}
 	if resp.GetLastRunStatus() != "succeeded" {
 		t.Errorf("status: got %q", resp.GetLastRunStatus())
@@ -219,7 +226,7 @@ func TestGetStatus_WithCompletedRun_populatesAllFields(t *testing.T) {
 // TestGetStatus_RepoError_returnsInternal verifies a non-NotFound
 // repository error surfaces as codes.Internal.
 func TestGetStatus_RepoError_returnsInternal(t *testing.T) {
-	h := New(&fakeRepo{latestErr: errors.New("boom")}, nil, 0)
+	h := New(&fakeRepo{latestErr: errors.New("boom")}, nil, 0, 0)
 	_, err := h.GetStatus(context.Background(), &gcv1.GetStatusRequest{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -238,7 +245,7 @@ func TestGetStatus_RepoError_returnsInternal(t *testing.T) {
 func TestRunNow_HappyPath_returnsQueuedRunID(t *testing.T) {
 	repo := &fakeRepo{}
 	dispatch := make(chan uuid.UUID, 1)
-	h := New(repo, dispatch, time.Hour)
+	h := New(repo, dispatch, time.Hour, 0)
 
 	caller := uuid.New().String()
 	resp, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
@@ -272,7 +279,7 @@ func TestRunNow_HappyPath_returnsQueuedRunID(t *testing.T) {
 func TestRunNow_InvalidMode_returnsInvalidArgument(t *testing.T) {
 	repo := &fakeRepo{}
 	dispatch := make(chan uuid.UUID, 1)
-	h := New(repo, dispatch, 0)
+	h := New(repo, dispatch, 0, 0)
 
 	_, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
 		Mode:        "obliterate",
@@ -293,7 +300,7 @@ func TestRunNow_InvalidMode_returnsInvalidArgument(t *testing.T) {
 // TestRunNow_MalformedTriggeredBy_returnsInvalidArgument verifies the
 // UUID validation gate.
 func TestRunNow_MalformedTriggeredBy_returnsInvalidArgument(t *testing.T) {
-	h := New(&fakeRepo{}, make(chan uuid.UUID, 1), 0)
+	h := New(&fakeRepo{}, make(chan uuid.UUID, 1), 0, 0)
 	_, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
 		Mode:        "dry-run",
 		TriggeredBy: "not-a-uuid",
@@ -309,7 +316,7 @@ func TestRunNow_MalformedTriggeredBy_returnsInvalidArgument(t *testing.T) {
 // to surface a clear status than silently insert a row no worker
 // will ever drain.
 func TestRunNow_NoDispatcher_returnsFailedPrecondition(t *testing.T) {
-	h := New(&fakeRepo{}, nil, 0)
+	h := New(&fakeRepo{}, nil, 0, 0)
 	_, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
 		Mode:        "full",
 		TriggeredBy: uuid.NewString(),
@@ -327,7 +334,7 @@ func TestRunNow_DispatcherFull_stillSucceeds(t *testing.T) {
 	dispatch := make(chan uuid.UUID, 1)
 	// Pre-fill the channel so the next send would block.
 	dispatch <- uuid.New()
-	h := New(&fakeRepo{}, dispatch, 0)
+	h := New(&fakeRepo{}, dispatch, 0, 0)
 	resp, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
 		Mode:        "manifests",
 		TriggeredBy: uuid.NewString(),
@@ -343,7 +350,7 @@ func TestRunNow_DispatcherFull_stillSucceeds(t *testing.T) {
 // TestRunNow_CreateFails_returnsInternal verifies a repository error
 // surfaces as Internal so the BFF can return 500.
 func TestRunNow_CreateFails_returnsInternal(t *testing.T) {
-	h := New(&fakeRepo{createErr: errors.New("db down")}, make(chan uuid.UUID, 1), 0)
+	h := New(&fakeRepo{createErr: errors.New("db down")}, make(chan uuid.UUID, 1), 0, 0)
 	_, err := h.RunNow(context.Background(), &gcv1.RunNowRequest{
 		Mode:        "blobs",
 		TriggeredBy: uuid.NewString(),
@@ -364,7 +371,7 @@ func TestListRuns_Happy_returnsAllRows(t *testing.T) {
 		{RunID: uuid.New(), Mode: "full", Status: "succeeded", RequestedAt: time.Now()},
 		{RunID: uuid.New(), Mode: "dry-run", Status: "running", RequestedAt: time.Now()},
 	}
-	h := New(&fakeRepo{runs: rows}, nil, 0)
+	h := New(&fakeRepo{runs: rows}, nil, 0, 0)
 	resp, err := h.ListRuns(context.Background(), &gcv1.ListRunsRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -381,7 +388,7 @@ func TestListRuns_Happy_returnsAllRows(t *testing.T) {
 // is rewritten to 50 before reaching the repository.
 func TestListRuns_DefaultLimit_appliesFifty(t *testing.T) {
 	repo := &fakeRepo{}
-	h := New(repo, nil, 0)
+	h := New(repo, nil, 0, 0)
 	_, _ = h.ListRuns(context.Background(), &gcv1.ListRunsRequest{})
 	if repo.lastListLimit != 50 {
 		t.Errorf("default limit: got %d, want 50", repo.lastListLimit)
@@ -392,7 +399,7 @@ func TestListRuns_DefaultLimit_appliesFifty(t *testing.T) {
 // rows than the hard cap.
 func TestListRuns_LimitClampedTo200(t *testing.T) {
 	repo := &fakeRepo{}
-	h := New(repo, nil, 0)
+	h := New(repo, nil, 0, 0)
 	_, _ = h.ListRuns(context.Background(), &gcv1.ListRunsRequest{PageSize: 5000})
 	if repo.lastListLimit != 200 {
 		t.Errorf("clamp: got %d, want 200", repo.lastListLimit)
@@ -402,7 +409,7 @@ func TestListRuns_LimitClampedTo200(t *testing.T) {
 // TestListRuns_NextPageToken_propagates verifies the repository's
 // cursor is returned to the caller verbatim.
 func TestListRuns_NextPageToken_propagates(t *testing.T) {
-	h := New(&fakeRepo{listNext: "cursor-abc"}, nil, 0)
+	h := New(&fakeRepo{listNext: "cursor-abc"}, nil, 0, 0)
 	resp, err := h.ListRuns(context.Background(), &gcv1.ListRunsRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -415,7 +422,7 @@ func TestListRuns_NextPageToken_propagates(t *testing.T) {
 // TestListRuns_BadPageToken_returnsInvalidArgument verifies the
 // repository's wrapped error maps onto the gRPC INVALID_ARGUMENT code.
 func TestListRuns_BadPageToken_returnsInvalidArgument(t *testing.T) {
-	h := New(&fakeRepo{listErr: fmt.Errorf("invalid page_token: %w", errors.New("bad base64"))}, nil, 0)
+	h := New(&fakeRepo{listErr: fmt.Errorf("invalid page_token: %w", errors.New("bad base64"))}, nil, 0, 0)
 	_, err := h.ListRuns(context.Background(), &gcv1.ListRunsRequest{PageToken: "garbage"})
 	st, _ := status.FromError(err)
 	if st.Code() != codes.InvalidArgument {
@@ -426,7 +433,7 @@ func TestListRuns_BadPageToken_returnsInvalidArgument(t *testing.T) {
 // TestListRuns_GenericRepoError_returnsInternal verifies a non-cursor
 // repository error becomes codes.Internal.
 func TestListRuns_GenericRepoError_returnsInternal(t *testing.T) {
-	h := New(&fakeRepo{listErr: errors.New("db down")}, nil, 0)
+	h := New(&fakeRepo{listErr: errors.New("db down")}, nil, 0, 0)
 	_, err := h.ListRuns(context.Background(), &gcv1.ListRunsRequest{})
 	st, _ := status.FromError(err)
 	if st.Code() != codes.Internal {
@@ -438,7 +445,7 @@ func TestListRuns_GenericRepoError_returnsInternal(t *testing.T) {
 // net: a handler with no repository wired is reachable (the server
 // registered it) but every method short-circuits cleanly.
 func TestNoRepository_AllRPCsReturnFailedPrecondition(t *testing.T) {
-	h := New(nil, nil, 0)
+	h := New(nil, nil, 0, 0)
 	if _, err := h.GetStatus(context.Background(), &gcv1.GetStatusRequest{}); err == nil ||
 		statusCode(err) != codes.FailedPrecondition {
 		t.Errorf("GetStatus: got %v, want FailedPrecondition", err)
@@ -472,7 +479,7 @@ func TestGetTenantRetentionSavings_mapsAggregate(t *testing.T) {
 		RunCount:         2,
 		LastRunAt:        &last,
 	}}
-	h := New(repo, nil, 0)
+	h := New(repo, nil, 0, 0)
 
 	resp, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
 		TenantId: tenant.String(),
@@ -504,7 +511,7 @@ func TestGetTenantRetentionSavings_mapsAggregate(t *testing.T) {
 // a tenant with no completed retention runs yields all-zero counters and a nil
 // last_run_at, with no error.
 func TestGetTenantRetentionSavings_noRuns_returnsZero(t *testing.T) {
-	h := New(&fakeRepo{}, nil, 0)
+	h := New(&fakeRepo{}, nil, 0, 0)
 	resp, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
 		TenantId: uuid.New().String(),
 	})
@@ -519,7 +526,7 @@ func TestGetTenantRetentionSavings_noRuns_returnsZero(t *testing.T) {
 // TestGetTenantRetentionSavings_badTenant_returnsInvalidArgument verifies the
 // tenant-id validation path (empty + non-UUID).
 func TestGetTenantRetentionSavings_badTenant_returnsInvalidArgument(t *testing.T) {
-	h := New(&fakeRepo{}, nil, 0)
+	h := New(&fakeRepo{}, nil, 0, 0)
 	for _, tid := range []string{"", "not-a-uuid"} {
 		_, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{TenantId: tid})
 		if statusCode(err) != codes.InvalidArgument {
@@ -531,7 +538,7 @@ func TestGetTenantRetentionSavings_badTenant_returnsInvalidArgument(t *testing.T
 // TestGetTenantRetentionSavings_repoErr_returnsInternal verifies a repository
 // failure surfaces as codes.Internal, not a panic.
 func TestGetTenantRetentionSavings_repoErr_returnsInternal(t *testing.T) {
-	h := New(&fakeRepo{savingsErr: errors.New("boom")}, nil, 0)
+	h := New(&fakeRepo{savingsErr: errors.New("boom")}, nil, 0, 0)
 	_, err := h.GetTenantRetentionSavings(context.Background(), &gcv1.GetTenantRetentionSavingsRequest{
 		TenantId: uuid.New().String(),
 	})

@@ -2163,6 +2163,13 @@ type WorkspaceResponse struct {
 	Plan      string    `json:"plan"`
 	Host      string    `json:"host"`
 	CreatedAt time.Time `json:"created_at"`
+	// RetentionGraceDays is the platform soft-delete grace window (GC's
+	// RETENTION_GRACE_DAYS), surfaced best-effort so the FE can render an
+	// accurate pending-delete ETA instead of hardcoding the default. It is a
+	// platform-global setting (not tenant-scoped) piggy-backed on this
+	// already-app-wide response. Omitted (0) when the GC service isn't wired
+	// or is unreachable — the FE falls back to its default in that case.
+	RetentionGraceDays int32 `json:"retention_grace_days,omitempty"`
 }
 
 func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -2181,13 +2188,35 @@ func (h *Handler) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, WorkspaceResponse{
-		TenantID:  t.GetTenantId(),
-		Name:      t.GetName(),
-		Slug:      t.GetSlug(),
-		Plan:      t.GetPlan(),
-		Host:      t.GetHost(),
-		CreatedAt: t.GetCreatedAt().AsTime(),
+		TenantID:           t.GetTenantId(),
+		Name:               t.GetName(),
+		Slug:               t.GetSlug(),
+		Plan:               t.GetPlan(),
+		Host:               t.GetHost(),
+		CreatedAt:          t.GetCreatedAt().AsTime(),
+		RetentionGraceDays: h.retentionGraceDays(r.Context()),
 	})
+}
+
+// retentionGraceDays fetches the platform soft-delete grace window from the GC
+// service (its RETENTION_GRACE_DAYS, the single source of truth) on a best-
+// effort basis. Returns 0 — which the FE reads as "unknown, use the default" —
+// when the GC client isn't wired, the call errors, or the value is unset, so a
+// down or absent GC never blocks the workspace load.
+func (h *Handler) retentionGraceDays(ctx context.Context) int32 {
+	if h.gc == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	st, err := h.gc.GetStatus(ctx, &gcv1.GetStatusRequest{})
+	if err != nil {
+		// Best-effort — log at debug and fall back; the workspace response is
+		// still fully usable without the grace hint.
+		slog.Debug("GC GetStatus for retention grace", "err", err)
+		return 0
+	}
+	return st.GetRetentionGraceDays()
 }
 
 // requireDomainAdmin returns true when the caller holds at least tenant-admin

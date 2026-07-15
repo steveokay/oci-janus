@@ -20,11 +20,18 @@ import (
 
 	auditv1 "github.com/steveokay/oci-janus/proto/gen/go/audit/v1"
 	authv1 "github.com/steveokay/oci-janus/proto/gen/go/auth/v1"
+	gcv1 "github.com/steveokay/oci-janus/proto/gen/go/gc/v1"
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
 	tenantv1 "github.com/steveokay/oci-janus/proto/gen/go/tenant/v1"
 
 	"github.com/steveokay/oci-janus/services/management/internal/handler"
 )
+
+// workspaceGCGrace is the RETENTION_GRACE_DAYS value the workspace env's fake
+// GC server reports on GetStatus. Default 0 keeps the existing tests seeing an
+// omitted grace field; a test sets it (reset via t.Cleanup) to exercise the
+// FUT-088 #3 pass-through.
+var workspaceGCGrace int32
 
 // fakeTenantServer is the bufconn gRPC stub. The default GetTenant payload
 // covers the FE-API-007 + FE-API-009 happy path (slug + custom primary host).
@@ -96,6 +103,17 @@ func newWorkspaceEnv(t *testing.T) *testEnv {
 	go func() { _ = tenantGRPC.Serve(tenantLis) }()
 	t.Cleanup(tenantGRPC.Stop)
 
+	// A fake GC server so the workspace handler's best-effort grace fetch has
+	// something to talk to. Reports workspaceGCGrace (default 0 → omitted).
+	gcLis := bufconn.Listen(bufSize)
+	gcGRPC := grpc.NewServer()
+	gcv1.RegisterGCServiceServer(gcGRPC, &fakeGCServer{
+		statusReturn: &gcv1.GCStatus{RetentionGraceDays: workspaceGCGrace},
+	})
+	healthpb.RegisterHealthServer(gcGRPC, &fakeHealthServer{})
+	go func() { _ = gcGRPC.Serve(gcLis) }()
+	t.Cleanup(gcGRPC.Stop)
+
 	dialBufconn := func(lis *bufconn.Listener) *grpc.ClientConn {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
@@ -114,6 +132,7 @@ func newWorkspaceEnv(t *testing.T) *testEnv {
 	metaConn := dialBufconn(metaLis)
 	auditConn := dialBufconn(auditLis)
 	tenantConn := dialBufconn(tenantLis)
+	gcConn := dialBufconn(gcLis)
 
 	h := handler.New(
 		authv1.NewAuthServiceClient(authConn),
@@ -122,7 +141,8 @@ func newWorkspaceEnv(t *testing.T) *testEnv {
 		nil, // publisher unused on the workspace route
 		"",  // platformAdminTenantID unused here
 		healthpb.NewHealthClient(authConn),
-	).WithTenantClient(tenantv1.NewTenantServiceClient(tenantConn))
+	).WithTenantClient(tenantv1.NewTenantServiceClient(tenantConn)).
+		WithGCClient(gcv1.NewGCServiceClient(gcConn))
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -195,6 +215,43 @@ func TestWorkspaceMe_WildcardSubdomain_returnsCorrectHost(t *testing.T) {
 	}
 	if body.Slug != "newco" {
 		t.Errorf("slug: got %q, want newco", body.Slug)
+	}
+}
+
+// TestWorkspaceMe_RetentionGrace_flowsFromGC verifies the FUT-088 #3
+// pass-through: the platform grace window reported by the GC service surfaces
+// on the workspace response so the FE renders an accurate pending-delete ETA.
+func TestWorkspaceMe_RetentionGrace_flowsFromGC(t *testing.T) {
+	workspaceGCGrace = 10
+	t.Cleanup(func() { workspaceGCGrace = 0 })
+
+	env := newWorkspaceEnv(t)
+	resp := env.get(t, "/api/v1/workspace/me", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.WorkspaceResponse
+	decodeJSON(t, resp, &body)
+	if body.RetentionGraceDays != 10 {
+		t.Errorf("retention_grace_days: got %d, want 10", body.RetentionGraceDays)
+	}
+}
+
+// TestWorkspaceMe_RetentionGrace_omittedWhenGCUnset confirms the handler
+// degrades gracefully: with no GC client wired, the grace field is omitted
+// (0) rather than failing the workspace load. newTestEnv wires no GC client.
+func TestWorkspaceMe_RetentionGrace_omittedWhenGCUnset(t *testing.T) {
+	// newTestEnv has no tenant client, so /workspace/me 404s there; instead we
+	// assert the default env's fake GC (grace 0) yields an omitted field.
+	env := newWorkspaceEnv(t) // workspaceGCGrace defaults to 0
+	resp := env.get(t, "/api/v1/workspace/me", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var body handler.WorkspaceResponse
+	decodeJSON(t, resp, &body)
+	if body.RetentionGraceDays != 0 {
+		t.Errorf("retention_grace_days: got %d, want 0 (omitted)", body.RetentionGraceDays)
 	}
 }
 

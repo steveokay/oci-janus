@@ -35,6 +35,7 @@ import { formatBytes, formatRelativeDate } from "@/lib/format";
 import { useTags } from "@/lib/api/tags";
 import { BULK_DELETE_MAX } from "@/lib/api/tags";
 import { useBulkScanRepo } from "@/lib/api/scan";
+import { useWorkspace } from "@/lib/api/workspace";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search } from "lucide-react";
@@ -582,21 +583,27 @@ function QuarantinePill(): React.ReactElement {
 // the manifest is inside the retention grace window. Renders nothing for
 // the common path (no stamp on the wire).
 //
-// Grace window is 7 days by default (services/gc RETENTION_GRACE_DAYS). The
-// pill turns danger-toned in the final 24h so an operator scanning the
-// table sees the imminent rows first. The relative date already handles
-// "in 4 days" vs "in 6 hours" so the pill stays compact.
+// Grace window comes from the platform setting (services/gc
+// RETENTION_GRACE_DAYS) surfaced on the workspace response; falls back to 7
+// when the BFF omits it (GC unwired/unreachable). The pill turns danger-toned
+// in the final 24h so an operator scanning the table sees the imminent rows
+// first. The relative date already handles "in 4 days" vs "in 6 hours" so the
+// pill stays compact.
+const DEFAULT_GRACE_DAYS = 7;
 function PendingDeletePill({
   iso,
 }: {
   iso: string | undefined;
 }): React.ReactElement | null {
+  // Read the live grace window from the workspace context (react-query caches
+  // it, so many pills share one fetch). Hook must run before the early return.
+  const { data: workspace } = useWorkspace();
   if (!iso) return null;
-  // Stamp + 7d grace window = ETA. We compute client-side because the BFF
-  // doesn't return the platform grace setting; if it ever does the value
-  // should flow in from useWorkspace() instead of being hardcoded.
-  const GRACE_DAYS = 7;
-  const eta = new Date(iso).getTime() + GRACE_DAYS * 24 * 60 * 60 * 1000;
+  // Stamp + grace window = ETA. FUT-088 #3 — the value now flows in from
+  // useWorkspace() (GC's RETENTION_GRACE_DAYS) instead of a hardcoded 7; the
+  // fallback keeps the ETA sane if the BFF omits the field.
+  const graceDays = workspace?.retention_grace_days || DEFAULT_GRACE_DAYS;
+  const eta = new Date(iso).getTime() + graceDays * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const msLeft = eta - now;
   // Already past grace — should be hard-deleted shortly. Still surface it
