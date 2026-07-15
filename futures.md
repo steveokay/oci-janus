@@ -237,37 +237,40 @@ quickly in real operator workflows.
   BFF route. Returns repos, tags, manifests, recent scans matching the
   query. Postgres `pg_trgm` or full-text index on the relevant columns.
 
-### 2. Repo settings page
-- **Why:** `/repositories/$org/$repo` Settings tab currently shows an
-  EmptyState placeholder ("arrives in a later sprint"). Quota override,
-  description, visibility toggle, tag-immutability flag, signature
-  policy, and webhook subscriptions all belong here.
-- **What:** Wire the existing repo-update RPC, add the immutability +
-  signature flags from Tier 1 #2 + #3 when they land.
-- **General section — repository metadata editors (tracked 2026-07-14).**
-  The Settings → **General** tab groups the repo's core-metadata editors
-  (name, owner, description, quota). Until their backend RPCs land it
-  renders read-only with the placeholder copy *"Editors for these
-  surfaces land in a later sprint alongside their backend RPCs."* The
-  four editors, each gated on its own backend work:
+### 2. Repo settings page — General section DONE (2026-07-15); rename + transfer remain
+- **Why:** `/repositories/$org/$repo` Settings tab showed an EmptyState
+  placeholder. Quota override, description, visibility toggle, tag-immutability
+  flag, signature policy all belong here.
+- **Shipped 2026-07-15 (PRs #359 / #360 / #361):** the Security section
+  (immutability + signature + CVSS + trusted keys) and Quality section (scan
+  policy) were already live; the **General section is now complete**:
+  - **Visibility** — public/private toggle. New `UpdateRepositoryVisibility`
+    metadata RPC + BFF `is_public` three-state + `RepoVisibilitySection`
+    (#361).
+  - **Description** — README editor. Wired the existing `UpdateRepository` RPC
+    via `RepoDescriptionSection`; the same PR fixed **two latent bugs** — the
+    BFF blanked `description` on every security-flag PATCH (unconditional write
+    → three-state `*string`), and `UpdateRepository`'s SQL 500'd on a missing
+    `max_cvss_score` in its CTE RETURNING (broken since migration 00019) (#359).
+  - **Quota override** — wired the previously-orphaned `UpdateRepositoryQuota`
+    RPC through a BFF `storage_quota_bytes` three-state + `RepoQuotaSection`
+    (GB/TB input) (#360).
+- **Still open — rename + transfer.** Both need net-new metadata RPCs **plus
+  manifest-storage re-keying** (`manifests/<tenant_id>/<repo_encoded>/...` is
+  keyed by repo name; blobs are digest-keyed so they're safe). That storage
+  migration makes them materially riskier than the metadata-only General
+  editors — deliberately deferred.
   - **Rename** — change the repo's slug under the **same org**. Needs a
-    metadata RPC that rewrites `repositories.name` + re-keys any
-    name-derived storage prefixes / tag rows; must reject collisions and
-    preserve immutability/signature state. No such RPC today (the
-    existing update RPC only touches description + the immutability /
-    signature / CVSS flags).
-  - **Transfer** — move the repo to **another org the caller belongs
-    to**. Needs a metadata RPC that reparents `org_id` (+ storage-prefix
+    metadata RPC that rewrites `repositories.name` + re-keys the manifest
+    storage prefix; must reject collisions and preserve immutability/signature
+    state.
+  - **Transfer** — move the repo to **another org the caller belongs to**.
+    Needs a metadata RPC that reparents `org_id` (+ manifest-storage-prefix
     migration) with an authz check that the caller holds admin on **both**
-    source and destination orgs. New RPC.
-  - **Description** — long-form README rendered on the repo overview.
-    Already supported by the existing repo-update RPC + `PATCH
-    /api/v1/repositories/{org}/{repo}` (`description`); this editor is the
-    lightest lift and can land first.
-  - **Quota override** — per-repo cap on storage / pull bandwidth. Storage
-    quota already exists on the repo row (`storage_quota_bytes`, surfaced
-    read-only); needs an admin-gated update path. Pull-bandwidth capping
-    is net-new (no counter/limit primitive today).
+    source and destination orgs.
+- **Not per-repo yet:** webhook subscriptions are tenant-scoped only
+  (`Endpoint` has `tenant_id`, no `repo_id`); a per-repo subscription surface
+  would need a proto change to scope + filter endpoints.
 
 ### 3. Image diff between two tags — DONE (2026-07-15)
 - **Why:** "What shipped this week?" is a common review question. Today
