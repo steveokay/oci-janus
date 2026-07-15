@@ -1023,8 +1023,15 @@ type createRepositoryBody struct {
 // immutability off). A nil pointer skips the UpdateRepositoryImmutability
 // RPC entirely; a non-nil pointer triggers it.
 type updateRepositoryBody struct {
-	Description   string `json:"description"`
-	ImmutableTags *bool  `json:"immutable_tags,omitempty"`
+	// Description is a three-state pointer: a nil pointer means the key was
+	// absent from the PATCH body ("leave the description alone"), while a
+	// non-nil pointer means the caller explicitly sent a value (set it, even
+	// to ""). This matters because the Settings security cards send PATCHes
+	// that touch only their own flag — a plain-string Description would decode
+	// to "" and the unconditional UpdateRepository call would blank the repo's
+	// README on every immutability / signature / CVSS toggle.
+	Description   *string `json:"description"`
+	ImmutableTags *bool   `json:"immutable_tags,omitempty"`
 	// Signed-image admission (futures.md Tier 1 #3). Optional *bool
 	// for the same "nil = leave alone, non-nil = update" reason as
 	// ImmutableTags above — a separate RPC fires so the audit log
@@ -1739,15 +1746,23 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	repo, err := h.meta.UpdateRepository(r.Context(), &metadatav1.UpdateRepositoryRequest{
-		TenantId:    tenantID,
-		RepoId:      existing.GetRepoId(),
-		Description: body.Description,
-	})
-	if err != nil {
-		slog.Error("UpdateRepository", "err", err, "repo_id", existing.GetRepoId())
-		writeError(w, http.StatusInternalServerError, "failed to update repository")
-		return
+	// Start from the current row so a PATCH that touches only a security flag
+	// (immutability / signature / CVSS) still returns the up-to-date repo and
+	// never blanks the description. Only fire UpdateRepository when the caller
+	// actually sent a `description` key — a nil pointer means "leave alone".
+	repo := existing
+	if body.Description != nil {
+		updated, err := h.meta.UpdateRepository(r.Context(), &metadatav1.UpdateRepositoryRequest{
+			TenantId:    tenantID,
+			RepoId:      existing.GetRepoId(),
+			Description: *body.Description,
+		})
+		if err != nil {
+			slog.Error("UpdateRepository", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update repository")
+			return
+		}
+		repo = updated
 	}
 
 	// Tag immutability flip (futures.md Tier 1 #2). Only fires when the
