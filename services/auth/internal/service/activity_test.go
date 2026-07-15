@@ -88,12 +88,18 @@ func (f *fakeUserRepoForActivity) GetUserAnyKind(_ context.Context, id uuid.UUID
 type fakeAuditClient struct {
 	notifs   []*auditv1.NotificationEvent
 	notifErr error
+	// lastReq captures the most recent GetNotifications request so tests can
+	// assert the time-range (`since`) and paging fields the service threaded
+	// through from ListActivityOpts.
+	lastReq *auditv1.GetNotificationsRequest
 }
 
 // GetNotifications returns the canned notifications response. The tenant_id and
 // actor_id on the request are not validated here — filtering is the
 // ActivityService's responsibility and is tested via the fakeUserRepo state.
-func (f *fakeAuditClient) GetNotifications(_ context.Context, _ *auditv1.GetNotificationsRequest, _ ...grpc.CallOption) (*auditv1.GetNotificationsResponse, error) {
+// The request is captured in lastReq so time-range tests can inspect it.
+func (f *fakeAuditClient) GetNotifications(_ context.Context, req *auditv1.GetNotificationsRequest, _ ...grpc.CallOption) (*auditv1.GetNotificationsResponse, error) {
+	f.lastReq = req
 	if f.notifErr != nil {
 		return nil, f.notifErr
 	}
@@ -389,6 +395,57 @@ func TestActivity_ShadowUserTarget(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, activities, 1, "admin must be able to query a shadow user's activity")
+}
+
+// ── Time-range (`since`) threading ────────────────────────────────────────────
+
+// TestActivity_SinceThreadedToAudit verifies that a non-zero Since in
+// ListActivityOpts is passed through to the audit GetNotifications request so
+// the feed is time-bounded server-side rather than approximated by `limit`
+// (FUT-088 #1). This is the core of replacing the fake 24h/7d/30d chips.
+func TestActivity_SinceThreadedToAudit(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newActivityService(t, ctx)
+
+	tenant := uuid.New()
+	caller := fakes.userRepo.seedHuman(tenant, "me@x.com")
+
+	since := time.Now().Add(-24 * time.Hour)
+	_, _, err := svc.List(ctx, ListActivityOpts{
+		CallerUserID:   caller,
+		CallerTenantID: tenant,
+		CallerIsAdmin:  false,
+		TargetUserID:   caller,
+		Since:          since,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fakes.audit.lastReq, "audit request must have been made")
+	require.NotNil(t, fakes.audit.lastReq.Since, "non-zero Since must set the request's Since")
+	require.WithinDuration(t, since, fakes.audit.lastReq.Since.AsTime(), time.Second,
+		"the request Since must equal the opts Since")
+}
+
+// TestActivity_ZeroSinceOmitsBound verifies that a zero Since leaves the audit
+// request's Since nil so the audit service applies its own default window
+// (7 days). Passing timestamppb.New(zeroTime) would send a bogus year-1
+// lower bound, so the service must skip the field entirely.
+func TestActivity_ZeroSinceOmitsBound(t *testing.T) {
+	ctx := context.Background()
+	svc, fakes := newActivityService(t, ctx)
+
+	tenant := uuid.New()
+	caller := fakes.userRepo.seedHuman(tenant, "me@x.com")
+
+	_, _, err := svc.List(ctx, ListActivityOpts{
+		CallerUserID:   caller,
+		CallerTenantID: tenant,
+		CallerIsAdmin:  false,
+		TargetUserID:   caller,
+		// Since intentionally left zero.
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fakes.audit.lastReq, "audit request must have been made")
+	require.Nil(t, fakes.audit.lastReq.Since, "zero Since must leave the request Since nil")
 }
 
 // ── Audit backend error propagates ────────────────────────────────────────────

@@ -7,6 +7,13 @@ import { useMe } from "@/lib/api/me";
 import { useServiceAccounts } from "@/lib/api/service-accounts";
 import { ActivityTable } from "@/components/access/ActivityTable";
 import {
+  TIME_RANGES,
+  DEFAULT_RANGE,
+  PAGE_LIMIT_CAP,
+  sinceForRange,
+  type TimeRangeLabel,
+} from "@/lib/activity-range";
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -26,19 +33,10 @@ export const Route = createFileRoute("/_authenticated/api-keys/activity")({
   component: ActivityPage,
 });
 
-// Time-range chip options. Each value maps to a `limit` ceiling that gives a
-// rough approximation of the requested window when events are roughly evenly
-// distributed. The backend doesn't yet support explicit from/to date filters
-// on this endpoint; we use `limit` as a proxy.
-//
-// TODO: replace with ?from=&to= once the backend exposes date-range params.
-const TIME_RANGES = [
-  { label: "24h", limit: 50 },
-  { label: "7d", limit: 200 },
-  { label: "30d", limit: 500 },
-] as const;
-
-type TimeRangeLabel = (typeof TIME_RANGES)[number]["label"];
+// Time-range chip options + the window→`since` conversion live in
+// @/lib/activity-range. Each window now maps to a real RFC3339 `since` lower
+// bound that the auth endpoint threads into the audit query (FUT-088 #1),
+// replacing the old limit-as-time-proxy approximation.
 
 // ActivityPage — layout: page header, filter row (principal + time range),
 // then the ActivityTable.
@@ -77,16 +75,27 @@ function ActivityPage(): React.ReactElement {
 
   // Time-range chip state — default 7d.
   const [selectedRange, setSelectedRange] =
-    React.useState<TimeRangeLabel>("7d");
+    React.useState<TimeRangeLabel>(DEFAULT_RANGE);
 
-  // Derive the limit from the selected range.
+  // Derive the initial page size from the selected window.
   const limit =
-    TIME_RANGES.find((r) => r.label === selectedRange)?.limit ?? 200;
+    TIME_RANGES.find((r) => r.label === selectedRange)?.limit ?? 100;
 
-  // "Load more" increments the limit by the current window's step.
-  // This is a best-effort approximation until backend cursor support ships.
+  // Compute the `since` lower bound for the selected window. Memoized on the
+  // window label so it is stable across renders — recomputing Date.now() every
+  // render would churn the query key and refetch in a loop. The bound is fixed
+  // at the moment the window (re)selects, which is fine for an activity feed.
+  const since = React.useMemo(
+    () => sinceForRange(selectedRange, Date.now()),
+    [selectedRange],
+  );
+
+  // "Load more" raises the page size toward the backend cap. Clamped at
+  // PAGE_LIMIT_CAP so a limit-based expansion never trips the endpoint's 400 —
+  // the bug the old 30d window (limit=500) hit. Beyond the cap the operator
+  // narrows the window, which now genuinely shrinks the result set.
   const [extraLimit, setExtraLimit] = React.useState(0);
-  const effectiveLimit = limit + extraLimit;
+  const effectiveLimit = Math.min(limit + extraLimit, PAGE_LIMIT_CAP);
 
   // Reset extra limit whenever the range or principal changes so stale
   // expansions don't bleed across filter changes.
@@ -150,6 +159,7 @@ function ActivityPage(): React.ReactElement {
       <ActivityTable
         principalUserID={principalUserID}
         limit={effectiveLimit}
+        since={since}
         principalDisplayName={principalDisplayName}
         onLoadMore={handleLoadMore}
       />

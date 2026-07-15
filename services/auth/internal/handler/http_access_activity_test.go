@@ -38,14 +38,19 @@ type fakeAuditClient struct {
 	// notifs is the slice of NotificationEvent values returned by GetNotifications.
 	// Tests seed this with events for the target actor.
 	notifs []*auditv1.NotificationEvent
+	// lastReq captures the most recent GetNotifications request so tests can
+	// assert that the handler-parsed `since` query param was threaded through.
+	lastReq *auditv1.GetNotificationsRequest
 }
 
-// GetNotifications returns the preconfigured notification slice.
+// GetNotifications returns the preconfigured notification slice and records the
+// request in lastReq for time-range assertions.
 func (f *fakeAuditClient) GetNotifications(
 	_ context.Context,
-	_ *auditv1.GetNotificationsRequest,
+	req *auditv1.GetNotificationsRequest,
 	_ ...grpc.CallOption,
 ) (*auditv1.GetNotificationsResponse, error) {
+	f.lastReq = req
 	return &auditv1.GetNotificationsResponse{
 		Notifications: f.notifs,
 	}, nil
@@ -408,6 +413,56 @@ func TestHTTP_Activity_AdminQueryingOtherInTenant_Works(t *testing.T) {
 
 	if len(envelope.Activity) != 2 {
 		t.Errorf("activity count: got %d, want 2", len(envelope.Activity))
+	}
+}
+
+// TestHTTP_Activity_SinceParamThreaded verifies that a well-formed RFC3339
+// `since` query param is parsed by the handler and threaded through the service
+// into the audit GetNotifications request (FUT-088 #1). This proves the time
+// window is now enforced server-side rather than approximated by `limit`.
+func TestHTTP_Activity_SinceParamThreaded(t *testing.T) {
+	env := newActivityTestEnv(t)
+
+	alice := env.seedUser(env.tenantID, "human")
+	aliceTok := env.issueActivityToken(t, alice.ID, env.tenantID, false)
+
+	since := time.Now().Add(-7 * 24 * time.Hour).UTC().Truncate(time.Second)
+	resp := doActivityReq(t, env, aliceTok, map[string]string{
+		"since": since.Format(time.RFC3339),
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("self-query with since: got status %d, want 200", resp.StatusCode)
+	}
+	if env.auditClient.lastReq == nil {
+		t.Fatal("audit GetNotifications was not called")
+	}
+	if env.auditClient.lastReq.Since == nil {
+		t.Fatal("since query param was not threaded to the audit request")
+	}
+	got := env.auditClient.lastReq.Since.AsTime()
+	if !got.Equal(since) {
+		t.Errorf("threaded since: got %s, want %s", got, since)
+	}
+}
+
+// TestHTTP_Activity_InvalidSince400 verifies that a malformed `since` query
+// param is rejected with 400 BADREQUEST rather than silently ignored — a bad
+// timestamp is a client error, not a reason to fall back to the default window.
+func TestHTTP_Activity_InvalidSince400(t *testing.T) {
+	env := newActivityTestEnv(t)
+
+	alice := env.seedUser(env.tenantID, "human")
+	aliceTok := env.issueActivityToken(t, alice.ID, env.tenantID, false)
+
+	resp := doActivityReq(t, env, aliceTok, map[string]string{
+		"since": "not-a-timestamp",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("invalid since: got status %d, want 400", resp.StatusCode)
 	}
 }
 

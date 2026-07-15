@@ -42,16 +42,33 @@ interface ActivityResponse {
 //
 // limit controls the maximum number of events returned (default 50). The
 // backend caps this at 200.
-export function useActivity(principalUserID?: string, limit = 50) {
+//
+// since, when provided, is an RFC3339 lower bound on event time — the backend
+// threads it into the audit query so the feed is genuinely time-bounded
+// (FUT-088 #1). Omit it to get the backend's default window (7 days).
+export function useActivity(
+  principalUserID?: string,
+  limit = 50,
+  since?: string,
+) {
   return useQuery({
     // Only fire once a principalUserID is available so components can mount
     // before the caller's user ID is resolved from the auth store.
     enabled: !!principalUserID,
-    queryKey: ["access-activity", principalUserID, limit] as const,
+    queryKey: ["access-activity", principalUserID, limit, since] as const,
     queryFn: async () => {
       const { data } = await apiClient.get<ActivityResponse>(
         "/access/activity",
-        { params: { principal_user_id: principalUserID, limit } },
+        {
+          // `since` is spread conditionally so we don't send an empty param
+          // (which the backend would treat as "no bound" anyway, but keeping
+          // the query string clean avoids a spurious 400 on a "" value).
+          params: {
+            principal_user_id: principalUserID,
+            limit,
+            ...(since ? { since } : {}),
+          },
+        },
       );
       return data;
     },
