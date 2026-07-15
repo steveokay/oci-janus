@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { Bot, Check, Copy, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
+import { Bot, Check, Copy, ExternalLink, KeyRound, ShieldAlert } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -8,62 +9,68 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import { useWorkspace } from "@/lib/api/workspace";
+import { useGenerateMcpKey, type GeneratedMcpKey } from "@/lib/api/mcp";
+import { buildStdioConfig } from "@/lib/mcp-config";
 
-// MCPConnectCard — Settings › Integrations card that surfaces the registry's
-// Model Context Protocol (MCP) server so an operator can connect an AI agent
-// (Claude Desktop / Cursor) without leaving the dashboard (FUT-088 paper-cut
-// #6). Before this there was zero in-app MCP presence — the setup lived only
-// in docs/MCP.md.
+// MCPConnectCard — Settings › Integrations card that connects an AI agent
+// (Claude Desktop / Cursor) to the registry's Model Context Protocol server
+// WITHOUT the operator ever hand-assembling a credential (FUT-088 #6 + one-click
+// connect).
 //
-// The card is informational: it renders the Claude Desktop (stdio) config with
-// the live tenant id pre-filled and the API key + registry URL as placeholders
-// the operator swaps in. Admin-gated (renders null for non-admins), matching
-// the sibling PR-registry panels as defense in depth on top of the tab gate.
-
-// buildStdioConfig renders the claude_desktop_config.json snippet with the
-// live tenant id filled in. The API key and management URL stay as
-// placeholders — the key is minted per-operator at /api-keys and the external
-// URL isn't knowable from the browser.
-function buildStdioConfig(tenantID: string): string {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        "oci-janus-registry": {
-          command: "docker",
-          args: [
-            "run",
-            "-i",
-            "--rm",
-            "-e",
-            "MCP_TRANSPORT=stdio",
-            "-e",
-            "MCP_MANAGEMENT_URL=https://your-registry.example.com",
-            "-e",
-            "MCP_API_KEY=key.<uuid>.<secret>",
-            "-e",
-            `MCP_TENANT_ID=${tenantID || "<tenant-id>"}`,
-            "steveokay/oci-janus-mcp:latest",
-          ],
-        },
-      },
-    },
-    null,
-    2,
-  );
-}
+// The pain this removes: the MCP server authenticates with a `key.<id>.<secret>`
+// Bearer token, but the UI only ever showed the raw secret once and never the
+// composed token or the key UUID — so wiring MCP meant minting a key, digging
+// the id out of the app, and concatenating by hand. The "Generate" button now
+// mints a dedicated read-only service account + key and bakes the composed token
+// straight into a ready-to-paste claude_desktop_config.json.
+//
+// Admin-gated (renders null for non-admins), matching the sibling PR-registry
+// panels as defense in depth on top of the tab gate.
 
 export function MCPConnectCard(): React.ReactElement | null {
   const isAdmin = useIsGlobalAdmin();
   const { data: workspace } = useWorkspace();
+  const generate = useGenerateMcpKey();
+
+  // Registry URL the MCP container will call. Defaults to the origin the
+  // operator is browsing — for a typical single-host deployment that IS the
+  // registry URL. Editable for setups where the MCP client runs elsewhere.
+  const [url, setUrl] = React.useState<string>(() =>
+    typeof window !== "undefined" ? window.location.origin : "",
+  );
+  // The freshly-minted key, held only in memory for this session. The secret is
+  // unrecoverable once the page is left, hence the shown-once warning.
+  const [minted, setMinted] = React.useState<GeneratedMcpKey | null>(null);
   const [copied, setCopied] = React.useState(false);
 
   // Defense in depth — the tab is already admin-gated, but each panel also
   // renders null for non-admins (matches PRRegistryPanel / PRNamespacesList).
   if (!isAdmin) return null;
 
-  const config = buildStdioConfig(workspace?.tenant_id ?? "");
+  const tenantID = workspace?.tenant_id ?? "";
+  const config = buildStdioConfig({
+    tenantID,
+    managementURL: url,
+    apiKey: minted?.token ?? "",
+  });
+
+  async function onGenerate(): Promise<void> {
+    try {
+      // Date.now() only seeds the SA name + guarantees uniqueness; it never
+      // reaches a security decision, so a client clock is fine here.
+      const result = await generate.mutateAsync(Date.now());
+      setMinted(result);
+      toast.success("Read-only MCP key generated — copy the config now.");
+    } catch {
+      toast.error(
+        "Couldn't generate the key. You need workspace-admin rights and a reachable auth service.",
+      );
+    }
+  }
 
   async function onCopy(): Promise<void> {
     try {
@@ -85,43 +92,75 @@ export function MCPConnectCard(): React.ReactElement | null {
             <CardTitle className="text-base">Connect an AI agent (MCP)</CardTitle>
             <CardDescription>
               Expose this registry to Claude Desktop, Cursor, and other MCP
-              clients as read-only tools (repositories, tags, scans,
-              signatures, audit, service accounts). The agent queries live data
-              through the management API.
+              clients as read-only tools (repositories, tags, scans, signatures,
+              audit, service accounts). Generate a scoped key and paste the
+              config — no hand-assembled credentials.
             </CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <ol className="space-y-2 text-sm text-[var(--color-fg-muted)]">
-          <li>
-            <span className="font-medium text-[var(--color-fg)]">
-              1. Mint a read-only key.
-            </span>{" "}
-            Create a service account under{" "}
-            <Link
-              to="/api-keys/service-accounts"
-              className="text-[var(--color-accent)] hover:underline"
-            >
-              API keys › Service accounts
-            </Link>{" "}
-            and issue a key scoped to <code>repo:read</code>,{" "}
-            <code>scan:read</code>, <code>audit:read</code>,{" "}
-            <code>access:read</code> (and <code>signer:read</code> for
-            signature queries). Copy the <code>key.&lt;uuid&gt;.&lt;secret&gt;</code>{" "}
-            — it's shown once.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--color-fg)]">
-              2. Paste the config.
-            </span>{" "}
-            Drop the block below into your MCP client's config (Claude Desktop:{" "}
-            <code>claude_desktop_config.json</code>), swap in your registry URL
-            and the key from step 1, then restart the client. Your tenant id is
-            already filled in.
-          </li>
-        </ol>
+        {/* Step 1 — registry URL the MCP container dials. */}
+        <label className="block space-y-1">
+          <span className="text-sm font-medium text-[var(--color-fg)]">
+            Registry URL
+          </span>
+          <Input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://your-registry.example.com"
+            spellCheck={false}
+            aria-label="Registry URL"
+          />
+          <span className="text-xs text-[var(--color-fg-subtle)]">
+            The URL the MCP client reaches this registry at. Defaults to this
+            site; change it if your agent runs on a different host.
+          </span>
+        </label>
 
+        {/* Step 2 — one-click mint. */}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="accent"
+            onClick={() => void onGenerate()}
+            loading={generate.isPending}
+            disabled={generate.isPending}
+          >
+            <KeyRound className="size-4" aria-hidden />
+            {minted ? "Generate another key" : "Generate read-only key"}
+          </Button>
+          <span className="text-xs text-[var(--color-fg-subtle)]">
+            Creates a dedicated read-only service account + key and fills it into
+            the config below.
+          </span>
+        </div>
+
+        {/* Shown-once warning — only after a key exists. */}
+        {minted ? (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warning-border)] bg-[var(--color-warning-subtle)] p-3 text-xs text-[var(--color-warning)]">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <div className="space-y-1">
+              <p className="font-medium">
+                Copy this now — the secret is shown only once.
+              </p>
+              <p className="text-[var(--color-fg-muted)]">
+                It isn't stored and cannot be retrieved later. Created service
+                account{" "}
+                <code className="font-mono">{minted.saName}</code> — manage or
+                revoke it under{" "}
+                <Link
+                  to="/api-keys/service-accounts"
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  API keys › Service accounts
+                </Link>
+                .
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {/* The config block — placeholder key before generation, real token after. */}
         <div className="group relative">
           <pre className="overflow-x-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-inset)] p-3 text-xs leading-relaxed">
             <code>{config}</code>
@@ -139,6 +178,12 @@ export function MCPConnectCard(): React.ReactElement | null {
             )}
           </button>
         </div>
+
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          Paste the block into your MCP client's config (Claude Desktop:{" "}
+          <code>claude_desktop_config.json</code>) and restart the client. Your
+          tenant id is already filled in.
+        </p>
 
         <a
           href="https://steveokay.github.io/oci-janus/integrations/mcp/"
