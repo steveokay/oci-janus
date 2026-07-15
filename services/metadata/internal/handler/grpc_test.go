@@ -57,6 +57,19 @@ type fakeRepo struct {
 	updateQuotaResult *metadatav1.Repository
 	updateQuotaErr    error
 
+	// RenameRepository — result/err plus captured new_name so tests can
+	// assert the handler threaded the argument through unchanged.
+	renameRepoResult  *metadatav1.Repository
+	renameRepoErr     error
+	renameRepoNewName string
+	renameRepoCalls   int
+
+	// TransferRepository — result/err plus captured dest_org.
+	transferRepoResult  *metadatav1.Repository
+	transferRepoErr     error
+	transferRepoDestOrg string
+	transferRepoCalls   int
+
 	// FUT-021 — captured *int32 arg passed to UpdateRepositoryCVSSPolicy
 	// so tests can assert the "clear vs set" wire semantics. Call count
 	// exists to prove the handler skipped the repo dispatch on
@@ -455,6 +468,18 @@ func (f *fakeRepo) UpdateRepositoryImmutability(_ context.Context, _, _ string, 
 // error paths without new fields.
 func (f *fakeRepo) UpdateRepositoryVisibility(_ context.Context, _, _ string, _ bool) (*metadatav1.Repository, error) {
 	return f.updateQuotaResult, f.updateQuotaErr
+}
+
+func (f *fakeRepo) RenameRepository(_ context.Context, _, _, newName string) (*metadatav1.Repository, error) {
+	f.renameRepoCalls++
+	f.renameRepoNewName = newName
+	return f.renameRepoResult, f.renameRepoErr
+}
+
+func (f *fakeRepo) TransferRepository(_ context.Context, _, _, destOrg string) (*metadatav1.Repository, error) {
+	f.transferRepoCalls++
+	f.transferRepoDestOrg = destOrg
+	return f.transferRepoResult, f.transferRepoErr
 }
 
 // Signed-image admission (futures.md Tier 1 #3) — same fake shape as
@@ -963,6 +988,120 @@ func TestGetRepository_repoError_returnsInternal(t *testing.T) {
 
 	_, err := h.GetRepository(context.Background(), &metadatav1.GetRepositoryRequest{TenantId: "t1", RepoId: "r1"})
 	requireCode(t, err, codes.Internal)
+}
+
+// ── RenameRepository ──────────────────────────────────────────────────────────
+
+// TestRenameRepository_happyPath threads the new name to the repo and echoes
+// the renamed row back.
+func TestRenameRepository_happyPath(t *testing.T) {
+	want := &metadatav1.Repository{RepoId: "r1", Name: "renamed"}
+	f := &fakeRepo{renameRepoResult: want}
+	h := newHandler(f)
+
+	got, err := h.RenameRepository(context.Background(), &metadatav1.RenameRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", NewName: "renamed",
+	})
+	requireNoErr(t, err)
+	if got.GetName() != "renamed" {
+		t.Errorf("name: got %q, want %q", got.GetName(), "renamed")
+	}
+	if f.renameRepoNewName != "renamed" {
+		t.Errorf("captured new_name: got %q, want %q", f.renameRepoNewName, "renamed")
+	}
+}
+
+// TestRenameRepository_emptyName short-circuits with InvalidArgument before
+// touching the repo.
+func TestRenameRepository_emptyName_returnsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+
+	_, err := h.RenameRepository(context.Background(), &metadatav1.RenameRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", NewName: "",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if f.renameRepoCalls != 0 {
+		t.Errorf("repo should not be called on empty name; got %d calls", f.renameRepoCalls)
+	}
+}
+
+// TestRenameRepository_collision maps the UNIQUE(org_id, name) sentinel to
+// AlreadyExists.
+func TestRenameRepository_collision_returnsAlreadyExists(t *testing.T) {
+	h := newHandler(&fakeRepo{renameRepoErr: repository.ErrAlreadyExists})
+
+	_, err := h.RenameRepository(context.Background(), &metadatav1.RenameRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", NewName: "taken",
+	})
+	requireCode(t, err, codes.AlreadyExists)
+}
+
+// TestRenameRepository_notFound maps ErrNotFound to NotFound.
+func TestRenameRepository_notFound_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{renameRepoErr: repository.ErrNotFound})
+
+	_, err := h.RenameRepository(context.Background(), &metadatav1.RenameRepositoryRequest{
+		TenantId: "t1", RepoId: "missing", NewName: "renamed",
+	})
+	requireCode(t, err, codes.NotFound)
+}
+
+// ── TransferRepository ────────────────────────────────────────────────────────
+
+// TestTransferRepository_happyPath threads dest_org through and echoes the
+// re-parented row back.
+func TestTransferRepository_happyPath(t *testing.T) {
+	want := &metadatav1.Repository{RepoId: "r1", Org: "neworg", Name: "neworg/repo"}
+	f := &fakeRepo{transferRepoResult: want}
+	h := newHandler(f)
+
+	got, err := h.TransferRepository(context.Background(), &metadatav1.TransferRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", DestOrg: "neworg",
+	})
+	requireNoErr(t, err)
+	if got.GetOrg() != "neworg" {
+		t.Errorf("org: got %q, want %q", got.GetOrg(), "neworg")
+	}
+	if f.transferRepoDestOrg != "neworg" {
+		t.Errorf("captured dest_org: got %q, want %q", f.transferRepoDestOrg, "neworg")
+	}
+}
+
+// TestTransferRepository_emptyDest short-circuits with InvalidArgument.
+func TestTransferRepository_emptyDest_returnsInvalidArgument(t *testing.T) {
+	f := &fakeRepo{}
+	h := newHandler(f)
+
+	_, err := h.TransferRepository(context.Background(), &metadatav1.TransferRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", DestOrg: "",
+	})
+	requireCode(t, err, codes.InvalidArgument)
+	if f.transferRepoCalls != 0 {
+		t.Errorf("repo should not be called on empty dest; got %d calls", f.transferRepoCalls)
+	}
+}
+
+// TestTransferRepository_destOrgMissing maps ErrNotFound (from the org lookup)
+// to NotFound.
+func TestTransferRepository_destOrgMissing_returnsNotFound(t *testing.T) {
+	h := newHandler(&fakeRepo{transferRepoErr: repository.ErrNotFound})
+
+	_, err := h.TransferRepository(context.Background(), &metadatav1.TransferRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", DestOrg: "ghost",
+	})
+	requireCode(t, err, codes.NotFound)
+}
+
+// TestTransferRepository_collision maps the UNIQUE(org_id, name) sentinel to
+// AlreadyExists.
+func TestTransferRepository_collision_returnsAlreadyExists(t *testing.T) {
+	h := newHandler(&fakeRepo{transferRepoErr: repository.ErrAlreadyExists})
+
+	_, err := h.TransferRepository(context.Background(), &metadatav1.TransferRepositoryRequest{
+		TenantId: "t1", RepoId: "r1", DestOrg: "neworg",
+	})
+	requireCode(t, err, codes.AlreadyExists)
 }
 
 // ── GetRepositoryByName ───────────────────────────────────────────────────────

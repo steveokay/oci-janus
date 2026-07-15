@@ -37,6 +37,8 @@ type metadataRepo interface {
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
 	UpdateRepositoryVisibility(ctx context.Context, tenantID, repoID string, isPublic bool) (*metadatav1.Repository, error)
+	RenameRepository(ctx context.Context, tenantID, repoID, newName string) (*metadatav1.Repository, error)
+	TransferRepository(ctx context.Context, tenantID, repoID, destOrg string) (*metadatav1.Repository, error)
 	UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error)
 	// FUT-021 — CVSS-gated admission. Pointer semantics on maxCVSS:
 	// nil = clear the threshold (SQL NULL), non-nil = set it. Range
@@ -390,6 +392,41 @@ func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req 
 // path sees the new visibility on the next request instead of a stale value.
 func (h *MetadataHandler) UpdateRepositoryVisibility(ctx context.Context, req *metadatav1.UpdateRepositoryVisibilityRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositoryVisibility(ctx, req.GetTenantId(), req.GetRepoId(), req.GetIsPublic())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return repo, mapErr(err)
+}
+
+// RenameRepository changes a repo's name within its current org. Structural
+// pass-through: the BFF gates on repo admin, validates the new name against the
+// allowlist, and — critically — performs the follow-up RBAC scope-string
+// rewrite (role_assignments in registry-auth key on "org/name"). This handler
+// only re-checks non-emptiness. Bust the GetRepository cache so services/core
+// and by-name lookups see the new name on the next request. A UNIQUE(org_id,
+// name) collision surfaces as AlreadyExists via mapErr.
+func (h *MetadataHandler) RenameRepository(ctx context.Context, req *metadatav1.RenameRepositoryRequest) (*metadatav1.Repository, error) {
+	if req.GetNewName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "new_name is required")
+	}
+	repo, err := h.repo.RenameRepository(ctx, req.GetTenantId(), req.GetRepoId(), req.GetNewName())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return repo, mapErr(err)
+}
+
+// TransferRepository re-parents a repo to a different org. Structural
+// pass-through: the BFF gates on repo admin AND admin on the destination org,
+// and performs the follow-up RBAC scope rewrite ("oldorg/name" → "neworg/name").
+// This handler re-checks non-emptiness of dest_org. Bust the GetRepository
+// cache on success. A missing destination org maps to NotFound and a name
+// collision in the destination org to AlreadyExists (both via mapErr).
+func (h *MetadataHandler) TransferRepository(ctx context.Context, req *metadatav1.TransferRepositoryRequest) (*metadatav1.Repository, error) {
+	if req.GetDestOrg() == "" {
+		return nil, status.Error(codes.InvalidArgument, "dest_org is required")
+	}
+	repo, err := h.repo.TransferRepository(ctx, req.GetTenantId(), req.GetRepoId(), req.GetDestOrg())
 	if err == nil {
 		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
 	}
