@@ -25,6 +25,7 @@ const (
 	AuthService_GetUserPermissions_FullMethodName    = "/registry.auth.v1.AuthService/GetUserPermissions"
 	AuthService_GrantRole_FullMethodName             = "/registry.auth.v1.AuthService/GrantRole"
 	AuthService_RevokeRole_FullMethodName            = "/registry.auth.v1.AuthService/RevokeRole"
+	AuthService_RewriteRepoRoleScopes_FullMethodName = "/registry.auth.v1.AuthService/RewriteRepoRoleScopes"
 	AuthService_ListMembers_FullMethodName           = "/registry.auth.v1.AuthService/ListMembers"
 	AuthService_CountTenantUsers_FullMethodName      = "/registry.auth.v1.AuthService/CountTenantUsers"
 	AuthService_LookupUsernames_FullMethodName       = "/registry.auth.v1.AuthService/LookupUsernames"
@@ -57,6 +58,11 @@ type AuthServiceClient interface {
 	GetUserPermissions(ctx context.Context, in *GetUserPermissionsRequest, opts ...grpc.CallOption) (*GetUserPermissionsResponse, error)
 	GrantRole(ctx context.Context, in *GrantRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// RewriteRepoRoleScopes migrates every repo-scoped role assignment from an
+	// old "org/repo" scope string to a new one (tenant-scoped, idempotent). The
+	// management BFF calls it when a repository is renamed or transferred so
+	// repo-specific grants follow the repo instead of being silently orphaned.
+	RewriteRepoRoleScopes(ctx context.Context, in *RewriteRepoRoleScopesRequest, opts ...grpc.CallOption) (*RewriteRepoRoleScopesResponse, error)
 	ListMembers(ctx context.Context, in *ListMembersRequest, opts ...grpc.CallOption) (*ListMembersResponse, error)
 	// CountTenantUsers (FE-API-028) returns the number of distinct user accounts
 	// belonging to the tenant. Used by the admin tenant-detail composition; the
@@ -190,6 +196,16 @@ func (c *authServiceClient) RevokeRole(ctx context.Context, in *RevokeRoleReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, AuthService_RevokeRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) RewriteRepoRoleScopes(ctx context.Context, in *RewriteRepoRoleScopesRequest, opts ...grpc.CallOption) (*RewriteRepoRoleScopesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RewriteRepoRoleScopesResponse)
+	err := c.cc.Invoke(ctx, AuthService_RewriteRepoRoleScopes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +404,11 @@ type AuthServiceServer interface {
 	GetUserPermissions(context.Context, *GetUserPermissionsRequest) (*GetUserPermissionsResponse, error)
 	GrantRole(context.Context, *GrantRoleRequest) (*emptypb.Empty, error)
 	RevokeRole(context.Context, *RevokeRoleRequest) (*emptypb.Empty, error)
+	// RewriteRepoRoleScopes migrates every repo-scoped role assignment from an
+	// old "org/repo" scope string to a new one (tenant-scoped, idempotent). The
+	// management BFF calls it when a repository is renamed or transferred so
+	// repo-specific grants follow the repo instead of being silently orphaned.
+	RewriteRepoRoleScopes(context.Context, *RewriteRepoRoleScopesRequest) (*RewriteRepoRoleScopesResponse, error)
 	ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error)
 	// CountTenantUsers (FE-API-028) returns the number of distinct user accounts
 	// belonging to the tenant. Used by the admin tenant-detail composition; the
@@ -487,6 +508,9 @@ func (UnimplementedAuthServiceServer) GrantRole(context.Context, *GrantRoleReque
 }
 func (UnimplementedAuthServiceServer) RevokeRole(context.Context, *RevokeRoleRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevokeRole not implemented")
+}
+func (UnimplementedAuthServiceServer) RewriteRepoRoleScopes(context.Context, *RewriteRepoRoleScopesRequest) (*RewriteRepoRoleScopesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RewriteRepoRoleScopes not implemented")
 }
 func (UnimplementedAuthServiceServer) ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMembers not implemented")
@@ -640,6 +664,24 @@ func _AuthService_RevokeRole_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AuthServiceServer).RevokeRole(ctx, req.(*RevokeRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AuthService_RewriteRepoRoleScopes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RewriteRepoRoleScopesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).RewriteRepoRoleScopes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_RewriteRepoRoleScopes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).RewriteRepoRoleScopes(ctx, req.(*RewriteRepoRoleScopesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -994,6 +1036,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeRole",
 			Handler:    _AuthService_RevokeRole_Handler,
+		},
+		{
+			MethodName: "RewriteRepoRoleScopes",
+			Handler:    _AuthService_RewriteRepoRoleScopes_Handler,
 		},
 		{
 			MethodName: "ListMembers",

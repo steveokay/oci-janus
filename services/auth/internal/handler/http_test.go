@@ -49,6 +49,11 @@ type handlerFakeUserRepo struct {
 	// round-trip enrolment (SetPendingMFASecret → GetMFAState) and seed an
 	// already-enabled user. A user with no entry is treated as not enrolled.
 	mfa map[uuid.UUID]*repository.MFAState
+	// rewriteScopesResult / rewriteScopesErr let RewriteRepoRoleScopes tests
+	// stub the count + error; rewriteScopesCalls records the (old,new) args.
+	rewriteScopesResult int64
+	rewriteScopesErr    error
+	rewriteScopesCalls  [][2]string
 }
 
 func newHandlerFakeUserRepo() *handlerFakeUserRepo {
@@ -244,6 +249,10 @@ func (f *handlerFakeUserRepo) GrantRole(_ context.Context, _ repository.RoleAssi
 func (f *handlerFakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (f *handlerFakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
+}
+func (f *handlerFakeUserRepo) RewriteRepoRoleScopes(_ context.Context, _ uuid.UUID, oldScope, newScope string) (int64, error) {
+	f.rewriteScopesCalls = append(f.rewriteScopesCalls, [2]string{oldScope, newScope})
+	return f.rewriteScopesResult, f.rewriteScopesErr
 }
 func (f *handlerFakeUserRepo) CountByTenant(_ context.Context, _ uuid.UUID) (int64, error) {
 	return int64(len(f.users)), nil

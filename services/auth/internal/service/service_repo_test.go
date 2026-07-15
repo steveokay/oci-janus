@@ -252,6 +252,9 @@ func (f *fakeUserRepo) RevokeRole(_ context.Context, _, _ uuid.UUID) error { ret
 func (f *fakeUserRepo) RevokeRoleScoped(_ context.Context, _, _ uuid.UUID, _, _ string) error {
 	return nil
 }
+func (f *fakeUserRepo) RewriteRepoRoleScopes(_ context.Context, _ uuid.UUID, _, _ string) (int64, error) {
+	return 0, nil
+}
 func (f *fakeUserRepo) ListMembers(_ context.Context, _ uuid.UUID, _, _ string) ([]repository.Member, error) {
 	return nil, nil
 }
