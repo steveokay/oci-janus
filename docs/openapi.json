@@ -3701,6 +3701,55 @@
         ]
       }
     },
+    "/api/v1/repositories/{org}/{repo}/rename": {
+      "post": {
+        "operationId": "post_api_v1_repositories_org_repo_rename",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "POST /api/v1/repositories/{org}/{repo}/rename",
+        "tags": [
+          "repositories"
+        ]
+      }
+    },
     "/api/v1/repositories/{org}/{repo}/scan": {
       "post": {
         "operationId": "post_api_v1_repositories_org_repo_scan",

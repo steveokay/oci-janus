@@ -200,3 +200,45 @@ export function useUpdateRepository() {
     },
   });
 }
+
+// POST /repositories/{org}/{repo}/rename — renames the repo within its org and
+// migrates repo-scoped RBAC grants. Distinct route (not the PATCH) because it
+// spans two services (metadata + auth) and returns rename-specific metadata:
+// the count of role grants migrated and a partial-success warning.
+interface RenameRepoArgs {
+  org: string;
+  repo: string;
+  new_name: string;
+}
+
+// RenameRepoResponse is the repo shape plus the two rename-specific fields the
+// BFF adds. `rbac_warning` is non-empty only on partial success — the rename
+// committed but the follow-up scope rewrite failed — so the UI can surface a
+// "re-grant permissions manually" nudge without a second request.
+export interface RenameRepoResponse extends Repository {
+  roles_rewritten: number;
+  rbac_warning?: string;
+}
+
+export function useRenameRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      org,
+      repo,
+      new_name,
+    }: RenameRepoArgs): Promise<RenameRepoResponse> => {
+      const { data } = await apiClient.post<RenameRepoResponse>(
+        `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/rename`,
+        { new_name },
+      );
+      return data;
+    },
+    // Invalidate broadly — the old detail key is now stale (the repo lives at a
+    // new name) and every list that referenced the old name must refetch.
+    onSuccess: (_, { org, repo }) => {
+      void qc.invalidateQueries({ queryKey: repoKeys.detail(org, repo) });
+      void qc.invalidateQueries({ queryKey: repoKeys.all });
+    },
+  });
+}
