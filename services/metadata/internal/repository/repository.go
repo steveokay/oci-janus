@@ -542,6 +542,70 @@ func (r *Repository) UpdateRepositoryVisibility(ctx context.Context, tenantID, r
 	return r.scanOneRepo(ctx, q, isPublic, repoID, tenantID)
 }
 
+// RenameRepository changes a repo's name within its current org. The storage
+// layer is repo_id-keyed (manifests/tags reference repo_id, blobs are
+// content-addressed) so nothing beyond the row's name column moves. Same
+// CTE-then-join shape as the other repo mutators so the response carries the
+// full read shape (incl. max_cvss_score in RETURNING). A collision on the
+// UNIQUE(org_id, name) constraint maps to ErrAlreadyExists so the handler can
+// surface codes.AlreadyExists; the RBAC scope-string rewrite is the caller's
+// (management BFF) responsibility.
+func (r *Repository) RenameRepository(ctx context.Context, tenantID, repoID, newName string) (*metadatav1.Repository, error) {
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET name = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	repo, err := r.scanOneRepo(ctx, q, newName, repoID, tenantID)
+	if err != nil {
+		// A name clash with a sibling repo in the same org trips the
+		// UNIQUE(org_id, name) constraint — normalise to the sentinel so
+		// the handler returns AlreadyExists rather than a raw 5xx.
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyExists
+		}
+		return nil, err
+	}
+	return repo, nil
+}
+
+// TransferRepository re-parents a repo to destOrg (an org name). It resolves
+// the destination org id first (ErrNotFound when the org does not exist), then
+// updates org_id. Same storage-safety reasoning as RenameRepository — only the
+// row's org_id changes, blobs stay content-addressed. A name collision in the
+// destination org trips UNIQUE(org_id, name) → ErrAlreadyExists. The RBAC
+// scope-string rewrite from "oldorg/name" to "neworg/name" is the caller's
+// (management BFF) responsibility.
+func (r *Repository) TransferRepository(ctx context.Context, tenantID, repoID, destOrg string) (*metadatav1.Repository, error) {
+	destOrgID, err := r.LookupOrgIDByName(ctx, tenantID, destOrg)
+	if err != nil {
+		// LookupOrgIDByName already returns ErrNotFound when the org is
+		// absent; propagate it so the handler answers NotFound.
+		return nil, err
+	}
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET org_id = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	repo, err := r.scanOneRepo(ctx, q, destOrgID, repoID, tenantID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyExists
+		}
+		return nil, err
+	}
+	return repo, nil
+}
+
 // UpdateTagImmutable flips the per-tag pin. Independent of the repo-wide
 // `immutable_tags` flag — a pinned tag stays locked even when the parent
 // repo is mutable. Returns the updated Tag so the caller can echo state

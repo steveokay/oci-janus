@@ -28,6 +28,19 @@ service MetadataService {
   // and so the GetRepository cache is busted (services/core reads is_public
   // on the anonymous-pull path).
   rpc UpdateRepositoryVisibility(UpdateRepositoryVisibilityRequest) returns (Repository);
+  // RenameRepository changes a repo's `name` within its current org. The
+  // storage layer is repo_id-keyed (manifests/tags reference repo_id, blobs
+  // are content-addressed) so no blob re-keying is needed. The management BFF
+  // is responsible for the follow-up RBAC scope rewrite (role_assignments in
+  // registry-auth key on the "org/name" string). Collides on the
+  // UNIQUE(org_id, name) constraint → AlreadyExists.
+  rpc RenameRepository(RenameRepositoryRequest) returns (Repository);
+  // TransferRepository moves a repo to a different org by changing `org_id`.
+  // Same storage-safety reasoning as RenameRepository. The destination org
+  // must exist (NotFound otherwise) and must not already hold a repo of the
+  // same name (AlreadyExists). The BFF performs the follow-up RBAC scope
+  // rewrite from "oldorg/name" to "neworg/name".
+  rpc TransferRepository(TransferRepositoryRequest) returns (Repository);
   // Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
   // `require_signature` flag. Separate RPC from UpdateRepository for
   // the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -513,6 +526,25 @@ message UpdateRepositoryVisibilityRequest {
   string repo_id   = 1;
   string tenant_id = 2;
   bool   is_public = 3;
+}
+
+// RenameRepository changes a repo's name within its current org. new_name is
+// validated against the repository-name allowlist at the BFF layer; the
+// metadata handler re-validates non-emptiness. A collision on
+// UNIQUE(org_id, name) surfaces as AlreadyExists.
+message RenameRepositoryRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+  string new_name  = 3;
+}
+
+// TransferRepository moves a repo to dest_org (an org name, not id). The
+// handler resolves the destination org id, verifies it exists, and re-parents
+// the repo. A name collision in the destination org surfaces as AlreadyExists.
+message TransferRepositoryRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+  string dest_org  = 3;
 }
 
 // Signed-image admission (futures.md Tier 1 #3). `require_signature=true`

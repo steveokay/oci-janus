@@ -29,6 +29,8 @@ const (
 	MetadataService_UpdateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateRepository"
 	MetadataService_UpdateRepositoryImmutability_FullMethodName    = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
 	MetadataService_UpdateRepositoryVisibility_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateRepositoryVisibility"
+	MetadataService_RenameRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/RenameRepository"
+	MetadataService_TransferRepository_FullMethodName              = "/registry.metadata.v1.MetadataService/TransferRepository"
 	MetadataService_UpdateRepositorySignaturePolicy_FullMethodName = "/registry.metadata.v1.MetadataService/UpdateRepositorySignaturePolicy"
 	MetadataService_UpdateRepositoryCVSSPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateRepositoryCVSSPolicy"
 	MetadataService_ListRepositoryTrustedKeys_FullMethodName       = "/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys"
@@ -108,6 +110,19 @@ type MetadataServiceClient interface {
 	// and so the GetRepository cache is busted (services/core reads is_public
 	// on the anonymous-pull path).
 	UpdateRepositoryVisibility(ctx context.Context, in *UpdateRepositoryVisibilityRequest, opts ...grpc.CallOption) (*Repository, error)
+	// RenameRepository changes a repo's `name` within its current org. The
+	// storage layer is repo_id-keyed (manifests/tags reference repo_id, blobs
+	// are content-addressed) so no blob re-keying is needed. The management BFF
+	// is responsible for the follow-up RBAC scope rewrite (role_assignments in
+	// registry-auth key on the "org/name" string). Collides on the
+	// UNIQUE(org_id, name) constraint → AlreadyExists.
+	RenameRepository(ctx context.Context, in *RenameRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
+	// TransferRepository moves a repo to a different org by changing `org_id`.
+	// Same storage-safety reasoning as RenameRepository. The destination org
+	// must exist (NotFound otherwise) and must not already hold a repo of the
+	// same name (AlreadyExists). The BFF performs the follow-up RBAC scope
+	// rewrite from "oldorg/name" to "neworg/name".
+	TransferRepository(ctx context.Context, in *TransferRepositoryRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -449,6 +464,26 @@ func (c *metadataServiceClient) UpdateRepositoryVisibility(ctx context.Context, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryVisibility_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) RenameRepository(ctx context.Context, in *RenameRepositoryRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_RenameRepository_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) TransferRepository(ctx context.Context, in *TransferRepositoryRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_TransferRepository_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1087,6 +1122,19 @@ type MetadataServiceServer interface {
 	// and so the GetRepository cache is busted (services/core reads is_public
 	// on the anonymous-pull path).
 	UpdateRepositoryVisibility(context.Context, *UpdateRepositoryVisibilityRequest) (*Repository, error)
+	// RenameRepository changes a repo's `name` within its current org. The
+	// storage layer is repo_id-keyed (manifests/tags reference repo_id, blobs
+	// are content-addressed) so no blob re-keying is needed. The management BFF
+	// is responsible for the follow-up RBAC scope rewrite (role_assignments in
+	// registry-auth key on the "org/name" string). Collides on the
+	// UNIQUE(org_id, name) constraint → AlreadyExists.
+	RenameRepository(context.Context, *RenameRepositoryRequest) (*Repository, error)
+	// TransferRepository moves a repo to a different org by changing `org_id`.
+	// Same storage-safety reasoning as RenameRepository. The destination org
+	// must exist (NotFound otherwise) and must not already hold a repo of the
+	// same name (AlreadyExists). The BFF performs the follow-up RBAC scope
+	// rewrite from "oldorg/name" to "neworg/name".
+	TransferRepository(context.Context, *TransferRepositoryRequest) (*Repository, error)
 	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -1343,6 +1391,12 @@ func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.C
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositoryVisibility(context.Context, *UpdateRepositoryVisibilityRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryVisibility not implemented")
+}
+func (UnimplementedMetadataServiceServer) RenameRepository(context.Context, *RenameRepositoryRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenameRepository not implemented")
+}
+func (UnimplementedMetadataServiceServer) TransferRepository(context.Context, *TransferRepositoryRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TransferRepository not implemented")
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositorySignaturePolicy not implemented")
@@ -1679,6 +1733,42 @@ func _MetadataService_UpdateRepositoryVisibility_Handler(srv interface{}, ctx co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositoryVisibility(ctx, req.(*UpdateRepositoryVisibilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_RenameRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).RenameRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_RenameRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).RenameRepository(ctx, req.(*RenameRepositoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_TransferRepository_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferRepositoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).TransferRepository(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_TransferRepository_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).TransferRepository(ctx, req.(*TransferRepositoryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2702,6 +2792,14 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositoryVisibility",
 			Handler:    _MetadataService_UpdateRepositoryVisibility_Handler,
+		},
+		{
+			MethodName: "RenameRepository",
+			Handler:    _MetadataService_RenameRepository_Handler,
+		},
+		{
+			MethodName: "TransferRepository",
+			Handler:    _MetadataService_TransferRepository_Handler,
 		},
 		{
 			MethodName: "UpdateRepositorySignaturePolicy",
