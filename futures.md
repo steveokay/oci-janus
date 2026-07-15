@@ -237,7 +237,7 @@ quickly in real operator workflows.
   BFF route. Returns repos, tags, manifests, recent scans matching the
   query. Postgres `pg_trgm` or full-text index on the relevant columns.
 
-### 2. Repo settings page — General section DONE (2026-07-15); rename + transfer remain
+### 2. Repo settings page — General section DONE (2026-07-15), incl. rename + transfer
 - **Why:** `/repositories/$org/$repo` Settings tab showed an EmptyState
   placeholder. Quota override, description, visibility toggle, tag-immutability
   flag, signature policy all belong here.
@@ -255,19 +255,30 @@ quickly in real operator workflows.
   - **Quota override** — wired the previously-orphaned `UpdateRepositoryQuota`
     RPC through a BFF `storage_quota_bytes` three-state + `RepoQuotaSection`
     (GB/TB input) (#360).
-- **Still open — rename + transfer.** Both need net-new metadata RPCs **plus
-  manifest-storage re-keying** (`manifests/<tenant_id>/<repo_encoded>/...` is
-  keyed by repo name; blobs are digest-keyed so they're safe). That storage
-  migration makes them materially riskier than the metadata-only General
-  editors — deliberately deferred.
-  - **Rename** — change the repo's slug under the **same org**. Needs a
-    metadata RPC that rewrites `repositories.name` + re-keys the manifest
-    storage prefix; must reject collisions and preserve immutability/signature
-    state.
-  - **Transfer** — move the repo to **another org the caller belongs to**.
-    Needs a metadata RPC that reparents `org_id` (+ manifest-storage-prefix
-    migration) with an authz check that the caller holds admin on **both**
-    source and destination orgs.
+- **Shipped 2026-07-15 (PRs #363 / #364 / #365 / #367) — rename + transfer.**
+  The earlier "manifest-storage re-keying" worry was **wrong**: manifests and
+  tags are `repo_id`-keyed (UUID FK), blobs are content-addressed
+  (`blobs/<tenant_id>/sha256/...`), and the `manifests/<tenant_id>/<repo_encoded>/...`
+  layout in `docs/SERVICES.md` is documented-but-not-implemented (vestigial).
+  So both operations are **storage-safe** — the only cross-service concern is
+  the RBAC scope strings (`role_assignments.scope_value` = `"org/repo"` NAME
+  string in registry-auth), which orphan silently if not migrated. Both flows
+  use a two-step orchestration: the durable metadata change commits first, then
+  a best-effort `auth.RewriteRepoRoleScopes` migrates the scope strings — a
+  failure there surfaces as an `rbac_warning` in the 200 response rather than
+  rolling back (same posture as re-sign-on-promote).
+  - **Rename** — change the repo's slug under the **same org**. Metadata
+    `RenameRepository` RPC (#364, `UPDATE repositories.name`, collision →
+    `AlreadyExists`) + BFF `POST /rename` (admin-gated, #365) then
+    `auth.RewriteRepoRoleScopes("org/old" → "org/new")` (#363). FE
+    `RepoRenameSection` (inline input + confirm dialog + navigate).
+  - **Transfer** — move the repo to **another org**. Metadata
+    `TransferRepository` RPC (#364, reparents `org_id`, dest-org existence
+    check + collision → `AlreadyExists`) + BFF `POST /transfer` gated on admin
+    of **both** source repo and destination org (#367). FE
+    `RepoTransferSection` (dest-org picker). Live-verified: renamed + transferred
+    repos keep their `repo_id`, resolve at the new path, 404 at the old, and
+    their repo-scoped grants follow the move.
 - **Not per-repo yet:** webhook subscriptions are tenant-scoped only
   (`Endpoint` has `tenant_id`, no `repo_id`); a per-repo subscription surface
   would need a proto change to scope + filter endpoints.
