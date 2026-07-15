@@ -28,6 +28,7 @@ const (
 	MetadataService_UpdateRepositoryQuota_FullMethodName           = "/registry.metadata.v1.MetadataService/UpdateRepositoryQuota"
 	MetadataService_UpdateRepository_FullMethodName                = "/registry.metadata.v1.MetadataService/UpdateRepository"
 	MetadataService_UpdateRepositoryImmutability_FullMethodName    = "/registry.metadata.v1.MetadataService/UpdateRepositoryImmutability"
+	MetadataService_UpdateRepositoryVisibility_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateRepositoryVisibility"
 	MetadataService_UpdateRepositorySignaturePolicy_FullMethodName = "/registry.metadata.v1.MetadataService/UpdateRepositorySignaturePolicy"
 	MetadataService_UpdateRepositoryCVSSPolicy_FullMethodName      = "/registry.metadata.v1.MetadataService/UpdateRepositoryCVSSPolicy"
 	MetadataService_ListRepositoryTrustedKeys_FullMethodName       = "/registry.metadata.v1.MetadataService/ListRepositoryTrustedKeys"
@@ -101,6 +102,12 @@ type MetadataServiceClient interface {
 	// audit trail records the security-relevant change explicitly
 	// (description edits stay on the existing path).
 	UpdateRepositoryImmutability(ctx context.Context, in *UpdateRepositoryImmutabilityRequest, opts ...grpc.CallOption) (*Repository, error)
+	// Visibility (futures.md Tier 2 #2) — flips the repo-wide `is_public`
+	// flag. Public repos allow anonymous pull; private require auth. Separate
+	// RPC from UpdateRepository so the access-relevant change is audit-legible,
+	// and so the GetRepository cache is busted (services/core reads is_public
+	// on the anonymous-pull path).
+	UpdateRepositoryVisibility(ctx context.Context, in *UpdateRepositoryVisibilityRequest, opts ...grpc.CallOption) (*Repository, error)
 	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -432,6 +439,16 @@ func (c *metadataServiceClient) UpdateRepositoryImmutability(ctx context.Context
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Repository)
 	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryImmutability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metadataServiceClient) UpdateRepositoryVisibility(ctx context.Context, in *UpdateRepositoryVisibilityRequest, opts ...grpc.CallOption) (*Repository, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Repository)
+	err := c.cc.Invoke(ctx, MetadataService_UpdateRepositoryVisibility_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,6 +1081,12 @@ type MetadataServiceServer interface {
 	// audit trail records the security-relevant change explicitly
 	// (description edits stay on the existing path).
 	UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error)
+	// Visibility (futures.md Tier 2 #2) — flips the repo-wide `is_public`
+	// flag. Public repos allow anonymous pull; private require auth. Separate
+	// RPC from UpdateRepository so the access-relevant change is audit-legible,
+	// and so the GetRepository cache is busted (services/core reads is_public
+	// on the anonymous-pull path).
+	UpdateRepositoryVisibility(context.Context, *UpdateRepositoryVisibilityRequest) (*Repository, error)
 	// Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
 	// `require_signature` flag. Separate RPC from UpdateRepository for
 	// the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -1317,6 +1340,9 @@ func (UnimplementedMetadataServiceServer) UpdateRepository(context.Context, *Upd
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositoryImmutability(context.Context, *UpdateRepositoryImmutabilityRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryImmutability not implemented")
+}
+func (UnimplementedMetadataServiceServer) UpdateRepositoryVisibility(context.Context, *UpdateRepositoryVisibilityRequest) (*Repository, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryVisibility not implemented")
 }
 func (UnimplementedMetadataServiceServer) UpdateRepositorySignaturePolicy(context.Context, *UpdateRepositorySignaturePolicyRequest) (*Repository, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositorySignaturePolicy not implemented")
@@ -1635,6 +1661,24 @@ func _MetadataService_UpdateRepositoryImmutability_Handler(srv interface{}, ctx 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MetadataServiceServer).UpdateRepositoryImmutability(ctx, req.(*UpdateRepositoryImmutabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetadataService_UpdateRepositoryVisibility_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryVisibilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetadataServiceServer).UpdateRepositoryVisibility(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetadataService_UpdateRepositoryVisibility_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetadataServiceServer).UpdateRepositoryVisibility(ctx, req.(*UpdateRepositoryVisibilityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2654,6 +2698,10 @@ var MetadataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateRepositoryImmutability",
 			Handler:    _MetadataService_UpdateRepositoryImmutability_Handler,
+		},
+		{
+			MethodName: "UpdateRepositoryVisibility",
+			Handler:    _MetadataService_UpdateRepositoryVisibility_Handler,
 		},
 		{
 			MethodName: "UpdateRepositorySignaturePolicy",

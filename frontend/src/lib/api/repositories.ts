@@ -158,6 +158,10 @@ interface UpdateRepoArgs {
   // PATCH that touches only another field never resets the quota; the BFF
   // routes a present value to the dedicated UpdateRepositoryQuota RPC.
   storage_quota_bytes?: number;
+  // Visibility (Tier 2 #2). true = anonymous pull allowed, false = auth
+  // required. Omitted when undefined so an unrelated PATCH never flips it;
+  // a present value routes to the dedicated UpdateRepositoryVisibility RPC.
+  is_public?: boolean;
 }
 
 export function useUpdateRepository() {
@@ -171,6 +175,7 @@ export function useUpdateRepository() {
       require_signature,
       max_cvss_score,
       storage_quota_bytes,
+      is_public,
     }: UpdateRepoArgs): Promise<Repository> => {
       const body: Record<string, unknown> = {};
       if (description !== undefined) body.description = description;
@@ -182,6 +187,7 @@ export function useUpdateRepository() {
       if (max_cvss_score !== undefined) body.max_cvss_score = max_cvss_score;
       if (storage_quota_bytes !== undefined)
         body.storage_quota_bytes = storage_quota_bytes;
+      if (is_public !== undefined) body.is_public = is_public;
       const { data } = await apiClient.patch<Repository>(
         `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`,
         body,

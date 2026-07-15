@@ -450,6 +450,13 @@ func (f *fakeRepo) UpdateRepositoryImmutability(_ context.Context, _, _ string, 
 	return f.updateQuotaResult, f.updateQuotaErr
 }
 
+// Visibility (futures.md Tier 2 #2) — same fake shape as the sibling repo
+// flips; reuses the shared update result/err so tests can drive success and
+// error paths without new fields.
+func (f *fakeRepo) UpdateRepositoryVisibility(_ context.Context, _, _ string, _ bool) (*metadatav1.Repository, error) {
+	return f.updateQuotaResult, f.updateQuotaErr
+}
+
 // Signed-image admission (futures.md Tier 1 #3) — same fake shape as
 // UpdateRepositoryImmutability; both flips ride the same audit
 // security-relevant path.

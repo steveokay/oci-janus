@@ -526,6 +526,22 @@ func (r *Repository) UpdateRepositoryImmutability(ctx context.Context, tenantID,
 	return r.scanOneRepo(ctx, q, immutable, repoID, tenantID)
 }
 
+// UpdateRepositoryVisibility flips the repo-wide is_public flag (futures.md
+// Tier 2 #2). Same CTE-then-join shape as UpdateRepositoryImmutability so the
+// response carries the full read shape (incl. max_cvss_score in RETURNING).
+func (r *Repository) UpdateRepositoryVisibility(ctx context.Context, tenantID, repoID string, isPublic bool) (*metadatav1.Repository, error) {
+	const q = `
+		WITH updated AS (
+			UPDATE repositories SET is_public = $1
+			WHERE  id = $2 AND tenant_id = $3
+			RETURNING id, org_id, tenant_id, name, is_public, storage_quota, created_at, description, immutable_tags, require_signature, max_cvss_score
+		)
+		SELECT ` + repoSelectCols + `
+		FROM   updated r
+		JOIN   organizations o ON o.id = r.org_id`
+	return r.scanOneRepo(ctx, q, isPublic, repoID, tenantID)
+}
+
 // UpdateTagImmutable flips the per-tag pin. Independent of the repo-wide
 // `immutable_tags` flag — a pinned tag stays locked even when the parent
 // repo is mutable. Returns the updated Tag so the caller can echo state
