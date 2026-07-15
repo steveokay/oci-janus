@@ -14,6 +14,7 @@ import { RepoSignaturePolicySection } from "@/components/repositories/repo-signa
 import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-keys-section";
 import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-policy-section";
 import { RepoDescriptionSection } from "@/components/repositories/repo-description-section";
+import { RepoQuotaSection } from "@/components/repositories/repo-quota-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
 import { PromotionsTab } from "@/components/repositories/PromotionsTab";
@@ -230,13 +231,16 @@ function RepositoryDetail(): React.ReactElement {
               <SettingsSection
                 id="general"
                 eyebrow="General"
-                description="Repository metadata. The description editor is live; rename, transfer, and quota editors land alongside their backend RPCs."
+                description="Repository metadata. Description and storage-quota editors are live; rename and transfer land alongside their backend RPCs."
               >
                 {/* Tier 2 #2 — description editor. Wires the existing    */}
                 {/* UpdateRepository RPC (description field); no new       */}
-                {/* backend. Sits above the placeholder because it's the  */}
-                {/* one General surface with a shipped backend today.     */}
+                {/* backend.                                              */}
                 <RepoDescriptionSection org={org} repo={repo} />
+                {/* Tier 2 #2 — storage-quota override. Wires the         */}
+                {/* previously-orphaned UpdateRepositoryQuota RPC through  */}
+                {/* the PATCH route's new storage_quota_bytes field.      */}
+                <RepoQuotaSection org={org} repo={repo} />
                 <RepoGeneralPlaceholder />
               </SettingsSection>
             </div>
@@ -303,18 +307,18 @@ function SettingsSection({
 }
 
 // RepoGeneralPlaceholder — slot card for the remaining General-section
-// editors whose backend hasn't shipped yet. The description editor
-// (RepoDescriptionSection) now renders above this card; rename, transfer,
-// and quota still land here once their RPCs exist. Rendering it keeps the
-// "more is coming" affordance visible so operators know where to look.
+// editors whose backend hasn't shipped yet. The description + storage-quota
+// editors now render above this card; rename and transfer still land here
+// once their metadata RPCs (name re-key / org reparent + manifest-storage
+// migration) exist. Rendering it keeps the "more is coming" affordance
+// visible so operators know where to look.
 function RepoGeneralPlaceholder(): React.ReactElement {
   return (
     <Card>
       <CardHeader>
         <CardTitle>More metadata editors</CardTitle>
         <CardDescription>
-          Rename, transfer, and quota editors land here alongside their
-          backend RPCs.
+          Rename and transfer editors land here alongside their backend RPCs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -322,9 +326,6 @@ function RepoGeneralPlaceholder(): React.ReactElement {
           <li>Rename — change the repo's slug under the same org.</li>
           <li>
             Transfer — move the repo to another org you belong to.
-          </li>
-          <li>
-            Quota override — per-repo cap on storage / pull bandwidth.
           </li>
         </ul>
       </CardContent>

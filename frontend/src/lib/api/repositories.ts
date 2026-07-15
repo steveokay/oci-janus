@@ -154,6 +154,10 @@ interface UpdateRepoArgs {
   // is skipped by the Object.assign path below so the BFF receives no
   // key at all.
   max_cvss_score?: number | null;
+  // Per-repo storage cap in bytes (Tier 2 #2). Omitted when undefined so a
+  // PATCH that touches only another field never resets the quota; the BFF
+  // routes a present value to the dedicated UpdateRepositoryQuota RPC.
+  storage_quota_bytes?: number;
 }
 
 export function useUpdateRepository() {
@@ -166,6 +170,7 @@ export function useUpdateRepository() {
       immutable_tags,
       require_signature,
       max_cvss_score,
+      storage_quota_bytes,
     }: UpdateRepoArgs): Promise<Repository> => {
       const body: Record<string, unknown> = {};
       if (description !== undefined) body.description = description;
@@ -175,6 +180,8 @@ export function useUpdateRepository() {
       // `undefined` (leave alone). The `in` check preserves the
       // three-state contract on the wire.
       if (max_cvss_score !== undefined) body.max_cvss_score = max_cvss_score;
+      if (storage_quota_bytes !== undefined)
+        body.storage_quota_bytes = storage_quota_bytes;
       const { data } = await apiClient.patch<Repository>(
         `/repositories/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`,
         body,

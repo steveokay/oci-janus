@@ -1049,6 +1049,14 @@ type updateRepositoryBody struct {
 	// pattern that landed in PR #227.
 	MaxCVSSScore    *int32 `json:"-"`
 	MaxCVSSScoreSet bool   `json:"-"`
+
+	// StorageQuotaBytes is the per-repo storage cap (Tier 2 #2, quota
+	// override). Optional *int64 for the same "nil = leave alone, non-nil =
+	// apply" contract as ImmutableTags — a PATCH that only touches another
+	// field must never reset the quota to zero. Fires the dedicated
+	// UpdateRepositoryQuota RPC so the change is isolated from the description
+	// write.
+	StorageQuotaBytes *int64 `json:"storage_quota_bytes,omitempty"`
 }
 
 // UnmarshalJSON is a hand-rolled decoder that distinguishes "field not
@@ -1079,6 +1087,11 @@ func (u *updateRepositoryBody) UnmarshalJSON(data []byte) error {
 	if v, ok := raw["require_signature"]; ok {
 		if err := json.Unmarshal(v, &u.RequireSignature); err != nil {
 			return fmt.Errorf("require_signature: %w", err)
+		}
+	}
+	if v, ok := raw["storage_quota_bytes"]; ok {
+		if err := json.Unmarshal(v, &u.StorageQuotaBytes); err != nil {
+			return fmt.Errorf("storage_quota_bytes: %w", err)
 		}
 	}
 	if v, ok := raw["max_cvss_score"]; ok {
@@ -1867,6 +1880,29 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 			}
 			cancel()
 		}
+	}
+
+	// Storage-quota override (Tier 2 #2). Only fires when the caller sent
+	// `storage_quota_bytes`. A dedicated RPC keeps the quota change isolated
+	// from the description write and audit-legible. Reject a non-positive cap
+	// with a fast 400 rather than letting a zero/negative value reach the DB
+	// where it would silently block all future pushes.
+	if body.StorageQuotaBytes != nil {
+		if *body.StorageQuotaBytes <= 0 {
+			writeError(w, http.StatusBadRequest, "storage_quota_bytes must be a positive number of bytes")
+			return
+		}
+		updated, err := h.meta.UpdateRepositoryQuota(r.Context(), &metadatav1.UpdateRepositoryQuotaRequest{
+			TenantId:     tenantID,
+			RepoId:       existing.GetRepoId(),
+			StorageQuota: *body.StorageQuotaBytes,
+		})
+		if err != nil {
+			slog.Error("UpdateRepositoryQuota", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update storage quota")
+			return
+		}
+		repo = updated
 	}
 
 	writeJSON(w, http.StatusOK, repoToResponse(repo))
