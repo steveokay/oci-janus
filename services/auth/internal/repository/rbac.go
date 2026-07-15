@@ -148,6 +148,31 @@ func (r *UserRepository) RevokeRoleScoped(ctx context.Context, assignmentID, ten
 	return nil
 }
 
+// RewriteRepoRoleScopes migrates every repo-scoped role assignment from the
+// old "org/repo" scope string to newScope, within the tenant. Used when a
+// repository is renamed or transferred so repo-specific grants follow the repo
+// instead of being silently orphaned (an org-scoped grant keys on the org name
+// alone and is unaffected). Idempotent — re-running after the move affects 0
+// rows. Returns the number of assignments moved.
+//
+// The upstream rename/transfer collision check guarantees the destination
+// "org/newname" repository did not previously exist, so no assignment can
+// already hold newScope; the UNIQUE(user_id, role_id, scope_type, scope_value)
+// constraint therefore cannot fire here in the real flow.
+func (r *UserRepository) RewriteRepoRoleScopes(ctx context.Context, tenantID uuid.UUID, oldScope, newScope string) (int64, error) {
+	const q = `
+		UPDATE role_assignments
+		SET    scope_value = $3
+		WHERE  tenant_id   = $1
+		  AND  scope_type  = 'repo'
+		  AND  scope_value = $2`
+	tag, err := r.pool.Exec(ctx, q, tenantID, oldScope, newScope)
+	if err != nil {
+		return 0, fmt.Errorf("rewrite repo role scopes: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListMembers returns the enriched membership list for the given tenant scope.
 // scopeType must be "org" or "repo"; scopeValue is the org name or "org/repo"
 // string. Each Member carries the principal's kind, a display name, and — for

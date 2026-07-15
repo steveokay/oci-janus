@@ -16,6 +16,11 @@ service AuthService {
   rpc GetUserPermissions(GetUserPermissionsRequest) returns (GetUserPermissionsResponse);
   rpc GrantRole(GrantRoleRequest) returns (google.protobuf.Empty);
   rpc RevokeRole(RevokeRoleRequest) returns (google.protobuf.Empty);
+  // RewriteRepoRoleScopes migrates every repo-scoped role assignment from an
+  // old "org/repo" scope string to a new one (tenant-scoped, idempotent). The
+  // management BFF calls it when a repository is renamed or transferred so
+  // repo-specific grants follow the repo instead of being silently orphaned.
+  rpc RewriteRepoRoleScopes(RewriteRepoRoleScopesRequest) returns (RewriteRepoRoleScopesResponse);
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
   // CountTenantUsers (FE-API-028) returns the number of distinct user accounts
   // belonging to the tenant. Used by the admin tenant-detail composition; the
@@ -212,6 +217,19 @@ message RevokeRoleRequest {
   string assignment_id        = 2;
   string expected_scope_type  = 3; // "org" | "repo" | "" for no check
   string expected_scope_value = 4; // org name or "org/repo"; "" for no check
+}
+
+// RewriteRepoRoleScopesRequest moves every repo-scoped role assignment from
+// old_scope to new_scope within the tenant. Both scopes are "org/repo" strings.
+message RewriteRepoRoleScopesRequest {
+  string tenant_id = 1;
+  string old_scope = 2; // "org/oldname"
+  string new_scope = 3; // "org/newname"
+}
+
+// RewriteRepoRoleScopesResponse reports how many assignments moved.
+message RewriteRepoRoleScopesResponse {
+  int64 rewritten = 1;
 }
 
 // ListMembersRequest queries all role assignments within a tenant scope.

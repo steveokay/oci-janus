@@ -488,6 +488,28 @@ func (h *GRPCHandler) ListMembers(ctx context.Context, req *authv1.ListMembersRe
 	return &authv1.ListMembersResponse{Members: out}, nil
 }
 
+// RewriteRepoRoleScopes migrates repo-scoped role assignments from old_scope to
+// new_scope (repo rename / transfer). Called by the management BFF over mTLS
+// after the metadata repo row has moved, so repo-specific grants follow the
+// repo. Idempotent; returns the number of assignments moved.
+func (h *GRPCHandler) RewriteRepoRoleScopes(ctx context.Context, req *authv1.RewriteRepoRoleScopesRequest) (*authv1.RewriteRepoRoleScopesResponse, error) {
+	tenantID, err := uuid.Parse(req.GetTenantId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid tenant_id")
+	}
+	if req.GetOldScope() == "" || req.GetNewScope() == "" {
+		return nil, status.Error(codes.InvalidArgument, "old_scope and new_scope must not be empty")
+	}
+	if req.GetOldScope() == req.GetNewScope() {
+		return nil, status.Error(codes.InvalidArgument, "old_scope and new_scope must differ")
+	}
+	n, err := h.svc.RewriteRepoRoleScopes(ctx, tenantID, req.GetOldScope(), req.GetNewScope())
+	if err != nil {
+		return nil, errcodes.MapDBError(err, "internal error")
+	}
+	return &authv1.RewriteRepoRoleScopesResponse{Rewritten: n}, nil
+}
+
 // CountTenantUsers returns the number of users in the tenant (FE-API-028).
 // Used by registry-management to populate the admin tenant-detail card.
 // Errors from the underlying DB query map to Internal via MapDBError so the

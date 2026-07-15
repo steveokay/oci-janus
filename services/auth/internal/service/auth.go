@@ -1627,6 +1627,12 @@ func (s *Service) RevokeRoleScoped(ctx context.Context, assignmentID, tenantID u
 	return s.users.RevokeRoleScoped(ctx, assignmentID, tenantID, expectedScopeType, expectedScopeValue)
 }
 
+// RewriteRepoRoleScopes migrates repo-scoped role assignments from oldScope to
+// newScope within the tenant (repo rename / transfer). Returns the count moved.
+func (s *Service) RewriteRepoRoleScopes(ctx context.Context, tenantID uuid.UUID, oldScope, newScope string) (int64, error) {
+	return s.users.RewriteRepoRoleScopes(ctx, tenantID, oldScope, newScope)
+}
+
 // ListMembers returns the enriched membership list for the given tenant scope.
 // Each Member carries the principal kind, display name, and — for service-account
 // principals — the service_accounts.id so callers can link back to the SA.
