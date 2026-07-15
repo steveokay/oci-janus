@@ -269,13 +269,33 @@ quickly in real operator workflows.
     read-only); needs an admin-gated update path. Pull-bandwidth capping
     is net-new (no counter/limit primitive today).
 
-### 3. Image diff between two tags
+### 3. Image diff between two tags — DONE (2026-07-15)
 - **Why:** "What shipped this week?" is a common review question. Today
   the only answer is reading the dockerfile + git log out of band.
 - **What:** UI: pick tag A + tag B → table of layers added/removed +
   package version deltas (parsed from SBOMs if available) + size delta.
   Backend: new comparison RPC on services/metadata that joins two
   manifests.
+- **Resolution:** Shipped as a BFF-only feature (like the Provenance
+  panel — **no new metadata proto/RPC/migration**). New
+  `GET /api/v1/repositories/{org}/{repo}/compare?from=&to=` route
+  (`services/management/internal/handler/compare_tags.go`, reader-gated)
+  fetches both tags' manifests / image-config blobs / SBOMs / scans via
+  existing calls and returns four self-describing sections: **layers**
+  (added/removed + size delta, always present), **config** (ENV / CMD /
+  ENTRYPOINT / exposed-ports / workdir / user, via `core.GetBlob`),
+  **packages** (added/removed/version-changed, from each tag's SPDX SBOM
+  `GetScanSBOM`), and **vulnerabilities** (introduced/fixed CVEs, from
+  `GetScanResult`'s `findings_json`). Every non-layer section degrades to
+  `available:false` + a `reason` when its data is missing (unscanned tag,
+  no SBOM, core unwired) rather than failing the diff. FE: full-page
+  `$repo_/compare` route + `CompareTagsView` (`compare-tags-view.tsx`) +
+  `useImageDiff` hook; entry point is a **Compare** button in the tags
+  panel's selection toolbar, enabled when exactly two tags are ticked.
+  Scoped to "everything incl. config/env" per the 2026-07-15 scope pick.
+  TDD: 8 pure-differ unit tests + 4 handler tests + 3 FE component tests.
+  (The spec's "new comparison RPC on metadata" was avoided — the split
+  digest data was all reachable from the BFF.)
 
 ### 4. Image lineage / provenance surface — DONE (PR #317, FE-API-060, 2026-07-11)
 - **Why:** A real deploy traces back to "this manifest was built from
