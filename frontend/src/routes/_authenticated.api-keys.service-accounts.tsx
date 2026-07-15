@@ -15,9 +15,8 @@ import { isWorkspaceAdmin } from "@/lib/auth/jwt";
 // the BFF's `requireDomainAdmin` posture (any admin/owner grant within the
 // tenant). The same primitive gates the "Workspace" section in AccessSubNav.
 //
-// The route does NOT render a detail drawer — that is T26's job.
-// TODO (T26): Mount <ServiceAccountDetail id={selectedId} /> here once
-// the drawer component lands. Wire it to the ?id search param below.
+// The detail drawer (`ServiceAccountDetail`) mounts below when the `?id`
+// search param is set — see the render body.
 export const Route = createFileRoute(
   "/_authenticated/api-keys/service-accounts",
 )({
