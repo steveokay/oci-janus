@@ -410,6 +410,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/repositories/{org}/{repo}/tags/{tag}/promote", authMW(http.HandlerFunc(h.handlePromoteTag)))
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/promotions", authMW(http.HandlerFunc(h.handleListPromotions)))
 
+	// Tier 2 #3 — image diff between two tags of the same repo. Reader-gated;
+	// `from`/`to` tag names come as query params. Rides on existing manifest /
+	// config-blob / SBOM / scan fetches (no new metadata RPC).
+	mux.Handle("GET /api/v1/repositories/{org}/{repo}/compare", authMW(http.HandlerFunc(h.handleCompareTags)))
+
 	// FUT-082 — tenant-wide read surfaces that back three registry-mcp
 	// tools whose BFF routes did not exist before (list_service_accounts,
 	// list_audit_events, list_promotions with no org/repo). All three are

@@ -2102,6 +2102,38 @@
           }
         },
         {
+          "name": "GET /api/v1/repositories/{org}/{repo}/compare",
+          "request": {
+            "description": "GET /api/v1/repositories/{org}/{repo}/compare",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "compare"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/compare",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "GET /api/v1/repositories/{org}/{repo}/members",
           "request": {
             "description": "GET /api/v1/repositories/{org}/{repo}/members",

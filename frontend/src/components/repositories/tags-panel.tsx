@@ -3,6 +3,7 @@ import {
   Box,
   FileCheck2,
   FileSignature,
+  GitCompare,
   Lock,
   Package,
   Pin,
@@ -257,6 +258,17 @@ export function TagsPanel({
         overCap={overCap}
         onClear={() => setSelected(new Set())}
         onDelete={() => setConfirmOpen(true)}
+        canCompare={selectionCount === 2}
+        onCompare={() => {
+          // Exactly two selected — send both tag names to the compare route.
+          // Insertion order is stable, so the first-ticked tag is the "from".
+          const [fromTag, toTag] = Array.from(selected);
+          void navigate({
+            to: "/repositories/$org/$repo/compare",
+            params: { org, repo },
+            search: { from: fromTag, to: toTag },
+          });
+        }}
       />
 
       <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]">
@@ -430,6 +442,10 @@ interface SelectionToolbarProps {
   overCap: boolean;
   onClear: () => void;
   onDelete: () => void;
+  // canCompare is true only when exactly two tags are selected — the diff
+  // view compares a pair. onCompare navigates to the compare route.
+  canCompare: boolean;
+  onCompare: () => void;
 }
 
 function SelectionToolbar({
@@ -437,6 +453,8 @@ function SelectionToolbar({
   overCap,
   onClear,
   onDelete,
+  canCompare,
+  onCompare,
 }: SelectionToolbarProps): React.ReactElement {
   // Always render the toolbar in the same slot — but make it visually
   // recede when no selection is active so it doesn't shift the table down
@@ -474,6 +492,12 @@ function SelectionToolbar({
           <Button variant="ghost" size="sm" onClick={onClear}>
             Clear
           </Button>
+          {canCompare ? (
+            <Button variant="ghost" size="sm" onClick={onCompare}>
+              <GitCompare className="size-3.5" />
+              Compare
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
