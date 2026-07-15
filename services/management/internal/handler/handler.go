@@ -1057,6 +1057,13 @@ type updateRepositoryBody struct {
 	// UpdateRepositoryQuota RPC so the change is isolated from the description
 	// write.
 	StorageQuotaBytes *int64 `json:"storage_quota_bytes,omitempty"`
+
+	// IsPublic toggles anonymous-pull visibility (Tier 2 #2). Optional *bool
+	// for the same "nil = leave alone" contract as ImmutableTags — a PATCH
+	// that touches only another field must never flip visibility. Fires the
+	// dedicated UpdateRepositoryVisibility RPC so the access-relevant change
+	// is audit-legible.
+	IsPublic *bool `json:"is_public,omitempty"`
 }
 
 // UnmarshalJSON is a hand-rolled decoder that distinguishes "field not
@@ -1092,6 +1099,11 @@ func (u *updateRepositoryBody) UnmarshalJSON(data []byte) error {
 	if v, ok := raw["storage_quota_bytes"]; ok {
 		if err := json.Unmarshal(v, &u.StorageQuotaBytes); err != nil {
 			return fmt.Errorf("storage_quota_bytes: %w", err)
+		}
+	}
+	if v, ok := raw["is_public"]; ok {
+		if err := json.Unmarshal(v, &u.IsPublic); err != nil {
+			return fmt.Errorf("is_public: %w", err)
 		}
 	}
 	if v, ok := raw["max_cvss_score"]; ok {
@@ -1900,6 +1912,23 @@ func (h *Handler) handleUpdateRepository(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			slog.Error("UpdateRepositoryQuota", "err", err, "repo_id", existing.GetRepoId())
 			writeError(w, http.StatusInternalServerError, "failed to update storage quota")
+			return
+		}
+		repo = updated
+	}
+
+	// Visibility flip (Tier 2 #2). Only fires when the caller sent `is_public`.
+	// Dedicated RPC so the access-relevant transition (public repos allow
+	// anonymous pull) is audit-legible and busts the GetRepository cache.
+	if body.IsPublic != nil {
+		updated, err := h.meta.UpdateRepositoryVisibility(r.Context(), &metadatav1.UpdateRepositoryVisibilityRequest{
+			TenantId: tenantID,
+			RepoId:   existing.GetRepoId(),
+			IsPublic: *body.IsPublic,
+		})
+		if err != nil {
+			slog.Error("UpdateRepositoryVisibility", "err", err, "repo_id", existing.GetRepoId())
+			writeError(w, http.StatusInternalServerError, "failed to update visibility")
 			return
 		}
 		repo = updated

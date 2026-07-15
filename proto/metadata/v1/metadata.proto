@@ -22,6 +22,12 @@ service MetadataService {
   // audit trail records the security-relevant change explicitly
   // (description edits stay on the existing path).
   rpc UpdateRepositoryImmutability(UpdateRepositoryImmutabilityRequest) returns (Repository);
+  // Visibility (futures.md Tier 2 #2) — flips the repo-wide `is_public`
+  // flag. Public repos allow anonymous pull; private require auth. Separate
+  // RPC from UpdateRepository so the access-relevant change is audit-legible,
+  // and so the GetRepository cache is busted (services/core reads is_public
+  // on the anonymous-pull path).
+  rpc UpdateRepositoryVisibility(UpdateRepositoryVisibilityRequest) returns (Repository);
   // Signed-image admission (futures.md Tier 1 #3) — flips the repo-wide
   // `require_signature` flag. Separate RPC from UpdateRepository for
   // the same audit-trail-clarity reason as UpdateRepositoryImmutability.
@@ -498,6 +504,15 @@ message UpdateRepositoryImmutabilityRequest {
   string repo_id        = 1;
   string tenant_id      = 2;
   bool   immutable_tags = 3;
+}
+
+// Visibility (futures.md Tier 2 #2). `is_public=true` allows anonymous pull;
+// `false` requires authentication. Settable at creation via
+// CreateRepositoryRequest.is_public; this RPC makes it editable afterwards.
+message UpdateRepositoryVisibilityRequest {
+  string repo_id   = 1;
+  string tenant_id = 2;
+  bool   is_public = 3;
 }
 
 // Signed-image admission (futures.md Tier 1 #3). `require_signature=true`

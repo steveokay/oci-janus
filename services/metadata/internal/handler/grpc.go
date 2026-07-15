@@ -36,6 +36,7 @@ type metadataRepo interface {
 	DeleteRepository(ctx context.Context, tenantID, repoID string) error
 	UpdateRepositoryQuota(ctx context.Context, tenantID, repoID string, quota int64) (*metadatav1.Repository, error)
 	UpdateRepositoryImmutability(ctx context.Context, tenantID, repoID string, immutable bool) (*metadatav1.Repository, error)
+	UpdateRepositoryVisibility(ctx context.Context, tenantID, repoID string, isPublic bool) (*metadatav1.Repository, error)
 	UpdateRepositorySignaturePolicy(ctx context.Context, tenantID, repoID string, requireSignature bool) (*metadatav1.Repository, error)
 	// FUT-021 — CVSS-gated admission. Pointer semantics on maxCVSS:
 	// nil = clear the threshold (SQL NULL), non-nil = set it. Range
@@ -376,6 +377,19 @@ func (h *MetadataHandler) UpdateRepositoryQuota(ctx context.Context, req *metada
 // cached entry to expire.
 func (h *MetadataHandler) UpdateRepositoryImmutability(ctx context.Context, req *metadatav1.UpdateRepositoryImmutabilityRequest) (*metadatav1.Repository, error) {
 	repo, err := h.repo.UpdateRepositoryImmutability(ctx, req.GetTenantId(), req.GetRepoId(), req.GetImmutableTags())
+	if err == nil {
+		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
+	}
+	return repo, mapErr(err)
+}
+
+// UpdateRepositoryVisibility flips the repo-wide is_public flag (futures.md
+// Tier 2 #2). Same posture as UpdateRepositoryImmutability: the BFF gates on
+// repo admin and records the audit event; this handler is a structural
+// pass-through. Bust the GetRepository cache so services/core's anonymous-pull
+// path sees the new visibility on the next request instead of a stale value.
+func (h *MetadataHandler) UpdateRepositoryVisibility(ctx context.Context, req *metadatav1.UpdateRepositoryVisibilityRequest) (*metadatav1.Repository, error) {
+	repo, err := h.repo.UpdateRepositoryVisibility(ctx, req.GetTenantId(), req.GetRepoId(), req.GetIsPublic())
 	if err == nil {
 		h.bustRepositoryCache(ctx, req.GetTenantId(), req.GetRepoId())
 	}

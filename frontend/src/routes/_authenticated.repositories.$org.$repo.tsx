@@ -15,6 +15,7 @@ import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-k
 import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-policy-section";
 import { RepoDescriptionSection } from "@/components/repositories/repo-description-section";
 import { RepoQuotaSection } from "@/components/repositories/repo-quota-section";
+import { RepoVisibilitySection } from "@/components/repositories/repo-visibility-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
 import { PromotionsTab } from "@/components/repositories/PromotionsTab";
@@ -231,8 +232,12 @@ function RepositoryDetail(): React.ReactElement {
               <SettingsSection
                 id="general"
                 eyebrow="General"
-                description="Repository metadata. Description and storage-quota editors are live; rename and transfer land alongside their backend RPCs."
+                description="Repository metadata. Visibility, description, and storage-quota editors are live; rename and transfer land alongside their backend RPCs."
               >
+                {/* Tier 2 #2 — visibility toggle. Public repos allow     */}
+                {/* anonymous pull; dedicated UpdateRepositoryVisibility   */}
+                {/* RPC so the access-relevant flip is audit-legible.     */}
+                <RepoVisibilitySection org={org} repo={repo} />
                 {/* Tier 2 #2 — description editor. Wires the existing    */}
                 {/* UpdateRepository RPC (description field); no new       */}
                 {/* backend.                                              */}
