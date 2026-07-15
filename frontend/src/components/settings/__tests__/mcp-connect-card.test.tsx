@@ -55,6 +55,27 @@ describe("MCPConnectCard", () => {
     expect(screen.getByText(/key\.<uuid>\.<secret>/)).toBeInTheDocument();
   });
 
+  it("defaults to the local (compose) target on a localhost origin, and switching to hosted swaps the config shape", () => {
+    // jsdom's origin is http://localhost:3000 → local is auto-selected, so the
+    // generated config is the compose-network form that actually connects on a
+    // dev box (the bug the first cut shipped).
+    render(<MCPConnectCard />);
+    expect(
+      screen.getByText(/MCP_MANAGEMENT_URL=http:\/\/registry-management:8085/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/docker-compose-registry-mcp:latest/)).toBeInTheDocument();
+    // No editable URL input in local mode.
+    expect(screen.queryByLabelText(/registry url/i)).not.toBeInTheDocument();
+
+    // Switch to hosted → published image + the URL input appears.
+    fireEvent.click(screen.getByRole("button", { name: /hosted \/ deployed/i }));
+    expect(screen.getByLabelText(/registry url/i)).toBeInTheDocument();
+    expect(screen.getByText(/steveokay\/oci-janus-mcp:latest/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/MCP_MANAGEMENT_URL=http:\/\/registry-management:8085/),
+    ).not.toBeInTheDocument();
+  });
+
   it("bakes the composed token into the config after Generate", async () => {
     // Built by join (not an inline literal) so the secret-scanner doesn't
     // read a `token: "…"` assignment as a real credential.

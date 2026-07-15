@@ -11,10 +11,15 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { useIsGlobalAdmin } from "@/lib/api/abilities";
 import { useWorkspace } from "@/lib/api/workspace";
 import { useGenerateMcpKey, type GeneratedMcpKey } from "@/lib/api/mcp";
-import { buildStdioConfig } from "@/lib/mcp-config";
+import {
+  buildStdioConfig,
+  detectDefaultTarget,
+  type McpTarget,
+} from "@/lib/mcp-config";
 
 // MCPConnectCard — Settings › Integrations card that connects an AI agent
 // (Claude Desktop / Cursor) to the registry's Model Context Protocol server
@@ -36,12 +41,20 @@ export function MCPConnectCard(): React.ReactElement | null {
   const { data: workspace } = useWorkspace();
   const generate = useGenerateMcpKey();
 
-  // Registry URL the MCP container will call. Defaults to the origin the
-  // operator is browsing — for a typical single-host deployment that IS the
-  // registry URL. Editable for setups where the MCP client runs elsewhere.
-  const [url, setUrl] = React.useState<string>(() =>
-    typeof window !== "undefined" ? window.location.origin : "",
+  // Deployment target. Auto-detected from the origin: a loopback origin means a
+  // local Docker-Compose dev box (which needs the compose-network form), any
+  // real origin means a gateway-fronted deployment.
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  const [target, setTarget] = React.useState<McpTarget>(() =>
+    detectDefaultTarget(origin),
   );
+
+  // Registry URL the MCP container will call (hosted mode only). Defaults to the
+  // origin the operator is browsing — for a gateway-fronted deployment that IS
+  // the registry URL. Local mode uses a fixed internal service DNS instead, so
+  // this input is hidden there.
+  const [url, setUrl] = React.useState<string>(() => origin);
   // The freshly-minted key, held only in memory for this session. The secret is
   // unrecoverable once the page is left, hence the shown-once warning.
   const [minted, setMinted] = React.useState<GeneratedMcpKey | null>(null);
@@ -53,6 +66,7 @@ export function MCPConnectCard(): React.ReactElement | null {
 
   const tenantID = workspace?.tenant_id ?? "";
   const config = buildStdioConfig({
+    target,
     tenantID,
     managementURL: url,
     apiKey: minted?.token ?? "",
@@ -100,23 +114,67 @@ export function MCPConnectCard(): React.ReactElement | null {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Step 1 — registry URL the MCP container dials. */}
-        <label className="block space-y-1">
+        {/* Step 1 — where the MCP client runs. */}
+        <div className="space-y-1.5">
           <span className="text-sm font-medium text-[var(--color-fg)]">
-            Registry URL
+            Where does your MCP client run?
           </span>
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://your-registry.example.com"
-            spellCheck={false}
-            aria-label="Registry URL"
-          />
-          <span className="text-xs text-[var(--color-fg-subtle)]">
-            The URL the MCP client reaches this registry at. Defaults to this
-            site; change it if your agent runs on a different host.
+          <div
+            className="flex gap-1"
+            role="group"
+            aria-label="Deployment target"
+          >
+            {(
+              [
+                { key: "local", label: "Local (Docker Compose)" },
+                { key: "hosted", label: "Hosted / deployed" },
+              ] as const
+            ).map((opt) => {
+              const active = target === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setTarget(opt.key)}
+                  aria-pressed={active}
+                  className={cn(
+                    "rounded-full border px-3 py-0.5 text-xs font-medium transition-colors",
+                    active
+                      ? "border-[var(--color-accent-border)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+                      : "border-[var(--color-border)] bg-transparent text-[var(--color-fg-muted)] hover:bg-[var(--color-surface-sunken)]",
+                  )}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          <span className="block text-xs text-[var(--color-fg-subtle)]">
+            {target === "local"
+              ? "Runs a stdio container on the compose network and reaches the BFF by its service name — the form that works on a dev box."
+              : "Runs the published image and reaches the registry over its public URL (via the gateway)."}
           </span>
-        </label>
+        </div>
+
+        {/* Registry URL — hosted mode only (local mode uses fixed internal DNS). */}
+        {target === "hosted" ? (
+          <label className="block space-y-1">
+            <span className="text-sm font-medium text-[var(--color-fg)]">
+              Registry URL
+            </span>
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://your-registry.example.com"
+              spellCheck={false}
+              aria-label="Registry URL"
+            />
+            <span className="text-xs text-[var(--color-fg-subtle)]">
+              The URL the MCP client reaches this registry at. Defaults to this
+              site; change it if your agent runs on a different host.
+            </span>
+          </label>
+        ) : null}
 
         {/* Step 2 — one-click mint. */}
         <div className="flex flex-wrap items-center gap-3">
