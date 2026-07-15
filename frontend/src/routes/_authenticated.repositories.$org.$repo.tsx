@@ -15,6 +15,7 @@ import { RepoTrustedKeysSection } from "@/components/repositories/repo-trusted-k
 import { RepoCVSSPolicySection } from "@/components/repositories/repo-cvss-policy-section";
 import { RepoDescriptionSection } from "@/components/repositories/repo-description-section";
 import { RepoQuotaSection } from "@/components/repositories/repo-quota-section";
+import { RepoRenameSection } from "@/components/repositories/repo-rename-section";
 import { RepoVisibilitySection } from "@/components/repositories/repo-visibility-section";
 import { RepoSettingsToc } from "@/components/repositories/repo-settings-toc";
 // FUT-020 — image promotion history tab.
@@ -232,7 +233,7 @@ function RepositoryDetail(): React.ReactElement {
               <SettingsSection
                 id="general"
                 eyebrow="General"
-                description="Repository metadata. Visibility, description, and storage-quota editors are live; rename and transfer land alongside their backend RPCs."
+                description="Repository metadata. Visibility, description, storage-quota, and rename editors are live; transfer lands alongside its backend RPC."
               >
                 {/* Tier 2 #2 — visibility toggle. Public repos allow     */}
                 {/* anonymous pull; dedicated UpdateRepositoryVisibility   */}
@@ -246,6 +247,9 @@ function RepositoryDetail(): React.ReactElement {
                 {/* previously-orphaned UpdateRepositoryQuota RPC through  */}
                 {/* the PATCH route's new storage_quota_bytes field.      */}
                 <RepoQuotaSection org={org} repo={repo} />
+                {/* Repo rename — dedicated POST /rename route that also     */}
+                {/* migrates repo-scoped RBAC grants in registry-auth.       */}
+                <RepoRenameSection org={org} repo={repo} />
                 <RepoGeneralPlaceholder />
               </SettingsSection>
             </div>
@@ -311,24 +315,23 @@ function SettingsSection({
   );
 }
 
-// RepoGeneralPlaceholder — slot card for the remaining General-section
-// editors whose backend hasn't shipped yet. The description + storage-quota
-// editors now render above this card; rename and transfer still land here
-// once their metadata RPCs (name re-key / org reparent + manifest-storage
-// migration) exist. Rendering it keeps the "more is coming" affordance
-// visible so operators know where to look.
+// RepoGeneralPlaceholder — slot card for the remaining General-section editors
+// whose backend hasn't shipped yet. The description, storage-quota, and rename
+// editors now render above this card; transfer still lands here once its
+// metadata RPC (org reparent + RBAC scope migration) is wired into the BFF.
+// Rendering it keeps the "more is coming" affordance visible so operators know
+// where to look.
 function RepoGeneralPlaceholder(): React.ReactElement {
   return (
     <Card>
       <CardHeader>
         <CardTitle>More metadata editors</CardTitle>
         <CardDescription>
-          Rename and transfer editors land here alongside their backend RPCs.
+          The transfer editor lands here alongside its backend RPC.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="space-y-1 text-sm text-[var(--color-fg-muted)]">
-          <li>Rename — change the repo's slug under the same org.</li>
           <li>
             Transfer — move the repo to another org you belong to.
           </li>

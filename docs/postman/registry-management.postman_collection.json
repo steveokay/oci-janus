@@ -2717,6 +2717,47 @@
           }
         },
         {
+          "name": "POST /api/v1/repositories/{org}/{repo}/rename",
+          "request": {
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \n}"
+            },
+            "description": "POST /api/v1/repositories/{org}/{repo}/rename",
+            "header": [],
+            "method": "POST",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "repositories",
+                ":org",
+                ":repo",
+                "rename"
+              ],
+              "raw": "{{baseUrl}}/api/v1/repositories/:org/:repo/rename",
+              "variable": [
+                {
+                  "key": "org",
+                  "value": "{{org}}"
+                },
+                {
+                  "key": "repo",
+                  "value": "{{repo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "POST /api/v1/repositories/{org}/{repo}/scan",
           "request": {
             "body": {
