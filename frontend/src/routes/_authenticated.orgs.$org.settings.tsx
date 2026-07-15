@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronRight, Settings as SettingsIcon } from "lucide-react";
 import { OrgRetentionPanel } from "@/components/orgs/org-retention-panel";
 import { OrgScanPolicySection } from "@/components/orgs/org-scan-policy-section";
+import { OrgBulkScanSection } from "@/components/orgs/org-bulk-scan-section";
 
 // Beacon — Org settings route (S11 Slice 4, FE-API-039).
 //
@@ -81,6 +82,16 @@ function OrgSettings(): React.ReactElement {
           Default scan policy
         </div>
         <OrgScanPolicySection org={org} />
+      </section>
+
+      {/* FUT-088 #5 — org-wide bulk scan. The hook + BFF route existed but */}
+      {/* no UI imported it; sits under the policy editors as an action.    */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
+          <SettingsIcon className="size-3.5" aria-hidden />
+          Actions
+        </div>
+        <OrgBulkScanSection org={org} />
       </section>
     </div>
   );

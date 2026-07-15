@@ -2733,27 +2733,37 @@ Below is only what was genuinely untracked.
   vars until drivers exist.
 
 #### FUT-088 — UI paper-cuts batch (2026-07-12 audit) — **Tier 3**
+> Re-triaged 2026-07-15: items 2 + 4 were already fixed; 7a had no rot. Batch 1
+> (below) shipped org bulk-scan + the stale T26 TODO. Remaining items are open.
 - **API-key activity time chips are fake** —
-  `api-keys.activity.tsx:31-40` uses `limit` as a proxy for 24h/7d/30d;
-  needs real `from`/`to` params on the backend + FE swap.
-- **Access-activity pagination not wired** — `ActivityTable.tsx`
-  exposes `next_page_token` but never fetches page 2.
-- **Hardcoded retention grace window** — `tags-panel.tsx:571-574` pins
-  `GRACE_DAYS = 7` client-side; BFF should return the platform grace
-  setting so the pending-delete ETA can't drift.
-- **Onboarding replay link from Settings** — Phase 4.3 §3 leftover;
-  the first-run redirect shipped, the Settings link never did.
-- **Org-wide bulk scan trigger** — `useBulkScanOrg`
-  (`lib/api/scan.ts:171`) + the BFF route exist; no UI imports it.
-  (Repo-level bulk scan IS wired.)
+  `api-keys.activity.tsx:29-39` uses `limit` as a proxy for 24h/7d/30d;
+  needs real `from`/`to` (or `since`/`until`) params on the
+  `/access/activity` BFF handler + FE swap. **STILL OPEN** (medium — BFF+FE).
+- **Hardcoded retention grace window** — `tags-panel.tsx:598` pins
+  `GRACE_DAYS = 7` client-side; BFF `/workspace/me` should return the
+  platform grace setting (add `retention_grace_days` to the Workspace
+  response) so the pending-delete ETA can't drift. **STILL OPEN** (low — BFF+FE).
 - **MCP connect card** in Settings › Integrations — zero in-app MCP
-  presence; the natural home for a connect-an-AI-agent setup snippet.
-- **Comment rot + unused hooks sweep** — `sso-buttons.tsx:7-8` stale
-  "backend not implemented" (dies with FUT-084);
-  `api-keys.service-accounts.tsx:18-20` TODO says the T26 drawer is
-  unmounted but it's mounted at lines 98-103; audit unused exports
-  (`useAbility`, `useActiveAdapter`, `useReport`, single-upstream
-  proxy-policy hooks, `useUpdateOIDCTrust`).
+  presence; the natural home for a connect-an-AI-agent setup snippet
+  (render the `docs/MCP.md` connect config: `MCP_MANAGEMENT_URL` /
+  `MCP_API_KEY` / `MCP_TENANT_ID` / transport). **STILL OPEN** (low — FE-only).
+- **Unused hooks sweep** — audit + remove/`@deprecated` the zero-importer
+  exports the re-triage confirmed: `useAbility`, `useActiveAdapter`,
+  `useReport`, `useUpdateOIDCTrust`, and the single-upstream proxy-policy
+  hooks (`useProxyCacheScanPolicy`/`useProxyCacheSignPolicy`, test-only).
+  **STILL OPEN** (low — cleanup).
+- ~~**Org-wide bulk scan trigger**~~ ✅ DONE (batch 1) — `OrgBulkScanSection`
+  on the org Settings page wires the existing `useBulkScanOrg` + `POST
+  /orgs/{org}/scan` (type-to-confirm SCAN, capped-toast). Live-verified 202.
+- ~~**Comment rot: T26 TODO**~~ ✅ DONE (batch 1) — the stale
+  `api-keys.service-accounts.tsx` TODO claiming the detail drawer is
+  unmounted was removed (the drawer is mounted + wired to `?id`).
+- ~~**Access-activity pagination not wired**~~ ✅ ALREADY FIXED — `ActivityTable`
+  has a working "Load more" (limit-extend) wired via the parent route.
+- ~~**Onboarding replay link**~~ ✅ ALREADY FIXED — shipped on the Profile page
+  (`ReplayOnboardingFooter` → `/getting-started`), the account-scoped home.
+- ~~**sso-buttons.tsx comment rot**~~ ✅ N/A — the comment is an accurate
+  FUT-084 docstring, no "backend not implemented" rot.
 
 #### FUT-089 — Doc truth-up batch: docs claim X, code does Y — **Tier 3**
 - **CLAUDE.md §8** claims 5 storage drivers; 2 exist (minio,
