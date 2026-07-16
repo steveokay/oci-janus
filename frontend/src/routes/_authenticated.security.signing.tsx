@@ -1,58 +1,74 @@
-// REDESIGN-001 Phase 4.2.e — Security › Signing tab (placeholder).
+// REDESIGN-001 Phase 4.2.e — Security › Signing tab.
 //
-// New tab for this PR. Surfaces workspace-wide Cosign / Notary v2 signing
-// posture — coverage % by repo, recent-signer rollup, trusted-key
-// allowlist health, and "require_signature" admission status. None of
-// that has a workspace-scoped backend yet:
-//
-//   - signature.ts is per-tag (signer.ListSignatures wrapped per
-//     manifest digest).
-//   - trusted-keys.ts is per-repo (Phase 2 allowlist + recent-signers
-//     picker).
-//
-// Building the workspace-wide aggregate (a "signing overview" BFF
-// rollup) is tracked under futures.md "Admission policy — signed-image
-// enforcement" Phase 3 alongside the policy-attestation work. Until
-// that ships we render a dashed placeholder so the operator knows the
-// tab exists and what to expect — mirrors the MFA placeholder pattern
-// in /settings/account.
-//
-// We do NOT freehand a one-off workspace signing UI here — the per-repo
-// signing surface (RepoTrustedKeysSection) is the source of truth today,
-// and duplicating it at the workspace level without the rollup
-// backend would just be three useTrustedKeys hooks in a loop. Wait
-// for the BFF rollup, then revisit.
+// Workspace-wide Cosign signing coverage rollup (futures.md "Signing coverage
+// rollup"). Per-repo signed-tag %, recent signers, trusted-key allowlist
+// health, and require_signature status, from the BFF
+// GET /api/v1/signing/coverage. Per-tag verify + the per-repo trusted-key
+// editor live on the repository pages; this tab is the read-only rollup and
+// drills into per-repo Settings for any change.
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { FileSignature } from "lucide-react";
+import { useSigningCoverage } from "@/lib/api/signing-coverage";
+import { SigningCoverageSummary } from "@/components/security/signing-coverage-summary";
+import { SigningCoverageTable } from "@/components/security/signing-coverage-table";
 
 export const Route = createFileRoute("/_authenticated/security/signing")({
   component: SigningTab,
 });
 
-function SigningTab(): React.ReactElement {
+const WINDOW = 50;
+
+export function SigningTab(): React.ReactElement {
+  const { data, isLoading, isError } = useSigningCoverage(WINDOW);
+
+  if (isLoading) {
+    return (
+      <p className="text-sm text-[var(--color-fg-muted)]">Loading signing coverage…</p>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <p className="text-sm text-[var(--color-danger)]">
+        Failed to load signing coverage. Retry shortly.
+      </p>
+    );
+  }
+
+  // Signer not wired → the whole rollup is moot. Reuse the dashed "not wired"
+  // card vocabulary the placeholder established.
+  if (!data.signer_enabled) {
+    return (
+      <section className="rounded-lg border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] p-6 text-center">
+        <div className="mx-auto inline-flex size-10 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-fg-muted)]">
+          <FileSignature className="size-5" />
+        </div>
+        <h2 className="mt-3 font-display text-lg font-medium">Image signing coverage</h2>
+        <p className="mx-auto mt-2 max-w-prose text-sm text-[var(--color-fg-muted)]">
+          Signing is not wired on this deployment (no signer service configured),
+          so there is no coverage to report. Configure the signer service to see
+          per-repo signed-tag coverage, recent signers, and allowlist health here.
+        </p>
+      </section>
+    );
+  }
+
+  if (data.repos.length === 0) {
+    return (
+      <p className="text-sm text-[var(--color-fg-muted)]">
+        No repositories yet. Coverage appears once repositories exist.
+      </p>
+    );
+  }
+
   return (
-    <section className="rounded-lg border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] p-6 text-center">
-      <div className="mx-auto inline-flex size-10 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-fg-muted)]">
-        <FileSignature className="size-5" />
-      </div>
-      <h2 className="mt-3 font-display text-lg font-medium">
-        Image signing coverage
-      </h2>
-      <p className="mx-auto mt-2 max-w-prose text-sm text-[var(--color-fg-muted)]">
-        Image signing coverage lands here — Cosign / Notary v2 visibility
-        across the workspace: per-repo signed-tag percentage, recent
-        signers, trusted-key allowlist health, and which repos have
-        <code className="mx-1 rounded bg-[var(--color-surface)] px-1 py-0.5 text-xs">
-          require_signature
-        </code>
-        turned on. Per-tag verify and the per-repo trusted-key editor
-        already exist on the repository pages; this tab is the
-        workspace-wide rollup.
+    <div className="space-y-5">
+      <SigningCoverageSummary summary={data.summary} />
+      <SigningCoverageTable repos={data.repos} />
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        Coverage computed over the {data.window} most-recent tags per repository.
       </p>
-      <p className="mt-3 text-xs font-medium uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-        Tracked under futures.md — Signed-image admission, Phase 3
-      </p>
-    </section>
+    </div>
   );
 }
