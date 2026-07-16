@@ -673,6 +673,7 @@ func mapEvent(tenantID uuid.UUID, event events.Event) *repository.AuditEvent {
 			TenantID:   tenantID,
 			ActorID:    actor,
 			ActorType:  actorType,
+			ActorIP:    p.SourceIP, // client IP for the principal activity feed
 			Action:     p.Action,
 			Resource:   p.Resource,
 			Outcome:    "success",

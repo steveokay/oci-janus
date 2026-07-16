@@ -309,3 +309,36 @@ func TestMapEvent_accessReview_malformedPayloadDropped(t *testing.T) {
 		t.Errorf("action: got %q, want auth.access_review.snoozed", ae.Action)
 	}
 }
+
+// TestMapEvent_saLifecycle_populatesActorIP verifies the SA lifecycle
+// consumer copies the payload's SourceIP into AuditEvent.ActorIP so the
+// row's actor_ip column carries the client IP for the activity feed.
+func TestMapEvent_saLifecycle_populatesActorIP(t *testing.T) {
+	tenantID := uuid.New()
+	payload, _ := json.Marshal(events.ServiceAccountLifecyclePayload{
+		Action:   "service_account.key_issued",
+		ActorID:  "actor-1",
+		Resource: "sa-1",
+		SourceIP: "203.0.113.9",
+		APIKeyID: "key-77",
+	})
+	ev := events.Event{
+		ID:         uuid.NewString(),
+		Type:       events.RoutingServiceAccountLifecycle,
+		TenantID:   tenantID.String(),
+		OccurredAt: time.Now().UTC(),
+		Version:    "1.0",
+		Payload:    payload,
+	}
+
+	ae := mapEvent(tenantID, ev)
+	if ae == nil {
+		t.Fatal("mapEvent returned nil for SA lifecycle event")
+	}
+	if ae.ActorIP != "203.0.113.9" {
+		t.Errorf("ActorIP = %q, want 203.0.113.9", ae.ActorIP)
+	}
+	if ae.Action != "service_account.key_issued" {
+		t.Errorf("Action = %q, want service_account.key_issued", ae.Action)
+	}
+}
