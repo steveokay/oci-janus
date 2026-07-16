@@ -134,6 +134,19 @@ workloads will refuse to deploy without. Estimated as 1-2 sprints each.
 - **Affects (shipped):** `services/metadata`, `services/core`,
   `services/management`, `frontend`.
 
+### Signing coverage rollup — DONE (2026-07-16)
+- **Why:** Per-tag verify + per-repo trusted-key editor existed, but no
+  workspace-wide view of signing posture.
+- **What shipped:** read-only BFF `GET /api/v1/signing/coverage` (pure
+  orchestration, no proto/migration) + Security → Signing tab: per-repo
+  signed-tag % over a bounded recent-tag window, recent signers,
+  trusted-key allowlist health (surfacing "enforced but empty
+  allowlist"), and `require_signature` status. Cosign-only; Notary v2
+  not wired.
+- **Distinct from** the deferred admission Phase 3 (quorum / rotation /
+  keyless), which changes admission decisions — this is visibility only.
+- **Affects:** `services/management`, `frontend`, `docs/SIGNING.md`.
+
 ### 4. Audit log streaming to SIEM — DONE (Phase 1 + Phase 2, 2026-06-23)
 - **Why:** Enterprise procurement asks for syslog/CEF export on day one.
   Customers want every push, pull, role grant, signed scan in Splunk /

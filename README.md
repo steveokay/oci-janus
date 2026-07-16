@@ -117,6 +117,7 @@ The `tenant_id` columns stay in the schema and wire format (frozen — they back
 - Per-server peer-CN allowlist (`MTLS_PEER_CN_ALLOWLIST`) for defence-in-depth
 - Cosign (Sigstore) image signing against Vault-backed keys (Notary v2 planned)
 - Signed-image admission: repo-wide `require_signature` + per-repo trusted-key allowlist
+- Workspace-wide signing coverage rollup (Security → Signing tab): per-repo signed-tag % over a recent-tag window + trusted-key allowlist health
 - CVSS-gated admission: block push/pull of images whose scan exceeds a configured severity threshold ([`docs/ADMISSION.md`](docs/ADMISSION.md))
 - Two-layer tag immutability: `repositories.immutable_tags` + per-tag `tags.immutable`
 - Tamper-evident audit log: FORCE RLS + per-tenant SHA-256 hash chain, INSERT-only role
