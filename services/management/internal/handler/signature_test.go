@@ -45,6 +45,17 @@ type fakeSignerServer struct {
 	// signatures returned by ListSignatures. nil yields a single canned entry.
 	signatures []*signerv1.Signature
 
+	// signaturesByDigest, when non-nil, makes ListSignatures answer per
+	// manifest_digest: a hit returns those signatures, a miss returns
+	// NotFound (i.e. an unsigned manifest). Lets the coverage rollup tests
+	// mark specific digests signed vs unsigned. Takes precedence over
+	// `signatures` when set.
+	signaturesByDigest map[string][]*signerv1.Signature
+
+	// listCalls counts ListSignatures invocations so the coverage test can
+	// assert per-digest dedupe (two tags → one manifest → one call).
+	listCalls int
+
 	// listErr is returned from ListSignatures when non-nil; takes precedence
 	// over signatures.
 	listErr error
@@ -65,9 +76,21 @@ type fakeSignerServer struct {
 	mu        sync.Mutex
 }
 
-func (s *fakeSignerServer) ListSignatures(_ context.Context, _ *signerv1.ListSignaturesRequest) (*signerv1.ListSignaturesResponse, error) {
+func (s *fakeSignerServer) ListSignatures(_ context.Context, req *signerv1.ListSignaturesRequest) (*signerv1.ListSignaturesResponse, error) {
+	s.mu.Lock()
+	s.listCalls++
+	s.mu.Unlock()
+
 	if s.listErr != nil {
 		return nil, s.listErr
+	}
+	// Per-digest table wins when configured (coverage rollup tests).
+	if s.signaturesByDigest != nil {
+		sigs, ok := s.signaturesByDigest[req.GetManifestDigest()]
+		if !ok || len(sigs) == 0 {
+			return nil, status.Error(codes.NotFound, "no signatures for digest")
+		}
+		return &signerv1.ListSignaturesResponse{Signatures: sigs}, nil
 	}
 	if s.signatures == nil {
 		return &signerv1.ListSignaturesResponse{
