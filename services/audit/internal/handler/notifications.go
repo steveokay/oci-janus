@@ -313,7 +313,7 @@ func notificationFromRow(row *repository.NotificationRow, displayNames map[strin
 		Title:            title,
 		Summary:          summary,
 		Link:             link,
-		Metadata:         notificationMetadataMap(&p),
+		Metadata:         notificationMetadataMap(&p, row.Outcome),
 	}
 }
 
@@ -564,8 +564,15 @@ func renderNotification(action, outcome string, p *rawNotificationPayload, org, 
 // for the dashboard to render extra context. Empty values are dropped to keep
 // the JSON tight; numeric fields are stringified so the proto type stays a
 // simple string→string map.
-func notificationMetadataMap(p *rawNotificationPayload) map[string]string {
+func notificationMetadataMap(p *rawNotificationPayload, outcome string) map[string]string {
 	m := map[string]string{}
+	// outcome is the audit row's first-class success/failure column (not a
+	// payload field). The auth ActivityService reads meta["outcome"] to populate
+	// the activity feed's Status, so it must be carried on the wire here;
+	// omitting it made every event render as "failure" downstream.
+	if outcome != "" {
+		m["outcome"] = outcome
+	}
 	if p.RepositoryName != "" {
 		m["repo"] = p.RepositoryName
 	}
