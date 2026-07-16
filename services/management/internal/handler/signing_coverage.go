@@ -18,6 +18,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -363,6 +364,12 @@ func (h *Handler) coverageSignatures(ctx context.Context, tenantID, digest, labe
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			return nil // unsigned manifest — normal
+		}
+		// Client disconnected mid-rollup — swallow quietly so one abort
+		// doesn't emit up to N warning lines (one per repo/digest still
+		// in flight). Mirrors handleListRecentSigners in trusted_keys.go.
+		if errors.Is(err, context.Canceled) {
+			return nil
 		}
 		slog.Warn("signing-coverage ListSignatures", "err", err, "repo", label, "digest", digest)
 		return nil

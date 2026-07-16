@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	metadatav1 "github.com/steveokay/oci-janus/proto/gen/go/metadata/v1"
@@ -158,6 +160,61 @@ func TestSigningCoverage_invalidWindow(t *testing.T) {
 			t.Errorf("window %q: expected 400, got %d", q, resp.StatusCode)
 		}
 		resp.Body.Close()
+	}
+}
+
+// TestSigningCoverage_failOpen proves a flaky signer doesn't fail the whole
+// rollup: ListSignatures returns a non-NotFound transport error (Unavailable)
+// for every digest, yet the endpoint still returns 200 with all repos present
+// and coverage degraded to signed_tags=0 rather than 500ing. Uses ?window=70
+// so the (tenant,window) TTL cache never bleeds from a sibling test.
+func TestSigningCoverage_failOpen(t *testing.T) {
+	env := newSignerTestEnv(t)
+
+	t.Cleanup(func() {
+		coverageReposOverride = nil
+		coverageTagsOverride = nil
+		coverageTrustedKeysOverride = nil
+	})
+
+	now := time.Now()
+	coverageReposOverride = []*metadatav1.Repository{
+		{RepoId: "r-a", Org: "acme", Name: "api", RequireSignature: true},
+		{RepoId: "r-b", Org: "acme", Name: "web", RequireSignature: false},
+	}
+	coverageTagsOverride = map[string][]*metadatav1.Tag{
+		"r-a": {{Name: "latest", ManifestDigest: "sha256:aaa", UpdatedAt: timestamppb.New(now)}},
+		"r-b": {{Name: "latest", ManifestDigest: "sha256:bbb", UpdatedAt: timestamppb.New(now)}},
+	}
+	// Global transport error on every ListSignatures — the fail-open path must
+	// log + degrade each digest to "unsigned" instead of bubbling a 500.
+	env.signer.listErr = status.Error(codes.Unavailable, "boom")
+
+	resp := env.get(t, "/api/v1/signing/coverage?window=70", adminToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 (fail-open), got %d", resp.StatusCode)
+	}
+	var body coverageWire
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// All repos present, none dropped by the flaky signer.
+	if body.Summary.RepoCount != 2 || len(body.Repos) != 2 {
+		t.Fatalf("repo_count = %d / len(repos) = %d, want 2/2", body.Summary.RepoCount, len(body.Repos))
+	}
+	// Coverage degraded to zero (signer unreachable ⇒ every tag counts unsigned).
+	for _, r := range body.Repos {
+		if r.SignedTags != 0 {
+			t.Errorf("repo %q signed_tags = %d, want 0 (degraded)", r.Repo, r.SignedTags)
+		}
+		if r.TagsInWindow != 1 {
+			t.Errorf("repo %q tags_in_window = %d, want 1", r.Repo, r.TagsInWindow)
+		}
+	}
+	if body.Summary.WorkspaceSignedTagPct != 0 {
+		t.Errorf("workspace_signed_tag_pct = %v, want 0", body.Summary.WorkspaceSignedTagPct)
 	}
 }
 
