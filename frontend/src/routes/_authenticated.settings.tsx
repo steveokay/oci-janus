@@ -41,7 +41,7 @@ type SettingsTab =
   | "scanning"
   | "housekeeping"
   | "notifications"
-  | "connected-agents"
+  | "agents"
   | "integrations";
 
 interface TabDef {
@@ -51,7 +51,7 @@ interface TabDef {
     | "/settings/scanning"
     | "/settings/housekeeping"
     | "/settings/notifications"
-    | "/settings/connected-agents"
+    | "/settings/agents"
     | "/settings/integrations";
   label: string;
 }
@@ -99,13 +99,15 @@ function SettingsLayout(): React.ReactElement {
         label: "Housekeeping",
       });
     }
-    // Connected Agents (MCP) — the inventory of MCP-minted service accounts
-    // with a one-click revoke. Admin-gated, matching the SA-admin surface.
+    // Agents (MCP) — the one-click connect card + the inventory of MCP-minted
+    // service accounts with a one-click revoke. Admin-gated, matching the
+    // SA-admin surface. (The connect card moved here from Integrations so all
+    // agent surfaces live in one place.)
     if (hasAnyAdminScope) {
       out.push({
-        key: "connected-agents",
-        to: "/settings/connected-agents",
-        label: "Connected Agents",
+        key: "agents",
+        to: "/settings/agents",
+        label: "Agents",
       });
     }
     // Notifications is a personal preference — always available to everyone.
@@ -137,8 +139,8 @@ function SettingsLayout(): React.ReactElement {
       ? "Housekeeping"
       : location.pathname.startsWith("/settings/notifications")
         ? "Notifications"
-        : location.pathname.startsWith("/settings/connected-agents")
-          ? "Connected Agents"
+        : location.pathname.startsWith("/settings/agents")
+          ? "Agents"
           : location.pathname.startsWith("/settings/integrations")
             ? "Integrations"
             : "Workspace";

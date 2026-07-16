@@ -132,16 +132,17 @@ the MCP server and the BFF, not between the LLM and the MCP server).
   `since_iso` filter for more history.
 
 - **The key is revocable.** It's a normal SA API key — revoke any time
-  from `/api-keys` in the dashboard, or from **Settings › Connected Agents**
+  from `/api-keys` in the dashboard, or from **Settings › Agents**
   (see below). The MCP server treats it as opaque.
 
-- **MCP-minted service accounts are tagged + discoverable.** The one-click
-  connect mints a service account named `mcp-agent-<base36>` stamped with
-  `origin='mcp-connect'`. That origin drives an **MCP** badge in the
-  service-accounts list and a dedicated **Settings › Connected Agents (MCP)**
-  view (created-at, last-used, one-click revoke) so an operator can find and
-  prune agent keys without decoding the name convention. Existing `mcp-agent-*`
-  accounts are backfilled to `origin='mcp-connect'` by migration.
+- **One place for agents: Settings › Agents.** The one-click connect card
+  ("Connect an AI agent (MCP)") and the inventory of already-connected agents
+  live together on the **Settings › Agents** tab. The connect card mints a
+  service account named `mcp-agent-<base36>` stamped with `origin='mcp-connect'`;
+  that origin drives an **MCP** badge in the service-accounts list and the
+  Agents inventory (created-at, last-used, one-click revoke) so an operator can
+  find and prune agent keys without decoding the name convention. Existing
+  `mcp-agent-*` accounts are backfilled to `origin='mcp-connect'` by migration.
 
 - **The `*:read` scopes on an MCP key are advisory today.** The read-only
   vocabulary (`repo:read`, `scan:read`, `audit:read`, `access:read`,
