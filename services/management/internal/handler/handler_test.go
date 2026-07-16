@@ -250,6 +250,22 @@ func (s *fakeMetaServer) GetTenantStorageBreakdown(_ context.Context, _ *metadat
 	}, nil
 }
 
+// Coverage-rollup test hooks (signing_coverage_test.go). When non-nil the
+// fake streams the override set instead of its canned defaults so a single
+// test can shape the whole workspace.
+var (
+	coverageReposOverride       []*metadatav1.Repository
+	coverageTagsOverride        map[string][]*metadatav1.Tag                  // repo_id → tags
+	coverageTrustedKeysOverride map[string][]*metadatav1.RepositoryTrustedKey // repo_id → keys
+)
+
+func (s *fakeMetaServer) ListRepositoryTrustedKeys(_ context.Context, req *metadatav1.ListRepositoryTrustedKeysRequest) (*metadatav1.ListRepositoryTrustedKeysResponse, error) {
+	if coverageTrustedKeysOverride != nil {
+		return &metadatav1.ListRepositoryTrustedKeysResponse{Keys: coverageTrustedKeysOverride[req.GetRepoId()]}, nil
+	}
+	return &metadatav1.ListRepositoryTrustedKeysResponse{}, nil
+}
+
 func (s *fakeMetaServer) GetTenantVulnerabilityCount(_ context.Context, _ *metadatav1.GetTenantVulnerabilityCountRequest) (*metadatav1.VulnerabilityCountResponse, error) {
 	return &metadatav1.VulnerabilityCountResponse{Total: 3}, nil
 }
@@ -259,6 +275,12 @@ func (s *fakeMetaServer) CountRepositories(_ context.Context, _ *metadatav1.Coun
 }
 
 func (s *fakeMetaServer) ListRepositories(req *metadatav1.ListRepositoriesRequest, stream metadatav1.MetadataService_ListRepositoriesServer) error {
+	if coverageReposOverride != nil {
+		for _, repo := range coverageReposOverride {
+			_ = stream.Send(repo)
+		}
+		return nil
+	}
 	// Two repos in different orgs so the BFF's client-side ?org= filter is
 	// observable. metadata streams every repo; the BFF narrows the results.
 	_ = stream.Send(&metadatav1.Repository{RepoId: testRepoID, OrgId: testOrgID, Org: "dev", Name: "api", StorageUsed: 512, StorageQuota: 10737418240, CreatedAt: timestamppb.Now(), ArtifactTypes: []string{"image", "helm"}})
@@ -305,6 +327,12 @@ func (s *fakeMetaServer) DeleteRepository(_ context.Context, _ *metadatav1.Delet
 }
 
 func (s *fakeMetaServer) ListTags(req *metadatav1.ListTagsRequest, stream metadatav1.MetadataService_ListTagsServer) error {
+	if coverageTagsOverride != nil {
+		for _, tag := range coverageTagsOverride[req.GetRepoId()] {
+			_ = stream.Send(tag)
+		}
+		return nil
+	}
 	_ = stream.Send(&metadatav1.Tag{
 		Name:           "v1.0",
 		ManifestDigest: "sha256:abc123",

@@ -574,7 +574,106 @@ both valid combinations).
 
 ---
 
-## 9. Related decisions & open work
+## 9. Coverage rollup (Security → Signing tab)
+
+Sections 4 (verify) and 8 (admission) work **one tag / one repo at a
+time**. The coverage rollup answers the workspace-wide question an
+operator otherwise can't: *which repos are actually signing, how well,
+and where is my signing posture soft?* It is **visibility only** — it
+changes no admission decision and is deliberately distinct from the
+deferred admission Phase 3 enforcement work (quorum / rotation /
+keyless).
+
+### Endpoint
+
+```
+GET /api/v1/signing/coverage?window=50   — reader-allowed, workspace-scoped
+```
+
+Lives entirely in `services/management` as **pure BFF orchestration** —
+no proto change, no DB migration. It fans out over existing gRPC
+(`metadata.ListRepositories` → per-repo `metadata.ListTags` +
+`signer.ListSignatures` + `metadata.ListRepositoryTrustedKeys`) and
+folds the result into a single rollup. A process-wide 60s TTL cache
+keyed by `(tenant, window)` shields the backend from repeated fan-out on
+every dashboard load.
+
+### Windowed by design
+
+Coverage is computed over the **N most-recent tags per repo** (default
+`window=50`, cap `200`; `window` is echoed back in the response). The
+percentage is therefore **not an all-tags figure** — it is "of the last
+N tags, how many are signed". The window is disclosed per-repo and at
+the top level precisely so the percentage is never mistaken for a
+whole-repo number.
+
+### Response shape
+
+```json
+{
+  "window": 50,
+  "signer_enabled": true,
+  "summary": {
+    "repo_count": 12,
+    "repos_require_signature": 4,
+    "repos_enforced_empty_allowlist": 1,
+    "workspace_signed_tag_pct": 0.73
+  },
+  "repos": [
+    {
+      "org": "acme",
+      "repo": "api",
+      "require_signature": true,
+      "window": 50,
+      "tags_in_window": 20,
+      "signed_tags": 18,
+      "signed_pct": 0.9,
+      "trusted_key_count": 2,
+      "allowlist_health": "enforced_with_allowlist",
+      "stale_trusted_keys": 0,
+      "recent_signers": [
+        { "key_id": "2630bb12c4c045bf", "signer_id": "ci-prod", "last_signed_at": "2026-07-15T09:12:00Z", "tag_count": 12 }
+      ]
+    }
+  ]
+}
+```
+
+`signed_pct` / `workspace_signed_tag_pct` are fractions in `[0,1]`.
+`stale_trusted_keys` counts trusted-allowlist `key_id`s that did **not**
+sign anything within the window (candidate rotation cleanup).
+
+### `allowlist_health` enum
+
+Per-repo, this is the headline "where is my posture soft" signal:
+
+| Value | Meaning |
+|---|---|
+| `enforced_with_allowlist` | `require_signature` on **and** ≥1 trusted key — the tight posture: only allowlisted keys pass admission. |
+| `enforced_any_signature` | `require_signature` on but the trusted-key allowlist is **empty** → **any** valid signature passes admission (Phase 1 fallback, see §8). This is the soft spot the tab surfaces; `summary.repos_enforced_empty_allowlist` counts these. |
+| `advisory` | `require_signature` off — signatures are recorded but never gate a pull. |
+
+### Graceful degrade
+
+When `SIGNER_GRPC_ADDR` is unset (signer not wired), the endpoint
+returns `200` with `signer_enabled: false` and an empty `repos` array —
+checked before the cache so an enabled response is never served on the
+disabled path. The tab renders a "signing not configured" state rather
+than an error.
+
+### Files
+
+| File | Why it exists |
+|---|---|
+| `services/management/internal/handler/signing_coverage.go` | The BFF handler + fan-out + TTL cache + `allowlist_health` classification |
+| `services/management/internal/handler/signing_coverage_test.go` | Table tests incl. the empty-allowlist soft-spot + `signer_enabled:false` degrade |
+| `frontend/src/lib/api/signing-coverage.ts` | TanStack Query hook + response types |
+| `frontend/src/components/security/signing-coverage-*.tsx` | Summary, per-repo table, and signed-tag % bar |
+| `frontend/src/routes/_authenticated.security.signing.tsx` | Security → Signing tab (was a placeholder; now live) |
+
+---
+
+## 10. Related decisions & open work
 
 - **status.md Decision #14** — chose Vault dev mode for local development;
   same `SIGNER_KEY_BACKEND=vault` path used in production

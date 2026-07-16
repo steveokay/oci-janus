@@ -469,6 +469,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// with 200 so the dialog falls back to Manual entry without an error toast.
 	mux.Handle("GET /api/v1/repositories/{org}/{repo}/recent-signers", authMW(http.HandlerFunc(h.handleListRecentSigners)))
 
+	// Workspace-wide signing coverage rollup (futures.md "Signing coverage
+	// rollup"). Reader-allowed — posture data, same bar as trusted-keys List.
+	mux.Handle("GET /api/v1/signing/coverage", authMW(http.HandlerFunc(h.handleSigningCoverage)))
+
 	// Per-tag SBOM download (FE-API-033). Reader access on the repo is
 	// sufficient — the SBOM is equivalent to what a reader could derive by
 	// pulling the image themselves. ?format=spdx-json (default) is the only
