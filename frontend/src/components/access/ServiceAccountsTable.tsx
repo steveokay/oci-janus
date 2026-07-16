@@ -10,6 +10,11 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { formatRelativeDate } from "@/lib/format";
@@ -135,35 +140,62 @@ function SARow({
     <TableRow interactive onClick={() => onSelect(sa.id)}>
       {/* Account name + description */}
       <TableCell>
-        <button
-          type="button"
-          // The button is a semantic interactive element that stops the event
-          // from bubbling to the row click (which would call onSelect twice).
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(sa.id);
-          }}
-          className="flex items-center gap-3 text-left"
-        >
-          {/* Robot avatar — Beacon-style round swatch matching
-              RepositoriesTable's icon pattern */}
-          <span
-            className="grid size-8 shrink-0 place-items-center rounded-md bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
-            aria-hidden
+        {/* The MCP badge lives as a sibling of the name button (not nested)
+            because PopoverTrigger renders a <button> and a button-in-button is
+            invalid HTML that breaks focus + click handling. */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            // The button is a semantic interactive element that stops the event
+            // from bubbling to the row click (which would call onSelect twice).
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(sa.id);
+            }}
+            className="flex min-w-0 items-center gap-3 text-left"
           >
-            <Bot className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-[var(--color-fg)]">
-              {sa.name}
-            </div>
-            {desc ? (
-              <div className="mt-0.5 truncate text-[11px] text-[var(--color-fg-subtle)]">
-                {desc}
+            {/* Robot avatar — Beacon-style round swatch matching
+                RepositoriesTable's icon pattern */}
+            <span
+              className="grid size-8 shrink-0 place-items-center rounded-md bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"
+              aria-hidden
+            >
+              <Bot className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium text-[var(--color-fg)]">
+                {sa.name}
               </div>
-            ) : null}
-          </div>
-        </button>
+              {desc ? (
+                <div className="mt-0.5 truncate text-[11px] text-[var(--color-fg-subtle)]">
+                  {desc}
+                </div>
+              ) : null}
+            </div>
+          </button>
+
+          {/* MCP-minted accounts get an informational badge whose popover
+              explains the advisory nature of the *:read scopes. Only the
+              one-click MCP connect flow stamps origin: "mcp-connect". */}
+          {sa.origin === "mcp-connect" ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                {/* Wrap in a span so the badge's own styling is preserved and
+                    the trigger click doesn't bubble to the row's onSelect. */}
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Badge tone="accent">MCP</Badge>
+                </span>
+              </PopoverTrigger>
+              <PopoverContent className="max-w-xs p-3 text-xs text-[var(--color-fg-muted)]">
+                Minted by the MCP one-click connect (Settings › Integrations).
+                The
+                <span className="font-mono"> *:read </span>
+                scopes are advisory — MCP read access is governed by the key's
+                reader role, not by these labels.
+              </PopoverContent>
+            </Popover>
+          ) : null}
+        </div>
       </TableCell>
 
       {/* Active key count — badge centred so the column is easy to scan. */}

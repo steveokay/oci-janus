@@ -32,6 +32,10 @@ export interface ServiceAccount {
   // last_used_at is not returned by the current backend (T14 enrichment does
   // not include it), but is defined here for forward-compatibility.
   last_used_at?: string | null;
+  // origin records how the SA was minted: 'manual' (created via the UI/API) or
+  // 'mcp-connect' (minted by the MCP one-click connect flow). Optional/nullable
+  // because older rows predate the column and the backend omits it when empty.
+  origin?: string | null;
 }
 
 // SAApiKey mirrors the saKeyResponse shape from http_service_accounts.go.

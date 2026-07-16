@@ -9,7 +9,6 @@ import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { PRRegistryPanel } from "@/components/settings/pr-registry-panel";
 import { PRNamespacesList } from "@/components/settings/pr-namespaces-list";
-import { MCPConnectCard } from "@/components/settings/mcp-connect-card";
 
 export const Route = createFileRoute("/_authenticated/settings/integrations")({
   component: IntegrationsTab,
@@ -22,8 +21,6 @@ function IntegrationsTab(): React.ReactElement {
       <PRRegistryPanel />
       {/* Active PR-namespace inventory — admin-only; renders null otherwise. */}
       <PRNamespacesList />
-      {/* FUT-088 #6 — connect-an-AI-agent (MCP) setup card; admin-only. */}
-      <MCPConnectCard />
     </div>
   );
 }

@@ -157,6 +157,10 @@ type ServiceAccountInput struct {
 	Name          string
 	Description   string
 	AllowedScopes []string
+	// Origin records how the SA was created: 'manual' (default) or
+	// 'mcp-connect'. It is a closed enum validated at the HTTP layer; the
+	// repo defaults an empty value to 'manual'.
+	Origin string
 	// ActorUserID is the human user performing the create. It is used to
 	// snapshot creator.Email + creator.DisplayName in the audit event so that
 	// audit attribution survives after the admin's account is deleted.
@@ -218,6 +222,7 @@ func (s *ServiceAccountService) Create(ctx context.Context, in ServiceAccountInp
 		Name:          in.Name,
 		Description:   in.Description,
 		AllowedScopes: in.AllowedScopes,
+		Origin:        in.Origin,
 		CreatedBy:     in.ActorUserID,
 	})
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -88,6 +89,10 @@ func (f *handlerFakeSARepo) CreateAtomic(
 		AllowedScopes: scopes,
 		CreatedBy:     &cb,
 		CreatedAt:     time.Now(),
+		// Copy Origin so create responses can echo it (Task 3). The repo
+		// defaults empty→'manual' in the real CreateAtomic; the service layer
+		// passes through whatever the handler validated.
+		Origin: in.Origin,
 	}
 	f.accounts[saID] = sa
 	return sa, shadowID, nil
@@ -1064,6 +1069,52 @@ func TestHTTP_RevokeKey_HappyPath(t *testing.T) {
 	}
 	if len(envelope.APIKeys) != 0 {
 		t.Errorf("api_keys count after revoke: got %d, want 0", len(envelope.APIKeys))
+	}
+}
+
+// TestCreateServiceAccount_originValidatedAndStored verifies that the create
+// handler validates the closed `origin` enum (manual | mcp-connect), rejects
+// unknown values with 400, and echoes the accepted origin back on the 201
+// response. It also confirms the origin threaded through the service layer into
+// the repo (the fake CreateAtomic copies Origin onto the returned row).
+func TestCreateServiceAccount_originValidatedAndStored(t *testing.T) {
+	env := newSATestEnv(t)
+	adminTok, _ := env.issueAdminToken(t)
+
+	// Invalid origin -> 400 Bad Request.
+	rr := doSAReq(t, env, http.MethodPost, "/api/v1/service-accounts", adminTok,
+		map[string]any{"name": "x-sa", "origin": "bogus"})
+	defer rr.Body.Close()
+	if rr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid origin: got %d, want 400", rr.StatusCode)
+	}
+
+	// Valid mcp-connect -> 201 Created and echoed back on the response.
+	rr2 := doSAReq(t, env, http.MethodPost, "/api/v1/service-accounts", adminTok,
+		map[string]any{"name": "mcp-agent-h1", "origin": "mcp-connect"})
+	defer rr2.Body.Close()
+	if rr2.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(rr2.Body)
+		t.Fatalf("valid create: got %d body=%s", rr2.StatusCode, string(body))
+	}
+	body, _ := io.ReadAll(rr2.Body)
+	if !containsSubstring(string(body), `"origin":"mcp-connect"`) {
+		t.Errorf("response missing origin: %s", string(body))
+	}
+
+	// The stub repo must have received Origin=="mcp-connect" (threaded through
+	// the service layer into repository.CreateServiceAccountInput).
+	found := false
+	for _, sa := range env.saRepo.accounts {
+		if sa.Name == "mcp-agent-h1" {
+			found = true
+			if sa.Origin != "mcp-connect" {
+				t.Errorf("stored origin: got %q, want %q", sa.Origin, "mcp-connect")
+			}
+		}
+	}
+	if !found {
+		t.Error("created SA not found in fake repo")
 	}
 }
 

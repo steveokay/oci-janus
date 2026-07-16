@@ -5552,6 +5552,37 @@
         ]
       }
     },
+    "/api/v1/signing/coverage": {
+      "get": {
+        "operationId": "get_api_v1_signing_coverage",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "GET /api/v1/signing/coverage",
+        "tags": [
+          "signing"
+        ]
+      }
+    },
     "/api/v1/stats": {
       "get": {
         "operationId": "get_api_v1_stats",
@@ -6510,6 +6541,9 @@
     },
     {
       "name": "signatures-by-digest"
+    },
+    {
+      "name": "signing"
     },
     {
       "name": "stats"

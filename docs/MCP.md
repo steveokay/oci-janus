@@ -132,7 +132,24 @@ the MCP server and the BFF, not between the LLM and the MCP server).
   `since_iso` filter for more history.
 
 - **The key is revocable.** It's a normal SA API key — revoke any time
-  from `/api-keys` in the dashboard. The MCP server treats it as opaque.
+  from `/api-keys` in the dashboard, or from **Settings › Agents**
+  (see below). The MCP server treats it as opaque.
+
+- **One place for agents: Settings › Agents.** The one-click connect card
+  ("Connect an AI agent (MCP)") and the inventory of already-connected agents
+  live together on the **Settings › Agents** tab. The connect card mints a
+  service account named `mcp-agent-<base36>` stamped with `origin='mcp-connect'`;
+  that origin drives an **MCP** badge in the service-accounts list and the
+  Agents inventory (created-at, last-used, one-click revoke) so an operator can
+  find and prune agent keys without decoding the name convention. Existing
+  `mcp-agent-*` accounts are backfilled to `origin='mcp-connect'` by migration.
+
+- **The `*:read` scopes on an MCP key are advisory today.** The read-only
+  vocabulary (`repo:read`, `scan:read`, `audit:read`, `access:read`,
+  `signer:read`) labels the key's intent but is **not** a per-route permission
+  gate — access is governed by the key being a role-less (reader) API key on
+  reader-gated routes. The SA-list badge tooltip says as much. Making these
+  scopes enforced gates is a planned follow-up.
 
 - **Stdio transport requires the key to be a Docker `-e` var** in
   Claude Desktop's config, which is stored in cleartext on disk.

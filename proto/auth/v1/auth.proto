@@ -605,6 +605,7 @@ message ServiceAccountSummary {
   int32                     active_key_count = 7;
   google.protobuf.Timestamp created_at       = 8;
   google.protobuf.Timestamp last_used_at     = 9; // null if no key ever used
+  string                    origin           = 10; // 'manual' | 'mcp-connect' (MCP provenance)
 }
 
 message ListServiceAccountsResponse {

@@ -66,6 +66,9 @@ export function useGenerateMcpKey() {
           name,
           description: "Read-only key for an MCP agent (Settings › Integrations)",
           allowed_scopes: MCP_KEY_SCOPES,
+          // Stamp the SA so the Service Accounts list can badge MCP-minted
+          // accounts. The backend echoes this back on the list response.
+          origin: "mcp-connect",
         },
       );
       const { data: key } = await apiClient.post<{ id: string; key: string }>(

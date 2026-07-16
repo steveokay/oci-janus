@@ -4065,6 +4065,31 @@
     {
       "item": [
         {
+          "name": "GET /api/v1/signing/coverage",
+          "request": {
+            "description": "GET /api/v1/signing/coverage",
+            "header": [],
+            "method": "GET",
+            "url": {
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "signing",
+                "coverage"
+              ],
+              "raw": "{{baseUrl}}/api/v1/signing/coverage"
+            }
+          }
+        }
+      ],
+      "name": "signing"
+    },
+    {
+      "item": [
+        {
           "name": "GET /api/v1/stats",
           "request": {
             "description": "GET /api/v1/stats",

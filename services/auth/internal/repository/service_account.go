@@ -41,6 +41,10 @@ type ServiceAccount struct {
 	CreatedAt time.Time
 	// DisabledAt is nil while the account is active.
 	DisabledAt *time.Time
+	// Origin records how the SA was created: 'manual' (default, all admin/API
+	// paths) or 'mcp-connect' (the MCP one-click connect flow). Closed enum,
+	// backed by the service_accounts.origin column (default 'manual').
+	Origin string
 }
 
 // ServiceAccountWithStats augments ServiceAccount with live stats derived from
@@ -67,6 +71,10 @@ type CreateServiceAccountInput struct {
 	// service_accounts.created_by FK and NULLed automatically by PostgreSQL
 	// when that user is later deleted.
 	CreatedBy uuid.UUID
+	// Origin records how the SA was created: 'manual' (default) or
+	// 'mcp-connect'. An empty string is normalised to 'manual' in CreateAtomic
+	// so callers on the manual path need not set it.
+	Origin string
 }
 
 // UpdateServiceAccountInput carries the optional fields that may be changed via
@@ -154,18 +162,26 @@ func (r *ServiceAccountRepo) CreateAtomic(ctx context.Context, in CreateServiceA
 		scopes = []string{}
 	}
 
+	// Default origin to 'manual' when unset so manual/admin callers need not set
+	// it. The column also carries a DB-side DEFAULT 'manual', but normalising
+	// here keeps the returned struct consistent regardless of DB defaulting.
+	origin := in.Origin
+	if origin == "" {
+		origin = "manual"
+	}
+
 	// 2. Insert the service_accounts row using the pre-generated saID.
 	sa := &ServiceAccount{}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO service_accounts
-		    (id, tenant_id, shadow_user_id, name, description, allowed_scopes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		    (id, tenant_id, shadow_user_id, name, description, allowed_scopes, created_by, origin)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, tenant_id, shadow_user_id, name, description, allowed_scopes,
-		          created_by, created_at, disabled_at`,
-		saID, in.TenantID, shadowID, in.Name, in.Description, scopes, in.CreatedBy,
+		          created_by, created_at, disabled_at, origin`,
+		saID, in.TenantID, shadowID, in.Name, in.Description, scopes, in.CreatedBy, origin,
 	).Scan(
 		&sa.ID, &sa.TenantID, &sa.ShadowUserID, &sa.Name, &sa.Description,
-		&sa.AllowedScopes, &sa.CreatedBy, &sa.CreatedAt, &sa.DisabledAt,
+		&sa.AllowedScopes, &sa.CreatedBy, &sa.CreatedAt, &sa.DisabledAt, &sa.Origin,
 	); err != nil {
 		if isUniqueViolation(err) {
 			return nil, uuid.Nil, ErrAlreadyExists
@@ -216,7 +232,7 @@ func (r *ServiceAccountRepo) Get(ctx context.Context, id uuid.UUID) (*ServiceAcc
 //	$5  limit           — pageSize+1 so the caller can detect a next page
 const listSQL = `
 	SELECT sa.id, sa.tenant_id, sa.shadow_user_id, sa.name, sa.description,
-	       sa.allowed_scopes, sa.created_by, sa.created_at, sa.disabled_at,
+	       sa.allowed_scopes, sa.created_by, sa.created_at, sa.disabled_at, sa.origin,
 	       COALESCE(COUNT(ak.id) FILTER (WHERE ak.is_active = true), 0)::int AS active_key_count,
 	       MAX(ak.last_used_at) AS last_used_at
 	FROM   service_accounts sa
@@ -294,7 +310,7 @@ func (r *ServiceAccountRepo) List(
 		var row ServiceAccountWithStats
 		if err := rows.Scan(
 			&row.ID, &row.TenantID, &row.ShadowUserID, &row.Name, &row.Description,
-			&row.AllowedScopes, &row.CreatedBy, &row.CreatedAt, &row.DisabledAt,
+			&row.AllowedScopes, &row.CreatedBy, &row.CreatedAt, &row.DisabledAt, &row.Origin,
 			&row.ActiveKeyCount, &row.LastUsedAt,
 		); err != nil {
 			return nil, "", fmt.Errorf("service_account list: scan: %w", err)

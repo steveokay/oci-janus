@@ -429,6 +429,54 @@ func TestServiceAccountRepo_List_Basic(t *testing.T) {
 	require.Empty(t, none, "different tenant must see no SAs")
 }
 
+// TestCreateServiceAccount_persistsOrigin verifies that the new origin column is
+// persisted on CreateAtomic (explicit value + default) and surfaced by List.
+//
+// origin is a closed enum: 'manual' (default) | 'mcp-connect'. The MCP one-click
+// connect flow stamps 'mcp-connect'; every other create path leaves it defaulted.
+func TestCreateServiceAccount_persistsOrigin(t *testing.T) {
+	ctx := context.Background()
+	_, users, repo := setupSARepo(t, ctx)
+
+	tenantID, creatorID := seedHuman(t, ctx, users, "origin@example.com")
+
+	// Explicit origin is persisted and returned on create.
+	sa, _, err := repo.CreateAtomic(ctx, CreateServiceAccountInput{
+		TenantID: tenantID, Name: "mcp-agent-testx", Description: "d",
+		AllowedScopes: []string{"repo:read"}, CreatedBy: creatorID, Origin: "mcp-connect",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if sa.Origin != "mcp-connect" {
+		t.Errorf("Origin = %q, want mcp-connect", sa.Origin)
+	}
+
+	// Empty Origin defaults to 'manual'.
+	sa2, _, err := repo.CreateAtomic(ctx, CreateServiceAccountInput{
+		TenantID: tenantID, Name: "plain-sa", Description: "", CreatedBy: creatorID,
+	})
+	if err != nil {
+		t.Fatalf("create2: %v", err)
+	}
+	if sa2.Origin != "manual" {
+		t.Errorf("default Origin = %q, want manual", sa2.Origin)
+	}
+
+	// List surfaces origin per row (ServiceAccountWithStats embeds ServiceAccount).
+	rows, _, err := repo.List(ctx, tenantID, true, 50, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.Name] = r.Origin
+	}
+	if got["mcp-agent-testx"] != "mcp-connect" || got["plain-sa"] != "manual" {
+		t.Errorf("list origins = %v", got)
+	}
+}
+
 // TestServiceAccountRepo_CountKeysAffectedByScopeShrink verifies that:
 //   - a key whose scopes are a subset of proposed returns count=0 (safe)
 //   - a key that grants a scope absent from proposed returns count=1 (warned)

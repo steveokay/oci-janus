@@ -58,6 +58,9 @@ type serviceAccountResponse struct {
 	// It is 0 on create/get/update responses (no stats join on single-row
 	// fetches); T14 enriches the list path.
 	ActiveKeyCount int32 `json:"active_key_count"`
+	// Origin records how the SA was created: 'manual' (default) or
+	// 'mcp-connect' (Task 3). Echoed on every SA CRUD response.
+	Origin string `json:"origin"`
 }
 
 // saToResponse converts a repository.ServiceAccount to the wire response.
@@ -71,6 +74,7 @@ func saToResponse(sa *repository.ServiceAccount) serviceAccountResponse {
 		ShadowUserID:  sa.ShadowUserID.String(),
 		CreatedAt:     sa.CreatedAt,
 		DisabledAt:    sa.DisabledAt,
+		Origin:        sa.Origin,
 	}
 	if sa.CreatedBy != nil {
 		resp.CreatedBy = sa.CreatedBy.String()
@@ -230,6 +234,9 @@ type createServiceAccountBody struct {
 	Name          string   `json:"name"`
 	Description   string   `json:"description"`
 	AllowedScopes []string `json:"allowed_scopes"`
+	// Origin is a closed enum: 'manual' (default) or 'mcp-connect'. Unknown
+	// values are rejected with 400 (Task 3).
+	Origin string `json:"origin"`
 }
 
 // createServiceAccount handles POST /api/v1/service-accounts.
@@ -275,11 +282,23 @@ func (h *HTTPHandler) createServiceAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate origin — a closed enum. Empty defaults to 'manual'; any value
+	// other than 'manual' or 'mcp-connect' is rejected (Task 3).
+	origin := body.Origin
+	if origin == "" {
+		origin = "manual"
+	}
+	if origin != "manual" && origin != "mcp-connect" {
+		writeError(w, http.StatusBadRequest, "BADREQUEST", "invalid origin: must be 'manual' or 'mcp-connect'")
+		return
+	}
+
 	sa, err := h.saService.Create(h.auditCtx(r, claims), service.ServiceAccountInput{
 		TenantID:      tenantID,
 		Name:          body.Name,
 		Description:   body.Description,
 		AllowedScopes: body.AllowedScopes,
+		Origin:        origin,
 		ActorUserID:   callerID,
 	})
 	if err != nil {
