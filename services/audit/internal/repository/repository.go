@@ -373,6 +373,11 @@ type NotificationRow struct {
 	ID         uuid.UUID
 	ActorID    string
 	ActorType  string
+	// ActorIP is the audit_events.actor_ip column (auth-published access
+	// events stamp the client source IP here). Surfaced on the notification
+	// metadata map as source_ip so the auth ActivityService can render the
+	// principal activity feed's origin column.
+	ActorIP    string
 	Action     string
 	Resource   string
 	Outcome    string
@@ -427,7 +432,7 @@ func (r *Repository) GetNotifications(
 	}
 
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, actor_id, actor_type, action, resource, outcome, metadata, occurred_at
+		`SELECT id, actor_id, actor_type, actor_ip, action, resource, outcome, metadata, occurred_at
 		 FROM audit_events
 		 WHERE tenant_id = $1
 		   AND occurred_at >= $2
@@ -448,7 +453,7 @@ func (r *Repository) GetNotifications(
 	for rows.Next() {
 		e := &NotificationRow{}
 		if err := rows.Scan(
-			&e.ID, &e.ActorID, &e.ActorType, &e.Action, &e.Resource,
+			&e.ID, &e.ActorID, &e.ActorType, &e.ActorIP, &e.Action, &e.Resource,
 			&e.Outcome, &e.Metadata, &e.OccurredAt,
 		); err != nil {
 			return nil, fmt.Errorf("audit GetNotifications scan: %w", err)
