@@ -116,26 +116,29 @@ func (h *HTTPHandler) RegisterServiceAccounts(mux *http.ServeMux) {
 //
 // The sentinel error is only used to signal "the response was already written" —
 // callers must return immediately when err != nil.
-func (h *HTTPHandler) requireSAAdmin(w http.ResponseWriter, r *http.Request) (callerID, tenantID uuid.UUID, err error) {
+// requireSAAdmin returns the caller's user id, tenant id, and the full
+// *service.Claims so mutation handlers can thread auditCtx(r, claims) into
+// their service calls (Task 3). Read-only callers discard the claims with _.
+func (h *HTTPHandler) requireSAAdmin(w http.ResponseWriter, r *http.Request) (callerID, tenantID uuid.UUID, claims *service.Claims, err error) {
 	// Authenticate the caller.
 	claims, authErr := h.requireAuth(r)
 	if authErr != nil {
 		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
-		return uuid.Nil, uuid.Nil, authErr
+		return uuid.Nil, uuid.Nil, nil, authErr
 	}
 
 	callerID, parseErr := uuid.Parse(claims.Subject)
 	if parseErr != nil {
 		slog.ErrorContext(r.Context(), "sa handler: invalid sub in token", "value", claims.Subject)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return uuid.Nil, uuid.Nil, parseErr
+		return uuid.Nil, uuid.Nil, nil, parseErr
 	}
 
 	tenantID, parseErr = uuid.Parse(claims.TenantID)
 	if parseErr != nil {
 		slog.ErrorContext(r.Context(), "sa handler: invalid tenant_id in token", "value", claims.TenantID)
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal error")
-		return uuid.Nil, uuid.Nil, parseErr
+		return uuid.Nil, uuid.Nil, nil, parseErr
 	}
 
 	// Require admin or owner role in the caller's tenant. The
@@ -145,10 +148,10 @@ func (h *HTTPHandler) requireSAAdmin(w http.ResponseWriter, r *http.Request) (ca
 	// other SA principals.
 	if !callerIsTenantAdmin(r.Context(), h.svc, callerID, tenantID, claims.PrincipalKind) {
 		writeError(w, http.StatusForbidden, "DENIED", "admin role required")
-		return uuid.Nil, uuid.Nil, errors.New("forbidden")
+		return uuid.Nil, uuid.Nil, nil, errors.New("forbidden")
 	}
 
-	return callerID, tenantID, nil
+	return callerID, tenantID, claims, nil
 }
 
 // requireSAService writes 501 and returns false when h.saService is nil.
@@ -174,7 +177,7 @@ func (h *HTTPHandler) listServiceAccounts(w http.ResponseWriter, r *http.Request
 	if !h.requireSAService(w) {
 		return
 	}
-	_, tenantID, err := h.requireSAAdmin(w, r)
+	_, tenantID, _, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -234,7 +237,7 @@ func (h *HTTPHandler) createServiceAccount(w http.ResponseWriter, r *http.Reques
 	if !h.requireSAService(w) {
 		return
 	}
-	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	callerID, tenantID, claims, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -272,7 +275,7 @@ func (h *HTTPHandler) createServiceAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	sa, err := h.saService.Create(r.Context(), service.ServiceAccountInput{
+	sa, err := h.saService.Create(h.auditCtx(r, claims), service.ServiceAccountInput{
 		TenantID:      tenantID,
 		Name:          body.Name,
 		Description:   body.Description,
@@ -303,7 +306,7 @@ func (h *HTTPHandler) getServiceAccount(w http.ResponseWriter, r *http.Request) 
 	if !h.requireSAService(w) {
 		return
 	}
-	_, tenantID, err := h.requireSAAdmin(w, r)
+	_, tenantID, _, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -352,7 +355,7 @@ func (h *HTTPHandler) updateServiceAccount(w http.ResponseWriter, r *http.Reques
 	if !h.requireSAService(w) {
 		return
 	}
-	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	callerID, tenantID, claims, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -408,7 +411,7 @@ func (h *HTTPHandler) updateServiceAccount(w http.ResponseWriter, r *http.Reques
 		// SetDisabled validates tenant ownership internally, but we surface the
 		// tenant mismatch as a 404 (not a 403) per the spec so callers cannot
 		// probe cross-tenant existence.
-		if err := h.saService.SetDisabled(r.Context(), saID, tenantID, *body.Disabled, callerID); err != nil {
+		if err := h.saService.SetDisabled(h.auditCtx(r, claims), saID, tenantID, *body.Disabled, callerID); err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
 				return
@@ -426,7 +429,7 @@ func (h *HTTPHandler) updateServiceAccount(w http.ResponseWriter, r *http.Reques
 	// Apply field-level mutations (name / description / allowed_scopes).
 	// When only disabled was changed, Update is still called so we get the
 	// refreshed SA back for the response.
-	sa, err := h.saService.Update(r.Context(), service.UpdateServiceAccountInput{
+	sa, err := h.saService.Update(h.auditCtx(r, claims), service.UpdateServiceAccountInput{
 		ID:            saID,
 		TenantID:      tenantID,
 		Name:          body.Name,
@@ -462,7 +465,7 @@ func (h *HTTPHandler) deleteServiceAccount(w http.ResponseWriter, r *http.Reques
 	if !h.requireSAService(w) {
 		return
 	}
-	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	callerID, tenantID, claims, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -491,7 +494,7 @@ func (h *HTTPHandler) deleteServiceAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.saService.Delete(r.Context(), saID, callerID); err != nil {
+	if err := h.saService.Delete(h.auditCtx(r, claims), saID, callerID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
 			return
@@ -528,7 +531,7 @@ func (h *HTTPHandler) saPreflightScopes(w http.ResponseWriter, r *http.Request) 
 	if !h.requireSAService(w) {
 		return
 	}
-	_, tenantID, err := h.requireSAAdmin(w, r)
+	_, tenantID, _, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -594,7 +597,7 @@ func (h *HTTPHandler) saListKeys(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSAService(w) {
 		return
 	}
-	_, tenantID, err := h.requireSAAdmin(w, r)
+	_, tenantID, _, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -663,7 +666,7 @@ func (h *HTTPHandler) saIssueKey(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSAService(w) {
 		return
 	}
-	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	callerID, tenantID, claims, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -697,7 +700,7 @@ func (h *HTTPHandler) saIssueKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.saService.IssueKey(r.Context(), saID, tenantID, body.Name, body.Scopes, callerID)
+	result, err := h.saService.IssueKey(h.auditCtx(r, claims), saID, tenantID, body.Name, body.Scopes, callerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "service account not found")
@@ -751,7 +754,7 @@ func (h *HTTPHandler) saRevokeKey(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSAService(w) {
 		return
 	}
-	callerID, tenantID, err := h.requireSAAdmin(w, r)
+	callerID, tenantID, claims, err := h.requireSAAdmin(w, r)
 	if err != nil {
 		return
 	}
@@ -768,7 +771,7 @@ func (h *HTTPHandler) saRevokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.saService.RevokeKey(r.Context(), keyID, saID, tenantID, callerID); err != nil {
+	if err := h.saService.RevokeKey(h.auditCtx(r, claims), keyID, saID, tenantID, callerID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOTFOUND", "service account or key not found")
 			return

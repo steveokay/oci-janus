@@ -123,6 +123,12 @@ type Claims struct {
 	// the JTI rotates every 300s. Empty for non-session tokens (OCI /v2 Docker
 	// tokens, workload OIDC, API-key dispatch).
 	Sid string `json:"sid,omitempty"`
+	// KeyID is the API key that authenticated this request, populated only on
+	// the `Bearer key.<uuid>.<secret>` / Basic-auth API-key path (see
+	// synthClaimsFromAPIKey). uuid.Nil for JWT/browser sessions. json:"-" so it
+	// never touches the wire — it is an in-process field on synthesized claims,
+	// not a real JWT claim.
+	KeyID uuid.UUID `json:"-"`
 }
 
 // RepositoryAccess describes a scope granted within a single token.

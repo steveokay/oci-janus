@@ -262,6 +262,10 @@ type rawNotificationPayload struct {
 	Title    string `json:"title"`
 	Summary  string `json:"summary"`
 	Link     string `json:"link"`
+	// APIKeyID is the id of the API key that authenticated the request that
+	// produced this event (auth SA lifecycle events). Empty for JWT/browser-
+	// driven mutations. Surfaced as metadata["api_key_id"].
+	APIKeyID string `json:"api_key_id"`
 }
 
 // notificationFromRow converts an audit row into a wire-shaped notification
@@ -313,7 +317,7 @@ func notificationFromRow(row *repository.NotificationRow, displayNames map[strin
 		Title:            title,
 		Summary:          summary,
 		Link:             link,
-		Metadata:         notificationMetadataMap(&p),
+		Metadata:         notificationMetadataMap(&p, row.Outcome, row.ActorIP),
 	}
 }
 
@@ -564,8 +568,24 @@ func renderNotification(action, outcome string, p *rawNotificationPayload, org, 
 // for the dashboard to render extra context. Empty values are dropped to keep
 // the JSON tight; numeric fields are stringified so the proto type stays a
 // simple string→string map.
-func notificationMetadataMap(p *rawNotificationPayload) map[string]string {
+func notificationMetadataMap(p *rawNotificationPayload, outcome, sourceIP string) map[string]string {
 	m := map[string]string{}
+	// source_ip is the audit row's actor_ip column (auth-published access
+	// events); api_key_id rides in the raw payload. Both power the principal
+	// activity feed (auth ActivityService reads these metadata keys).
+	if sourceIP != "" {
+		m["source_ip"] = sourceIP
+	}
+	if p.APIKeyID != "" {
+		m["api_key_id"] = p.APIKeyID
+	}
+	// outcome is the audit row's first-class success/failure column (not a
+	// payload field). The auth ActivityService reads meta["outcome"] to populate
+	// the activity feed's Status, so it must be carried on the wire here;
+	// omitting it made every event render as "failure" downstream.
+	if outcome != "" {
+		m["outcome"] = outcome
+	}
 	if p.RepositoryName != "" {
 		m["repo"] = p.RepositoryName
 	}

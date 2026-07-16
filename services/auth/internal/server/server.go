@@ -694,13 +694,24 @@ func (e rabbitMQAuditEmitter) Emit(ctx context.Context, ev service.AuditEvent) e
 // eventconsumer translates each message to an audit_events row with
 // action == payload.Action so spec §5.7's lifecycle vocabulary becomes a
 // real, queryable audit trail.
-func (e rabbitMQAuditEmitter) publishSALifecycle(ctx context.Context, ev service.AuditEvent) error {
-	payload, err := json.Marshal(events.ServiceAccountLifecyclePayload{
+// saLifecyclePayload builds the ServiceAccountLifecyclePayload for an SA
+// lifecycle AuditEvent, stamping the request's source IP + authenticating
+// API-key id read from ctx (see service.RequestMetaFromContext). Pure +
+// broker-free so it is unit-testable.
+func saLifecyclePayload(ctx context.Context, ev service.AuditEvent) events.ServiceAccountLifecyclePayload {
+	sourceIP, apiKeyID := service.RequestMetaFromContext(ctx)
+	return events.ServiceAccountLifecyclePayload{
 		Action:   ev.Action,
 		ActorID:  ev.ActorID,
 		Resource: ev.Resource,
 		Fields:   ev.Fields,
-	})
+		SourceIP: sourceIP,
+		APIKeyID: apiKeyID,
+	}
+}
+
+func (e rabbitMQAuditEmitter) publishSALifecycle(ctx context.Context, ev service.AuditEvent) error {
+	payload, err := json.Marshal(saLifecyclePayload(ctx, ev))
 	if err != nil {
 		return fmt.Errorf("marshal SA lifecycle payload: %w", err)
 	}
