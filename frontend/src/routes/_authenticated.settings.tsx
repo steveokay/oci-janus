@@ -41,6 +41,7 @@ type SettingsTab =
   | "scanning"
   | "housekeeping"
   | "notifications"
+  | "connected-agents"
   | "integrations";
 
 interface TabDef {
@@ -50,6 +51,7 @@ interface TabDef {
     | "/settings/scanning"
     | "/settings/housekeeping"
     | "/settings/notifications"
+    | "/settings/connected-agents"
     | "/settings/integrations";
   label: string;
 }
@@ -97,6 +99,15 @@ function SettingsLayout(): React.ReactElement {
         label: "Housekeeping",
       });
     }
+    // Connected Agents (MCP) — the inventory of MCP-minted service accounts
+    // with a one-click revoke. Admin-gated, matching the SA-admin surface.
+    if (hasAnyAdminScope) {
+      out.push({
+        key: "connected-agents",
+        to: "/settings/connected-agents",
+        label: "Connected Agents",
+      });
+    }
     // Notifications is a personal preference — always available to everyone.
     out.push({
       key: "notifications",
@@ -126,9 +137,11 @@ function SettingsLayout(): React.ReactElement {
       ? "Housekeeping"
       : location.pathname.startsWith("/settings/notifications")
         ? "Notifications"
-        : location.pathname.startsWith("/settings/integrations")
-          ? "Integrations"
-          : "Workspace";
+        : location.pathname.startsWith("/settings/connected-agents")
+          ? "Connected Agents"
+          : location.pathname.startsWith("/settings/integrations")
+            ? "Integrations"
+            : "Workspace";
 
   return (
     <div className="space-y-6 p-6">
