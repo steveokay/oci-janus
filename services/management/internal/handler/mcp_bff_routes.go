@@ -53,6 +53,9 @@ type serviceAccountResponse struct {
 	ActiveKeyCount int32    `json:"active_key_count"`
 	CreatedAt      string   `json:"created_at,omitempty"`
 	LastUsedAt     string   `json:"last_used_at,omitempty"`
+	// Origin records how the SA was created: 'manual' (admin/API) or
+	// 'mcp-connect' (the one-click MCP connect flow). MCP provenance.
+	Origin string `json:"origin,omitempty"`
 }
 
 // handleListServiceAccounts proxies auth.ListServiceAccounts. include_disabled
@@ -82,6 +85,7 @@ func (h *Handler) handleListServiceAccounts(w http.ResponseWriter, r *http.Reque
 			AllowedScopes:  sa.GetAllowedScopes(),
 			Disabled:       sa.GetDisabled(),
 			ActiveKeyCount: sa.GetActiveKeyCount(),
+			Origin:         sa.GetOrigin(),
 		}
 		if ts := sa.GetCreatedAt(); ts != nil {
 			row.CreatedAt = ts.AsTime().UTC().Format(time.RFC3339)

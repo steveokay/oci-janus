@@ -48,6 +48,7 @@ func TestListServiceAccountsBFF_returnsInventory(t *testing.T) {
 			AllowedScopes  []string `json:"allowed_scopes"`
 			Disabled       bool     `json:"disabled"`
 			ActiveKeyCount int      `json:"active_key_count"`
+			Origin         string   `json:"origin"`
 		} `json:"service_accounts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -59,6 +60,10 @@ func TestListServiceAccountsBFF_returnsInventory(t *testing.T) {
 	sa := body.ServiceAccounts[0]
 	if sa.Name != "ci-bot" || sa.ActiveKeyCount != 2 || !sa.Disabled {
 		t.Errorf("unexpected SA row: %+v", sa)
+	}
+	// MCP provenance: the origin field must surface through the BFF DTO.
+	if sa.Origin != "mcp-connect" {
+		t.Errorf("Origin = %q, want mcp-connect", sa.Origin)
 	}
 }
 
@@ -210,6 +215,7 @@ func (s *fakeAuthServer) ListServiceAccounts(_ context.Context, req *authv1.List
 				Disabled:       true,
 				ActiveKeyCount: 2,
 				CreatedAt:      timestamppb.Now(),
+				Origin:         "mcp-connect",
 			},
 		},
 	}, nil

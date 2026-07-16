@@ -791,6 +791,7 @@ func (h *GRPCHandler) ListServiceAccounts(ctx context.Context, req *authv1.ListS
 			Disabled:       r.DisabledAt != nil,
 			ActiveKeyCount: r.ActiveKeyCount,
 			CreatedAt:      timestamppb.New(r.CreatedAt),
+			Origin:         r.Origin, // MCP provenance: 'manual' | 'mcp-connect'
 		}
 		if r.LastUsedAt != nil {
 			s.LastUsedAt = timestamppb.New(*r.LastUsedAt)
