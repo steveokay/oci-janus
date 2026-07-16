@@ -71,6 +71,6 @@ describe("SigningCoverageTable", () => {
     expect(screen.getByText("acme/api")).toBeInTheDocument();
     expect(screen.getByText("acme/web")).toBeInTheDocument();
     expect(screen.getByText("38/40")).toBeInTheDocument();
-    expect(screen.getByText(/any signature/i)).toBeInTheDocument();
+    expect(screen.getByText(/any sig/i)).toBeInTheDocument();
   });
 });

@@ -1,5 +1,13 @@
 import * as React from "react";
 import { Link } from "@tanstack/react-router";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { AllowlistHealth, RepoCoverage } from "@/lib/api/signing-coverage";
 import { SigningCoverageBar } from "./signing-coverage-bar";
@@ -18,7 +26,7 @@ const HEALTH_META: Record<AllowlistHealth, { label: string; className: string }>
     className: "text-[var(--color-success)] bg-[var(--color-success)]/10",
   },
   enforced_any_signature: {
-    label: "Any signature",
+    label: "Enforced · any sig",
     className: "text-[var(--color-warning)] bg-[var(--color-warning)]/10",
   },
   advisory: {
@@ -92,25 +100,27 @@ export function SigningCoverageTable({ repos }: SigningCoverageTableProps): Reac
         </label>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
-        <table className="w-full text-sm">
-          <thead className="bg-[var(--color-surface-sunken)] text-left text-xs uppercase tracking-wide text-[var(--color-fg-subtle)]">
-            <tr>
-              <th className="px-4 py-2 font-medium">Repository</th>
-              <th className="px-4 py-2 font-medium">Policy</th>
-              <th className="px-4 py-2 font-medium">Signed coverage</th>
-              <th className="px-4 py-2 font-medium">Trusted keys</th>
-              <th className="px-4 py-2 font-medium">Recent signers</th>
-              <th className="px-4 py-2" />
-            </tr>
-          </thead>
-          <tbody>
+      {/* Table already provides its own overflow-x-auto scroll container, so we
+          only add the rounded-border shell (matching VulnerabilitiesTable). */}
+      <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Repository</TableHead>
+              <TableHead>Policy</TableHead>
+              <TableHead>Signed coverage</TableHead>
+              <TableHead>Trusted keys</TableHead>
+              <TableHead>Recent signers</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((r) => (
-              <tr key={`${r.org}/${r.repo}`} className="border-t border-[var(--color-border)]">
-                <td className="px-4 py-2 font-medium">
+              <TableRow key={`${r.org}/${r.repo}`}>
+                <TableCell className="font-medium">
                   {r.org}/{r.repo}
-                </td>
-                <td className="px-4 py-2">
+                </TableCell>
+                <TableCell>
                   {r.require_signature ? (
                     <span className="rounded bg-[var(--color-surface-sunken)] px-1.5 py-0.5 text-xs">
                       require_signature
@@ -118,31 +128,31 @@ export function SigningCoverageTable({ repos }: SigningCoverageTableProps): Reac
                   ) : (
                     <span className="text-[var(--color-fg-subtle)]">—</span>
                   )}
-                </td>
-                <td className="px-4 py-2">
+                </TableCell>
+                <TableCell>
                   <SigningCoverageBar
                     pct={r.signed_pct}
                     signed={r.signed_tags}
                     total={r.tags_in_window}
                   />
-                </td>
-                <td className="px-4 py-2">
+                </TableCell>
+                <TableCell>
                   <AllowlistHealthBadge health={r.allowlist_health} keyCount={r.trusted_key_count} />
                   {r.stale_trusted_keys > 0 && (
                     <span className="ml-1 text-xs text-[var(--color-fg-subtle)]">
                       ({r.stale_trusted_keys} stale)
                     </span>
                   )}
-                </td>
-                <td className="px-4 py-2 text-xs text-[var(--color-fg-muted)]">
+                </TableCell>
+                <TableCell className="text-xs text-[var(--color-fg-muted)]">
                   {r.recent_signers.length === 0
                     ? "—"
                     : r.recent_signers
                         .slice(0, 3)
                         .map((s) => s.signer_id || s.key_id)
                         .join(", ")}
-                </td>
-                <td className="px-4 py-2 text-right">
+                </TableCell>
+                <TableCell className="text-right">
                   {/* Drill into the per-repo Settings tab (trusted-key editor +
                       require_signature toggle). The repo-detail route keeps its
                       active tab in a ?tab= search param, so we deep-link
@@ -156,11 +166,11 @@ export function SigningCoverageTable({ repos }: SigningCoverageTableProps): Reac
                   >
                     Settings →
                   </Link>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
