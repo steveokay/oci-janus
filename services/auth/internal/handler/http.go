@@ -799,7 +799,7 @@ func (h *HTTPHandler) createSAAPIKey(w http.ResponseWriter, r *http.Request, req
 	// 4. Issue the key via the service layer; it validates that scopes are a
 	// subset of sa.AllowedScopes and emits the service_account.key_issued audit
 	// event.
-	result, err := h.saService.IssueKey(r.Context(), sa.ID, sa.TenantID, req.Name, req.Scopes, callerID)
+	result, err := h.saService.IssueKey(h.auditCtx(r, claims), sa.ID, sa.TenantID, req.Name, req.Scopes, callerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "service account not found")
@@ -950,9 +950,22 @@ func (h *HTTPHandler) requireAuth(r *http.Request) (*service.Claims, error) {
 		if err != nil {
 			return nil, err
 		}
-		return synthClaimsFromAPIKey(vk), nil
+		return synthClaimsFromAPIKey(vk, keyID), nil
 	}
 	return h.svc.ValidateToken(r.Context(), token)
+}
+
+// auditCtx enriches the request context with the actor metadata the audit
+// emitter stamps onto lifecycle events: the trusted-proxy-resolved client IP
+// and the authenticating API-key id (blank for JWT/browser callers). Handlers
+// that trigger an audited SA mutation pass auditCtx(r, claims) to the service
+// call instead of r.Context().
+func (h *HTTPHandler) auditCtx(r *http.Request, claims *service.Claims) context.Context {
+	keyID := ""
+	if claims != nil && claims.KeyID != uuid.Nil {
+		keyID = claims.KeyID.String()
+	}
+	return service.WithRequestMeta(r.Context(), remoteIP(r), keyID)
 }
 
 // parseAPIKeyBearer tries to interpret `token` as an API-key Bearer of the
@@ -990,8 +1003,8 @@ func parseAPIKeyBearer(token string) (uuid.UUID, string, bool) {
 // claim baked in. Handlers that gate on a specific role (admin / owner)
 // must still require a JWT — they will surface a clean 403 against the
 // empty roles list rather than a confusing UNAUTHORIZED.
-func synthClaimsFromAPIKey(vk *service.ValidatedKey) *service.Claims {
-	return &service.Claims{
+func synthClaimsFromAPIKey(vk *service.ValidatedKey, keyID uuid.UUID) *service.Claims {
+	c := &service.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject: vk.UserID.String(),
 		},
@@ -1003,6 +1016,10 @@ func synthClaimsFromAPIKey(vk *service.ValidatedKey) *service.Claims {
 		// (REDESIGN-001 Phase 5.4, Decision #24).
 		PrincipalKind: vk.PrincipalKind,
 	}
+	// KeyID records the authenticating API key so the audit emitter can stamp
+	// api_key_id onto lifecycle events triggered by this request (Task 3).
+	c.KeyID = keyID
+	return c
 }
 
 // parseTenantID reads the X-Tenant-ID header injected by the gateway.
