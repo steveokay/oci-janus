@@ -575,6 +575,13 @@ type ServiceAccountLifecyclePayload struct {
 	ActorID  string         `json:"actor_id"`
 	Resource string         `json:"resource"`
 	Fields   map[string]any `json:"fields,omitempty"`
+	// SourceIP is the client IP that initiated the mutation (trusted-proxy
+	// resolved). Empty when unknown. Consumed by the audit service to populate
+	// audit_events.actor_ip so the principal activity feed can show it.
+	SourceIP string `json:"source_ip,omitempty"`
+	// APIKeyID is the id of the API key that authenticated the request, or empty
+	// for JWT/browser sessions. Surfaced on the activity feed as api_key_id.
+	APIKeyID string `json:"api_key_id,omitempty"`
 }
 
 // FUT-004 payloads ─────────────────────────────────────────────────────
