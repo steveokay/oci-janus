@@ -63,27 +63,6 @@
 
 ---
 
-### REM-019 — Scanner trivy adapter exits with code 1 (Phase 2: underlying failure)
-
-**Surfaced:** 2026-06-24 during scan smoke testing.
-**Phase 1 (DONE, PR #70):** all four adapters now mirror their RPC
-error to stderr before exit; orchestrator parses stdout RPC error
-even on non-zero exit. This was the "stop debugging blind" half.
-**Phase 2 (OPEN):** the underlying trivy invocation still fails.
-The next smoke test against
-`dev/rabbitmq:3.13-management-alpine` should now print the real
-error in either the `stderr` or `stdout_error` field of the
-orchestrator log. Once that error string lands, file the targeted
-fix (likely candidates: missing Trivy DB in the cache volume —
-boot pre-warm uses Grype not Trivy; raw gzipped layer vs OCI
-layout; distroless scratch-dir / tmpdir perms).
-
-**Workaround for users right now:** in `/admin/scanner`, swap the
-active adapter to the dev stub. REM-011 P2's in-memory swap means
-no container restart is needed.
-
----
-
 ### REM-020 — CI pipeline reshape (rethink + rework)
 
 **Surfaced:** 2026-06-29 during PR #160. The proto-touching PR

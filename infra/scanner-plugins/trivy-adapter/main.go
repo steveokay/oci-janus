@@ -8,12 +8,12 @@
 //
 // Flow:
 //
-//	1. read newline-delimited JSON-RPC scan request from stdin
-//	2. flatten the staged layer blobs (image_path/<digest_hex>) into a
-//	   single rootfs directory, applying layers in manifest order
-//	3. invoke `trivy rootfs --format json --quiet --no-progress <rootfs>`
-//	4. parse Trivy's JSON, translate to the contract's findings shape
-//	5. write the JSON-RPC response to stdout, exit 0
+//  1. read newline-delimited JSON-RPC scan request from stdin
+//  2. flatten the staged layer blobs (image_path/<digest_hex>) into a
+//     single rootfs directory, applying layers in manifest order
+//  3. invoke `trivy rootfs --format json --quiet --no-progress <rootfs>`
+//  4. parse Trivy's JSON, translate to the contract's findings shape
+//  5. write the JSON-RPC response to stdout, exit 0
 //
 // Scope note: this is a v1 adapter aimed at the common case — Linux base
 // images (alpine, debian, distroless, ubuntu) with gzipped tar layers.
@@ -277,32 +277,92 @@ func untarTo(r io.Reader, rootfs string) error {
 	}
 }
 
-// runTrivy shells out to trivy rootfs and returns the parsed report
-// plus trivy's self-reported version (read once from `trivy --version`
-// so the response always reports the binary that actually ran).
-func runTrivy(rootfs string) (*trivyJSON, string, error) {
-	version, _ := trivyVersion()
+// trivyDBDir returns the directory trivy stores its vulnerability DB in.
+// Trivy keeps the DB under $TRIVY_CACHE_DIR/db (the scanner image sets
+// TRIVY_CACHE_DIR=/trivy-cache), falling back to trivy's default
+// ~/.cache/trivy/db when the env var is unset.
+func trivyDBDir() string {
+	if c := os.Getenv("TRIVY_CACHE_DIR"); c != "" {
+		return filepath.Join(c, "db")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".cache", "trivy", "db")
+}
 
-	// --quiet drops the progress bar; --no-progress drops the DB
-	// download spinner that would otherwise pollute stdout. --format
-	// json directs the report (still stderr-safe — trivy emits human
-	// progress on stderr and the report on stdout).
-	cmd := exec.Command(trivyBinary, "rootfs", "--quiet", "--no-progress", "--format", "json", rootfs) //nolint:gosec
+// trivyDBPresent reports whether the trivy vulnerability DB is already on
+// disk. When it is, the scan runs with --skip-db-update so the hot path does
+// ZERO network I/O — the core of the REM-019 Phase 2 fix (a live per-scan DB
+// download made scans slow and intermittently fail).
+func trivyDBPresent() bool {
+	_, err := os.Stat(filepath.Join(trivyDBDir(), "trivy.db"))
+	return err == nil
+}
+
+// trivyScanArgs builds the `trivy rootfs` argument vector.
+//
+//   - --quiet drops the progress bar; --no-progress drops the DB spinner that
+//     would otherwise pollute stdout; --format json directs the report to
+//     stdout (trivy keeps human progress on stderr).
+//   - --skip-db-update (when skipDBUpdate) makes the scan fully offline: trivy
+//     uses the already-downloaded DB and never reaches out to the network. This
+//     is what makes scans deterministic instead of coupling every scan to a
+//     ~100MB download from mirror.gcr.io.
+func trivyScanArgs(rootfs string, skipDBUpdate bool) []string {
+	args := []string{"rootfs", "--quiet", "--no-progress", "--format", "json"}
+	if skipDBUpdate {
+		args = append(args, "--skip-db-update")
+	}
+	return append(args, rootfs)
+}
+
+// runTrivyOnce runs a single `trivy rootfs` invocation and parses its report.
+func runTrivyOnce(rootfs string, skipDBUpdate bool) (*trivyJSON, error) {
+	cmd := exec.Command(trivyBinary, trivyScanArgs(rootfs, skipDBUpdate)...) //nolint:gosec
 	cmd.Env = pluginEnv()
 
 	stdout, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, version, fmt.Errorf("trivy exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
+			return nil, fmt.Errorf("trivy exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
 		}
-		return nil, version, err
+		return nil, err
 	}
 
 	var report trivyJSON
 	if err := json.Unmarshal(stdout, &report); err != nil {
-		return nil, version, fmt.Errorf("parse trivy json: %w", err)
+		return nil, fmt.Errorf("parse trivy json: %w", err)
 	}
-	return &report, version, nil
+	return &report, nil
+}
+
+// runTrivy shells out to trivy rootfs and returns the parsed report plus
+// trivy's self-reported version (read once from `trivy --version` so the
+// response always reports the binary that actually ran).
+//
+// REM-019 Phase 2 root-cause fix: prefer an OFFLINE scan (--skip-db-update)
+// whenever the vulnerability DB is already present (pre-warmed at container
+// boot, or downloaded by an earlier scan). This removes the live per-scan DB
+// download from the hot path — the download made scans take ~30s and fail
+// intermittently on transient registry/network errors. Only when the cache is
+// genuinely cold (fresh volume, or the boot pre-warm failed) do we fall back to
+// a one-time online run so the adapter self-heals rather than hard-failing
+// every scan. The online run also covers the rare case where the DB file exists
+// but trivy rejects it (corrupt / schema-mismatched) — a first offline attempt
+// that errors is retried online once.
+func runTrivy(rootfs string) (*trivyJSON, string, error) {
+	version, _ := trivyVersion()
+
+	skipDBUpdate := trivyDBPresent()
+	report, err := runTrivyOnce(rootfs, skipDBUpdate)
+	if err != nil && skipDBUpdate {
+		// DB looked present but the offline scan failed — retry once allowing a
+		// fresh download before giving up.
+		report, err = runTrivyOnce(rootfs, false)
+	}
+	if err != nil {
+		return nil, version, err
+	}
+	return report, version, nil
 }
 
 // trivyVersion runs `trivy --version` and parses the first line.
