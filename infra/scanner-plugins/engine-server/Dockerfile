@@ -42,7 +42,12 @@ FROM engine-${ENGINE} AS final
 # would resolve empty.
 ARG ENGINE=trivy
 
-USER root
+# Numeric UID 0, NOT `USER root`: grype's distroless base has no /etc/passwd
+# entry for the name "root", so `USER root` fails at container start with
+# "unable to find user root". Numeric UIDs need no passwd lookup. Root is
+# needed to write /engine-cache and read the scanner's 0700 rootfs on the
+# shared volume.
+USER 0
 # Both upstream images are alpine/distroless-ish. grype's base is distroless
 # (no /bin/sh, no mkdir/coreutils at all), so the wrapper binary itself is the
 # entrypoint and handles DB pre-warm + healthchecks in-process — see
