@@ -42,28 +42,7 @@ if [ -z "${SCANNER_PLUGIN_CHECKSUM:-}" ]; then
     echo "entrypoint: auto-computed SCANNER_PLUGIN_CHECKSUM=$SCANNER_PLUGIN_CHECKSUM for $SCANNER_PLUGIN_PATH" >&2
 fi
 
-# REM-014: Pre-warm the Grype vulnerability DB at container start so
-# the first scan doesn't pay the ~2 GB download cost (which can blow
-# past the scanner job timeout and produce the "exit status 1 with
-# empty stderr" symptom we hit during initial integration). Best-
-# effort — failure logs but doesn't block startup, because the dev-
-# stub + Trivy paths still work without Grype's DB.
-#
-# Skips the warm if:
-#   - grype isn't in the image (defensive — tests with a different
-#     image layout still work)
-#   - SCANNER_SKIP_GRYPE_WARM=1 (operator override for fast CI runs
-#     where the DB isn't needed)
-if [ -z "${SCANNER_SKIP_GRYPE_WARM:-}" ] && [ -x /usr/local/bin/grype ]; then
-    echo "entrypoint: pre-warming Grype vulnerability DB (one-time per cache volume)..." >&2
-    if /usr/local/bin/grype db update >/tmp/grype-warm.log 2>&1; then
-        echo "entrypoint: Grype DB ready." >&2
-    else
-        echo "entrypoint: Grype DB warm failed (see /tmp/grype-warm.log) — continuing; first scan with Grype active will retry." >&2
-    fi
-fi
-
-# Trivy DB pre-warm moved to the trivy-engine sidecar (engine decoupling,
-# 2026-07-17). Grype warm stays until grype-engine ships in Phase 2.
+# Trivy + Grype DB pre-warm moved to their engine sidecars (engine
+# decoupling, 2026-07-17). The scanner image bakes no engine binaries.
 
 exec "$@"
