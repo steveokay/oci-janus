@@ -1090,6 +1090,40 @@ services:
   # binary so neither env var needs a value in dev. Operators wanting real
   # scans should set SCANNER_PLUGIN_PATH to the trivy adapter; the env
   # default below empty-falls-through to the Dockerfile default.
+  # ── trivy-engine (scanner-engine-decoupling Task 2/6) ────────────────────
+  #
+  # Sidecar HTTP server wrapping the Trivy CLI so the trivy vulnerability
+  # DB (and its periodic refresh) live outside the scanner's own image —
+  # the scanner no longer needs to download the DB mid-scan (REM-019 Ph2).
+  # Built from the shared engine-server Dockerfile with ENGINE=trivy; the
+  # build context must be the repo root because that Dockerfile COPYs
+  # infra/scanner-plugins/engine-server/.
+  #
+  # Shares the `scan_work` volume (read-only here) with registry-scanner,
+  # which stages the image layers there for the engine to read.
+  trivy-engine:
+    build:
+      context: ../..
+      dockerfile: infra/scanner-plugins/engine-server/Dockerfile
+      args:
+        ENGINE: trivy
+    image: oci-janus/trivy-engine:dev
+    profiles: ["scanner"]
+    networks:
+      - registry
+    environment:
+      ENGINE_NAME: trivy
+      ENGINE_HTTP_ADDR: ":8085"
+    volumes:
+      - scan_work:/scan-work:ro
+      - trivy_engine_cache:/engine-cache
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   registry-scanner:
     build:
       context: ../../
@@ -1130,6 +1164,11 @@ services:
       MTLS_KEY_PATH: /certs/scanner.key
       # REDESIGN-001 Phase 3.4 — single-mode bootstrap-tenant-id lookup.
       TENANT_GRPC_ADDR: registry-tenant:50051
+      # scanner-engine-decoupling Task 6 — trivy-engine sidecar wiring.
+      # The trivy DB now lives in the sidecar's trivy_engine_cache volume
+      # instead of being downloaded on the scanner's hot path (REM-019 Ph2).
+      TRIVY_ENGINE_URL: "http://trivy-engine:8085"
+      SCANNER_SCAN_WORK_DIR: "/scan-work"
     volumes:
       - certs_data:/certs:ro
       # FE-API-019 compliance reports — scanner writes rendered PDF +
@@ -1137,6 +1176,10 @@ services:
       # cross-service handoff to a streaming gRPC RPC, so this is a
       # scanner-private volume now rather than a shared mount.
       - scanner_reports:/tmp/reports
+      # scanner-engine-decoupling Task 6 — shared read-write staging area;
+      # the scanner writes layers here for trivy-engine to read (ro on
+      # the sidecar side above).
+      - scan_work:/scan-work
     ports:
       - "8085:8080"
       - "50056:50051"
@@ -1156,6 +1199,10 @@ services:
       # Phase 3.4 fetchBootstrapTenantID lookup fails closed at startup.
       registry-bootstrap:
         condition: service_completed_successfully
+      # scanner-engine-decoupling Task 6 — wait for the trivy sidecar's
+      # own healthcheck (DB loaded) before accepting scan requests.
+      trivy-engine:
+        condition: service_healthy
     networks:
       - registry
     healthcheck:
@@ -1223,3 +1270,11 @@ volumes:
   # matcher's vulnerability feed cache (~1 GB after first updater
   # run).
   clair_db:
+  # scanner-engine-decoupling Task 6 — shared staging area between
+  # registry-scanner (writer) and trivy-engine (reader) for image
+  # layers being scanned. Scoped to the `scanner` profile.
+  scan_work:
+  # scanner-engine-decoupling Task 6 — trivy-engine's own vulnerability
+  # DB cache, decoupled from the scanner's image so DB refreshes no
+  # longer happen on the scan hot path (REM-019 Ph2).
+  trivy_engine_cache:
