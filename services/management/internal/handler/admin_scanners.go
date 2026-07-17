@@ -82,6 +82,11 @@ type AdminScannerHealthResponse struct {
 	InFlightCount        int64  `json:"in_flight_count"`
 	ActiveAdapterName    string `json:"active_adapter_name,omitempty"`
 	ActiveAdapterVersion string `json:"active_adapter_version,omitempty"`
+	// ActiveAdapterEngineReachable/Detail surface REM engine-sidecar
+	// reachability (e.g. trivy-engine) distinct from a generic scan
+	// error — see scanner.proto ScannerHealthResponse fields 7/8.
+	ActiveAdapterEngineReachable bool   `json:"active_adapter_engine_reachable"`
+	ActiveAdapterEngineDetail    string `json:"active_adapter_engine_detail,omitempty"`
 }
 
 // requireScannerAdmin is the shared platform-admin gate. Returns false
@@ -264,11 +269,13 @@ func (h *Handler) handleAdminScannerHealth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	out := AdminScannerHealthResponse{
-		Healthy:              resp.GetHealthy(),
-		QueueDepth:           resp.GetQueueDepth(),
-		InFlightCount:        resp.GetInFlightCount(),
-		ActiveAdapterName:    resp.GetActiveAdapterName(),
-		ActiveAdapterVersion: resp.GetActiveAdapterVersion(),
+		Healthy:                      resp.GetHealthy(),
+		QueueDepth:                   resp.GetQueueDepth(),
+		InFlightCount:                resp.GetInFlightCount(),
+		ActiveAdapterName:            resp.GetActiveAdapterName(),
+		ActiveAdapterVersion:         resp.GetActiveAdapterVersion(),
+		ActiveAdapterEngineReachable: resp.GetActiveAdapterEngineReachable(),
+		ActiveAdapterEngineDetail:    resp.GetActiveAdapterEngineDetail(),
 	}
 	if ts := resp.GetLastSuccessfulScanAt(); ts != nil {
 		// RFC3339 keeps parity with the gc + tenant admin routes —
