@@ -63,4 +63,27 @@ if [ -z "${SCANNER_SKIP_GRYPE_WARM:-}" ] && [ -x /usr/local/bin/grype ]; then
     fi
 fi
 
+# REM-019 Phase 2: Pre-warm the Trivy vulnerability DB at container start for
+# the SAME reason as Grype above — Trivy is the default active adapter, but its
+# DB was never pre-warmed, so every scan against a stale/absent DB paid a live
+# ~100MB download from mirror.gcr.io on the hot path. That download made scans
+# take ~30s and fail intermittently on transient registry errors, producing the
+# "failed" scan_results with scanner_name="unknown" this phase set out to fix.
+# With the DB warmed here, the trivy-adapter runs `trivy rootfs --skip-db-update`
+# (see infra/scanner-plugins/trivy-adapter/main.go) so the scan hot path does no
+# network I/O. Best-effort — a failed warm logs but never blocks startup, and
+# the adapter falls back to a one-time online fetch for a cold cache.
+#
+# Skips the warm if:
+#   - trivy isn't in the image (defensive — dev-stub adapter needs no DB)
+#   - SCANNER_SKIP_TRIVY_WARM=1 (operator override for fast CI runs)
+if [ -z "${SCANNER_SKIP_TRIVY_WARM:-}" ] && [ -x /usr/local/bin/trivy ]; then
+    echo "entrypoint: pre-warming Trivy vulnerability DB (one-time per cache volume)..." >&2
+    if /usr/local/bin/trivy image --download-db-only >/tmp/trivy-warm.log 2>&1; then
+        echo "entrypoint: Trivy DB ready." >&2
+    else
+        echo "entrypoint: Trivy DB warm failed (see /tmp/trivy-warm.log) — continuing; first scan will fall back to an online DB fetch." >&2
+    fi
+fi
+
 exec "$@"
