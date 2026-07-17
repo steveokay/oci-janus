@@ -2807,17 +2807,22 @@ Below is only what was genuinely untracked.
 
 #### FUT-090 — Scanner engine decoupling — Phase 2 & beyond — **Tier 2**
 > Phase 1 (trivy → `trivy-engine` sidecar, decoupling the Trivy version bump
-> from a scanner rebuild) shipped 2026-07-17 — see `status.md` and
-> `status-tracker.md`. Spec: `docs/superpowers/specs/2026-07-17-scanner-engine-decoupling-design.md`;
+> from a scanner rebuild) shipped 2026-07-17, and Phase 2 (grype → `grype-engine`
+> sidecar) also shipped 2026-07-17 — see `status.md` and `status-tracker.md`.
+> Spec: `docs/superpowers/specs/2026-07-17-scanner-engine-decoupling-design.md`;
 > plan: `docs/superpowers/plans/2026-07-17-scanner-engine-decoupling.md`. The
-> items below were named out of scope for Phase 1.
-- **grype-engine sidecar (Phase 2)** — reuse the same `infra/scanner-plugins/engine-server`
-  wrapper with `--build-arg ENGINE=grype` to give Grype the same
-  independently-versioned sidecar treatment Trivy got in Phase 1. Grype's
-  distroless base has no shell for a curl-style healthcheck, so the wrapper's
-  `GET /healthz` needs the engine-entrypoint's `-health` self-probe flag
-  wired through before the sidecar can report readiness the same way
-  `trivy-engine` does.
+> items below remain out of scope.
+- ~~**grype-engine sidecar (Phase 2)**~~ ✅ shipped 2026-07-17 — reused the
+  same `infra/scanner-plugins/engine-server` wrapper with
+  `--build-arg ENGINE=grype` (port 8086, distinct from trivy-engine's 8085
+  since both sidecars share the pod's network namespace) to give Grype the
+  same independently-versioned sidecar treatment Trivy got in Phase 1. Helm
+  `grypeEngine` values block + sidecar container gated on
+  `.Values.grypeEngine.enabled`; `GRYPE_ENGINE_URL` wired into
+  `adapterEngineURLEnv` for the `GetScannerHealth` probe; CI builds the
+  `grype-engine` image. K8s `httpGet` liveness probes are done by the
+  kubelet, not an in-container tool, so the wrapper's `GET /healthz` needed
+  no curl/shell dependency inside the distroless image. See `status.md`.
 - **cosign-verify of engine images** — Phase 1 shifted trust from an in-image
   SHA256 checksum to image-digest pinning; the next hardening step is
   verifying the `trivy-engine` (and future `grype-engine`) image signature
