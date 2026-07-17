@@ -51,6 +51,13 @@ export interface AdminScannerHealth {
   in_flight_count: number;
   active_adapter_name: string;
   active_adapter_version: string;
+  // active_adapter_engine_reachable — liveness of the active adapter's
+  // engine sidecar (e.g. trivy-engine). false means the sidecar itself is
+  // down/unreachable — a deploy problem, distinct from `healthy=false`
+  // (which reflects scan throughput). active_adapter_engine_detail carries
+  // the reason and is only populated when reachable is false.
+  active_adapter_engine_reachable: boolean;
+  active_adapter_engine_detail?: string;
 }
 
 // Wire shape for the test-scan result. `ok=true` populates the scanner
