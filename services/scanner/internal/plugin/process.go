@@ -241,7 +241,11 @@ func pluginEnv() []string {
 	// CLAIR_TIMEOUT. The same allowlist gate the other adapters live
 	// behind — services/scanner can't inadvertently leak DB_DSN / JWT
 	// keys / cloud credentials into a subprocess by adding a prefix.
-	allowedPrefixes := []string{"TRIVY_", "GRYPE_", "CLAIR_"}
+	// SCANNER_ joins the list so shared adapter config (SCANNER_SCAN_WORK_DIR —
+	// where an adapter flattens the rootfs for an engine sidecar to read) is
+	// forwarded to every adapter uniformly. SCANNER_ vars are non-secret
+	// config; the allowlist still blocks DB_DSN / JWT keys / cloud creds.
+	allowedPrefixes := []string{"TRIVY_", "GRYPE_", "CLAIR_", "SCANNER_"}
 
 	var env []string
 	for _, e := range os.Environ() {
