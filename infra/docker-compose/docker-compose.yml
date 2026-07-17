@@ -1118,10 +1118,47 @@ services:
       - scan_work:/scan-work:ro
       - trivy_engine_cache:/engine-cache
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/healthz || exit 1"]
+      # scanner-engine-decoupling Phase 2 Task 1 removed the shell
+      # entrypoint, so wget-against-/healthz no longer works here; both
+      # engines now self-probe via the -health flag on the engine-server
+      # binary itself (grype's image is distroless — no wget at all).
+      test: ["CMD", "/usr/local/bin/engine-server", "-health"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+  # ── grype-engine (scanner-engine-decoupling Phase 2 Task 4) ──────────────
+  #
+  # Second scanner engine sidecar, mirroring trivy-engine above but wrapping
+  # the Grype CLI. Runs as its own container (distinct from trivy-engine) so
+  # both can bind :8085 internally without colliding; reached on the
+  # `registry` network as `grype-engine:8085`.
+  grype-engine:
+    build:
+      context: ../..
+      dockerfile: infra/scanner-plugins/engine-server/Dockerfile
+      args:
+        ENGINE: grype
+    image: oci-janus/grype-engine:dev
+    profiles: ["scanner"]
+    networks:
+      - registry
+    environment:
+      ENGINE_NAME: grype
+      ENGINE_HTTP_ADDR: ":8085"
+    volumes:
+      - scan_work:/scan-work:ro
+      - grype_engine_cache:/engine-cache
+    healthcheck:
+      # grype's base image is distroless (no shell, no wget), so this
+      # engine has only ever supported the -health binary self-probe.
+      test: ["CMD", "/usr/local/bin/engine-server", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
 
   registry-scanner:
@@ -1168,6 +1205,9 @@ services:
       # The trivy DB now lives in the sidecar's trivy_engine_cache volume
       # instead of being downloaded on the scanner's hot path (REM-019 Ph2).
       TRIVY_ENGINE_URL: "http://trivy-engine:8085"
+      # scanner-engine-decoupling Phase 2 Task 4 — grype-engine sidecar
+      # wiring, parallel to TRIVY_ENGINE_URL above.
+      GRYPE_ENGINE_URL: "http://grype-engine:8085"
       SCANNER_SCAN_WORK_DIR: "/scan-work"
     volumes:
       - certs_data:/certs:ro
@@ -1202,6 +1242,11 @@ services:
       # scanner-engine-decoupling Task 6 — wait for the trivy sidecar's
       # own healthcheck (DB loaded) before accepting scan requests.
       trivy-engine:
+        condition: service_healthy
+      # scanner-engine-decoupling Phase 2 Task 4 — wait for the grype
+      # sidecar's own healthcheck before accepting scan requests, parallel
+      # to trivy-engine above.
+      grype-engine:
         condition: service_healthy
     networks:
       - registry
@@ -1278,3 +1323,6 @@ volumes:
   # DB cache, decoupled from the scanner's image so DB refreshes no
   # longer happen on the scan hot path (REM-019 Ph2).
   trivy_engine_cache:
+  # scanner-engine-decoupling Phase 2 Task 4 — grype-engine's own
+  # vulnerability DB cache, parallel to trivy_engine_cache above.
+  grype_engine_cache:
