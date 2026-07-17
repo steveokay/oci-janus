@@ -3,17 +3,19 @@
 // Mirrors the Trivy adapter's contract end-to-end so the orchestrator
 // can swap between them at runtime via SetActiveAdapter — same
 // JSON-RPC wire shape, same layer staging, same findings output. The
-// only thing that differs is the engine: this binary shells out to
-// `grype dir:<rootfs> -o json --quiet` instead of `trivy rootfs ...`.
+// only thing that differs is the engine: this binary talks to the
+// grype-engine sidecar over HTTP instead of the trivy-engine sidecar.
 //
 // Flow (identical to trivy-adapter — kept in sync deliberately):
 //
-//	1. read newline-delimited JSON-RPC scan request from stdin
-//	2. flatten the staged layer blobs (image_path/<digest_hex>) into a
-//	   single rootfs directory, applying layers in manifest order
-//	3. invoke `grype dir:<rootfs> -o json --quiet`
-//	4. parse Grype's JSON, translate to the contract's findings shape
-//	5. write the JSON-RPC response to stdout, exit 0
+//  1. read newline-delimited JSON-RPC scan request from stdin
+//  2. flatten the staged layer blobs (image_path/<digest_hex>) into a
+//     single rootfs directory under the shared scan-work volume,
+//     applying layers in manifest order
+//  3. POST the flattened rootfs path to the grype-engine sidecar
+//     ($GRYPE_ENGINE_URL/scan) and read back the engine's JSON
+//  4. parse Grype's JSON, translate to the contract's findings shape
+//  5. write the JSON-RPC response to stdout, exit 0
 //
 // Scope notes — same v1 trade-offs the Trivy adapter takes (Linux
 // images, gzipped tar layers, no whiteout replay). Grype itself has
@@ -28,10 +30,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // rpcRequest / rpcResponse / result / finding / severities mirror the
@@ -118,15 +121,25 @@ type grypeJSON struct {
 	} `json:"descriptor"`
 }
 
-// grypeBinary is the path to the grype CLI inside the scanner image.
-// Overridable via GRYPE_BIN env var for local dev where someone might
-// want to point at a custom build.
-var grypeBinary = func() string {
-	if p := os.Getenv("GRYPE_BIN"); p != "" {
-		return p
+// errEngineUnreachable is the sentinel substring the scanner orchestrator
+// keys on to distinguish "the engine sidecar is down/unreachable" (a deploy
+// problem) from "the engine ran and errored" (a real scan failure). Mirrors
+// the trivy-adapter's constant of the same name.
+const errEngineUnreachable = "engine_unreachable"
+
+// engineURL returns the grype-engine sidecar base URL. Required — an unset
+// value is a deployment misconfiguration and fails the scan cleanly.
+func engineURL() string { return os.Getenv("GRYPE_ENGINE_URL") }
+
+// scanWorkDir is the shared volume both this adapter (rw) and the engine
+// sidecar (ro) mount. The adapter flattens the rootfs here so the sidecar
+// can read it at the identical path. Overridable for tests / local dev.
+func scanWorkDir() string {
+	if d := os.Getenv("SCANNER_SCAN_WORK_DIR"); d != "" {
+		return d
 	}
-	return "/usr/local/bin/grype"
-}()
+	return "/scan-work"
+}
 
 func main() {
 	raw, err := io.ReadAll(os.Stdin)
@@ -149,7 +162,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	rootfs, err := os.MkdirTemp("", "grype-rootfs-*")
+	// Flatten onto the SHARED work volume so the engine sidecar can read the
+	// rootfs at the same absolute path. os.MkdirTemp under scanWorkDir() keeps
+	// per-scan isolation; defer RemoveAll cleans it after the engine responds.
+	if err := os.MkdirAll(scanWorkDir(), 0o755); err != nil {
+		writeError(req.ID, fmt.Sprintf("mkdir work dir: %v", err))
+		os.Exit(1)
+	}
+	rootfs, err := os.MkdirTemp(scanWorkDir(), "grype-rootfs-*")
 	if err != nil {
 		writeError(req.ID, fmt.Sprintf("mkdtemp rootfs: %v", err))
 		os.Exit(1)
@@ -166,9 +186,9 @@ func main() {
 		}
 	}
 
-	report, scannerVersion, err := runGrype(rootfs)
+	report, scannerVersion, err := scanViaEngine(engineURL(), rootfs)
 	if err != nil {
-		writeError(req.ID, fmt.Sprintf("run grype: %v", err))
+		writeError(req.ID, err.Error())
 		os.Exit(1)
 	}
 
@@ -281,84 +301,50 @@ func extractLayer(blobPath, mediaType, rootfs string) error {
 	}
 }
 
-// runGrype shells out to grype and returns the parsed report plus
-// grype's self-reported version (read once from `grype version` so the
-// response always reports the binary that actually ran).
-func runGrype(rootfs string) (*grypeJSON, string, error) {
-	version := grypeVersion()
-
-	// `grype dir:<rootfs>` scans the directory tree directly.
-	// -o json sends the structured report to stdout.
-	// --quiet drops the spinner / progress so stdout is JSON-only.
-	cmd := exec.Command(grypeBinary, "dir:"+rootfs, "-o", "json", "--quiet") //nolint:gosec
-	cmd.Env = pluginEnv()
-
-	stdout, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, version, fmt.Errorf("grype exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
-		}
-		return nil, version, err
+// scanViaEngine POSTs the flattened rootfs path to the grype-engine sidecar and
+// returns the parsed grype report + the engine's self-reported version. A
+// connection/timeout failure is wrapped with errEngineUnreachable so the
+// orchestrator classifies it as a deploy problem, not a scan failure.
+func scanViaEngine(baseURL, rootfs string) (*grypeJSON, string, error) {
+	if baseURL == "" {
+		return nil, "unknown", fmt.Errorf("GRYPE_ENGINE_URL not set; cannot reach grype-engine sidecar")
 	}
-
+	body, _ := json.Marshal(map[string]string{"rootfs": rootfs})
+	// Generous deadline: a cold engine may still be warming its DB; matches
+	// the trivy-adapter's minute-scale timeout.
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Post(strings.TrimRight(baseURL, "/")+"/scan", "application/json", bytes.NewReader(body))
+	if err != nil {
+		// net.Error (conn refused, timeout, DNS) => the sidecar is unreachable.
+		return nil, "unknown", fmt.Errorf("%s: POST /scan: %w", errEngineUnreachable, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if resp.StatusCode != http.StatusOK {
+		var er struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &er)
+		return nil, "unknown", fmt.Errorf("grype-engine returned %d: %s", resp.StatusCode, strings.TrimSpace(er.Error))
+	}
+	var env struct {
+		Version string          `json:"version"`
+		Raw     json.RawMessage `json:"raw"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, "unknown", fmt.Errorf("decode engine response: %w", err)
+	}
 	var report grypeJSON
-	if err := json.Unmarshal(stdout, &report); err != nil {
-		return nil, version, fmt.Errorf("parse grype json: %w", err)
+	if err := json.Unmarshal(env.Raw, &report); err != nil {
+		return nil, env.Version, fmt.Errorf("parse grype json: %w", err)
 	}
-	// Prefer the version embedded in the report when present —
-	// authoritative for the binary that actually ran. Fall back to the
-	// CLI probe.
+	// Prefer the version embedded in the report when present — authoritative
+	// for the binary that actually ran inside the engine. Fall back to the
+	// engine's self-reported version.
 	if report.Descriptor.Version != "" {
-		version = report.Descriptor.Version
+		return &report, report.Descriptor.Version, nil
 	}
-	return &report, version, nil
-}
-
-// grypeVersion runs `grype version` and parses the "Application:" line.
-// Grype's version output is multi-line; we grep for the relevant
-// field. Errors are swallowed — a missing version reports as
-// "unknown" because the findings are more valuable than the label.
-func grypeVersion() string {
-	out, err := exec.Command(grypeBinary, "version").Output() //nolint:gosec
-	if err != nil {
-		return "unknown"
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Application:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Application:"))
-		}
-		if strings.HasPrefix(line, "Version:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
-		}
-	}
-	return "unknown"
-}
-
-// pluginEnv returns the env grype can see. Same allowlist shape as
-// trivy-adapter — the orchestrator already strips host secrets before
-// invoking us, this is defence-in-depth so a subverted grype can't
-// inherit anything from this adapter. GRYPE_* env vars are explicitly
-// passed through so operators can configure cache directories +
-// vulnerability DB locations without code changes.
-func pluginEnv() []string {
-	allowed := map[string]bool{
-		"PATH": true, "HOME": true, "TMPDIR": true, "TMP": true, "TEMP": true,
-		"USER": true, "USERNAME": true,
-		"XDG_CACHE_HOME": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true,
-		"GRYPE_BIN": true,
-	}
-	var env []string
-	for _, e := range os.Environ() {
-		k, _, ok := strings.Cut(e, "=")
-		if !ok {
-			continue
-		}
-		if allowed[k] || strings.HasPrefix(k, "GRYPE_") {
-			env = append(env, e)
-		}
-	}
-	return env
+	return &report, env.Version, nil
 }
 
 // translateFindings folds grype's matches[] into the flat findings
