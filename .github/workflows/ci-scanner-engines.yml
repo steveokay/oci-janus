@@ -1,0 +1,54 @@
+name: CI — scanner-engines
+
+# The scanner engine sidecars (engine-server wrapper + the trivy-engine image)
+# had no CI before the engine-decoupling change — engines used to be baked into
+# services/scanner. This job builds + tests the stdlib-only wrapper and builds
+# the trivy-engine image so an engine bump can never silently break the sidecar.
+#
+# engine-server is a standalone module OUTSIDE the go.work workspace (like the
+# *-adapter shims), so every Go command runs with GOWORK=off.
+on:
+  push:
+    paths:
+      - "infra/scanner-plugins/engine-server/**"
+      - ".github/workflows/ci-scanner-engines.yml"
+  pull_request:
+    paths:
+      - "infra/scanner-plugins/engine-server/**"
+      - ".github/workflows/ci-scanner-engines.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.11" }
+      - name: vet + test (wrapper)
+        working-directory: infra/scanner-plugins/engine-server
+        run: |
+          go vet ./...
+          go test -race ./...
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: infra/scanner-plugins/engine-server
+          config: ../../../.golangci.yml
+          # Build golangci-lint from source with the setup-go toolchain — the
+          # action's bundled binary trails the codebase's required toolchain.
+          version: latest
+          install-mode: goinstall
+
+  build-image:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build trivy-engine image
+        run: |
+          docker build \
+            -f infra/scanner-plugins/engine-server/Dockerfile \
+            --build-arg ENGINE=trivy \
+            -t ghcr.io/steveokay/oci-janus/trivy-engine:${{ github.sha }} \
+            .
