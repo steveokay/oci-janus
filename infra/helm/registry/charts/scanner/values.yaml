@@ -62,7 +62,7 @@ grypeEngine:
   enabled: true
   image:
     repository: ghcr.io/steveokay/oci-janus/grype-engine
-    tag: "0.93.0"
+    tag: "0.116.0"
   httpPort: 8086
   resources:
     requests:

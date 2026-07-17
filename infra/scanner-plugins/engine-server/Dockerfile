@@ -29,7 +29,11 @@ RUN mkdir -p /engine-runtime-dirs/engine-cache /engine-runtime-dirs/scan-work
 # than a mutable tag and is what replaces the in-image checksum guarantee once
 # the engine runs in its own container.
 FROM aquasec/trivy:0.71.2 AS engine-trivy
-FROM anchore/grype:v0.93.0 AS engine-grype
+# grype v0.116.0: v0.93.0's DB importer chokes on the current upstream vuln DB
+# ("UNIQUE constraint failed: operating_systems … (2067)" on hydration), so the
+# engine can't load a DB. Bumping the tag here (and rebuilding only this small
+# grype-engine image — never registry-scanner) is exactly the decoupling payoff.
+FROM anchore/grype:v0.116.0 AS engine-grype
 
 # ── Stage 3: final, selected by ENGINE build-arg ──────────────────────
 FROM engine-${ENGINE} AS final
