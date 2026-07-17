@@ -53,6 +53,10 @@ spec:
             - name: SCANNER_SCAN_WORK_DIR
               value: "/scan-work"
             {{- end }}
+            {{- if .Values.grypeEngine.enabled }}
+            - name: GRYPE_ENGINE_URL
+              value: "http://localhost:{{ .Values.grypeEngine.httpPort }}"
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
@@ -114,11 +118,50 @@ spec:
             capabilities:
               drop: ["ALL"]
         {{- end }}
-      {{- if .Values.trivyEngine.enabled }}
+        {{- if .Values.grypeEngine.enabled }}
+        - name: grype-engine
+          image: "{{ .Values.grypeEngine.image.repository }}:{{ .Values.grypeEngine.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ENGINE_NAME
+              value: grype
+            - name: ENGINE_HTTP_ADDR
+              value: ":{{ .Values.grypeEngine.httpPort }}"
+          ports:
+            - name: engine-grype
+              containerPort: {{ .Values.grypeEngine.httpPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.grypeEngine.httpPort }}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: scan-work
+              mountPath: /scan-work
+              readOnly: true
+            - name: grype-engine-cache
+              mountPath: /engine-cache
+          resources:
+            {{- toYaml .Values.grypeEngine.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+        {{- end }}
+      {{- if or .Values.trivyEngine.enabled .Values.grypeEngine.enabled }}
       volumes:
         - name: scan-work
           emptyDir: {}
+        {{- end }}
+      {{- if .Values.trivyEngine.enabled }}
         - name: engine-cache
+          emptyDir: {}
+      {{- end }}
+      {{- if .Values.grypeEngine.enabled }}
+        - name: grype-engine-cache
           emptyDir: {}
       {{- end }}
       {{- with .Values.nodeSelector }}

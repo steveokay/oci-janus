@@ -44,20 +44,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /
 WORKDIR /build/infra/scanner-plugins/clair-adapter
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/clair-adapter .
 
-# ── Stage 2b: Grype binary ────────────────────────────────────────
-# Anchore publishes grype as a single static binary inside the
-# anchore/grype image. Mirrors the same shape as the Trivy stage —
-# pulling from upstream pins us to a known release without us hosting
-# the binary ourselves.
-#
-# Version pin note: grype < v0.81 uses DB schema v5, which Anchore
-# stopped publishing fresh updates for in mid-2024. The grype binary's
-# own age check (max 5 days old by default) rejects the stale v5 DBs
-# with "the vulnerability database was built N weeks ago". Pinning to
-# v0.93.0 (or any post-v0.81 release) gets schema v6, which is
-# actively maintained upstream.
-FROM anchore/grype:v0.93.0 AS grype
-
 # ── Stage 3: Final image ──────────────────────────────────────────
 # Uses debian-slim instead of distroless: the scanner must exec adapter
 # binaries as subprocesses, and the trivy-adapter in turn execs Trivy
@@ -68,46 +54,28 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates coreutils \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy Go server, healthcheck, all four adapters, and the Grype binary.
-# The adapter registry auto-discovers via the /usr/local/bin/scanner-*
-# glob at boot, so adding a new adapter only needs (a) the binary baked
-# here and (b) the engine CLI it shells out to. The Trivy engine binary
-# no longer lives in this image — the trivy-adapter now shells out to
-# the trivy-engine sidecar over HTTP instead of execing a local `trivy`
-# (scanner engine decoupling, 2026-07-17).
+# Copy Go server, healthcheck, and all four adapters. The adapter
+# registry auto-discovers via the /usr/local/bin/scanner-* glob at
+# boot, so adding a new adapter only needs (a) the binary baked here
+# and (b) the engine CLI it shells out to. Neither the Trivy nor the
+# Grype engine binaries live in this image any more — the
+# trivy-adapter and grype-adapter now shell out to their respective
+# trivy-engine / grype-engine sidecars over HTTP instead of execing a
+# locally-baked binary (scanner engine decoupling, 2026-07-17).
 COPY --from=builder /bin/healthcheck /healthcheck
 COPY --from=builder /bin/server /server
 COPY --from=builder /bin/dev-stub /usr/local/bin/scanner-dev-stub
 COPY --from=builder /bin/trivy-adapter /usr/local/bin/scanner-trivy-adapter
 COPY --from=builder /bin/grype-adapter /usr/local/bin/scanner-grype-adapter
 COPY --from=builder /bin/clair-adapter /usr/local/bin/scanner-clair-adapter
-# Grype upstream packages the binary at /grype inside its image.
-COPY --from=grype /grype /usr/local/bin/grype
 
-# /grype-cache holds the Anchore vulnerability DB.
-#
-# PENTEST-019: this cache is writable by the scanner process. A subverted
-# Grype binary could write malicious DB files here. Mitigations in place:
-#   1. The active adapter binary is SHA256-checksum-verified at scanner
-#      startup (SCANNER_PLUGIN_CHECKSUM env var — SEC-003). The entrypoint
-#      below auto-computes the checksum from the image-baked binary when
-#      the operator hasn't set it explicitly — image integrity is the
-#      trust root in that case, and any in-container binary swap by an
-#      attacker would still fail the check.
-#   2. The scanner runs as non-root (USER 65532:65532 below).
-#   3. Container filesystem is read-only outside /grype-cache and /tmp.
-# Operators wanting hard cache integrity should mount /grype-cache as a
-# tmpfs-backed overlay so each pod sees a fresh cache, OR mount the upstream
-# Grype DB read-only and disable in-place DB updates. See
-# infra/runbooks/scanner-cache-hardening.md.
-#
 # /scan-work is the shared work directory used to hand blob/layer data
-# to sidecar scan engines (trivy-engine and, eventually, other decoupled
-# engines) without shelling out to a locally-baked binary.
-RUN mkdir -p /grype-cache /scan-work /tmp/reports \
+# to sidecar scan engines (trivy-engine, grype-engine, and any future
+# decoupled engines) without shelling out to a locally-baked binary.
+RUN mkdir -p /scan-work /tmp/reports \
  && groupadd -g 65532 nonroot \
  && useradd -u 65532 -g nonroot -s /sbin/nologin -M nonroot \
- && chown nonroot:nonroot /grype-cache /scan-work /tmp/reports
+ && chown nonroot:nonroot /scan-work /tmp/reports
 # /tmp/reports holds rendered compliance reports (FE-API-019). Both this
 # scanner container (writer) and the registry-management container (reader,
 # via the scanner_reports named volume in infra/docker-compose) share this
@@ -116,11 +84,6 @@ RUN mkdir -p /grype-cache /scan-work /tmp/reports \
 # into a fresh volume, which means the volume inherits these permissions
 # rather than the default root:root that Docker creates volumes with.
 # Tracked properly as REM-012 (streaming RPC replacement).
-
-# GRYPE_DB_CACHE_DIR controls where Grype downloads its vuln DB. Mount
-# as a volume in production so the DB persists across container
-# restarts and doesn't re-download on every pod cycle.
-ENV GRYPE_DB_CACHE_DIR=/grype-cache
 
 # Default to the dev-stub adapter so `docker compose --profile scanner
 # up -d` works with zero operator configuration — useful for local UI
@@ -144,7 +107,7 @@ ENV SCANNER_PLUGIN_PATH=/usr/local/bin/scanner-dev-stub
 COPY services/scanner/scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-VOLUME ["/grype-cache", "/scan-work"]
+VOLUME ["/scan-work"]
 
 EXPOSE 50051 8080
 # REM-014 — Clair adapter's embedded HTTP server. Clair fetches staged

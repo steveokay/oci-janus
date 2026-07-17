@@ -302,6 +302,26 @@ func TestGetScannerHealth_EngineUnreachable(t *testing.T) {
 	}
 }
 
+// TestGetScannerHealth_GrypeEngineUnreachable mirrors
+// TestGetScannerHealth_EngineUnreachable for the grype-adapter added in
+// Phase 2 — verifies the adapterEngineURLEnv entry for "grype-adapter"
+// (GRYPE_ENGINE_URL) is wired up and probed the same way trivy's is.
+func TestGetScannerHealth_GrypeEngineUnreachable(t *testing.T) {
+	// Active adapter "grype-adapter" with its engine URL pointed at a dead port.
+	t.Setenv("GRYPE_ENGINE_URL", "http://127.0.0.1:1")
+	h := newHealthHandlerWithActiveAdapter(t, "grype-adapter")
+	resp, err := h.GetScannerHealth(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetActiveAdapterEngineReachable() {
+		t.Fatal("expected engine unreachable=false for a dead grype-engine")
+	}
+	if resp.GetActiveAdapterEngineDetail() == "" {
+		t.Fatal("expected a detail string on unreachable")
+	}
+}
+
 // TestGetScannerHealth_NoEngineAdapter_Reachable verifies that an adapter
 // with no external engine sidecar entry (e.g. dev-stub) is always reported
 // reachable — there is nothing to probe.

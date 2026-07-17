@@ -37,10 +37,11 @@ func itoa(n int) string { return strings.TrimSpace(string(rune('0' + n))) } // s
 func newTestServer(t *testing.T, enginePath, workDir string) *server {
 	t.Helper()
 	return &server{
-		engineCmd:  enginePath,
-		engineName: "stub",
-		scanArgs:   func(rootfs string) []string { return []string{"rootfs", rootfs} },
-		workDir:    workDir,
+		engineCmd:   enginePath,
+		engineName:  "stub",
+		scanArgs:    func(rootfs string) []string { return []string{"rootfs", rootfs} },
+		versionArgs: []string{"--version"},
+		workDir:     workDir,
 	}
 }
 
@@ -117,4 +118,41 @@ func postScan(t *testing.T, body map[string]string) *http.Request {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	return httptest.NewRequest(http.MethodPost, "/scan", strings.NewReader(string(b)))
+}
+
+// TestServerFromEnv_GrypeDefaults verifies ENGINE_CMD now defaults per engine
+// (grype's distroless binary lives at /grype) so operators no longer need to
+// set it explicitly — only ENGINE_NAME is required.
+func TestServerFromEnv_GrypeDefaults(t *testing.T) {
+	t.Setenv("ENGINE_NAME", "grype")
+	t.Setenv("ENGINE_CMD", "")
+
+	s, _, err := serverFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if s.engineCmd != "/grype" {
+		t.Fatalf("want engineCmd /grype, got %q", s.engineCmd)
+	}
+	if len(s.versionArgs) == 0 || s.versionArgs[0] != "version" {
+		t.Fatalf("want versionArgs[0] == version, got %v", s.versionArgs)
+	}
+}
+
+// TestServerFromEnv_TrivyDefaults verifies the same default behaviour for
+// trivy's binary path.
+func TestServerFromEnv_TrivyDefaults(t *testing.T) {
+	t.Setenv("ENGINE_NAME", "trivy")
+	t.Setenv("ENGINE_CMD", "")
+
+	s, _, err := serverFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if s.engineCmd != "/usr/local/bin/trivy" {
+		t.Fatalf("want engineCmd /usr/local/bin/trivy, got %q", s.engineCmd)
+	}
+	if len(s.versionArgs) == 0 || s.versionArgs[0] != "--version" {
+		t.Fatalf("want versionArgs[0] == --version, got %v", s.versionArgs)
+	}
 }

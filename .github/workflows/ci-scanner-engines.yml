@@ -52,3 +52,10 @@ jobs:
             --build-arg ENGINE=trivy \
             -t ghcr.io/steveokay/oci-janus/trivy-engine:${{ github.sha }} \
             .
+      - name: Build grype-engine image
+        run: |
+          docker build \
+            -f infra/scanner-plugins/engine-server/Dockerfile \
+            --build-arg ENGINE=grype \
+            -t ghcr.io/steveokay/oci-janus/grype-engine:${{ github.sha }} \
+            .

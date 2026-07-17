@@ -1163,6 +1163,7 @@ func testScanErrorFromResult(r *metadatav1.ScanResult) string {
 // joins this map in Phase 2 (GRYPE_ENGINE_URL).
 var adapterEngineURLEnv = map[string]string{
 	"trivy-adapter": "TRIVY_ENGINE_URL",
+	"grype-adapter": "GRYPE_ENGINE_URL",
 }
 
 // probeActiveEngine reports whether the active adapter's external engine
