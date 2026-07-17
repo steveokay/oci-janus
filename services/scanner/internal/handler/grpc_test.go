@@ -5,13 +5,17 @@ package handler
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	scannerv1 "github.com/steveokay/oci-janus/proto/gen/go/scanner/v1"
+	scannerregistry "github.com/steveokay/oci-janus/services/scanner/internal/registry"
 	"github.com/steveokay/oci-janus/services/scanner/internal/store"
 	"github.com/steveokay/oci-janus/services/scanner/internal/worker"
 )
@@ -246,5 +250,69 @@ func TestGRPCHandler_TriggerScan_validRequest_returnsScanID(t *testing.T) {
 	}
 	if rec.ManifestDigest != "sha256:cafebabe" {
 		t.Errorf("ManifestDigest: got %q, want sha256:cafebabe", rec.ManifestDigest)
+	}
+}
+
+// newHealthHandlerWithActiveAdapter builds a GRPCHandler wired with an
+// adapter registry whose active adapter is named adapterName. It writes a
+// fixture binary "scanner-<adapterName>" under a t.TempDir() so
+// scannerregistry.New discovers it, then marks it active. Used by the
+// GetScannerHealth engine-reachability tests below.
+func newHealthHandlerWithActiveAdapter(t *testing.T, adapterName string) *GRPCHandler {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "scanner-"+adapterName)
+	// Contents are irrelevant — the registry only hashes + stats the file;
+	// it never executes it during discovery. 0o755 mirrors the bake-time
+	// mode the scanner Dockerfile uses for real adapter binaries.
+	if err := os.WriteFile(path, []byte("fixture-binary"), 0o755); err != nil {
+		t.Fatalf("write fixture binary: %v", err)
+	}
+
+	reg, err := scannerregistry.New(scannerregistry.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("scannerregistry.New: %v", err)
+	}
+	if err := reg.SetActive(path); err != nil {
+		t.Fatalf("SetActive: %v", err)
+	}
+
+	sc := store.New()
+	pool := worker.NewPool(nil, nil, nil, nil, sc, 1, time.Second)
+	h := New(pool, sc).WithAdapterRegistry(reg)
+	return h
+}
+
+// TestGetScannerHealth_EngineUnreachable verifies that an active adapter
+// with an external engine sidecar pointed at a dead port surfaces
+// active_adapter_engine_reachable=false with a non-empty detail string.
+func TestGetScannerHealth_EngineUnreachable(t *testing.T) {
+	// Active adapter "trivy-adapter" with its engine URL pointed at a dead port.
+	t.Setenv("TRIVY_ENGINE_URL", "http://127.0.0.1:1")
+	h := newHealthHandlerWithActiveAdapter(t, "trivy-adapter")
+	resp, err := h.GetScannerHealth(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetActiveAdapterEngineReachable() {
+		t.Fatal("expected engine unreachable=false for a dead trivy-engine")
+	}
+	if resp.GetActiveAdapterEngineDetail() == "" {
+		t.Fatal("expected a detail string on unreachable")
+	}
+}
+
+// TestGetScannerHealth_NoEngineAdapter_Reachable verifies that an adapter
+// with no external engine sidecar entry (e.g. dev-stub) is always reported
+// reachable — there is nothing to probe.
+func TestGetScannerHealth_NoEngineAdapter_Reachable(t *testing.T) {
+	// dev-stub has no external engine → reachable must be true (nothing to probe).
+	h := newHealthHandlerWithActiveAdapter(t, "dev-stub")
+	resp, err := h.GetScannerHealth(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.GetActiveAdapterEngineReachable() {
+		t.Fatal("dev-stub has no engine; reachable must be true")
 	}
 }

@@ -2805,6 +2805,35 @@ Below is only what was genuinely untracked.
 - ~~**security.md SEC-087** status line vs status.md PR #321 — verify +
   flip~~ ✅ DONE 2026-07-13 (flipped RESOLVED; fix verified in-code).
 
+#### FUT-090 — Scanner engine decoupling — Phase 2 & beyond — **Tier 2**
+> Phase 1 (trivy → `trivy-engine` sidecar, decoupling the Trivy version bump
+> from a scanner rebuild) shipped 2026-07-17 — see `status.md` and
+> `status-tracker.md`. Spec: `docs/superpowers/specs/2026-07-17-scanner-engine-decoupling-design.md`;
+> plan: `docs/superpowers/plans/2026-07-17-scanner-engine-decoupling.md`. The
+> items below were named out of scope for Phase 1.
+- **grype-engine sidecar (Phase 2)** — reuse the same `infra/scanner-plugins/engine-server`
+  wrapper with `--build-arg ENGINE=grype` to give Grype the same
+  independently-versioned sidecar treatment Trivy got in Phase 1. Grype's
+  distroless base has no shell for a curl-style healthcheck, so the wrapper's
+  `GET /healthz` needs the engine-entrypoint's `-health` self-probe flag
+  wired through before the sidecar can report readiness the same way
+  `trivy-engine` does.
+- **cosign-verify of engine images** — Phase 1 shifted trust from an in-image
+  SHA256 checksum to image-digest pinning; the next hardening step is
+  verifying the `trivy-engine` (and future `grype-engine`) image signature
+  with cosign before the scanner pod starts, rather than trusting the pinned
+  digest alone.
+- **A3 registry-pull model** — today the engine image is pulled the same way
+  any sidecar image is (Compose/Helm pull-on-deploy). The deferred A3 model
+  would let the scanner pull + swap engine images at runtime without a pod
+  restart — bigger scope, parked until Phase 2's grype work lands first.
+- **Operator-installable new engines at runtime** — extending the sidecar
+  pattern so an operator can point the scanner at a custom/third-party engine
+  image without a code change to `registry-scanner` or the engine-server
+  wrapper. Needs a config surface + trust-root story before it's safe to ship.
+- **Affects:** `infra/scanner-plugins/engine-server`, `services/scanner`,
+  `infra/docker-compose`, `infra/helm/registry/charts/scanner`.
+
 ---
 
 ## How to use this file

@@ -71,12 +71,22 @@ function Body({ health }: { health: AdminScannerHealth }): React.ReactElement {
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--color-fg-subtle)]">
             Worker pool
           </div>
-          <div className="mt-0.5 truncate text-sm font-medium text-[var(--color-fg)]">
+          <div className="mt-0.5 flex items-center gap-1.5 truncate text-sm font-medium text-[var(--color-fg)]">
             {health.active_adapter_name || "—"}
             {health.active_adapter_version ? (
-              <span className="ml-1.5 font-mono text-xs text-[var(--color-fg-muted)]">
+              <span className="font-mono text-xs text-[var(--color-fg-muted)]">
                 @{health.active_adapter_version}
               </span>
+            ) : null}
+            {health.active_adapter_engine_reachable === false ? (
+              <Badge
+                tone="warning"
+                title={health.active_adapter_engine_detail}
+                className="gap-1"
+              >
+                <AlertTriangle className="size-3" />
+                Engine sidecar unreachable
+              </Badge>
             ) : null}
           </div>
         </div>

@@ -551,4 +551,13 @@ message ScannerHealthResponse {
   int64 in_flight_count = 4;
   string active_adapter_name = 5;
   string active_adapter_version = 6;
+  // active_adapter_engine_reachable is false when the active adapter runs
+  // against an external engine sidecar (e.g. trivy-engine) that the scanner
+  // could not reach on the last health probe. True when reachable OR when the
+  // active adapter has no external engine (dev-stub). Lets /settings/scanning
+  // show "degraded" for a deploy problem vs a genuine scan error.
+  bool active_adapter_engine_reachable = 7;
+  // active_adapter_engine_detail carries a short human string (e.g. the
+  // engine URL + probe error) when active_adapter_engine_reachable is false.
+  string active_adapter_engine_detail = 8;
 }

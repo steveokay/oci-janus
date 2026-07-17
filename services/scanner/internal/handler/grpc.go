@@ -17,7 +17,9 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1155,6 +1157,39 @@ func testScanErrorFromResult(r *metadatav1.ScanResult) string {
 	return "scan finished with status=" + r.GetStatus()
 }
 
+// adapterEngineURLEnv maps an active adapter Name to the env var holding its
+// external engine sidecar URL. Adapters absent from this map (dev-stub) have
+// no external engine, so their engine is "reachable" by definition. Grype
+// joins this map in Phase 2 (GRYPE_ENGINE_URL).
+var adapterEngineURLEnv = map[string]string{
+	"trivy-adapter": "TRIVY_ENGINE_URL",
+}
+
+// probeActiveEngine reports whether the active adapter's external engine
+// sidecar answers /healthz. Returns (true, "") when the adapter has no
+// external engine. Cheap (2s timeout) and read-only — safe for the polled
+// health endpoint.
+func probeActiveEngine(activeName string) (bool, string) {
+	envKey, hasEngine := adapterEngineURLEnv[activeName]
+	if !hasEngine {
+		return true, ""
+	}
+	url := os.Getenv(envKey)
+	if url == "" {
+		return false, fmt.Sprintf("%s not set for active adapter %q", envKey, activeName)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(strings.TrimRight(url, "/") + "/healthz")
+	if err != nil {
+		return false, fmt.Sprintf("engine %s unreachable: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Sprintf("engine %s returned %d", url, resp.StatusCode)
+	}
+	return true, ""
+}
+
 // GetScannerHealth returns liveness + recent-job stats sourced from the
 // worker pool's in-memory counters. No DB I/O, no gRPC fan-out — safe
 // to poll at high frequency from the dashboard.
@@ -1170,10 +1205,14 @@ func (h *GRPCHandler) GetScannerHealth(_ context.Context, _ *emptypb.Empty) (*sc
 	if last := h.pool.LastSuccessAt(); !last.IsZero() {
 		resp.LastSuccessfulScanAt = timestamppb.New(last)
 	}
+	resp.ActiveAdapterEngineReachable = true
 	if h.adapterReg != nil {
 		if a := h.adapterReg.Active(); a != nil {
 			resp.ActiveAdapterName = a.Name
 			resp.ActiveAdapterVersion = a.Version
+			reachable, detail := probeActiveEngine(a.Name)
+			resp.ActiveAdapterEngineReachable = reachable
+			resp.ActiveAdapterEngineDetail = detail
 		}
 	}
 	return resp, nil

@@ -1,17 +1,19 @@
 // Package main is the Trivy scanner adapter for OCI-Janus.
 //
 // It implements the JSON-RPC contract defined by
-// services/scanner/internal/plugin/process.go on top of Aqua Security's
-// trivy binary. The orchestrator never sees trivy directly — every
-// scanner_id swap is just pointing SCANNER_PLUGIN_PATH at a different
-// adapter, of which this is one.
+// services/scanner/internal/plugin/process.go on top of the trivy-engine
+// sidecar (see infra/scanner-plugins/trivy-engine). The orchestrator never
+// talks to trivy directly — every scanner_id swap is just pointing
+// SCANNER_PLUGIN_PATH at a different adapter, of which this is one.
 //
 // Flow:
 //
 //  1. read newline-delimited JSON-RPC scan request from stdin
 //  2. flatten the staged layer blobs (image_path/<digest_hex>) into a
-//     single rootfs directory, applying layers in manifest order
-//  3. invoke `trivy rootfs --format json --quiet --no-progress <rootfs>`
+//     single rootfs directory under the shared scan-work volume, applying
+//     layers in manifest order
+//  3. POST the flattened rootfs path to the trivy-engine sidecar
+//     ($TRIVY_ENGINE_URL/scan) and read back the engine's JSON
 //  4. parse Trivy's JSON, translate to the contract's findings shape
 //  5. write the JSON-RPC response to stdout, exit 0
 //
@@ -40,10 +42,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // rpcRequest / rpcResponse / result / finding / severities mirror what
@@ -110,15 +113,26 @@ type trivyJSON struct {
 	} `json:"Results"`
 }
 
-// trivyBinary is the path to the trivy CLI inside the scanner image.
-// Overridable via TRIVY_BIN env var for local dev where someone might
-// want to point at a custom build.
-var trivyBinary = func() string {
-	if p := os.Getenv("TRIVY_BIN"); p != "" {
-		return p
+// errEngineUnreachable is the sentinel substring the scanner orchestrator
+// keys on to distinguish "the engine sidecar is down/unreachable" (a deploy
+// problem) from "the engine ran and errored" (a real scan failure). Threaded
+// up through services/scanner so /settings/scanning can show the adapter as
+// degraded rather than making an operator guess.
+const errEngineUnreachable = "engine_unreachable"
+
+// engineURL returns the trivy-engine sidecar base URL. Required — an unset
+// value is a deployment misconfiguration and fails the scan cleanly.
+func engineURL() string { return os.Getenv("TRIVY_ENGINE_URL") }
+
+// scanWorkDir is the shared volume both this adapter (rw) and the engine
+// sidecar (ro) mount. The adapter flattens the rootfs here so the sidecar
+// can read it at the identical path. Overridable for tests / local dev.
+func scanWorkDir() string {
+	if d := os.Getenv("SCANNER_SCAN_WORK_DIR"); d != "" {
+		return d
 	}
-	return "/usr/local/bin/trivy"
-}()
+	return "/scan-work"
+}
 
 func main() {
 	raw, err := io.ReadAll(os.Stdin)
@@ -141,7 +155,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	rootfs, err := os.MkdirTemp("", "trivy-rootfs-*")
+	// Flatten onto the SHARED work volume so the engine sidecar can read the
+	// rootfs at the same absolute path. os.MkdirTemp under scanWorkDir() keeps
+	// per-scan isolation; defer RemoveAll cleans it after the engine responds.
+	if err := os.MkdirAll(scanWorkDir(), 0o755); err != nil {
+		writeError(req.ID, fmt.Sprintf("mkdir work dir: %v", err))
+		os.Exit(1)
+	}
+	rootfs, err := os.MkdirTemp(scanWorkDir(), "trivy-rootfs-*")
 	if err != nil {
 		writeError(req.ID, fmt.Sprintf("mkdtemp rootfs: %v", err))
 		os.Exit(1)
@@ -158,9 +179,9 @@ func main() {
 		}
 	}
 
-	report, scannerVersion, err := runTrivy(rootfs)
+	report, scannerVersion, err := scanViaEngine(engineURL(), rootfs)
 	if err != nil {
-		writeError(req.ID, fmt.Sprintf("run trivy: %v", err))
+		writeError(req.ID, err.Error())
 		os.Exit(1)
 	}
 
@@ -277,131 +298,44 @@ func untarTo(r io.Reader, rootfs string) error {
 	}
 }
 
-// trivyDBDir returns the directory trivy stores its vulnerability DB in.
-// Trivy keeps the DB under $TRIVY_CACHE_DIR/db (the scanner image sets
-// TRIVY_CACHE_DIR=/trivy-cache), falling back to trivy's default
-// ~/.cache/trivy/db when the env var is unset.
-func trivyDBDir() string {
-	if c := os.Getenv("TRIVY_CACHE_DIR"); c != "" {
-		return filepath.Join(c, "db")
+// scanViaEngine POSTs the flattened rootfs path to the trivy-engine sidecar
+// and returns the parsed trivy report plus the engine's self-reported version.
+// A connection/timeout failure is wrapped with errEngineUnreachable so the
+// orchestrator can classify it as a deploy problem, not a scan failure.
+func scanViaEngine(baseURL, rootfs string) (*trivyJSON, string, error) {
+	if baseURL == "" {
+		return nil, "unknown", fmt.Errorf("TRIVY_ENGINE_URL not set; cannot reach trivy-engine sidecar")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "trivy", "db")
-}
-
-// trivyDBPresent reports whether the trivy vulnerability DB is already on
-// disk. When it is, the scan runs with --skip-db-update so the hot path does
-// ZERO network I/O — the core of the REM-019 Phase 2 fix (a live per-scan DB
-// download made scans slow and intermittently fail).
-func trivyDBPresent() bool {
-	_, err := os.Stat(filepath.Join(trivyDBDir(), "trivy.db"))
-	return err == nil
-}
-
-// trivyScanArgs builds the `trivy rootfs` argument vector.
-//
-//   - --quiet drops the progress bar; --no-progress drops the DB spinner that
-//     would otherwise pollute stdout; --format json directs the report to
-//     stdout (trivy keeps human progress on stderr).
-//   - --skip-db-update (when skipDBUpdate) makes the scan fully offline: trivy
-//     uses the already-downloaded DB and never reaches out to the network. This
-//     is what makes scans deterministic instead of coupling every scan to a
-//     ~100MB download from mirror.gcr.io.
-func trivyScanArgs(rootfs string, skipDBUpdate bool) []string {
-	args := []string{"rootfs", "--quiet", "--no-progress", "--format", "json"}
-	if skipDBUpdate {
-		args = append(args, "--skip-db-update")
-	}
-	return append(args, rootfs)
-}
-
-// runTrivyOnce runs a single `trivy rootfs` invocation and parses its report.
-func runTrivyOnce(rootfs string, skipDBUpdate bool) (*trivyJSON, error) {
-	cmd := exec.Command(trivyBinary, trivyScanArgs(rootfs, skipDBUpdate)...) //nolint:gosec
-	cmd.Env = pluginEnv()
-
-	stdout, err := cmd.Output()
+	body, _ := json.Marshal(map[string]string{"rootfs": rootfs})
+	// Generous deadline: a cold engine may still be warming its DB; matches
+	// the clair-adapter's minute-scale timeouts.
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Post(strings.TrimRight(baseURL, "/")+"/scan", "application/json", bytes.NewReader(body))
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("trivy exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
-		}
-		return nil, err
+		// net.Error (conn refused, timeout, DNS) => the sidecar is unreachable.
+		return nil, "unknown", fmt.Errorf("%s: POST /scan: %w", errEngineUnreachable, err)
 	}
-
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if resp.StatusCode != http.StatusOK {
+		var er struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &er)
+		return nil, "unknown", fmt.Errorf("trivy-engine returned %d: %s", resp.StatusCode, strings.TrimSpace(er.Error))
+	}
+	var env struct {
+		Version string          `json:"version"`
+		Raw     json.RawMessage `json:"raw"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, "unknown", fmt.Errorf("decode engine response: %w", err)
+	}
 	var report trivyJSON
-	if err := json.Unmarshal(stdout, &report); err != nil {
-		return nil, fmt.Errorf("parse trivy json: %w", err)
+	if err := json.Unmarshal(env.Raw, &report); err != nil {
+		return nil, env.Version, fmt.Errorf("parse trivy json: %w", err)
 	}
-	return &report, nil
-}
-
-// runTrivy shells out to trivy rootfs and returns the parsed report plus
-// trivy's self-reported version (read once from `trivy --version` so the
-// response always reports the binary that actually ran).
-//
-// REM-019 Phase 2 root-cause fix: prefer an OFFLINE scan (--skip-db-update)
-// whenever the vulnerability DB is already present (pre-warmed at container
-// boot, or downloaded by an earlier scan). This removes the live per-scan DB
-// download from the hot path — the download made scans take ~30s and fail
-// intermittently on transient registry/network errors. Only when the cache is
-// genuinely cold (fresh volume, or the boot pre-warm failed) do we fall back to
-// a one-time online run so the adapter self-heals rather than hard-failing
-// every scan. The online run also covers the rare case where the DB file exists
-// but trivy rejects it (corrupt / schema-mismatched) — a first offline attempt
-// that errors is retried online once.
-func runTrivy(rootfs string) (*trivyJSON, string, error) {
-	version, _ := trivyVersion()
-
-	skipDBUpdate := trivyDBPresent()
-	report, err := runTrivyOnce(rootfs, skipDBUpdate)
-	if err != nil && skipDBUpdate {
-		// DB looked present but the offline scan failed — retry once allowing a
-		// fresh download before giving up.
-		report, err = runTrivyOnce(rootfs, false)
-	}
-	if err != nil {
-		return nil, version, err
-	}
-	return report, version, nil
-}
-
-// trivyVersion runs `trivy --version` and parses the first line.
-// Output format: "Version: 0.52.0\n..." — we slice the second field.
-// Errors are swallowed because the report is more valuable than the
-// version label; a missing version is reported as "unknown".
-func trivyVersion() (string, error) {
-	out, err := exec.Command(trivyBinary, "--version").Output() //nolint:gosec
-	if err != nil {
-		return "unknown", err
-	}
-	line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	if !strings.HasPrefix(line, "Version:") {
-		return "unknown", nil
-	}
-	return strings.TrimSpace(strings.TrimPrefix(line, "Version:")), nil
-}
-
-// pluginEnv returns the env trivy can see. The orchestrator already
-// strips host secrets before invoking us, but we further trim our own
-// env so a subverted trivy can't inherit anything from this adapter.
-func pluginEnv() []string {
-	allowed := map[string]bool{
-		"PATH": true, "HOME": true, "TMPDIR": true, "TMP": true, "TEMP": true,
-		"USER": true, "USERNAME": true,
-		"XDG_CACHE_HOME": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true,
-		"TRIVY_BIN": true, "TRIVY_CACHE_DIR": true,
-	}
-	var env []string
-	for _, e := range os.Environ() {
-		k, _, ok := strings.Cut(e, "=")
-		if !ok {
-			continue
-		}
-		if allowed[k] || strings.HasPrefix(k, "TRIVY_") {
-			env = append(env, e)
-		}
-	}
-	return env
+	return &report, env.Version, nil
 }
 
 // translateFindings folds trivy's nested Results[].Vulnerabilities[]

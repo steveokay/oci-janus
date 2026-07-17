@@ -47,6 +47,12 @@ spec:
             - name: OTEL_SAMPLING_RATE
               value: {{ .otel.samplingRate | quote }}
             {{- end }}
+            {{- if .Values.trivyEngine.enabled }}
+            - name: TRIVY_ENGINE_URL
+              value: "http://localhost:{{ .Values.trivyEngine.httpPort }}"
+            - name: SCANNER_SCAN_WORK_DIR
+              value: "/scan-work"
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
@@ -70,6 +76,51 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if .Values.trivyEngine.enabled }}
+          volumeMounts:
+            - name: scan-work
+              mountPath: /scan-work
+          {{- end }}
+        {{- if .Values.trivyEngine.enabled }}
+        - name: trivy-engine
+          image: "{{ .Values.trivyEngine.image.repository }}:{{ .Values.trivyEngine.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ENGINE_NAME
+              value: trivy
+            - name: ENGINE_HTTP_ADDR
+              value: ":{{ .Values.trivyEngine.httpPort }}"
+          ports:
+            - name: engine
+              containerPort: {{ .Values.trivyEngine.httpPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: engine
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: scan-work
+              mountPath: /scan-work
+              readOnly: true
+            - name: engine-cache
+              mountPath: /engine-cache
+          resources:
+            {{- toYaml .Values.trivyEngine.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+        {{- end }}
+      {{- if .Values.trivyEngine.enabled }}
+      volumes:
+        - name: scan-work
+          emptyDir: {}
+        - name: engine-cache
+          emptyDir: {}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -238,6 +238,31 @@ func TestPluginEnv_allowsTrivyPrefix(t *testing.T) {
 	}
 }
 
+// TestPluginEnv_ForwardsScannerPrefix verifies that SCANNER_* variables are
+// forwarded to the plugin (needed for SCANNER_SCAN_WORK_DIR, the shared
+// volume path an adapter uses to flatten the scan rootfs for an engine
+// sidecar to read) while service secrets like DB_DSN are never forwarded.
+func TestPluginEnv_ForwardsScannerPrefix(t *testing.T) {
+	t.Setenv("SCANNER_SCAN_WORK_DIR", "/scan-work")
+	t.Setenv("DB_DSN", "postgres://secret") // must NOT be forwarded
+	env := pluginEnv()
+	var sawWork, sawSecret bool
+	for _, e := range env {
+		if strings.HasPrefix(e, "SCANNER_SCAN_WORK_DIR=") {
+			sawWork = true
+		}
+		if strings.HasPrefix(e, "DB_DSN=") {
+			sawSecret = true
+		}
+	}
+	if !sawWork {
+		t.Fatal("expected SCANNER_SCAN_WORK_DIR to be forwarded")
+	}
+	if sawSecret {
+		t.Fatal("DB_DSN must never be forwarded to a plugin")
+	}
+}
+
 // TestScan_processFailsOnBadBinary verifies that Scan() returns an error when
 // the plugin binary exits non-zero (simulated via a failing script on Unix).
 // This test is skipped on Windows where shell scripts are not executable.
