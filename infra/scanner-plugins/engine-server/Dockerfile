@@ -19,6 +19,10 @@ WORKDIR /build
 COPY infra/scanner-plugins/engine-server/ ./engine-server/
 WORKDIR /build/engine-server
 RUN CGO_ENABLED=0 GOOS=linux GOWORK=off go build -trimpath -ldflags="-s -w" -o /bin/engine-server .
+# grype's base image is distroless (no /bin/sh, no mkdir) — pre-create the
+# runtime directories here, in a stage that has a shell, and COPY them into
+# the final stage below instead of RUN mkdir there.
+RUN mkdir -p /engine-runtime-dirs/engine-cache /engine-runtime-dirs/scan-work
 
 # ── Stage 2: engine bases (pin by DIGEST — the trust root, §7 of the spec) ──
 # Bump the tag AND the @sha256 digest together. Digest pinning is stronger
@@ -35,24 +39,26 @@ FROM engine-${ENGINE} AS final
 ARG ENGINE=trivy
 
 USER root
-# Both upstream images are alpine/distroless-ish; ensure /bin/sh + ca-certs
-# for the entrypoint. Trivy's image is alpine-based (has sh); grype's is
-# distroless (no sh) — grype support is finalised in Phase 2, which will
-# adjust this. For trivy this is a no-op safety net.
-COPY infra/scanner-plugins/engine-server/engine-entrypoint.sh /engine-entrypoint.sh
+# Both upstream images are alpine/distroless-ish. grype's base is distroless
+# (no /bin/sh, no mkdir/coreutils at all), so the wrapper binary itself is the
+# entrypoint and handles DB pre-warm + healthchecks in-process — see
+# main.go's warm()/-health. Runtime dirs are COPYed in pre-built (see builder
+# stage) rather than created with `RUN mkdir`, which needs a shell trivy has
+# but grype does not.
 COPY --from=builder /bin/engine-server /usr/local/bin/engine-server
+COPY --from=builder /engine-runtime-dirs/engine-cache /engine-cache
+COPY --from=builder /engine-runtime-dirs/scan-work /scan-work
 
 ENV ENGINE_NAME=${ENGINE}
-# ENGINE_CMD is the engine binary path inside the base image.
-# trivy: /usr/local/bin/trivy ; grype: /grype (finalised in Phase 2).
-ENV ENGINE_CMD=/usr/local/bin/trivy
+# ENGINE_CMD is left unset here — the wrapper defaults it per ENGINE_NAME
+# (trivy: /usr/local/bin/trivy ; grype: /grype). Set explicitly to override.
 ENV ENGINE_WORK_DIR=/scan-work
 ENV ENGINE_HTTP_ADDR=:8085
-# Trivy DB cache lives here now (moved off the scanner container).
+# DB cache dir for both engines (harmless to set both regardless of which
+# engine this image actually bakes).
 ENV TRIVY_CACHE_DIR=/engine-cache
-RUN mkdir -p /engine-cache /scan-work
+ENV GRYPE_DB_CACHE_DIR=/engine-cache
 VOLUME ["/engine-cache"]
 
 EXPOSE 8085
-ENTRYPOINT ["/engine-entrypoint.sh"]
-CMD ["/usr/local/bin/engine-server"]
+ENTRYPOINT ["/usr/local/bin/engine-server"]
