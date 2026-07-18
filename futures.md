@@ -2841,6 +2841,78 @@ Below is only what was genuinely untracked.
 
 ---
 
+#### FUT-091 — Deployment footprint reduction: modular-monolith profile — **Tier 2**
+> Idea captured 2026-07-18 during an architecture thinking session (NOT started —
+> no spec, no plan, no code). The architecture is **SaaS-shaped** (14 independently
+> deployed Go services + RabbitMQ event mesh + per-service Postgres schemas +
+> full mTLS mesh, ~25 containers) but the **product is a single-tenant self-hosted
+> appliance** (ADR-0031 retired multi-tenant). That mismatch means operators pay
+> full microservices tax (cert rotation across 14 services, 6 migration sets +
+> pools, a message broker) to run what a small team hosts on one box. **Goal:**
+> a default deploy of **~25 containers → ~4-5** by compiling the *existing* code
+> into a small number of binaries (a **modular monolith**), with **zero external
+> change** — same `/v2/` OCI API, `/api/v1/*` REST, MCP, CLI, and dashboard, so
+> **no look-and-feel loss** (backend packaging only, exactly like the scanner-engine
+> decoupling was invisible to users). The "exploded" microservices deploy stays
+> available for anyone who wants to scale pieces independently.
+
+- **Core reframe:** package boundaries ≠ deployment topology. The code is already
+  cleanly split (`services/*/internal/{service,repository,handler}`); those stay as
+  *module* boundaries. We change how they're *wired*, not the domain design —
+  cross-service gRPC-over-mTLS calls become in-process function calls.
+- **Target (default profile):** ONE `registry` binary folding ~12 of today's 14
+  services in-process — **data:** core + metadata + storage-driver; **control:**
+  auth + tenant (near-vestigial post-ADR-0031); **API:** management-BFF + mcp
+  (a transport, not a service); **+** signer, proxy* (optional); **+** scanner-API
+  and audit-query surfaces. Background work (scan-exec, gc, webhook-deliver,
+  audit-ingest, report-gen) runs as **goroutines**. The binary also **serves the
+  React SPA as static assets** (`go:embed`), dropping the separate frontend
+  container. Infra: one Postgres (schema per domain), Redis (optional), object
+  store (MinIO or filesystem), + **optional** scanner engine sidecar(s) — the
+  trivy/grype-engine pattern from FUT-090, only when scanning is enabled.
+- **Enabling trick (low-risk, reversible):** each domain already has a Go client
+  interface for its gRPC calls. Add a `Local*` impl (direct function call) beside
+  the `GRPC*` impl (over the wire + mTLS); a config/build flag selects which.
+  **The same domain code runs monolith or microservices** — you choose the
+  *transport*, not fork the logic. This is what preserves the exploded-deploy option.
+- **Drop RabbitMQ** → Postgres **outbox + `LISTEN/NOTIFY`** (or Redis streams);
+  reuses the `FOR UPDATE SKIP LOCKED` pattern already used by gc/reports. Removes a
+  whole category of moving parts (quorum queues, DLX, confirm mode).
+- **Make heavy defaults opt-in:** Jaeger / otel-collector / Prometheus (default to
+  stdout logs + a `/metrics` endpoint), Vault (dev-mode/KMS by default), and the
+  Traefik `gateway` (host-based tenant routing is moot single-tenant → fold TLS
+  into the server or a slim ingress). `proxy` (pull-through cache) is a feature
+  toggle, not a mandatory service.
+- **Split-for-scale variant (later, if needed):** pull the workers into a second
+  `registry-worker` binary; the new event bus (Postgres outbox / Redis) carries
+  events across the boundary. Run N `registry` copies behind the ingress for
+  push/pull throughput. Consolidation does **not** cost horizontal scale — you
+  scale a coarser unit.
+- **Must protect through the merge:** (1) **audit tamper-evidence** — keep a
+  *separate restricted Postgres role/pool* for `audit_events` inserts even inside
+  one process (the FORCE RLS + hash-chain isolation lives at the DB-role layer, not
+  the process layer); (2) **secrets blast radius** — one process holds DB creds +
+  signing keys in one memory space (acceptable for single-tenant behind a firewall,
+  but state it explicitly as the trade vs. today's mTLS mesh).
+- **Phasing:** Phase 0 = introduce the `Local*` shims behind the existing
+  interfaces (zero behavior change, fully reversible); then collapse one group at a
+  time — **data plane (core+metadata+storage) first** (biggest win, chattiest hot
+  path) — with the exploded deploy still working the whole way.
+- **Open questions to pressure-test before designing:** can `core+metadata+storage`
+  truly share a process given the storage-driver abstraction + read-replica routing
+  (REM-008)? Can the `gateway` be dropped entirely or does it need a thin TLS
+  ingress? How to split `audit`'s dual read (analytics/notifications) + write
+  (event ingest) surfaces cleanly?
+- **Needs a new ADR** — this partially *reverses* the microservices-as-default
+  decision (complements ADR-0031's single-tenant posture); decision + rationale
+  should be recorded before Phase 0.
+- **Affects:** essentially all of `services/*` (as a `cmd/` + wiring change, not a
+  domain rewrite), `libs/middleware` (interceptor/transport selection),
+  `infra/docker-compose`, `infra/helm/registry`, `frontend` (embed), and the
+  RabbitMQ → outbox migration in `libs/rabbitmq` + every publisher/consumer.
+
+---
+
 ## How to use this file
 
 **Tiering criteria:**
